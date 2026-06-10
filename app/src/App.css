@@ -394,6 +394,18 @@ button:disabled {
   border: 1px solid rgba(34, 211, 238, 0.22);
 }
 
+.pill.pending {
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.24);
+}
+
+.pill.error {
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.26);
+}
+
 .recording-visual {
   height: 48px;
   display: flex;
@@ -914,6 +926,72 @@ select option {
 .conflict-panel svg {
   color: #22c55e;
   flex: 0 0 auto;
+}
+
+.pending-panel,
+.empty-state,
+.loading-panel,
+.error-panel,
+.inline-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #cbd5e1;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  background: rgba(7, 11, 20, 0.32);
+  font-size: 13px;
+}
+
+.pending-panel,
+.empty-state {
+  min-height: 56px;
+  padding: 13px;
+}
+
+.pending-panel svg,
+.empty-state svg,
+.loading-panel svg,
+.inline-error svg {
+  color: #22d3ee;
+  flex: 0 0 auto;
+}
+
+.loading-panel,
+.error-panel {
+  justify-content: flex-start;
+  min-height: 88px;
+  margin-bottom: 14px;
+  padding: 18px;
+}
+
+.error-panel {
+  align-items: flex-start;
+  color: #fecaca;
+  border-color: rgba(239, 68, 68, 0.24);
+  background: rgba(127, 29, 29, 0.14);
+}
+
+.error-panel p {
+  margin: 4px 0 0;
+  color: #fca5a5;
+  font-size: 13px;
+}
+
+.error-panel .secondary-button {
+  margin-left: auto;
+}
+
+.inline-error {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  color: #fecaca;
+  border-color: rgba(239, 68, 68, 0.24);
+  background: rgba(127, 29, 29, 0.14);
+}
+
+.inline-error .compact-action {
+  margin-left: auto;
 }
 
 .progress-track {
