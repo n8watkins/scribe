@@ -7,6 +7,7 @@ use tauri::{
 
 use crate::{
     app_state::{AppEvent, AppStateSnapshot, AppStatus},
+    audio,
     commands::BackendState,
     error::CommandError,
 };
@@ -107,25 +108,15 @@ pub fn start_dictation(app: &AppHandle) -> Result<(), CommandError> {
     let state = app.state::<BackendState>();
     let snapshot = state.app_state()?.snapshot();
 
-    match snapshot.status {
-        AppStatus::Idle | AppStatus::Ready => {
-            let snapshot = state.transition_app_state(AppEvent::StartRecording)?;
-            emit_state_snapshot(app, &snapshot);
-            update_tray_status(app, snapshot.status);
-        }
-        AppStatus::Error => {
-            let snapshot = state.transition_app_state(AppEvent::ResetError)?;
-            emit_state_snapshot(app, &snapshot);
-            update_tray_status(app, snapshot.status);
-
-            let snapshot = state.transition_app_state(AppEvent::StartRecording)?;
-            emit_state_snapshot(app, &snapshot);
-            update_tray_status(app, snapshot.status);
-        }
-        _ => {}
+    if matches!(
+        snapshot.status,
+        AppStatus::Idle | AppStatus::Ready | AppStatus::Error | AppStatus::Recording
+    ) {
+        let _ = audio::start_recording_for_app(app, None)?;
+        let status = state.app_state()?.status().clone();
+        update_tray_status(app, status);
     }
 
-    let _ = app.emit("localdictate:dictation-placeholder", "start");
     Ok(())
 }
 
@@ -137,21 +128,9 @@ pub fn stop_dictation(app: &AppHandle) -> Result<(), CommandError> {
         return Ok(());
     }
 
-    let snapshot = state.transition_app_state(AppEvent::StopRecording)?;
-    emit_state_snapshot(app, &snapshot);
-    update_tray_status(app, snapshot.status);
-
-    // Placeholder only: later audio/Whisper lanes should replace this with real
-    // audio validation and transcription completion events.
-    let snapshot = state.transition_app_state(AppEvent::ValidAudio)?;
-    emit_state_snapshot(app, &snapshot);
-    update_tray_status(app, snapshot.status);
-
-    let snapshot = state.transition_app_state(AppEvent::TranscriptionSucceeded)?;
-    emit_state_snapshot(app, &snapshot);
-    update_tray_status(app, snapshot.status);
-
-    let _ = app.emit("localdictate:dictation-placeholder", "stop");
+    let _ = audio::stop_recording_for_app(app)?;
+    let status = state.app_state()?.status().clone();
+    update_tray_status(app, status);
     Ok(())
 }
 

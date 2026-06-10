@@ -2,6 +2,7 @@ use std::sync::Mutex;
 
 use crate::{
     app_state::{AppEvent, AppStateMachine, AppStateSnapshot},
+    audio::{self, MicrophoneInfo, RecordingResult, RecordingSessionInfo, StartRecordingRequest},
     db::Database,
     error::CommandError,
     hotkeys::{self, HotkeyStatus},
@@ -12,13 +13,15 @@ use crate::{
 
 pub struct BackendState {
     app_state: Mutex<AppStateMachine>,
+    audio: Mutex<audio::AudioService>,
     db: Mutex<Database>,
 }
 
 impl BackendState {
-    pub fn new(db: Database) -> Self {
+    pub fn new(db: Database, audio_temp_dir: std::path::PathBuf) -> Self {
         Self {
             app_state: Mutex::new(AppStateMachine::default()),
+            audio: Mutex::new(audio::AudioService::new(audio_temp_dir)),
             db: Mutex::new(db),
         }
     }
@@ -33,6 +36,12 @@ impl BackendState {
         self.db
             .lock()
             .map_err(|_| CommandError::new("database_lock_poisoned", "Could not access database."))
+    }
+
+    pub fn audio(&self) -> Result<std::sync::MutexGuard<'_, audio::AudioService>, CommandError> {
+        self.audio.lock().map_err(|_| {
+            CommandError::new("audio_lock_poisoned", "Could not access audio service.")
+        })
     }
 
     pub fn transition_app_state(&self, event: AppEvent) -> Result<AppStateSnapshot, CommandError> {
@@ -165,4 +174,35 @@ pub fn reset_hotkeys_to_defaults(
 #[tauri::command]
 pub fn open_dashboard(app: tauri::AppHandle) -> Result<(), CommandError> {
     crate::tray::open_dashboard(&app, None)
+}
+
+#[tauri::command]
+pub fn list_microphones(app: tauri::AppHandle) -> Result<Vec<MicrophoneInfo>, CommandError> {
+    audio::list_microphones_for_app(&app)
+}
+
+#[tauri::command]
+pub fn start_recording(
+    app: tauri::AppHandle,
+    request: Option<StartRecordingRequest>,
+) -> Result<RecordingSessionInfo, CommandError> {
+    audio::start_recording_for_app(&app, request)
+}
+
+#[tauri::command]
+pub fn stop_recording(app: tauri::AppHandle) -> Result<RecordingResult, CommandError> {
+    audio::stop_recording_for_app(&app)
+}
+
+#[tauri::command]
+pub fn cancel_recording(app: tauri::AppHandle) -> Result<(), CommandError> {
+    audio::cancel_recording_for_app(&app)
+}
+
+#[tauri::command]
+pub fn record_test_clip(
+    app: tauri::AppHandle,
+    duration_ms: Option<u64>,
+) -> Result<RecordingResult, CommandError> {
+    audio::record_test_clip_for_app(&app, duration_ms)
 }

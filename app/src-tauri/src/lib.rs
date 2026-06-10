@@ -1,4 +1,5 @@
 pub mod app_state;
+pub mod audio;
 pub mod commands;
 pub mod db;
 pub mod error;
@@ -25,10 +26,12 @@ pub fn run() {
         )
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
+            let audio_temp_dir = app.path().app_cache_dir()?.join("recordings");
             std::fs::create_dir_all(&app_data_dir)?;
+            std::fs::create_dir_all(&audio_temp_dir)?;
             let db = Database::open(app_data_dir.join("localdictate.sqlite3"))?;
             let settings = db.get_settings()?;
-            app.manage(BackendState::new(db));
+            app.manage(BackendState::new(db, audio_temp_dir));
             hotkeys::setup(app.handle(), &settings.hotkeys)?;
             tray::setup(app.handle())?;
             Ok(())
@@ -44,7 +47,12 @@ pub fn run() {
             commands::get_hotkey_status,
             commands::rebind_hotkey,
             commands::reset_hotkeys_to_defaults,
-            commands::open_dashboard
+            commands::open_dashboard,
+            commands::list_microphones,
+            commands::start_recording,
+            commands::stop_recording,
+            commands::cancel_recording,
+            commands::record_test_clip
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
