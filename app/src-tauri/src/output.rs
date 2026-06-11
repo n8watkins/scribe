@@ -384,10 +384,23 @@ fn emit_output_started(
 }
 
 fn emit_output_completed(app: &AppHandle, result: &OutputResult) {
+    log::info!(
+        "Output {:?} {:?} for transcript {}: {}",
+        result.action,
+        result.status,
+        result.transcript_id,
+        result.message
+    );
     let _ = app.emit("localdictate:output-completed", result);
 }
 
 pub fn emit_output_failed(app: &AppHandle, transcript_id: String, error: &CommandError) {
+    log::error!(
+        "Output failed for transcript {} ({}): {}",
+        transcript_id,
+        error.code,
+        error.message
+    );
     let _ = app.emit(
         "localdictate:output-failed",
         OutputFailedPayload {

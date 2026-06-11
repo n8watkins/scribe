@@ -21,6 +21,28 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // The single-instance plugin must be the first plugin registered so
+        // it can take over before anything else initializes.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            log::info!("Second instance launch detected; focusing the main window");
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .level_for("app_lib", log::LevelFilter::Debug)
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: None,
+                    }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                ])
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -36,16 +58,38 @@ pub fn run() {
             std::fs::create_dir_all(&audio_temp_dir)?;
             let db = Database::open(app_data_dir.join("localdictate.sqlite3"))?;
             let mut settings = db.get_settings()?;
+            let mut settings_migrated = false;
             // One-time migration: replace the old default hotkeys (which
             // collide with Windows shortcuts like Ctrl+Win+Space) with the
             // current defaults on installs that never customized them.
             if settings.hotkeys.migrate_legacy_defaults() {
+                log::info!("Migrated legacy default hotkeys to the current defaults");
+                settings_migrated = true;
+            }
+            // One-time migration of changed shipped defaults (e.g. the
+            // default output mode moving from SaveOnly to AutoPaste).
+            if settings.migrate_defaults() {
+                log::info!(
+                    "Migrated settings defaults to version {} (output mode now {:?})",
+                    settings.defaults_version,
+                    settings.output_mode
+                );
+                settings_migrated = true;
+            }
+            if settings_migrated {
                 db.save_settings(&settings)?;
             }
+            log::info!(
+                "Settings loaded (defaults version {}, output mode {:?}, model {:?})",
+                settings.defaults_version,
+                settings.output_mode,
+                settings.selected_model_id
+            );
             db.enforce_history_retention(settings.history_retention_days)?;
             app.manage(BackendState::new(db, audio_temp_dir));
             hotkeys::setup(app.handle(), &settings.hotkeys)?;
             tray::setup(app.handle())?;
+            log::info!("LocalDictate setup complete");
             Ok(())
         })
         .on_window_event(|window, event| {

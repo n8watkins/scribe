@@ -272,7 +272,9 @@ pub fn start_recording(
     app: tauri::AppHandle,
     request: Option<StartRecordingRequest>,
 ) -> Result<RecordingSessionInfo, CommandError> {
-    audio::start_recording_for_app(&app, request)
+    // UI-started recordings are toggle-style (no key is held), so silence
+    // auto-stop applies.
+    audio::start_recording_for_app(&app, request, true)
 }
 
 #[tauri::command]

@@ -119,6 +119,15 @@ pub fn emit_registration_failures(app: &AppHandle, failures: &[HotkeyRegistratio
         return;
     }
 
+    for failure in failures {
+        log::error!(
+            "Hotkey registration failed for {:?} ({}): {}",
+            failure.action,
+            failure.shortcut,
+            failure.message
+        );
+    }
+
     let _ = app.emit(
         "localdictate:hotkey-registration-failed",
         RegistrationFailedEvent { failures },
@@ -272,12 +281,11 @@ pub fn setup(app: &AppHandle, hotkeys: &HotkeySettings) -> Result<(), CommandErr
     validate_hotkeys(hotkeys)?;
 
     let failures = register_hotkey_set(app, hotkeys);
-    for failure in &failures {
-        eprintln!(
-            "Hotkey registration failed for {:?} ({}): {}",
-            failure.action, failure.shortcut, failure.message
-        );
-    }
+    log::info!(
+        "Registered {} of {} hotkey bindings",
+        HOTKEY_ACTIONS.len() - failures.len(),
+        HOTKEY_ACTIONS.len()
+    );
     emit_registration_failures(app, &failures);
 
     Ok(())
@@ -443,7 +451,7 @@ fn configure_chord_watcher(app: &AppHandle, bindings: Vec<(ModifierChord, Hotkey
                 }
             }
             Err(error) => {
-                eprintln!("Failed to start chord watcher thread: {}", error);
+                log::error!("Failed to start chord watcher thread: {}", error);
                 runtime.store_chord_bindings(Vec::new());
             }
         }
@@ -516,9 +524,10 @@ fn handle_pressed(app: &AppHandle, action: HotkeyAction) {
 
     // Hold-to-talk and toggle both always work, regardless of the (legacy)
     // recordingMode setting; gating either one made the other hotkey a
-    // silent no-op.
+    // silent no-op. Hold-to-talk never auto-stops on silence: the user is
+    // still holding the key, and a pause mid-thought must not cut them off.
     let result = match action {
-        HotkeyAction::HoldToTalk => tray::start_dictation(app),
+        HotkeyAction::HoldToTalk => tray::start_dictation(app, false),
         HotkeyAction::ToggleDictation => toggle_dictation(app),
         HotkeyAction::PasteLastTranscript => tray::paste_last_transcript(app),
         HotkeyAction::OpenDashboard => tray::open_dashboard(app, None),
@@ -542,7 +551,7 @@ fn toggle_dictation(app: &AppHandle) -> Result<(), CommandError> {
     let status = state.app_state()?.status().clone();
 
     match status {
-        AppStatus::Idle | AppStatus::Ready => tray::start_dictation(app),
+        AppStatus::Idle | AppStatus::Ready => tray::start_dictation(app, true),
         AppStatus::Recording => tray::stop_dictation(app),
         _ => Ok(()),
     }

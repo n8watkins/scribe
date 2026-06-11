@@ -16,6 +16,9 @@ pub struct WhisperRequest {
     pub model_path: PathBuf,
     pub wav_path: PathBuf,
     pub language: String,
+    /// Custom vocabulary / spelling hints; passed as `--prompt` when the
+    /// trimmed value is non-empty.
+    pub vocabulary_prompt: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,6 +60,7 @@ pub fn transcribe(
         &request.wav_path,
         &request.language,
         &output_prefix,
+        &request.vocabulary_prompt,
     );
     let started = Instant::now();
     let output = run_whisper_command(&executable, &args)?;
@@ -113,8 +117,9 @@ fn whisper_args(
     wav_path: &Path,
     language: &str,
     output_prefix: &Path,
+    vocabulary_prompt: &str,
 ) -> Vec<String> {
-    vec![
+    let mut args = vec![
         "-m".to_string(),
         model_path.to_string_lossy().to_string(),
         "-f".to_string(),
@@ -125,7 +130,17 @@ fn whisper_args(
         "--output-file".to_string(),
         output_prefix.to_string_lossy().to_string(),
         "--no-timestamps".to_string(),
-    ]
+    ];
+
+    let vocabulary_prompt = vocabulary_prompt.trim();
+    if !vocabulary_prompt.is_empty() {
+        // Separate argv entries: no shell is involved, so the prompt text
+        // needs no quoting or escaping.
+        args.push("--prompt".to_string());
+        args.push(vocabulary_prompt.to_string());
+    }
+
+    args
 }
 
 fn output_prefix_for_wav(wav_path: &Path) -> PathBuf {
@@ -186,6 +201,7 @@ mod tests {
             Path::new("temp/input.wav"),
             "en",
             Path::new("temp/out"),
+            "",
         );
 
         assert_eq!(
@@ -203,6 +219,37 @@ mod tests {
                 "--no-timestamps",
             ]
         );
+    }
+
+    #[test]
+    fn omits_prompt_when_vocabulary_is_blank() {
+        let args = whisper_args(
+            Path::new("model.bin"),
+            Path::new("input.wav"),
+            "en",
+            Path::new("out"),
+            "   \n\t ",
+        );
+
+        assert!(!args.iter().any(|arg| arg == "--prompt"));
+    }
+
+    #[test]
+    fn appends_prompt_as_separate_argv_entries() {
+        let args = whisper_args(
+            Path::new("model.bin"),
+            Path::new("input.wav"),
+            "en",
+            Path::new("out"),
+            "  LocalDictate, Tauri, WASAPI; \"quoted\" & spaced terms  ",
+        );
+
+        let prompt_index = args.iter().position(|arg| arg == "--prompt").unwrap();
+        assert_eq!(
+            args[prompt_index + 1],
+            "LocalDictate, Tauri, WASAPI; \"quoted\" & spaced terms"
+        );
+        assert_eq!(args.len(), prompt_index + 2);
     }
 
     #[test]

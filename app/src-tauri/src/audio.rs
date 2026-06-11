@@ -39,6 +39,20 @@ const TARGET_BITS_PER_SAMPLE: u16 = 16;
 #[cfg(windows)]
 const LEVEL_EVENT_INTERVAL: Duration = Duration::from_millis(40);
 const DEFAULT_TEST_CLIP_MS: u64 = 3_000;
+/// Per-chunk RMS at or above this counts as speech. Silence auto-stop only
+/// arms after at least one speech chunk, so a recording that never picks up
+/// any voice is not cut short.
+#[cfg(windows)]
+const AUTO_STOP_SPEECH_RMS: f32 = 0.03;
+/// RMS below this counts as silence, both for the auto-stop countdown and
+/// for trimming leading/trailing silence. Sits below typical speech levels
+/// but above quiet room noise.
+const SILENCE_RMS_THRESHOLD: f32 = 0.015;
+/// Audio kept on each side of detected speech when trimming silence, so word
+/// onsets/tails are not clipped.
+const TRIM_PADDING_MS: u32 = 150;
+/// RMS analysis window for silence trimming.
+const TRIM_WINDOW_MS: u32 = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -207,6 +221,7 @@ impl AudioService {
         settings: &AppSettings,
         request: StartRecordingRequest,
         is_test_clip: bool,
+        allow_auto_stop: bool,
     ) -> Result<StartOutcome, CommandError> {
         if let Some(active) = &self.active {
             return Ok(StartOutcome {
@@ -257,6 +272,12 @@ impl AudioService {
         let temp_dir = self.temp_dir.clone();
         let min_recording_ms = settings.min_recording_ms as u64;
         let silence_trim_enabled = settings.silence_trim_enabled;
+        // Silence auto-stop only applies to toggle-style starts (toggle
+        // hotkey, tray menu, UI Start button) — never hold-to-talk or test
+        // clips — and only when the setting is enabled.
+        let auto_stop_after_ms =
+            (allow_auto_stop && !is_test_clip && settings.silence_auto_stop_enabled)
+                .then_some(settings.silence_auto_stop_ms as u64);
         let worker_info = info.clone();
         let worker = thread::spawn(move || {
             recording_worker(
@@ -268,6 +289,7 @@ impl AudioService {
                 source_sample_rate,
                 min_recording_ms,
                 silence_trim_enabled,
+                auto_stop_after_ms,
             )
         });
 
@@ -298,6 +320,14 @@ impl AudioService {
         self.active = Some(session);
         self.last_result = None;
 
+        log::info!(
+            "Recording started: session {} (mic '{}', {} Hz, test clip: {}, silence auto-stop: {:?} ms)",
+            info.session_id,
+            info.microphone_name,
+            info.sample_rate,
+            is_test_clip,
+            auto_stop_after_ms
+        );
         let _ = app.emit("audio://recording-started", &info);
         Ok(StartOutcome {
             info,
@@ -312,6 +342,7 @@ impl AudioService {
         _settings: &AppSettings,
         _request: StartRecordingRequest,
         _is_test_clip: bool,
+        _allow_auto_stop: bool,
     ) -> Result<StartOutcome, CommandError> {
         Err(unsupported_audio_platform())
     }
@@ -386,9 +417,12 @@ pub fn list_microphones_for_app(app: &AppHandle) -> Result<Vec<MicrophoneInfo>, 
     Ok(microphones)
 }
 
+/// `allow_auto_stop` marks the recording as eligible for silence auto-stop
+/// (toggle hotkey / tray menu / UI Start). Hold-to-talk passes false.
 pub fn start_recording_for_app(
     app: &AppHandle,
     request: Option<StartRecordingRequest>,
+    allow_auto_stop: bool,
 ) -> Result<RecordingSessionInfo, CommandError> {
     let state = app.state::<BackendState>();
     let settings = state.db()?.get_settings()?;
@@ -403,9 +437,13 @@ pub fn start_recording_for_app(
             emit_state_snapshot(app, &snapshot);
         }
 
-        let outcome = state
-            .audio()?
-            .start(app, &settings, request.unwrap_or_default(), false)?;
+        let outcome = state.audio()?.start(
+            app,
+            &settings,
+            request.unwrap_or_default(),
+            false,
+            allow_auto_stop,
+        )?;
 
         if outcome.started {
             let snapshot = state.transition_app_state(AppEvent::StartRecording)?;
@@ -414,9 +452,13 @@ pub fn start_recording_for_app(
 
         Ok(outcome.info)
     } else if snapshot.status == AppStatus::Recording {
-        let outcome = state
-            .audio()?
-            .start(app, &settings, request.unwrap_or_default(), false)?;
+        let outcome = state.audio()?.start(
+            app,
+            &settings,
+            request.unwrap_or_default(),
+            false,
+            allow_auto_stop,
+        )?;
         Ok(outcome.info)
     } else {
         Err(CommandError::new(
@@ -441,6 +483,11 @@ pub fn cancel_recording_for_app(app: &AppHandle) -> Result<(), CommandError> {
     let result = state.audio()?.stop(StopReason::Cancelled)?;
 
     if let Some(result) = result {
+        log::info!(
+            "Recording cancelled: session {} after {} ms",
+            result.session_id,
+            result.duration_ms
+        );
         let _ = app.emit("audio://recording-stopped", &result);
     }
 
@@ -467,7 +514,9 @@ pub fn record_test_clip_for_app(
         microphone_id: None,
         max_duration_ms: Some(duration_ms.saturating_add(1_000)),
     };
-    let outcome = state.audio()?.start(app, &settings, request, true)?;
+    // Test clips are never silence auto-stopped: they run for a fixed
+    // duration and must capture whatever the mic hears.
+    let outcome = state.audio()?.start(app, &settings, request, true, false)?;
 
     if !outcome.started {
         return Err(CommandError::new(
@@ -547,6 +596,13 @@ fn stop_recording_with_reason(
         })?
     };
 
+    log::info!(
+        "Recording stopped: session {} ({:?}, {:?}, {} ms)",
+        result.session_id,
+        reason,
+        result.status,
+        result.duration_ms
+    );
     let _ = app.emit("audio://recording-stopped", &result);
 
     let snapshot = state.app_state()?.snapshot();
@@ -609,11 +665,13 @@ fn recording_worker(
     source_sample_rate: u32,
     min_recording_ms: u64,
     silence_trim_enabled: bool,
+    auto_stop_after_ms: Option<u64>,
 ) -> Result<RecordingResult, CommandError> {
     let mut samples = Vec::<f32>::new();
     let mut last_level_emit = Instant::now()
         .checked_sub(LEVEL_EVENT_INTERVAL)
         .unwrap_or_else(Instant::now);
+    let mut auto_stop = SilenceAutoStop::new(auto_stop_after_ms, source_sample_rate);
     let stop_reason = loop {
         crossbeam_channel::select! {
             recv(control_rx) -> message => {
@@ -626,6 +684,7 @@ fn recording_worker(
                 match message {
                     Ok(chunk) => {
                         maybe_emit_level(&app, &info.session_id, &chunk.samples, &mut last_level_emit);
+                        auto_stop.observe(&app, &info.session_id, &chunk.samples);
                         samples.extend(chunk.samples);
                     }
                     Err(_) => break StopReason::Completed,
@@ -664,12 +723,7 @@ fn maybe_emit_level(
     let peak = samples
         .iter()
         .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
-    let rms = (samples
-        .iter()
-        .map(|sample| (*sample as f64) * (*sample as f64))
-        .sum::<f64>()
-        / samples.len() as f64)
-        .sqrt() as f32;
+    let rms = chunk_rms(samples);
     let event = AudioLevelEvent {
         session_id: session_id.to_string(),
         level: rms.clamp(0.0, 1.0),
@@ -678,6 +732,94 @@ fn maybe_emit_level(
     };
     let _ = app.emit("audio://level", event);
     *last_level_emit = Instant::now();
+}
+
+/// Watches per-chunk RMS during a recording and stops the dictation after
+/// `auto_stop_after_ms` of continuous silence — but only once speech has been
+/// heard, and only once per session. Stopping goes through the same
+/// `tray::stop_dictation` path as a toggle-hotkey stop so transcription and
+/// output run exactly as if the user stopped manually.
+#[cfg(windows)]
+struct SilenceAutoStop {
+    auto_stop_after_ms: Option<u64>,
+    sample_rate: u32,
+    speech_detected: bool,
+    silence_samples: usize,
+    triggered: bool,
+}
+
+#[cfg(windows)]
+impl SilenceAutoStop {
+    fn new(auto_stop_after_ms: Option<u64>, sample_rate: u32) -> Self {
+        Self {
+            auto_stop_after_ms,
+            sample_rate,
+            speech_detected: false,
+            silence_samples: 0,
+            triggered: false,
+        }
+    }
+
+    fn observe(&mut self, app: &AppHandle, session_id: &str, samples: &[f32]) {
+        let Some(limit_ms) = self.auto_stop_after_ms else {
+            return;
+        };
+        if self.triggered || samples.is_empty() {
+            return;
+        }
+
+        let rms = chunk_rms(samples);
+        if rms >= AUTO_STOP_SPEECH_RMS {
+            self.speech_detected = true;
+            self.silence_samples = 0;
+            return;
+        }
+        if rms >= SILENCE_RMS_THRESHOLD {
+            // Not loud enough to count as speech, but not silent either:
+            // the continuous-silence run is broken.
+            self.silence_samples = 0;
+            return;
+        }
+        if !self.speech_detected {
+            return;
+        }
+
+        self.silence_samples += samples.len();
+        if duration_ms(self.silence_samples, self.sample_rate) < limit_ms {
+            return;
+        }
+
+        self.triggered = true;
+        log::info!(
+            "Silence auto-stop: session {} silent for {} ms, stopping dictation",
+            session_id,
+            limit_ms
+        );
+        // Stop from a separate thread: stop_dictation joins this worker
+        // thread, so it must not run on it. Double stops are harmless —
+        // stop_dictation no-ops unless the app is still Recording.
+        let app = app.clone();
+        thread::spawn(move || {
+            if let Err(error) = crate::tray::stop_dictation(&app) {
+                log::warn!("Silence auto-stop could not stop dictation: {}", error);
+            }
+        });
+    }
+}
+
+/// Root-mean-square level of one chunk of mono samples; 0.0 for an empty
+/// chunk. Shared by the level meter, silence auto-stop, and silence trimming.
+fn chunk_rms(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+
+    (samples
+        .iter()
+        .map(|sample| (*sample as f64) * (*sample as f64))
+        .sum::<f64>()
+        / samples.len() as f64)
+        .sqrt() as f32
 }
 
 fn finalize_recording(
@@ -719,7 +861,7 @@ fn finalize_recording(
         ));
     }
 
-    let samples = trim_silence_placeholder(samples, source_sample_rate, silence_trim_enabled);
+    let samples = trim_silence(samples, source_sample_rate, silence_trim_enabled);
     let normalized = normalize_to_whisper_wav_samples(&samples, source_sample_rate);
     let wav_path = temp_dir.join(format!("{}.wav", info.session_id));
     write_wav(&wav_path, &normalized)?;
@@ -774,7 +916,7 @@ fn build_input_stream(
 ) -> Result<Stream, CommandError> {
     let channels = config.channels as usize;
     let err_fn = |error| {
-        eprintln!("LocalDictate audio stream error: {}", error);
+        log::error!("Audio stream error: {}", error);
     };
 
     match sample_format {
@@ -1037,8 +1179,38 @@ fn endpoint_ids_by_name() -> HashMap<String, Vec<String>> {
     endpoints
 }
 
-fn trim_silence_placeholder(samples: Vec<f32>, _sample_rate: u32, _enabled: bool) -> Vec<f32> {
-    samples
+/// Cuts leading and trailing silence (windowed RMS below
+/// `SILENCE_RMS_THRESHOLD`), keeping `TRIM_PADDING_MS` of padding on each
+/// side of the detected speech. When the whole recording is below the
+/// threshold the input is returned unchanged rather than trimmed to nothing.
+fn trim_silence(samples: Vec<f32>, sample_rate: u32, enabled: bool) -> Vec<f32> {
+    if !enabled || samples.is_empty() || sample_rate == 0 {
+        return samples;
+    }
+
+    let window_len = ((sample_rate as usize * TRIM_WINDOW_MS as usize) / 1_000).max(1);
+    let mut first_loud_sample = None;
+    let mut loud_end_sample = 0usize;
+
+    for (index, window) in samples.chunks(window_len).enumerate() {
+        if chunk_rms(window) >= SILENCE_RMS_THRESHOLD {
+            let window_start = index * window_len;
+            if first_loud_sample.is_none() {
+                first_loud_sample = Some(window_start);
+            }
+            loud_end_sample = window_start + window.len();
+        }
+    }
+
+    let Some(first_loud_sample) = first_loud_sample else {
+        // All silence: keep the recording unchanged instead of emptying it.
+        return samples;
+    };
+
+    let padding = (sample_rate as usize * TRIM_PADDING_MS as usize) / 1_000;
+    let start = first_loud_sample.saturating_sub(padding);
+    let end = (loud_end_sample + padding).min(samples.len());
+    samples[start..end].to_vec()
 }
 
 fn normalize_to_whisper_wav_samples(samples: &[f32], source_sample_rate: u32) -> Vec<f32> {
@@ -1174,6 +1346,7 @@ fn duration_ms(sample_count: usize, sample_rate: u32) -> u64 {
 }
 
 pub fn emit_recording_error(app: &AppHandle, error: CommandError) {
+    log::error!("Recording error {}: {}", error.code, error.message);
     let _ = app.emit(
         "audio://recording-error",
         RecordingErrorEvent {
@@ -1183,6 +1356,7 @@ pub fn emit_recording_error(app: &AppHandle, error: CommandError) {
     );
 }
 
+#[cfg(not(windows))]
 fn unsupported_audio_platform() -> CommandError {
     CommandError::new(
         "audio_platform_unsupported",
@@ -1206,6 +1380,71 @@ mod tests {
     fn duration_uses_source_sample_rate() {
         assert_eq!(duration_ms(4_800, 48_000), 100);
         assert_eq!(duration_ms(16_000, 16_000), 1_000);
+    }
+
+    fn silence(samples: usize) -> Vec<f32> {
+        vec![0.0; samples]
+    }
+
+    fn speech(samples: usize) -> Vec<f32> {
+        vec![0.5; samples]
+    }
+
+    const TEST_SAMPLE_RATE: u32 = 16_000;
+    /// 150 ms of padding at 16 kHz.
+    const PADDING_SAMPLES: usize = 2_400;
+
+    #[test]
+    fn trims_leading_and_trailing_silence_keeping_padding() {
+        // 1 s silence + 0.5 s speech + 1 s silence at 16 kHz.
+        let mut samples = silence(16_000);
+        samples.extend(speech(8_000));
+        samples.extend(silence(16_000));
+
+        let trimmed = trim_silence(samples.clone(), TEST_SAMPLE_RATE, true);
+
+        let expected_start = 16_000 - PADDING_SAMPLES;
+        let expected_end = 24_000 + PADDING_SAMPLES;
+        assert_eq!(trimmed, samples[expected_start..expected_end].to_vec());
+        assert_eq!(trimmed.len(), 8_000 + 2 * PADDING_SAMPLES);
+    }
+
+    #[test]
+    fn trim_keeps_short_edges_without_underflow() {
+        // Speech starts immediately and runs to the end: nothing to trim and
+        // padding must not extend past the buffer.
+        let samples = speech(8_000);
+
+        let trimmed = trim_silence(samples.clone(), TEST_SAMPLE_RATE, true);
+
+        assert_eq!(trimmed, samples);
+    }
+
+    #[test]
+    fn trim_returns_all_silence_unchanged() {
+        let samples = silence(32_000);
+
+        let trimmed = trim_silence(samples.clone(), TEST_SAMPLE_RATE, true);
+
+        assert_eq!(trimmed, samples);
+    }
+
+    #[test]
+    fn trim_disabled_returns_input_unchanged() {
+        let mut samples = silence(16_000);
+        samples.extend(speech(8_000));
+        samples.extend(silence(16_000));
+
+        let trimmed = trim_silence(samples.clone(), TEST_SAMPLE_RATE, false);
+
+        assert_eq!(trimmed, samples);
+    }
+
+    #[test]
+    fn chunk_rms_handles_empty_and_constant_signals() {
+        assert_eq!(chunk_rms(&[]), 0.0);
+        assert!((chunk_rms(&[0.5; 64]) - 0.5).abs() < 1e-6);
+        assert!(chunk_rms(&[0.0; 64]) < SILENCE_RMS_THRESHOLD);
     }
 
     #[test]

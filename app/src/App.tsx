@@ -4,6 +4,7 @@ import {
   AlertCircle,
   Archive,
   BarChart3,
+  BookOpen,
   CheckCircle2,
   Clipboard,
   ClipboardPaste,
@@ -177,8 +178,8 @@ const viewTitles: Record<ViewName, { eyebrow: string; title: string }> = {
 };
 
 const outputModeOptions: { label: string; value: OutputMode }[] = [
-  { label: "Save Only", value: "save_only" },
   { label: "Auto Paste", value: "auto_paste" },
+  { label: "Save Only", value: "save_only" },
   { label: "Copy", value: "copy_clipboard" },
   { label: "Copy + Paste", value: "copy_and_paste" },
 ];
@@ -208,6 +209,7 @@ function App() {
   const [copyingLastTranscript, setCopyingLastTranscript] = useState(false);
   const [recordingBusy, setRecordingBusy] = useState(false);
   const [microphones, setMicrophones] = useState<MicrophoneInfo[] | null>(null);
+  const [models, setModels] = useState<ModelInfo[] | null>(null);
   const [toast, setToast] = useState<ToastNotice | null>(null);
   const soundsEnabledRef = useRef(false);
   const heading = viewTitles[activeView];
@@ -232,13 +234,17 @@ function App() {
     setLoadState((current) => (current === "ready" ? current : "loading"));
 
     try {
-      const [data, devices] = await Promise.all([
+      const [data, devices, modelList] = await Promise.all([
         getDashboardData(),
         listMicrophones().catch(() => null),
+        listModels().catch(() => null),
       ]);
       setDashboardData(data);
       if (devices) {
         setMicrophones(devices);
+      }
+      if (modelList) {
+        setModels(modelList);
       }
       setLoadState("ready");
     } catch (error) {
@@ -629,7 +635,14 @@ function App() {
           <ErrorPanel message={loadError} onRetry={refresh} />
         ) : null}
         {dashboardData
-          ? renderView(activeView, setActiveView, dashboardData, actions, microphones)
+          ? renderView(
+              activeView,
+              setActiveView,
+              dashboardData,
+              actions,
+              microphones,
+              models,
+            )
           : null}
         {toast ? <Toast notice={toast} /> : null}
       </main>
@@ -643,6 +656,7 @@ function renderView(
   data: DashboardData,
   actions: ViewActions,
   microphones: MicrophoneInfo[] | null,
+  models: ModelInfo[] | null,
 ) {
   switch (activeView) {
     case "Transcribe":
@@ -670,6 +684,7 @@ function renderView(
           actions={actions}
           data={data}
           microphones={microphones}
+          models={models}
           setActiveView={setActiveView}
         />
       );
@@ -680,17 +695,39 @@ function DashboardView({
   actions,
   data,
   microphones,
+  models,
   setActiveView,
 }: {
   actions: ViewActions;
   data: DashboardData;
   microphones: MicrophoneInfo[] | null;
+  models: ModelInfo[] | null;
   setActiveView: (view: ViewName) => void;
 }) {
   const { appState, lastTranscript, settings } = data;
+  const modelReady = isSelectedModelReady(models, settings.selectedModelId);
 
   return (
     <>
+      {!modelReady ? (
+        <div className="setup-banner" role="alert">
+          <Download aria-hidden="true" size={16} />
+          <div>
+            <strong>Download a model to start dictating</strong>
+            <span>
+              Transcription needs a local Whisper model on this device.
+            </span>
+          </div>
+          <button
+            className="primary-button"
+            onClick={() => setActiveView("Models")}
+            type="button"
+          >
+            Get a model
+          </button>
+        </div>
+      ) : null}
+
       <section className="status-grid" aria-label="Current setup">
         <StatusCard
           action="Record"
@@ -1231,7 +1268,7 @@ function SettingsView({
         title="Output"
       >
         <SettingRow
-          description="What happens to a finished transcript."
+          description={`Auto paste inserts text at the cursor when transcription finishes. Save only keeps it in the Last Transcript Buffer for ${formatHotkey(settings.hotkeys.pasteLastTranscript)}.`}
           label="Output mode"
         >
           <SegmentedControl
@@ -1270,7 +1307,66 @@ function SettingsView({
           </select>
         </SettingRow>
       </SectionPanel>
+
+      <SectionPanel
+        icon={<BookOpen aria-hidden="true" size={16} />}
+        title="Custom vocabulary"
+      >
+        <p className="muted vocab-hint">
+          Names and jargon Whisper should expect, e.g. "Tauri, natkins,
+          whisper.cpp". Improves recognition of unusual words.
+        </p>
+        <VocabularyField
+          onSave={(vocabularyPrompt) =>
+            actions.updateSettings({ vocabularyPrompt })
+          }
+          value={settings.vocabularyPrompt}
+        />
+      </SectionPanel>
     </section>
+  );
+}
+
+function VocabularyField({
+  onSave,
+  value,
+}: {
+  onSave: (vocabularyPrompt: string) => void;
+  value: string;
+}) {
+  const [draft, setDraft] = useState(value);
+  const latestRef = useRef({ draft, onSave, value });
+  latestRef.current = { draft, onSave, value };
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  // Flush an unsaved draft if the view unmounts before blur fires.
+  useEffect(
+    () => () => {
+      const latest = latestRef.current;
+      if (latest.draft !== latest.value) {
+        latest.onSave(latest.draft);
+      }
+    },
+    [],
+  );
+
+  return (
+    <textarea
+      aria-label="Custom vocabulary"
+      className="vocab-textarea"
+      onBlur={() => {
+        if (draft !== value) {
+          onSave(draft);
+        }
+      }}
+      onChange={(event) => setDraft(event.currentTarget.value)}
+      placeholder="Tauri, natkins, whisper.cpp"
+      rows={3}
+      value={draft}
+    />
   );
 }
 
@@ -2256,6 +2352,42 @@ function AudioView({
             />
           </SettingRow>
           <SettingRow
+            description="End toggle/manual recordings after a pause (hold-to-talk is unaffected)."
+            label="Auto-stop on silence"
+          >
+            <Toggle
+              checked={settings.silenceAutoStopEnabled}
+              disabled={actions.savingSettings}
+              label="Auto-stop on silence"
+              onChange={(silenceAutoStopEnabled) =>
+                actions.updateSettings({ silenceAutoStopEnabled })
+              }
+            />
+          </SettingRow>
+          <SettingRow
+            description="Pause length that ends the recording."
+            label="Auto-stop pause"
+          >
+            <select
+              aria-label="Auto-stop pause length"
+              disabled={
+                actions.savingSettings || !settings.silenceAutoStopEnabled
+              }
+              onChange={(event) =>
+                actions.updateSettings({
+                  silenceAutoStopMs: Number(event.currentTarget.value),
+                })
+              }
+              value={String(settings.silenceAutoStopMs)}
+            >
+              <option value="1000">1s</option>
+              <option value="1500">1.5s</option>
+              <option value="2000">2s</option>
+              <option value="3000">3s</option>
+              <option value="5000">5s</option>
+            </select>
+          </SettingRow>
+          <SettingRow
             description="Ignore captures below this length."
             label="Minimum duration"
           >
@@ -2958,6 +3090,35 @@ function stateTone(status: AppStateSnapshot["status"]) {
     default:
       return "idle";
   }
+}
+
+function isSelectedModelReady(
+  models: ModelInfo[] | null,
+  selectedModelId: string | null,
+) {
+  if (!selectedModelId) {
+    return false;
+  }
+
+  if (!models) {
+    // Model list is still loading or unavailable; assume the selected
+    // model works instead of flashing a false call-to-action.
+    return true;
+  }
+
+  const selected = models.find(
+    (model) => model.id === selectedModelId || model.selected,
+  );
+  if (!selected) {
+    return false;
+  }
+
+  return (
+    selected.status === "downloaded" ||
+    selected.status === "selected" ||
+    selected.status === "loaded" ||
+    selected.status === "update_available"
+  );
 }
 
 function modelStatusLabel(status: ModelInfo["status"]) {

@@ -70,7 +70,9 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id().as_ref() {
             MENU_START_DICTATION => {
-                let _ = start_dictation(app);
+                // Tray start behaves like the toggle hotkey (the user is not
+                // holding any key), so silence auto-stop applies.
+                let _ = start_dictation(app, true);
             }
             MENU_STOP_DICTATION => {
                 let _ = stop_dictation(app);
@@ -101,7 +103,10 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-pub fn start_dictation(app: &AppHandle) -> Result<(), CommandError> {
+/// Starts dictation. `allow_auto_stop` controls whether silence auto-stop may
+/// end this recording: true for toggle-style starts (toggle hotkey, tray
+/// menu), false for hold-to-talk where the user is still holding the key.
+pub fn start_dictation(app: &AppHandle, allow_auto_stop: bool) -> Result<(), CommandError> {
     let state = app.state::<BackendState>();
     let snapshot = state.app_state()?.snapshot();
 
@@ -109,7 +114,7 @@ pub fn start_dictation(app: &AppHandle) -> Result<(), CommandError> {
         snapshot.status,
         AppStatus::Idle | AppStatus::Ready | AppStatus::Error | AppStatus::Recording
     ) {
-        let _ = audio::start_recording_for_app(app, None)?;
+        let _ = audio::start_recording_for_app(app, None, allow_auto_stop)?;
         let status = state.app_state()?.status().clone();
         update_tray_status(app, status);
     }

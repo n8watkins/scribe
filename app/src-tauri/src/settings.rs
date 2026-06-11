@@ -1,8 +1,17 @@
 use serde::{Deserialize, Serialize};
 
+/// Bumped whenever a shipped default changes in a way that should be applied
+/// once to existing installs (see `migrate_defaults`). Stored settings with a
+/// lower `defaults_version` get the new defaults applied exactly once.
+pub const CURRENT_DEFAULTS_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
+    /// Version of the shipped defaults already applied to these settings.
+    /// Missing in pre-versioning DBs, which deserialize as 0.
+    #[serde(default)]
+    pub defaults_version: u32,
     pub launch_at_startup: bool,
     pub minimize_to_tray: bool,
     pub show_floating_pill: bool,
@@ -15,9 +24,20 @@ pub struct AppSettings {
     pub min_recording_ms: u32,
     pub max_recording_ms: u32,
     pub silence_trim_enabled: bool,
+    /// Automatically stop toggle/UI-started recordings after a stretch of
+    /// continuous silence. Never applies to hold-to-talk or test clips.
+    #[serde(default = "default_silence_auto_stop_enabled")]
+    pub silence_auto_stop_enabled: bool,
+    /// How long the audio must stay silent before auto-stop fires.
+    #[serde(default = "default_silence_auto_stop_ms")]
+    pub silence_auto_stop_ms: u32,
     pub selected_mic_id: Option<String>,
     pub selected_model_id: Option<String>,
     pub language: Language,
+    /// Custom vocabulary / spelling hints passed to whisper.cpp via
+    /// `--prompt` when non-empty.
+    #[serde(default)]
+    pub vocabulary_prompt: String,
     pub output_mode: OutputMode,
     pub paste_method: PasteMethod,
     pub history_enabled: bool,
@@ -30,6 +50,14 @@ pub struct AppSettings {
     #[serde(default)]
     pub pill_y: Option<i32>,
     pub hotkeys: HotkeySettings,
+}
+
+fn default_silence_auto_stop_enabled() -> bool {
+    true
+}
+
+fn default_silence_auto_stop_ms() -> u32 {
+    2_000
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +139,7 @@ impl HotkeySettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            defaults_version: CURRENT_DEFAULTS_VERSION,
             launch_at_startup: false,
             minimize_to_tray: true,
             show_floating_pill: true,
@@ -120,10 +149,13 @@ impl Default for AppSettings {
             min_recording_ms: 300,
             max_recording_ms: 180_000,
             silence_trim_enabled: true,
+            silence_auto_stop_enabled: default_silence_auto_stop_enabled(),
+            silence_auto_stop_ms: default_silence_auto_stop_ms(),
             selected_mic_id: None,
             selected_model_id: Some("small.en-q5_1".to_string()),
             language: Language::En,
-            output_mode: OutputMode::SaveOnly,
+            vocabulary_prompt: String::new(),
+            output_mode: OutputMode::AutoPaste,
             paste_method: PasteMethod::DirectInsert,
             history_enabled: true,
             save_audio_clips: false,
@@ -136,6 +168,26 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
+    /// One-time migration of changed shipped defaults. Settings stored before
+    /// defaults version 1 (i.e. `defaults_version` 0) move from the old
+    /// SaveOnly default output mode to AutoPaste — but only when the stored
+    /// value still is SaveOnly. After this runs once, `defaults_version` is
+    /// current, so a user who later deliberately picks SaveOnly is never
+    /// overridden again. Returns true when the settings changed and should be
+    /// saved back.
+    pub fn migrate_defaults(&mut self) -> bool {
+        if self.defaults_version >= CURRENT_DEFAULTS_VERSION {
+            return false;
+        }
+
+        if self.defaults_version < 1 && self.output_mode == OutputMode::SaveOnly {
+            self.output_mode = OutputMode::AutoPaste;
+        }
+
+        self.defaults_version = CURRENT_DEFAULTS_VERSION;
+        true
+    }
+
     pub fn validate(&self) -> Result<(), SettingsValidationError> {
         if self.min_recording_ms == 0 {
             return Err(SettingsValidationError::new(
@@ -146,6 +198,12 @@ impl AppSettings {
         if self.max_recording_ms < self.min_recording_ms {
             return Err(SettingsValidationError::new(
                 "maxRecordingMs must be greater than or equal to minRecordingMs.",
+            ));
+        }
+
+        if !(500..=10_000).contains(&self.silence_auto_stop_ms) {
+            return Err(SettingsValidationError::new(
+                "silenceAutoStopMs must be between 500 and 10000.",
             ));
         }
 
@@ -188,11 +246,15 @@ mod tests {
     fn defaults_match_prd_baseline() {
         let settings = AppSettings::default();
 
+        assert_eq!(settings.defaults_version, CURRENT_DEFAULTS_VERSION);
         assert_eq!(settings.recording_mode, RecordingMode::Both);
         assert_eq!(settings.min_recording_ms, 300);
         assert_eq!(settings.max_recording_ms, 180_000);
-        assert_eq!(settings.output_mode, OutputMode::SaveOnly);
+        assert_eq!(settings.output_mode, OutputMode::AutoPaste);
         assert_eq!(settings.paste_method, PasteMethod::DirectInsert);
+        assert!(settings.silence_auto_stop_enabled);
+        assert_eq!(settings.silence_auto_stop_ms, 2_000);
+        assert_eq!(settings.vocabulary_prompt, "");
         assert!(settings.history_enabled);
         assert!(!settings.save_audio_clips);
     }
@@ -203,6 +265,102 @@ mod tests {
         settings.history_retention_days = Some(14);
 
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn validates_silence_auto_stop_ms_range() {
+        let mut settings = AppSettings::default();
+
+        settings.silence_auto_stop_ms = 499;
+        assert!(settings.validate().is_err());
+
+        settings.silence_auto_stop_ms = 500;
+        assert!(settings.validate().is_ok());
+
+        settings.silence_auto_stop_ms = 10_000;
+        assert!(settings.validate().is_ok());
+
+        settings.silence_auto_stop_ms = 10_001;
+        assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn migrates_save_only_default_to_auto_paste_once() {
+        let mut settings = AppSettings {
+            defaults_version: 0,
+            output_mode: OutputMode::SaveOnly,
+            ..AppSettings::default()
+        };
+
+        assert!(settings.migrate_defaults());
+        assert_eq!(settings.output_mode, OutputMode::AutoPaste);
+        assert_eq!(settings.defaults_version, CURRENT_DEFAULTS_VERSION);
+
+        // Already migrated: never runs again.
+        assert!(!settings.migrate_defaults());
+    }
+
+    #[test]
+    fn does_not_migrate_non_default_output_mode() {
+        let mut settings = AppSettings {
+            defaults_version: 0,
+            output_mode: OutputMode::CopyClipboard,
+            ..AppSettings::default()
+        };
+
+        assert!(settings.migrate_defaults());
+        assert_eq!(settings.output_mode, OutputMode::CopyClipboard);
+        assert_eq!(settings.defaults_version, CURRENT_DEFAULTS_VERSION);
+    }
+
+    #[test]
+    fn does_not_override_deliberate_save_only_after_migration() {
+        let mut settings = AppSettings {
+            output_mode: OutputMode::SaveOnly,
+            ..AppSettings::default()
+        };
+
+        assert!(!settings.migrate_defaults());
+        assert_eq!(settings.output_mode, OutputMode::SaveOnly);
+    }
+
+    #[test]
+    fn legacy_settings_json_gains_new_field_defaults() {
+        // Pre-versioning settings JSON: no defaultsVersion,
+        // silenceAutoStop*, or vocabularyPrompt fields.
+        let json = serde_json::json!({
+            "launchAtStartup": false,
+            "minimizeToTray": true,
+            "showFloatingPill": true,
+            "notificationsEnabled": true,
+            "soundsEnabled": true,
+            "recordingMode": "both",
+            "minRecordingMs": 300,
+            "maxRecordingMs": 180000,
+            "silenceTrimEnabled": true,
+            "selectedMicId": null,
+            "selectedModelId": "small.en-q5_1",
+            "language": "en",
+            "outputMode": "save_only",
+            "pasteMethod": "direct_insert",
+            "historyEnabled": true,
+            "saveAudioClips": false,
+            "historyRetentionDays": 30,
+            "hotkeys": {
+                "holdToTalk": "Ctrl+Shift",
+                "toggleDictation": "Backquote",
+                "pasteLastTranscript": "Ctrl+Alt+V",
+                "openDashboard": "Ctrl+Alt+D"
+            }
+        });
+
+        let settings: AppSettings = serde_json::from_value(json).unwrap();
+
+        assert_eq!(settings.defaults_version, 0);
+        assert!(settings.silence_auto_stop_enabled);
+        assert_eq!(settings.silence_auto_stop_ms, 2_000);
+        assert_eq!(settings.vocabulary_prompt, "");
+        assert_eq!(settings.output_mode, OutputMode::SaveOnly);
     }
 
     #[test]

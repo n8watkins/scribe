@@ -39,6 +39,7 @@ export type HotkeySettings = {
 };
 
 export type AppSettings = {
+  defaultsVersion: number;
   launchAtStartup: boolean;
   minimizeToTray: boolean;
   showFloatingPill: boolean;
@@ -48,9 +49,12 @@ export type AppSettings = {
   minRecordingMs: number;
   maxRecordingMs: number;
   silenceTrimEnabled: boolean;
+  silenceAutoStopEnabled: boolean;
+  silenceAutoStopMs: number;
   selectedMicId: string | null;
   selectedModelId: string | null;
   language: Language;
+  vocabularyPrompt: string;
   outputMode: OutputMode;
   pasteMethod: PasteMethod;
   historyEnabled: boolean;

@@ -61,22 +61,42 @@ fn transcribe_recording_inner(
         model_manager::selected_model_path(app, &db)?
     };
     let language = whisper_language(&settings.language);
+    log::info!(
+        "Transcription started for session {} (model {}, recording {} ms)",
+        recording.session_id,
+        model_id,
+        recording.duration_ms
+    );
     let whisper_result = whisper::transcribe(
         app,
         WhisperRequest {
             model_path,
             wav_path,
             language: language.clone(),
+            vocabulary_prompt: settings.vocabulary_prompt.clone(),
         },
     );
 
     let whisper_result = match whisper_result {
         Ok(result) => result,
         Err(error) => {
+            log::error!(
+                "Transcription failed for session {} (model {}): {}",
+                recording.session_id,
+                model_id,
+                error.message
+            );
             transition_after_failure(app);
             return Err(error);
         }
     };
+
+    log::info!(
+        "Transcription finished for session {} (model {}, latency {} ms)",
+        recording.session_id,
+        model_id,
+        whisper_result.latency_ms
+    );
 
     let Some(mut transcript) = Transcript::new_last_buffer(
         whisper_result.text,
