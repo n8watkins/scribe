@@ -581,6 +581,19 @@ fn no_test_clip() -> CommandError {
 fn timeout_recording_for_app(app: &AppHandle, session_id: &str) -> Result<(), CommandError> {
     let result = stop_recording_with_reason(app, StopReason::Timeout, Some(session_id))?;
     let _ = app.emit("audio://recording-timeout", &result);
+
+    // Stopping moved the state machine into Transcribing: a timed-out
+    // recording must be transcribed exactly like a manual stop, or the app
+    // stays stuck on Transcribing forever.
+    if result.status == RecordingResultStatus::TooShort {
+        crate::dictation::emit_dictation_empty(app);
+    } else {
+        crate::dictation::transcribe_recording_for_app(app, result)?;
+    }
+
+    let state = app.state::<BackendState>();
+    let status = state.app_state()?.status().clone();
+    crate::tray::update_tray_status(app, status);
     Ok(())
 }
 
