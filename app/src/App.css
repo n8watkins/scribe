@@ -890,6 +890,13 @@ textarea {
   font-size: 12px;
 }
 
+.duration-field {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
 .setting-control .segmented-control {
   width: min(240px, 100%);
 }

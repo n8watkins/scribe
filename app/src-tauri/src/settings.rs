@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 /// Bumped whenever a shipped default changes in a way that should be applied
 /// once to existing installs (see `migrate_defaults`). Stored settings with a
 /// lower `defaults_version` get the new defaults applied exactly once.
-pub const CURRENT_DEFAULTS_VERSION: u32 = 3;
+pub const CURRENT_DEFAULTS_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,11 +58,11 @@ pub struct AppSettings {
 }
 
 fn default_silence_auto_stop_enabled() -> bool {
-    false
+    true
 }
 
 fn default_silence_auto_stop_ms() -> u32 {
-    5_000
+    60_000
 }
 
 fn default_incremental_transcription_enabled() -> bool {
@@ -114,8 +114,8 @@ impl Default for HotkeySettings {
         Self {
             hold_to_talk: "Ctrl+Win".to_string(),
             toggle_dictation: "Backquote".to_string(),
-            paste_last_transcript: "Ctrl+Shift+V".to_string(),
-            open_dashboard: "Ctrl+Alt+V".to_string(),
+            paste_last_transcript: "Ctrl+Alt+V".to_string(),
+            open_dashboard: "Ctrl+Alt+F".to_string(),
         }
     }
 }
@@ -156,7 +156,7 @@ impl Default for AppSettings {
             sounds_enabled: true,
             recording_mode: RecordingMode::Both,
             min_recording_ms: 300,
-            max_recording_ms: 180_000,
+            max_recording_ms: 600_000,
             silence_trim_enabled: true,
             silence_auto_stop_enabled: default_silence_auto_stop_enabled(),
             silence_auto_stop_ms: default_silence_auto_stop_ms(),
@@ -168,7 +168,7 @@ impl Default for AppSettings {
             output_mode: OutputMode::AutoPaste,
             paste_method: PasteMethod::DirectInsert,
             history_enabled: true,
-            save_audio_clips: false,
+            save_audio_clips: true,
             history_retention_days: Some(30),
             pill_x: None,
             pill_y: None,
@@ -212,6 +212,32 @@ impl AppSettings {
             self.hotkeys = HotkeySettings::default();
         }
 
+        if self.defaults_version < 4 {
+            // v4: longer dictations by default (10 min cap), silence
+            // auto-stop on with a 60 s threshold, raw audio kept for in-app
+            // playback, and paste/dashboard binds moved to Ctrl+Alt+V /
+            // Ctrl+Alt+F. As everywhere above, only values still on the old
+            // defaults are moved.
+            if self.max_recording_ms == 180_000 {
+                self.max_recording_ms = 600_000;
+            }
+            if !self.silence_auto_stop_enabled {
+                self.silence_auto_stop_enabled = true;
+            }
+            if self.silence_auto_stop_ms == 5_000 {
+                self.silence_auto_stop_ms = 60_000;
+            }
+            // save_audio_clips was inert before v4, so no install chose it.
+            self.save_audio_clips = true;
+            if self.hotkeys.hold_to_talk == "Ctrl+Win"
+                && self.hotkeys.toggle_dictation == "Backquote"
+                && self.hotkeys.paste_last_transcript == "Ctrl+Shift+V"
+                && self.hotkeys.open_dashboard == "Ctrl+Alt+V"
+            {
+                self.hotkeys = HotkeySettings::default();
+            }
+        }
+
         self.defaults_version = CURRENT_DEFAULTS_VERSION;
         true
     }
@@ -229,9 +255,9 @@ impl AppSettings {
             ));
         }
 
-        if !(500..=30_000).contains(&self.silence_auto_stop_ms) {
+        if !(500..=300_000).contains(&self.silence_auto_stop_ms) {
             return Err(SettingsValidationError::new(
-                "silenceAutoStopMs must be between 500 and 30000.",
+                "silenceAutoStopMs must be between 500 and 300000.",
             ));
         }
 
@@ -277,15 +303,15 @@ mod tests {
         assert_eq!(settings.defaults_version, CURRENT_DEFAULTS_VERSION);
         assert_eq!(settings.recording_mode, RecordingMode::Both);
         assert_eq!(settings.min_recording_ms, 300);
-        assert_eq!(settings.max_recording_ms, 180_000);
+        assert_eq!(settings.max_recording_ms, 600_000);
         assert_eq!(settings.output_mode, OutputMode::AutoPaste);
         assert_eq!(settings.paste_method, PasteMethod::DirectInsert);
-        assert!(!settings.silence_auto_stop_enabled);
-        assert_eq!(settings.silence_auto_stop_ms, 5_000);
+        assert!(settings.silence_auto_stop_enabled);
+        assert_eq!(settings.silence_auto_stop_ms, 60_000);
         assert!(settings.incremental_transcription_enabled);
         assert_eq!(settings.vocabulary_prompt, "");
         assert!(settings.history_enabled);
-        assert!(!settings.save_audio_clips);
+        assert!(settings.save_audio_clips);
     }
 
     #[test]
@@ -306,10 +332,10 @@ mod tests {
         settings.silence_auto_stop_ms = 500;
         assert!(settings.validate().is_ok());
 
-        settings.silence_auto_stop_ms = 30_000;
+        settings.silence_auto_stop_ms = 300_000;
         assert!(settings.validate().is_ok());
 
-        settings.silence_auto_stop_ms = 30_001;
+        settings.silence_auto_stop_ms = 300_001;
         assert!(settings.validate().is_err());
     }
 
@@ -330,21 +356,71 @@ mod tests {
     }
 
     #[test]
-    fn migrates_auto_stop_to_opt_in_once() {
+    fn migrates_auto_stop_to_enabled_with_60s_threshold() {
         let mut settings = AppSettings {
             defaults_version: 1,
-            silence_auto_stop_enabled: true,
+            silence_auto_stop_enabled: false,
+            silence_auto_stop_ms: 5_000,
             ..AppSettings::default()
         };
 
         assert!(settings.migrate_defaults());
-        assert!(!settings.silence_auto_stop_enabled);
+        assert!(settings.silence_auto_stop_enabled);
+        assert_eq!(settings.silence_auto_stop_ms, 60_000);
         assert_eq!(settings.defaults_version, CURRENT_DEFAULTS_VERSION);
 
-        // Re-enabling after migration sticks.
-        settings.silence_auto_stop_enabled = true;
+        // Disabling after migration sticks.
+        settings.silence_auto_stop_enabled = false;
         assert!(!settings.migrate_defaults());
+        assert!(!settings.silence_auto_stop_enabled);
+    }
+
+    #[test]
+    fn migrates_v3_defaults_to_v4_once() {
+        let mut settings = AppSettings {
+            defaults_version: 3,
+            max_recording_ms: 180_000,
+            silence_auto_stop_enabled: false,
+            silence_auto_stop_ms: 5_000,
+            save_audio_clips: false,
+            hotkeys: HotkeySettings {
+                hold_to_talk: "Ctrl+Win".to_string(),
+                toggle_dictation: "Backquote".to_string(),
+                paste_last_transcript: "Ctrl+Shift+V".to_string(),
+                open_dashboard: "Ctrl+Alt+V".to_string(),
+            },
+            ..AppSettings::default()
+        };
+
+        assert!(settings.migrate_defaults());
+        assert_eq!(settings.max_recording_ms, 600_000);
         assert!(settings.silence_auto_stop_enabled);
+        assert_eq!(settings.silence_auto_stop_ms, 60_000);
+        assert!(settings.save_audio_clips);
+        assert_eq!(settings.hotkeys, HotkeySettings::default());
+        assert_eq!(settings.defaults_version, CURRENT_DEFAULTS_VERSION);
+    }
+
+    #[test]
+    fn v4_does_not_touch_customized_duration_or_hotkeys() {
+        let mut settings = AppSettings {
+            defaults_version: 3,
+            max_recording_ms: 240_000,
+            silence_auto_stop_ms: 10_000,
+            hotkeys: HotkeySettings {
+                hold_to_talk: "Ctrl+Win".to_string(),
+                toggle_dictation: "F9".to_string(),
+                paste_last_transcript: "Ctrl+Shift+V".to_string(),
+                open_dashboard: "Ctrl+Alt+V".to_string(),
+            },
+            ..AppSettings::default()
+        };
+
+        assert!(settings.migrate_defaults());
+        assert_eq!(settings.max_recording_ms, 240_000);
+        assert_eq!(settings.silence_auto_stop_ms, 10_000);
+        assert_eq!(settings.hotkeys.toggle_dictation, "F9");
+        assert_eq!(settings.hotkeys.paste_last_transcript, "Ctrl+Shift+V");
     }
 
     #[test]
@@ -404,8 +480,8 @@ mod tests {
         let settings: AppSettings = serde_json::from_value(json).unwrap();
 
         assert_eq!(settings.defaults_version, 0);
-        assert!(!settings.silence_auto_stop_enabled);
-        assert_eq!(settings.silence_auto_stop_ms, 5_000);
+        assert!(settings.silence_auto_stop_enabled);
+        assert_eq!(settings.silence_auto_stop_ms, 60_000);
         assert!(settings.incremental_transcription_enabled);
         assert_eq!(settings.vocabulary_prompt, "");
         assert_eq!(settings.output_mode, OutputMode::SaveOnly);
@@ -417,8 +493,8 @@ mod tests {
 
         assert_eq!(hotkeys.hold_to_talk, "Ctrl+Win");
         assert_eq!(hotkeys.toggle_dictation, "Backquote");
-        assert_eq!(hotkeys.paste_last_transcript, "Ctrl+Shift+V");
-        assert_eq!(hotkeys.open_dashboard, "Ctrl+Alt+V");
+        assert_eq!(hotkeys.paste_last_transcript, "Ctrl+Alt+V");
+        assert_eq!(hotkeys.open_dashboard, "Ctrl+Alt+F");
     }
 
     #[test]

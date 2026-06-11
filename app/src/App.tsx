@@ -2422,6 +2422,9 @@ function AudioView({
               <option value="10000">10s</option>
               <option value="15000">15s</option>
               <option value="30000">30s</option>
+              <option value="60000">60s</option>
+              <option value="120000">2min</option>
+              <option value="300000">5min</option>
             </select>
           </SettingRow>
           <SettingRow
@@ -2438,36 +2441,42 @@ function AudioView({
             />
           </SettingRow>
           <SettingRow
-            description="Ignore captures below this length."
-            label="Minimum duration"
+            description="Ignore captures below this length, in milliseconds."
+            label="Minimum duration (ms)"
           >
-            <input
-              disabled={actions.savingSettings}
-              min={1}
-              onChange={(event) =>
-                actions.updateSettings({
-                  minRecordingMs: Number(event.currentTarget.value),
-                })
-              }
-              type="number"
-              value={settings.minRecordingMs}
-            />
+            <div className="duration-field">
+              <input
+                disabled={actions.savingSettings}
+                min={1}
+                onChange={(event) =>
+                  actions.updateSettings({
+                    minRecordingMs: Number(event.currentTarget.value),
+                  })
+                }
+                type="number"
+                value={settings.minRecordingMs}
+              />
+              <small className="muted">= {formatMsReadable(settings.minRecordingMs)}</small>
+            </div>
           </SettingRow>
           <SettingRow
-            description="Cap single dictation sessions."
-            label="Maximum duration"
+            description="Cap single dictation sessions, in milliseconds (600000 = 10 minutes)."
+            label="Maximum duration (ms)"
           >
-            <input
-              disabled={actions.savingSettings}
-              min={settings.minRecordingMs}
-              onChange={(event) =>
-                actions.updateSettings({
-                  maxRecordingMs: Number(event.currentTarget.value),
-                })
-              }
-              type="number"
-              value={settings.maxRecordingMs}
-            />
+            <div className="duration-field">
+              <input
+                disabled={actions.savingSettings}
+                min={settings.minRecordingMs}
+                onChange={(event) =>
+                  actions.updateSettings({
+                    maxRecordingMs: Number(event.currentTarget.value),
+                  })
+                }
+                type="number"
+                value={settings.maxRecordingMs}
+              />
+              <small className="muted">= {formatMsReadable(settings.maxRecordingMs)}</small>
+            </div>
           </SettingRow>
           <SettingRow description="Keep original clips for review." label="Save raw audio">
             <Toggle
@@ -2766,6 +2775,21 @@ function SectionPanel({
       <div className="settings-list">{children}</div>
     </article>
   );
+}
+
+/// Renders a millisecond value as a human-readable duration, e.g.
+/// 300 -> "0.3 s", 5000 -> "5 s", 600000 -> "10 min".
+function formatMsReadable(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return "0 s";
+  }
+  const totalSeconds = ms / 1000;
+  if (totalSeconds < 60) {
+    return `${Number(totalSeconds.toFixed(1))} s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.round(totalSeconds - minutes * 60);
+  return seconds > 0 ? `${minutes} min ${seconds} s` : `${minutes} min`;
 }
 
 function SettingRow({
