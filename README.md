@@ -45,11 +45,14 @@ Prerequisites: Windows 10/11 x64, [Rust](https://rustup.rs/) (stable, MSVC toolc
 
    ```text
    whisper-cli.exe
+   whisper-server.exe
    whisper.dll
    ggml.dll
    ggml-base.dll
    ggml-cpu.dll
    ```
+
+   `whisper-server.exe` powers the warm transcriber (the model stays loaded in RAM between dictations); `whisper-cli.exe` is the fallback path.
 
    Don't copy the rest of the zip — everything in `resources/` gets bundled into the installer.
 
@@ -70,7 +73,7 @@ Design and architecture docs live in [`docs/`](docs/), including the [PRD](docs/
 ## Roadmap / known gaps
 
 - No code signing yet (SmartScreen warning on install).
-- Silence trimming is a placeholder (toggle exists, trimming is a no-op).
+- Incremental transcription (text appearing while you talk) is planned; the warm transcription service was built segment-first to support it.
 - Transcript search uses SQL `LIKE`; fine for thousands of entries, not millions.
 - Launch-at-startup setting is not yet wired to the OS.
 

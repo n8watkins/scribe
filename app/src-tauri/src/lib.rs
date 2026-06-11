@@ -13,6 +13,7 @@ pub mod stats;
 pub mod transcript;
 pub mod tray;
 pub mod whisper;
+pub mod whisper_server;
 
 use commands::BackendState;
 use db::Database;
@@ -87,6 +88,7 @@ pub fn run() {
             );
             db.enforce_history_retention(settings.history_retention_days)?;
             app.manage(BackendState::new(db, audio_temp_dir));
+            app.manage(whisper_server::WarmTranscriber::new());
             hotkeys::setup(app.handle(), &settings.hotkeys)?;
             tray::setup(app.handle())?;
             log::info!("LocalDictate setup complete");
@@ -154,6 +156,15 @@ pub fn run() {
             commands::delete_model,
             commands::select_model
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // Tear down the resident whisper-server process so no orphan
+            // survives app quit (shutdown is safe to call multiple times).
+            if let tauri::RunEvent::Exit = event {
+                if let Some(warm) = app.try_state::<whisper_server::WarmTranscriber>() {
+                    warm.shutdown();
+                }
+            }
+        });
 }

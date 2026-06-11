@@ -52,7 +52,7 @@ pub fn transcribe(
         ));
     }
 
-    let executable = resolve_whisper_executable(app)?;
+    let executable = resolve_bundled_executable(app, "whisper-cli.exe")?;
     let output_prefix = output_prefix_for_wav(&request.wav_path);
     let output_txt_path = output_prefix.with_extension("txt");
     let args = whisper_args(
@@ -87,24 +87,27 @@ pub fn transcribe(
     Ok(WhisperTranscription { text, latency_ms })
 }
 
-fn resolve_whisper_executable(app: &AppHandle) -> Result<PathBuf, CommandError> {
+/// Resolves a bundled whisper.cpp executable (e.g. `whisper-cli.exe` or
+/// `whisper-server.exe`) under `$RESOURCE/bin/windows/`.
+pub(crate) fn resolve_bundled_executable(
+    app: &AppHandle,
+    file_name: &str,
+) -> Result<PathBuf, CommandError> {
     let resource_dir = app.path().resource_dir().map_err(|error| {
         CommandError::new(
             "missing_whisper_executable",
             format!("Could not locate bundled app resources. {}", error),
         )
     })?;
-    let executable = resource_dir
-        .join("bin")
-        .join("windows")
-        .join("whisper-cli.exe");
+    let executable = resource_dir.join("bin").join("windows").join(file_name);
 
     if !executable.is_file() {
         return Err(CommandError::new(
             "missing_whisper_executable",
             format!(
-                "Bundled whisper.cpp executable is missing at {}. Install the app build that includes resources/bin/windows/whisper-cli.exe.",
-                executable.display()
+                "Bundled whisper.cpp executable is missing at {}. Install the app build that includes resources/bin/windows/{}.",
+                executable.display(),
+                file_name
             ),
         ));
     }
@@ -179,7 +182,9 @@ fn parse_output_text(output_txt_path: &Path, stdout: &[u8]) -> Result<String, Co
     Ok(normalize_transcript_text(&raw_text))
 }
 
-fn normalize_transcript_text(raw_text: &str) -> String {
+/// Shared transcript normalization so the warm-server path and the CLI path
+/// produce identically trimmed text.
+pub(crate) fn normalize_transcript_text(raw_text: &str) -> String {
     raw_text
         .lines()
         .map(str::trim)

@@ -11,7 +11,8 @@ use crate::{
     model_manager, output,
     settings::Language,
     transcript::Transcript,
-    whisper::{self, WhisperRequest},
+    whisper::WhisperRequest,
+    whisper_server::WarmTranscriber,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -67,7 +68,9 @@ fn transcribe_recording_inner(
         model_id,
         recording.duration_ms
     );
-    let whisper_result = whisper::transcribe(
+    // The warm whisper-server transcriber falls back to whisper-cli
+    // internally when the server path is unavailable.
+    let whisper_result = app.state::<WarmTranscriber>().transcribe(
         app,
         WhisperRequest {
             model_path,
