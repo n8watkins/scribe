@@ -394,6 +394,27 @@ pub fn open_models_folder(app: tauri::AppHandle) -> Result<(), CommandError> {
     open_folder(&app, dir)
 }
 
+#[tauri::command]
+pub async fn check_for_update() -> Result<crate::update_check::UpdateCheckResult, CommandError> {
+    tauri::async_runtime::spawn_blocking(crate::update_check::check_for_update)
+        .await
+        .map_err(|error| CommandError::new("update_check_failed", error.to_string()))?
+}
+
+#[tauri::command]
+pub fn open_release_page(app: tauri::AppHandle, url: Option<String>) -> Result<(), CommandError> {
+    let url = url.unwrap_or_else(|| crate::update_check::RELEASES_PAGE_URL.to_string());
+    if !url.starts_with("https://github.com/n8watkins/localdictate/") {
+        return Err(CommandError::new(
+            "invalid_url",
+            "Refusing to open a non-release URL.",
+        ));
+    }
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|error| CommandError::new("open_url_failed", error.to_string()))
+}
+
 fn open_folder(app: &tauri::AppHandle, dir: std::path::PathBuf) -> Result<(), CommandError> {
     std::fs::create_dir_all(&dir).map_err(|error| {
         CommandError::new(

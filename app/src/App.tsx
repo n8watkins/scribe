@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getVersion as getAppVersion } from "@tauri-apps/api/app";
 import {
   AlertCircle,
   Archive,
@@ -52,6 +53,8 @@ import {
   openModelsFolder,
   pasteLastTranscript,
   pasteTranscript,
+  checkForUpdate,
+  openReleasePage,
   rebindHotkey,
   recordTestClip,
   resetHotkeysToDefaults,
@@ -66,6 +69,7 @@ import {
   updateSettings,
   type AudioLevelEvent,
   type AppSettings,
+  type UpdateCheckResult,
   type AppStateSnapshot,
   type BasicStats,
   type DashboardData,
@@ -261,6 +265,25 @@ function App() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // One quiet update check shortly after launch; network failures (offline,
+  // private repo) are ignored.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void checkForUpdate()
+        .then((result) => {
+          if (result.updateAvailable) {
+            setToast({
+              id: Date.now(),
+              tone: "info",
+              message: `LocalDictate v${result.latestVersion} is available — see About to view the release.`,
+            });
+          }
+        })
+        .catch(() => {});
+    }, 5000);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     if (!toast) {
@@ -2733,6 +2756,33 @@ function AudioView({
 }
 
 function AboutView() {
+  const [version, setVersion] = useState("...");
+  const [checking, setChecking] = useState(false);
+  const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(
+    null,
+  );
+  const [updateError, setUpdateError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void getAppVersion().then(setVersion).catch(() => setVersion("unknown"));
+  }, []);
+
+  const handleCheckForUpdate = async () => {
+    if (checking) {
+      return;
+    }
+    setChecking(true);
+    setUpdateError(null);
+    setUpdateResult(null);
+    try {
+      setUpdateResult(await checkForUpdate());
+    } catch (cause) {
+      setUpdateError(commandErrorMessage(cause));
+    } finally {
+      setChecking(false);
+    }
+  };
+
   return (
     <section className="view-grid">
       <article className="buffer-card span-2">
@@ -2756,7 +2806,37 @@ function AboutView() {
           description="Current packaged application version."
           label="Version"
         >
-          <strong>0.1.0</strong>
+          <strong>v{version}</strong>
+        </SettingRow>
+        <SettingRow
+          description={
+            updateError ??
+            (updateResult
+              ? updateResult.updateAvailable
+                ? `Version ${updateResult.latestVersion} is available (you have ${updateResult.currentVersion}).`
+                : `You are on the latest version (${updateResult.currentVersion}).`
+              : "Compare this install against the latest GitHub release.")
+          }
+          label="Updates"
+        >
+          {updateResult?.updateAvailable ? (
+            <button
+              className="primary-button"
+              onClick={() => void openReleasePage(updateResult.releaseUrl)}
+              type="button"
+            >
+              View release
+            </button>
+          ) : (
+            <button
+              className="ghost-button"
+              disabled={checking}
+              onClick={() => void handleCheckForUpdate()}
+              type="button"
+            >
+              {checking ? "Checking..." : "Check for updates"}
+            </button>
+          )}
         </SettingRow>
         <SettingRow
           description="Transcription runs locally after model download."

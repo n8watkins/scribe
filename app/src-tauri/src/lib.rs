@@ -14,6 +14,7 @@ pub mod settings;
 pub mod stats;
 pub mod transcript;
 pub mod tray;
+pub mod update_check;
 pub mod whisper;
 pub mod whisper_server;
 
@@ -192,7 +193,9 @@ pub fn run() {
             commands::cancel_model_download,
             commands::retry_model_download,
             commands::delete_model,
-            commands::select_model
+            commands::select_model,
+            commands::check_for_update,
+            commands::open_release_page
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

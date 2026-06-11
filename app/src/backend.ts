@@ -463,6 +463,21 @@ export function saveTextFile(path: string, text: string): Promise<string> {
   return invoke("save_text_file", { path, text });
 }
 
+export type UpdateCheckResult = {
+  currentVersion: string;
+  latestVersion: string;
+  updateAvailable: boolean;
+  releaseUrl: string;
+};
+
+export function checkForUpdate(): Promise<UpdateCheckResult> {
+  return invoke("check_for_update");
+}
+
+export function openReleasePage(url?: string): Promise<void> {
+  return invoke("open_release_page", { url });
+}
+
 export function getHotkeyStatus(): Promise<HotkeyStatus> {
   return invoke("get_hotkey_status");
 }
