@@ -1,9 +1,30 @@
 # LocalDictate - Status and Next Steps
 
-Status: Core V1 implementation complete; ready for Windows resource packaging and manual QA  
-Last updated: 2026-06-11  
+Status: Windows build fixed and installers produced; ready for manual Windows QA  
+Last updated: 2026-06-10  
 Repository: `https://github.com/n8watkins/localdictate`  
 Visibility: Private
+
+## Windows Build Fix and Packaging (2026-06-10)
+
+The Windows build of the prior `main` failed with 170 compile errors. Root causes, fixed in commit `721ed8a`:
+
+- cpal's platform `Stream` wrapper is deliberately `!Send`; it was stored in `AudioService` -> `BackendState` -> `app.manage()` (which requires `Send + Sync`), cascading into every Tauri command. Fixed by using the raw `WasapiHost`/`WasapiDevice`/`WasapiStream` types, which are `Send`.
+- `PKEY_Device_FriendlyName` and `IMMDevice::OpenPropertyStore` require the `Win32_UI_Shell_PropertiesSystem` feature on the `windows` crate.
+- `WasapiStream` has no `Debug` impl, so the unused `derive(Debug)` on `AudioService` and `RecordingSession` was removed.
+
+Lesson: almost all audio/hotkey/paste code is `#[cfg(windows)]`-gated, so `cargo check` in WSL never compiles it. Windows changes must be verified with the Windows toolchain, e.g. from WSL: `cmd.exe /c "cd /d C:\Users\natha\Projects\Tools\localdictate\app\src-tauri && cargo check"`.
+
+Verified on Windows (clone at `C:\Users\natha\Projects\Tools\localdictate`): `cargo check` clean, 22/22 tests pass, and `npm run tauri build` produced:
+
+```text
+app/src-tauri/target/release/bundle/nsis/LocalDictate_0.1.0_x64-setup.exe
+app/src-tauri/target/release/bundle/msi/LocalDictate_0.1.0_x64_en-US.msi
+```
+
+The MSI payload was extracted and confirmed to contain `bin/windows/whisper-cli.exe`, `whisper.dll`, and `ggml*.dll` at the resource root, matching the `$RESOURCE/bin/windows/whisper-cli.exe` path `whisper.rs` resolves. `whisper-cli.exe --help` runs standalone with only those DLLs. Extra whisper.cpp binaries (bench, server, stream, talk-llama, SDL2.dll, etc.) were moved out of `resources/` into `whisper-extras-unbundled/` at the Windows repo root so they are not bundled.
+
+Remaining before release: run the manual checklist in [V1_WINDOWS_QA_CHECKLIST.md](./V1_WINDOWS_QA_CHECKLIST.md) (real microphone, hold-to-talk, transcription, paste targets, tray/hotkeys).
 
 ## Current State
 
