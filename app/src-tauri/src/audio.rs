@@ -5,8 +5,9 @@ use std::{fs, path::PathBuf, thread, time::Duration};
 use chrono::{DateTime, Utc};
 #[cfg(windows)]
 use cpal::{
+    platform::{WasapiDevice as Device, WasapiHost, WasapiStream as Stream},
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    Device, SampleFormat, Stream, StreamConfig,
+    SampleFormat, StreamConfig,
 };
 #[cfg(windows)]
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -131,7 +132,6 @@ enum WorkerControl {
     Stop(StopReason),
 }
 
-#[derive(Debug)]
 pub struct AudioService {
     temp_dir: PathBuf,
     #[cfg(windows)]
@@ -139,7 +139,6 @@ pub struct AudioService {
     last_result: Option<RecordingResult>,
 }
 
-#[derive(Debug)]
 #[cfg(windows)]
 struct RecordingSession {
     info: RecordingSessionInfo,
@@ -845,7 +844,12 @@ fn unsigned_to_f32(sample: f32, max: f32) -> f32 {
 
 #[cfg(windows)]
 fn device_candidates(selected_mic_id: Option<&str>) -> Result<Vec<DeviceCandidate>, CommandError> {
-    let host = cpal::default_host();
+    let host = WasapiHost::new().map_err(|error| {
+        CommandError::new(
+            "microphone_unavailable",
+            format!("Could not initialize Windows audio host. {}", error),
+        )
+    })?;
     let default_name = host
         .default_input_device()
         .and_then(|device| device.name().ok());
