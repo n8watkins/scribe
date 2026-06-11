@@ -25,13 +25,38 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis", "msi"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "resources/": ""
+    },
+    "shortDescription": "Private local dictation for Windows.",
+    "longDescription": "LocalDictate is a Windows tray utility for recording speech, transcribing locally with Whisper, and inserting the Last Transcript Buffer without permanently overwriting the clipboard.",
+    "category": "Productivity",
+    "windows": {
+      "allowDowngrades": false,
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English"],
+        "displayLanguageSelector": false,
+        "compression": "lzma",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "startMenuFolder": "LocalDictate"
+      },
+      "wix": {
+        "language": "en-US"
+      }
+    }
   }
 }

@@ -42,6 +42,30 @@ pub fn run() {
             tray::setup(app.handle())?;
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let minimize_to_tray = window
+                    .app_handle()
+                    .try_state::<BackendState>()
+                    .and_then(|state| {
+                        state
+                            .db()
+                            .ok()
+                            .and_then(|db| db.get_settings().ok())
+                            .map(|settings| settings.minimize_to_tray)
+                    })
+                    .unwrap_or(true);
+
+                if minimize_to_tray {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::get_app_state,
             commands::get_settings,

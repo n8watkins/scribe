@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
   AlertCircle,
   Archive,
@@ -32,24 +33,44 @@ import {
   clearLastTranscript,
   clearTranscriptHistory,
   commandErrorMessage,
+  cancelModelDownload,
+  cancelRecording,
   copyLastTranscript,
   copyTranscript,
   deleteTranscript,
+  deleteModel,
+  downloadModel,
   getDashboardData,
+  listMicrophones,
+  listModels,
   pasteLastTranscript,
   pasteTranscript,
+  recordTestClip,
+  retryModelDownload,
   searchTranscripts,
+  selectModel,
+  startRecording,
+  stopRecording,
+  transcribeRecording,
   updateTranscript,
   updateSettings,
+  type AudioLevelEvent,
   type AppSettings,
   type AppStateSnapshot,
   type BasicStats,
   type DashboardData,
+  type DictationResult,
   type HistoryRetentionDays,
+  type MicrophoneInfo,
+  type ModelDownloadProgress,
+  type ModelInfo,
   type OutputMode,
   type OutputResult,
   type PasteMethod,
   type RecordingMode,
+  type RecordingResult,
+  type RecordingSessionInfo,
+  type RecordingErrorEvent,
   type Transcript,
 } from "./backend";
 import "./App.css";
@@ -69,15 +90,19 @@ type LoadState = "loading" | "ready" | "error";
 type SettingsPatch = Partial<AppSettings>;
 
 type ViewActions = {
+  cancelRecording: () => Promise<void>;
   clearLastTranscript: () => Promise<void>;
   clearingLastTranscript: boolean;
   copyLastTranscript: () => Promise<void>;
   copyingLastTranscript: boolean;
+  recordingBusy: boolean;
   pasteLastTranscript: () => Promise<void>;
   pastingLastTranscript: boolean;
   refresh: () => Promise<void>;
   saveError: string | null;
   savingSettings: boolean;
+  startRecording: () => Promise<void>;
+  stopRecording: () => Promise<void>;
   updateSettings: (patch: SettingsPatch) => void;
 };
 
@@ -145,36 +170,11 @@ const recordingModeOptions: { label: string; value: RecordingMode }[] = [
   { label: "Both", value: "both" },
 ];
 
-const modelRows = [
-  {
-    name: "small.en quantized",
-    id: "small.en-q5_1",
-    size: "181 MB",
-    status: "Downloaded",
-    progress: 100,
-  },
-  {
-    name: "base.en",
-    id: "base.en",
-    size: "142 MB",
-    status: "Downloaded",
-    progress: 100,
-  },
-  {
-    name: "medium.en quantized",
-    id: "medium.en-q5_0",
-    size: "514 MB",
-    status: "Pending service",
-    progress: 0,
-  },
-  {
-    name: "large-v3-turbo quantized",
-    id: "large-v3-turbo-q5_0",
-    size: "1.6 GB",
-    status: "Pending service",
-    progress: 0,
-  },
-];
+type ToastNotice = {
+  id: number;
+  tone: "info" | "success" | "error";
+  message: string;
+};
 
 function App() {
   const [activeView, setActiveView] = useState<ViewName>("Dashboard");
@@ -188,7 +188,20 @@ function App() {
   const [clearingLastTranscript, setClearingLastTranscript] = useState(false);
   const [pastingLastTranscript, setPastingLastTranscript] = useState(false);
   const [copyingLastTranscript, setCopyingLastTranscript] = useState(false);
+  const [recordingBusy, setRecordingBusy] = useState(false);
+  const [toast, setToast] = useState<ToastNotice | null>(null);
   const heading = viewTitles[activeView];
+
+  const showNotice = useCallback(
+    (message: string, tone: ToastNotice["tone"] = "info") => {
+      if (!dashboardData?.settings.notificationsEnabled) {
+        return;
+      }
+
+      setToast({ id: Date.now(), message, tone });
+    },
+    [dashboardData?.settings.notificationsEnabled],
+  );
 
   const refresh = useCallback(async () => {
     setLoadError(null);
@@ -207,6 +220,102 @@ function App() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!toast) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => setToast(null), 4200);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
+    let refreshTimer: number | null = null;
+    let disposed = false;
+    let unlisteners: Array<() => void> = [];
+
+    const scheduleRefresh = () => {
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer);
+      }
+
+      refreshTimer = window.setTimeout(() => {
+        if (!disposed) {
+          void refresh();
+        }
+      }, 250);
+    };
+
+    const setup = async () => {
+      unlisteners = await Promise.all([
+        listen<AppStateSnapshot>("localdictate:app-state", (event) => {
+          setDashboardData((current) =>
+            current ? { ...current, appState: event.payload } : current,
+          );
+          scheduleRefresh();
+        }),
+        listen<RecordingSessionInfo>("audio://recording-started", (event) => {
+          showNotice(`Recording with ${event.payload.microphoneName}.`);
+        }),
+        listen<RecordingResult>("audio://recording-stopped", (event) => {
+          if (event.payload.status === "too_short") {
+            showNotice(
+              event.payload.reason ??
+                "Recording was too short. Hold the hotkey longer and try again.",
+              "error",
+            );
+          }
+          scheduleRefresh();
+        }),
+        listen<RecordingErrorEvent>("audio://recording-error", (event) => {
+          showNotice(event.payload.message, "error");
+          scheduleRefresh();
+        }),
+        listen<DictationResult>("localdictate:dictation-transcribed", () => {
+          showNotice("Transcript ready.", "success");
+          scheduleRefresh();
+        }),
+        listen<ModelDownloadProgress>("model://download-progress", (event) => {
+          if (
+            event.payload.status === "downloaded" ||
+            event.payload.status === "selected"
+          ) {
+            showNotice("Model downloaded.", "success");
+          }
+          scheduleRefresh();
+        }),
+        listen<OutputResult>("localdictate:output-completed", (event) => {
+          showNotice(event.payload.message, "success");
+          scheduleRefresh();
+        }),
+        listen<{ message: string }>("localdictate:output-failed", (event) => {
+          showNotice(event.payload.message, "error");
+          scheduleRefresh();
+        }),
+        listen<{ route: string }>("localdictate:navigate", (event) => {
+          const route = routeToView(event.payload.route);
+          if (route) {
+            setActiveView(route);
+          }
+        }),
+      ]);
+
+      if (disposed) {
+        unlisteners.forEach((unlisten) => unlisten());
+      }
+    };
+
+    void setup();
+
+    return () => {
+      disposed = true;
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer);
+      }
+      unlisteners.forEach((unlisten) => unlisten());
+    };
+  }, [refresh, showNotice]);
 
   const persistSettings = useCallback(
     async (patch: SettingsPatch) => {
@@ -295,16 +404,75 @@ function App() {
     }
   }, [handleOutputResult, refresh]);
 
+  const handleStartRecording = useCallback(async () => {
+    if (!dashboardData) {
+      return;
+    }
+
+    setRecordingBusy(true);
+    setSaveError(null);
+
+    try {
+      await startRecording({
+        microphoneId: dashboardData.settings.selectedMicId,
+      });
+    } catch (error) {
+      setSaveError(commandErrorMessage(error));
+      await refresh();
+    } finally {
+      setRecordingBusy(false);
+    }
+  }, [dashboardData, refresh]);
+
+  const handleStopRecording = useCallback(async () => {
+    setRecordingBusy(true);
+    setSaveError(null);
+
+    try {
+      const recording = await stopRecording();
+      if (recording.status === "completed" || recording.status === "timed_out") {
+        await transcribeRecording(recording);
+      } else if (recording.reason) {
+        setSaveError(recording.reason);
+      }
+      await refresh();
+    } catch (error) {
+      setSaveError(commandErrorMessage(error));
+      await refresh();
+    } finally {
+      setRecordingBusy(false);
+    }
+  }, [refresh]);
+
+  const handleCancelRecording = useCallback(async () => {
+    setRecordingBusy(true);
+    setSaveError(null);
+
+    try {
+      await cancelRecording();
+      await refresh();
+    } catch (error) {
+      setSaveError(commandErrorMessage(error));
+      await refresh();
+    } finally {
+      setRecordingBusy(false);
+    }
+  }, [refresh]);
+
   const actions: ViewActions = {
+    cancelRecording: handleCancelRecording,
     clearLastTranscript: handleClearLastTranscript,
     clearingLastTranscript,
     copyLastTranscript: handleCopyLastTranscript,
     copyingLastTranscript,
+    recordingBusy,
     pasteLastTranscript: handlePasteLastTranscript,
     pastingLastTranscript,
     refresh,
     saveError,
     savingSettings,
+    startRecording: handleStartRecording,
+    stopRecording: handleStopRecording,
     updateSettings: (patch) => {
       void persistSettings(patch);
     },
@@ -366,12 +534,12 @@ function App() {
             </button>
             <button
               className="primary-button"
-              disabled
-              title="Recording commands are pending the audio service."
+              disabled={recordingBusy || !canStartRecording(dashboardData)}
+              onClick={() => void handleStartRecording()}
               type="button"
             >
               <Mic aria-hidden="true" size={16} />
-              Start pending
+              {recordingBusy ? "Working..." : "Start"}
             </button>
           </div>
         </header>
@@ -387,6 +555,14 @@ function App() {
         {dashboardData
           ? renderView(activeView, setActiveView, dashboardData, actions)
           : null}
+        {dashboardData?.settings.showFloatingPill ? (
+          <FloatingPill
+            appState={dashboardData.appState}
+            outputMode={dashboardData.settings.outputMode}
+            pasteHotkey={dashboardData.settings.hotkeys.pasteLastTranscript}
+          />
+        ) : null}
+        {toast ? <Toast notice={toast} /> : null}
       </main>
     </div>
   );
@@ -538,23 +714,39 @@ function TranscribeView({
             <strong>{recordingStageTitle(appState.status)}</strong>
             <p className="muted">
               Hold {formatHotkey(settings.hotkeys.holdToTalk)} or use toggle
-              mode. Recording commands are pending the audio service.
+              mode. Captures are normalized to 16 kHz mono WAV before local
+              transcription.
             </p>
           </div>
         </div>
 
         <div className="button-row">
-          <button className="primary-button" disabled type="button">
+          <button
+            className="primary-button"
+            disabled={actions.recordingBusy || !canStartRecording(data)}
+            onClick={() => void actions.startRecording()}
+            type="button"
+          >
             <Mic aria-hidden="true" size={16} />
-            Start pending
+            {actions.recordingBusy ? "Working..." : "Start"}
           </button>
-          <button className="secondary-button" disabled type="button">
+          <button
+            className="secondary-button"
+            disabled={actions.recordingBusy || appState.status !== "Recording"}
+            onClick={() => void actions.stopRecording()}
+            type="button"
+          >
             <Square aria-hidden="true" size={15} />
-            Stop pending
+            Stop
           </button>
-          <button className="ghost-button" disabled type="button">
+          <button
+            className="ghost-button"
+            disabled={actions.recordingBusy || appState.status !== "Recording"}
+            onClick={() => void actions.cancelRecording()}
+            type="button"
+          >
             <Eraser aria-hidden="true" size={15} />
-            Cancel pending
+            Cancel
           </button>
         </div>
       </article>
@@ -662,6 +854,10 @@ function HistoryView({
 
     return () => window.clearTimeout(timer);
   }, [loadHistory]);
+
+  useEffect(() => {
+    void loadHistory(offset);
+  }, [data.lastTranscript?.id, data.stats.dictationsToday, loadHistory, offset]);
 
   const refreshAfterMutation = useCallback(async () => {
     await actions.refresh();
@@ -1188,16 +1384,121 @@ function ModelsView({
   actions: ViewActions;
   settings: AppSettings;
 }) {
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [progressByModel, setProgressByModel] = useState<
+    Record<string, ModelDownloadProgress>
+  >({});
+  const [modelsLoading, setModelsLoading] = useState(true);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [busyModelId, setBusyModelId] = useState<string | null>(null);
+
+  const loadModels = useCallback(async () => {
+    setModelsLoading(true);
+    setModelsError(null);
+
+    try {
+      setModels(await listModels());
+    } catch (error) {
+      setModelsError(commandErrorMessage(error));
+    } finally {
+      setModelsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadModels();
+  }, [loadModels, settings.selectedModelId]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlistenProgress: (() => void) | null = null;
+
+    const setup = async () => {
+      const unlisten = await listen<ModelDownloadProgress>(
+        "model://download-progress",
+        (event) => {
+          setProgressByModel((current) => ({
+            ...current,
+            [event.payload.modelId]: event.payload,
+          }));
+
+          setModels((current) =>
+            current.map((model) =>
+              model.id === event.payload.modelId
+                ? { ...model, status: event.payload.status }
+                : model,
+            ),
+          );
+
+          if (
+            event.payload.status === "downloaded" ||
+            event.payload.status === "selected" ||
+            event.payload.status === "failed"
+          ) {
+            void loadModels();
+          }
+        },
+      );
+      unlistenProgress = unlisten;
+
+      if (disposed) {
+        unlisten();
+      }
+    };
+
+    void setup();
+
+    return () => {
+      disposed = true;
+      unlistenProgress?.();
+    };
+  }, [loadModels]);
+
+  const runModelAction = useCallback(
+    async (modelId: string, action: () => Promise<unknown>) => {
+      setBusyModelId(modelId);
+      setModelsError(null);
+
+      try {
+        await action();
+        await loadModels();
+        await actions.refresh();
+      } catch (error) {
+        setModelsError(commandErrorMessage(error));
+      } finally {
+        setBusyModelId(null);
+      }
+    },
+    [actions, loadModels],
+  );
+
   return (
     <section className="view-grid">
       <article className="panel-card span-2">
         <div className="section-heading compact">
           <h2>Whisper models</h2>
-          <button className="secondary-button" disabled type="button">
-            <FolderOpen aria-hidden="true" size={15} />
-            Open folder pending
+          <button
+            className="secondary-button"
+            disabled={modelsLoading}
+            onClick={() => void loadModels()}
+            type="button"
+          >
+            <RefreshCw aria-hidden="true" size={15} />
+            Refresh
           </button>
         </div>
+        {modelsError ? (
+          <InlineError message={modelsError} onRetry={loadModels} />
+        ) : null}
+        {modelsLoading ? (
+          <div className="pending-panel">
+            <RefreshCw aria-hidden="true" size={16} />
+            <span>Loading model catalog...</span>
+          </div>
+        ) : null}
+        {!modelsLoading && models.length === 0 ? (
+          <EmptyState message="No Whisper models are available from the local catalog." />
+        ) : null}
         <div className="model-table">
           <div className="model-table-header" aria-hidden="true">
             <span>Model</span>
@@ -1205,34 +1506,80 @@ function ModelsView({
             <span>Status</span>
             <span>Action</span>
           </div>
-          {modelRows.map((model) => {
-            const isSelected = model.id === settings.selectedModelId;
+          {models.map((model) => {
+            const progress = progressByModel[model.id];
+            const status = progress?.status ?? model.status;
+            const percent = progressPercent(model, progress);
+            const isSelected = model.selected || model.id === settings.selectedModelId;
+            const isDownloaded =
+              status === "downloaded" ||
+              status === "selected" ||
+              status === "loaded";
+            const isDownloading = status === "downloading";
+            const isBusy = busyModelId === model.id;
             return (
               <div className="model-row" key={model.id}>
                 <div>
                   <strong>{model.name}</strong>
-                  <span>{model.id}</span>
+                  <span>{model.filename}</span>
                   <div className="progress-track">
-                    <div style={{ width: `${model.progress}%` }} />
+                    <div style={{ width: `${percent}%` }} />
                   </div>
                 </div>
-                <span>{model.size}</span>
-                <span className={isSelected ? "pill selected" : "pill preserve"}>
-                  {isSelected ? "Selected" : model.status}
+                <span>{model.diskSizeLabel}</span>
+                <span className={modelStatusClass(status, isSelected)}>
+                  {isSelected ? "Selected" : modelStatusLabel(status)}
                 </span>
                 <div className="row-actions">
-                  {model.progress === 0 ? (
-                    <button className="secondary-button" disabled type="button">
-                      <Download aria-hidden="true" size={15} />
-                      Download pending
-                    </button>
-                  ) : null}
-                  {model.progress === 100 ? (
+                  {!isDownloaded && !isDownloading && status !== "failed" ? (
                     <button
                       className="secondary-button"
-                      disabled={actions.savingSettings || isSelected}
+                      disabled={isBusy}
                       onClick={() =>
-                        actions.updateSettings({ selectedModelId: model.id })
+                        void runModelAction(model.id, () => downloadModel(model.id))
+                      }
+                      type="button"
+                    >
+                      <Download aria-hidden="true" size={15} />
+                      {isBusy ? "Starting..." : "Download"}
+                    </button>
+                  ) : null}
+                  {status === "failed" ? (
+                    <button
+                      className="secondary-button"
+                      disabled={isBusy}
+                      onClick={() =>
+                        void runModelAction(model.id, () =>
+                          retryModelDownload(model.id),
+                        )
+                      }
+                      type="button"
+                    >
+                      <RefreshCw aria-hidden="true" size={15} />
+                      Retry
+                    </button>
+                  ) : null}
+                  {isDownloading ? (
+                    <button
+                      className="secondary-button"
+                      disabled={isBusy}
+                      onClick={() =>
+                        void runModelAction(model.id, () =>
+                          cancelModelDownload(model.id),
+                        )
+                      }
+                      type="button"
+                    >
+                      <Square aria-hidden="true" size={15} />
+                      Cancel
+                    </button>
+                  ) : null}
+                  {isDownloaded ? (
+                    <button
+                      className="secondary-button"
+                      disabled={isBusy || isSelected}
+                      onClick={() =>
+                        void runModelAction(model.id, () => selectModel(model.id))
                       }
                       type="button"
                     >
@@ -1240,8 +1587,23 @@ function ModelsView({
                       Select
                     </button>
                   ) : null}
-                  {model.progress === 100 ? (
-                    <IconButton danger disabled label="Delete pending">
+                  {isDownloaded ? (
+                    <IconButton
+                      danger
+                      disabled={isBusy || isDownloading}
+                      label="Delete model"
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            `Delete ${model.name} from local model storage?`,
+                          )
+                        ) {
+                          void runModelAction(model.id, () =>
+                            deleteModel(model.id),
+                          );
+                        }
+                      }}
+                    >
                       <Trash2 aria-hidden="true" size={15} />
                     </IconButton>
                   ) : null}
@@ -1260,7 +1622,8 @@ function ModelsView({
           {settings.selectedModelId ?? "No model selected"}
         </strong>
         <p className="muted">
-          Model discovery and download state will come from the model manager.
+          Downloaded models are stored under LocalDictate app data and resolved
+          by the backend at runtime.
         </p>
       </article>
 
@@ -1268,11 +1631,11 @@ function ModelsView({
         <div className="section-heading compact">
           <h2>Storage</h2>
         </div>
-        <code>%APPDATA%/LocalDictate/models/</code>
+        <code>LocalDictate app data / models</code>
         <div className="button-row">
           <button className="secondary-button" disabled type="button">
             <FolderOpen aria-hidden="true" size={15} />
-            Open pending
+            Open folder pending
           </button>
         </div>
       </article>
@@ -1287,20 +1650,107 @@ function AudioView({
   actions: ViewActions;
   settings: AppSettings;
 }) {
+  const [microphones, setMicrophones] = useState<MicrophoneInfo[]>([]);
+  const [microphonesLoading, setMicrophonesLoading] = useState(true);
+  const [microphonesError, setMicrophonesError] = useState<string | null>(null);
+  const [audioLevel, setAudioLevel] = useState(0);
+  const [testingMic, setTestingMic] = useState(false);
+
+  const loadMicrophones = useCallback(async () => {
+    setMicrophonesLoading(true);
+    setMicrophonesError(null);
+
+    try {
+      setMicrophones(await listMicrophones());
+    } catch (error) {
+      setMicrophonesError(commandErrorMessage(error));
+    } finally {
+      setMicrophonesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadMicrophones();
+  }, [loadMicrophones, settings.selectedMicId]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisteners: Array<() => void> = [];
+
+    const setup = async () => {
+      unlisteners = await Promise.all([
+        listen<AudioLevelEvent>("audio://level", (event) => {
+          setAudioLevel(Math.round(event.payload.level * 100));
+        }),
+        listen<RecordingErrorEvent>("audio://recording-error", (event) => {
+          setMicrophonesError(event.payload.message);
+        }),
+      ]);
+
+      if (disposed) {
+        unlisteners.forEach((unlisten) => unlisten());
+      }
+    };
+
+    void setup();
+
+    return () => {
+      disposed = true;
+      unlisteners.forEach((unlisten) => unlisten());
+    };
+  }, []);
+
+  const selectedMicrophone = selectedMicrophoneLabel(
+    microphones,
+    settings.selectedMicId,
+  );
+
+  const handleRecordTestClip = useCallback(async () => {
+    setTestingMic(true);
+    setMicrophonesError(null);
+
+    try {
+      await recordTestClip(1600);
+      await loadMicrophones();
+      await actions.refresh();
+    } catch (error) {
+      setMicrophonesError(commandErrorMessage(error));
+    } finally {
+      setTestingMic(false);
+    }
+  }, [actions, loadMicrophones]);
+
   return (
     <section className="split-grid">
       <article className="buffer-card">
         <div className="section-heading">
           <div>
             <p className="eyebrow">Input</p>
-            <h2>{settings.selectedMicId ?? "Default communications device"}</h2>
+            <h2>{selectedMicrophone}</h2>
           </div>
-          <span className="pill pending">Device list pending</span>
+          <span
+            className={
+              microphonesError
+                ? "pill error"
+                : microphonesLoading
+                  ? "pill pending"
+                  : "pill ready"
+            }
+          >
+            {microphonesError
+              ? "Needs attention"
+              : microphonesLoading
+                ? "Scanning"
+                : "Ready"}
+          </span>
         </div>
 
+        {microphonesError ? (
+          <InlineError message={microphonesError} onRetry={loadMicrophones} />
+        ) : null}
         <Waveform />
         <div className="meter">
-          <div />
+          <div style={{ width: `${Math.max(4, audioLevel)}%` }} />
         </div>
 
         <div className="control-grid">
@@ -1318,9 +1768,17 @@ function AudioView({
               }
               value={settings.selectedMicId ?? "default"}
             >
-              <option value="default">Default communications device</option>
-              <option value="usb">USB microphone</option>
-              <option value="array">Microphone array</option>
+              <option value="default">Default input device</option>
+              {microphones.map((microphone) => (
+                <option
+                  disabled={!microphone.isAvailable}
+                  key={microphone.id}
+                  value={microphone.id}
+                >
+                  {microphone.name}
+                  {microphone.isDefault ? " (default)" : ""}
+                </option>
+              ))}
             </select>
           </label>
           <label>
@@ -1330,9 +1788,19 @@ function AudioView({
         </div>
 
         <div className="button-row">
-          <button className="primary-button" disabled type="button">
+          <button
+            className="primary-button"
+            disabled={
+              testingMic ||
+              actions.recordingBusy ||
+              microphonesLoading ||
+              Boolean(microphonesError)
+            }
+            onClick={() => void handleRecordTestClip()}
+            type="button"
+          >
             <Mic aria-hidden="true" size={16} />
-            Test pending
+            {testingMic ? "Testing..." : "Record test"}
           </button>
           <button className="secondary-button" disabled type="button">
             <Play aria-hidden="true" size={15} />
@@ -1410,12 +1878,50 @@ function AudioView({
         <article className="panel-card">
           <div className="section-heading compact">
             <h2>Device health</h2>
-            <span className="pill pending">Pending audio service</span>
+            <span className={microphonesError ? "pill error" : "pill ready"}>
+              {microphonesError ? "Unavailable" : "Available"}
+            </span>
           </div>
-          <p className="muted">
-            Permission, unavailable device, and recording failure states will
-            surface here from the Rust audio service.
-          </p>
+          {microphonesLoading ? (
+            <div className="pending-panel">
+              <RefreshCw aria-hidden="true" size={16} />
+              <span>Scanning Windows input devices...</span>
+            </div>
+          ) : null}
+          {!microphonesLoading && microphones.length === 0 ? (
+            <EmptyState message="No input devices were reported by Windows. Connect a microphone and refresh." />
+          ) : null}
+          {!microphonesLoading && microphones.length > 0 ? (
+            <div className="device-list">
+              {microphones.map((microphone) => (
+                <div className="device-row" key={microphone.id}>
+                  <div>
+                    <strong>{microphone.name}</strong>
+                    <span>{microphone.endpointId ?? microphone.id}</span>
+                  </div>
+                  <span
+                    className={
+                      microphone.isSelected
+                        ? "pill selected"
+                        : microphone.isDefault
+                          ? "pill preserve"
+                          : microphone.isAvailable
+                            ? "pill ready"
+                            : "pill error"
+                    }
+                  >
+                    {microphone.isSelected
+                      ? "Selected"
+                      : microphone.isDefault
+                        ? "Default"
+                        : microphone.isAvailable
+                          ? "Available"
+                          : "Unavailable"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </article>
       </div>
     </section>
@@ -1876,17 +2382,20 @@ function IconButton({
   danger = false,
   disabled = false,
   label,
+  onClick,
 }: {
   children: ReactNode;
   danger?: boolean;
   disabled?: boolean;
   label: string;
+  onClick?: () => void;
 }) {
   return (
     <button
       aria-label={label}
       className={danger ? "icon-button danger" : "icon-button"}
       disabled={disabled}
+      onClick={onClick}
       title={label}
       type="button"
     >
@@ -1925,13 +2434,68 @@ function SegmentedControl<T extends string>({
 }
 
 function StatePill({ appState }: { appState: AppStateSnapshot }) {
-  const className = appState.status === "Error" ? "pill error" : "pill ready";
+  const className = `pill ${stateTone(appState.status)}`;
   const label = appState.error?.message ?? appState.status;
 
   return (
     <span className={className} title={label}>
       {appState.status}
     </span>
+  );
+}
+
+function FloatingPill({
+  appState,
+  outputMode,
+  pasteHotkey,
+}: {
+  appState: AppStateSnapshot;
+  outputMode: OutputMode;
+  pasteHotkey: string;
+}) {
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (appState.status === "Idle" || appState.status === "Paused") {
+      setVisible(false);
+      return;
+    }
+
+    setVisible(true);
+
+    if (appState.status === "Ready") {
+      const timer = window.setTimeout(() => setVisible(false), 5200);
+      return () => window.clearTimeout(timer);
+    }
+  }, [appState.status, appState.updatedAt]);
+
+  if (!visible) {
+    return null;
+  }
+
+  const lines = floatingPillLines(appState, outputMode, pasteHotkey);
+
+  return (
+    <div className={`floating-pill ${stateTone(appState.status)}`} role="status">
+      <span className="floating-pulse" aria-hidden="true" />
+      <div>
+        <strong>{lines[0]}</strong>
+        {lines[1] ? <span>{lines[1]}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+function Toast({ notice }: { notice: ToastNotice }) {
+  return (
+    <div className={`toast-notice ${notice.tone}`} role="status">
+      {notice.tone === "error" ? (
+        <AlertCircle aria-hidden="true" size={16} />
+      ) : (
+        <CheckCircle2 aria-hidden="true" size={16} />
+      )}
+      <span>{notice.message}</span>
+    </div>
   );
 }
 
@@ -2029,6 +2593,157 @@ function outputModeLabel(outputMode: OutputMode) {
   return (
     outputModeOptions.find((option) => option.value === outputMode)?.label ??
     outputMode
+  );
+}
+
+function routeToView(route: string): ViewName | null {
+  const normalized = route.trim().toLowerCase();
+  const routes: Record<string, ViewName> = {
+    dashboard: "Dashboard",
+    transcribe: "Transcribe",
+    history: "History",
+    settings: "Settings",
+    hotkeys: "Hotkeys",
+    models: "Models",
+    audio: "Audio",
+    about: "About",
+  };
+
+  return routes[normalized] ?? null;
+}
+
+function canStartRecording(data: DashboardData | null) {
+  if (!data) {
+    return false;
+  }
+
+  return (
+    data.appState.status === "Idle" ||
+    data.appState.status === "Ready" ||
+    data.appState.status === "Error"
+  );
+}
+
+function stateTone(status: AppStateSnapshot["status"]) {
+  switch (status) {
+    case "Recording":
+      return "recording";
+    case "Stopping":
+    case "Transcribing":
+    case "Pasting":
+      return "pending";
+    case "Ready":
+      return "ready";
+    case "Error":
+      return "error";
+    case "Paused":
+      return "preserve";
+    case "Idle":
+    default:
+      return "idle";
+  }
+}
+
+function floatingPillLines(
+  appState: AppStateSnapshot,
+  outputMode: OutputMode,
+  pasteHotkey: string,
+) {
+  if (appState.status === "Recording") {
+    return ["Recording...", "Release hotkey or press Stop"];
+  }
+
+  if (appState.status === "Stopping") {
+    return ["Saving audio...", "Preparing local transcription"];
+  }
+
+  if (appState.status === "Transcribing") {
+    return ["Transcribing...", "Whisper is running locally"];
+  }
+
+  if (appState.status === "Pasting") {
+    return ["Inserting transcript...", "Keeping clipboard behavior intact"];
+  }
+
+  if (appState.status === "Ready") {
+    if (outputMode === "save_only") {
+      return ["Saved to Last Transcript", "Clipboard preserved"];
+    }
+
+    return ["Transcript ready", `${formatHotkey(pasteHotkey)} to insert`];
+  }
+
+  if (appState.status === "Error") {
+    return ["Needs attention", appState.error?.message ?? "Check LocalDictate"];
+  }
+
+  return ["Ready for dictation", ""];
+}
+
+function modelStatusLabel(status: ModelInfo["status"]) {
+  const labels: Record<ModelInfo["status"], string> = {
+    not_downloaded: "Not downloaded",
+    downloading: "Downloading",
+    downloaded: "Downloaded",
+    selected: "Selected",
+    loaded: "Loaded",
+    failed: "Failed",
+    update_available: "Update available",
+  };
+
+  return labels[status];
+}
+
+function modelStatusClass(status: ModelInfo["status"], selected: boolean) {
+  if (selected || status === "selected" || status === "loaded") {
+    return "pill selected";
+  }
+
+  if (status === "failed") {
+    return "pill error";
+  }
+
+  if (status === "downloading" || status === "update_available") {
+    return "pill pending";
+  }
+
+  if (status === "downloaded") {
+    return "pill ready";
+  }
+
+  return "pill preserve";
+}
+
+function progressPercent(
+  model: ModelInfo,
+  progress: ModelDownloadProgress | undefined,
+) {
+  if (progress?.percent !== null && progress?.percent !== undefined) {
+    return Math.max(0, Math.min(100, progress.percent));
+  }
+
+  if (
+    model.status === "downloaded" ||
+    model.status === "selected" ||
+    model.status === "loaded"
+  ) {
+    return 100;
+  }
+
+  return 0;
+}
+
+function selectedMicrophoneLabel(
+  microphones: MicrophoneInfo[],
+  selectedMicId: string | null,
+) {
+  if (!selectedMicId) {
+    return microphones.find((microphone) => microphone.isDefault)?.name ?? "Default input device";
+  }
+
+  return (
+    microphones.find((microphone) => microphone.id === selectedMicId)?.name ??
+    selectedMicId
   );
 }
 
