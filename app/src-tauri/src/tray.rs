@@ -173,6 +173,23 @@ pub fn paste_last_transcript(app: &AppHandle) -> Result<(), CommandError> {
     Ok(())
 }
 
+/// Dashboard hotkey behavior: when the window is already visible and focused,
+/// hide it again; otherwise show and focus it. The caller gates this on the
+/// dashboardHotkeyToggles setting.
+pub fn toggle_dashboard(app: &AppHandle) -> Result<(), CommandError> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| CommandError::new("window_not_found", "Could not find the main window."))?;
+
+    if window.is_visible().unwrap_or(false) && window.is_focused().unwrap_or(false) {
+        return window
+            .hide()
+            .map_err(|error| CommandError::new("window_hide_failed", error.to_string()));
+    }
+
+    open_dashboard(app, None)
+}
+
 pub fn open_dashboard(app: &AppHandle, route: Option<&str>) -> Result<(), CommandError> {
     let window = app
         .get_webview_window("main")

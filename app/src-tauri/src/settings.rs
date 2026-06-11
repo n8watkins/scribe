@@ -19,6 +19,10 @@ pub struct AppSettings {
     /// the waveform visualizer, or the visualizer with live transcript text.
     #[serde(default = "default_pill_display_mode")]
     pub pill_display_mode: PillDisplayMode,
+    /// The dashboard hotkey hides the window again when it is already
+    /// focused, instead of only ever opening it.
+    #[serde(default = "default_dashboard_hotkey_toggles")]
+    pub dashboard_hotkey_toggles: bool,
     pub notifications_enabled: bool,
     pub sounds_enabled: bool,
     /// Inert: hold-to-talk and toggle hotkeys both always work now. The field
@@ -75,6 +79,10 @@ fn default_incremental_transcription_enabled() -> bool {
 
 fn default_pill_display_mode() -> PillDisplayMode {
     PillDisplayMode::VisualizerWithText
+}
+
+fn default_dashboard_hotkey_toggles() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,6 +177,7 @@ impl Default for AppSettings {
             minimize_to_tray: true,
             show_floating_pill: true,
             pill_display_mode: default_pill_display_mode(),
+            dashboard_hotkey_toggles: default_dashboard_hotkey_toggles(),
             notifications_enabled: true,
             sounds_enabled: true,
             recording_mode: RecordingMode::Both,

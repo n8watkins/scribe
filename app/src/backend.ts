@@ -45,6 +45,7 @@ export type AppSettings = {
   minimizeToTray: boolean;
   showFloatingPill: boolean;
   pillDisplayMode: PillDisplayMode;
+  dashboardHotkeyToggles: boolean;
   notificationsEnabled: boolean;
   soundsEnabled: boolean;
   recordingMode: RecordingMode;

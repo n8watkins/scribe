@@ -498,8 +498,8 @@ mod platform {
     use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
     use windows::Win32::System::Threading::GetCurrentProcessId;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
-        VIRTUAL_KEY, VK_CONTROL, VK_V,
+        GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+        KEYEVENTF_UNICODE, VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT, VK_V,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW,
@@ -577,7 +577,32 @@ mod platform {
         !(cloak_query.is_ok() && cloaked != 0)
     }
 
+    /// Hotkey-triggered pastes can start while the user still physically
+    /// holds the chord (e.g. Ctrl+Alt+V). Injected keystrokes then combine
+    /// with the held modifiers in the target app — terminals turn a typed
+    /// "," into Ctrl+Alt+"," and open their settings JSON — so wait for
+    /// every modifier to come back up before sending input.
+    fn wait_for_modifier_release() {
+        const MODIFIERS: [VIRTUAL_KEY; 5] = [VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN];
+        let deadline = std::time::Instant::now() + Duration::from_millis(1_500);
+        loop {
+            let held = MODIFIERS
+                .iter()
+                .any(|vk| (unsafe { GetAsyncKeyState(vk.0 as i32) } as u16) & 0x8000 != 0);
+            if !held {
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                log::warn!("Pasting with modifier keys still held after 1.5 s");
+                return;
+            }
+            thread::sleep(Duration::from_millis(15));
+        }
+    }
+
     pub fn direct_insert_text(text: &str) -> Result<(), CommandError> {
+        wait_for_modifier_release();
+
         let mut inputs = Vec::with_capacity(256);
 
         for unit in text.encode_utf16() {
@@ -602,6 +627,8 @@ mod platform {
     }
 
     pub fn send_paste_shortcut() -> Result<(), CommandError> {
+        wait_for_modifier_release();
+
         let inputs = [
             keyboard_input(VK_CONTROL, 0, Default::default()),
             keyboard_input(VK_V, 0, Default::default()),

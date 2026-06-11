@@ -1419,6 +1419,19 @@ function SettingsView({
           />
         </SettingRow>
         <SettingRow
+          description="The dashboard hotkey minimizes the window again when it is already focused."
+          label="Dashboard hotkey toggles"
+        >
+          <Toggle
+            checked={settings.dashboardHotkeyToggles}
+            disabled={actions.savingSettings}
+            label="Dashboard hotkey toggles"
+            onChange={(dashboardHotkeyToggles) =>
+              actions.updateSettings({ dashboardHotkeyToggles })
+            }
+          />
+        </SettingRow>
+        <SettingRow
           description="Always-on-top capture status overlay."
           label="Show floating status pill"
         >

@@ -530,7 +530,19 @@ fn handle_pressed(app: &AppHandle, action: HotkeyAction) {
         HotkeyAction::HoldToTalk => tray::start_dictation(app, false),
         HotkeyAction::ToggleDictation => toggle_dictation(app),
         HotkeyAction::PasteLastTranscript => tray::paste_last_transcript(app),
-        HotkeyAction::OpenDashboard => tray::open_dashboard(app, None),
+        HotkeyAction::OpenDashboard => {
+            let toggles = app
+                .state::<BackendState>()
+                .db()
+                .and_then(|db| db.get_settings())
+                .map(|settings| settings.dashboard_hotkey_toggles)
+                .unwrap_or(true);
+            if toggles {
+                tray::toggle_dashboard(app)
+            } else {
+                tray::open_dashboard(app, None)
+            }
+        }
     };
 
     if let Err(error) = result {

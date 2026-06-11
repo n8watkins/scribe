@@ -34,7 +34,7 @@ const VISIBLE_STATUSES: ReadonlySet<AppStatus> = new Set([
 ]);
 
 const READY_HIDE_DELAY_MS = 2000;
-const CONFIRM_HIDE_DELAY_MS = 5000;
+const CONFIRM_HIDE_DELAY_MS = 8000;
 const COPIED_RESET_MS = 1500;
 const MOVE_PERSIST_DEBOUNCE_MS = 600;
 const BOTTOM_MARGIN_PX = 90;
@@ -47,7 +47,7 @@ const BAR_ATTACK = 0.45;
 const BAR_DECAY = 0.16;
 // Normal speech RMS sits around 0.03-0.15, so raw values barely move the
 // bars. Normalize against this ceiling before the perceptual curve.
-const RMS_CEILING = 0.12;
+const RMS_CEILING = 0.07;
 
 /**
  * The pill window renders one of three physical layouts; each maps to a fixed
