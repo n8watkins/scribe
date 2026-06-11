@@ -1,6 +1,6 @@
 # LocalDictate — Session Handoff
 
-Last updated: 2026-06-11 (late evening session)
+Last updated: 2026-06-11 (QA + live-feedback session, v0.2.0)
 Read this first, then `docs/STATUS_AND_NEXT_STEPS.md` for deeper project history.
 
 ## Project summary
@@ -16,52 +16,67 @@ Windows toolchain. GitHub: `https://github.com/n8watkins/localdictate`.
 
 ## State after this session
 
-Eight commits, all verified (Windows `cargo check` clean, **88/88 tests** on
-both WSL and Windows toolchains, `npm run build` clean). **Local only — not
-pushed.**
+**v0.2.0 is installed on the owner's machine** (silent NSIS upgrade from the
+clone's `target/release/bundle/nsis/`). The owner QA'd the previous session's
+work live and dictated feedback mid-session; everything below shipped in
+response. 91/91 tests on the Windows toolchain, `npx tsc` + `npm run build`
+clean. **Local only — not pushed** (now 15 unpushed commits across both
+sessions).
 
 | Commit | What |
 |---|---|
-| `15052af` | Max-duration timeout now transcribes instead of stranding the app in "Transcribing" forever (the freeze bug). `audio.rs::timeout_recording_for_app` mirrors `tray::stop_dictation`. |
-| `9e3c903` | Defaults v4 + one-time migration: max recording 600 000 ms, silence auto-stop ON at 60 s (validation up to 300 s), save raw audio ON, paste `Ctrl+Alt+V`, dashboard `Ctrl+Alt+F`. Duration fields labeled "(ms)" with live human-readable readout. |
-| `1b53183` | Paste focus guard (`output.rs`): if our own window is foreground, refocus the next eligible Z-order window before SendInput; with no candidate, fail with `paste_target_unavailable` rather than typing into LocalDictate. Also routed paste errors through the `output-failed` event (previously escaped). |
-| `c40ccc6` | Saved audio clips for real (`save_audio_clips` was a no-op): WAV moves to `{app_data}/clips/{transcript_id}.wav`, `audioPath` on Transcript (SQLite migration `002_audio_clips.sql`), `get_transcript_audio(id)` command returns base64 WAV, clips deleted with transcript / clear-history / retention sweep / buffer replacement. |
-| `a712ba2` | Pill redesign: `pillDisplayMode` setting (`dot` / `visualizer` / `visualizer_with_text`, default text mode, ~5 lines live transcript, window resizes per mode and grows upward); bars driven by `sqrt(rms/0.12)`; 5 s post-transcription confirmation with Copy→Copied button. |
-| `98ef6a7` | Archive cleanup: rows are Play (when clip exists) / Copy / Insert / Delete; transcript editing and the output-mode chip removed; horizontal scroll fixed (`overflow-x: hidden`, `overflow-wrap: anywhere`). |
-| `8f5a957` | Tail-clipping fix: capture runs 400 ms past a user-initiated stop (`STOP_GRACE_MS` in `audio.rs`); 300 ms silence appended to every incremental segment WAV (`SEGMENT_TAIL_PAD_MS`); trim padding 150→300 ms. Whisper was dropping the last words on abrupt-ending audio. |
-| `41bbacd` | Local file transcription: `transcribe_file` command (new `file_transcribe.rs`) runs whisper-cli directly on WAV/MP3/FLAC/OGG, extracts other formats (video etc.) via ffmpeg from PATH (`ffmpeg_required` error if absent), `save_text_file` writes `<source>.txt`. "Transcribe file" card on the Transcribe view (plain path input — dialog plugin deliberately not added). |
+| `3c1fa3b` | **The QA find:** pill capability lacked `core:window:allow-set-size`/`allow-scale-factor`; the redesign's `setSize()` threw inside a swallow-all catch before `show()`, so the pill never appeared during recording. Tests/`tsc` can't catch this class of bug — only a real run. |
+| `1331c95` | Text-mode pill starts compact (320×80), grows upward with the live transcript, caps at 150 logical px; background more transparent (0.55/0.72 hover). |
+| `287926f` | Live transcript streams sooner: `SEGMENT_SILENCE_MS` 500→350 ms; segmenter test assertions derive from the constant. |
+| `85ee41a` | Dynamic-growth measurement reads an inner block div — `justify-content: flex-end` clip boxes don't report top-edge overflow in `scrollHeight` (confirmation text was clipped). |
+| `437e057` | All pill window mutations serialized through one promise chain (concurrent ops compounded bottom-anchor shifts and walked the pill up the screen); text layout persists through Stopping/Transcribing/Pasting so the pill doesn't bounce through bar size. |
+| `92367b6` | Owner-feedback batch: `Ctrl+Alt+F` hides the dashboard when focused (new `dashboardHotkeyToggles` setting, default on); paste waits up to 1.5 s for physical hotkey modifiers to release before `SendInput` (held Ctrl+Alt turned typed "," into Ctrl+Alt+"," — Windows Terminal opens its settings JSON); confirmation pill 5→8 s; visualizer full-scale at 0.07 RMS (was 0.12). |
+| `8344e5e` | v0.2.0 everywhere (About had hardcoded "0.1.0"); About shows the runtime version; new `update_check.rs` compares against the latest GitHub release tag — Check-for-updates button in About + one quiet auto-check 5 s after launch that toasts. |
 
-**Verified by code/tests only — NOT yet visually QA'd on real hardware:** pill
-resize/anchoring per mode, archive Play button end-to-end, the focus guard,
-the timeout-transcribe path, the 400 ms stop-grace feel, and the
-Transcribe-file card (incl. the ffmpeg path with a real video). First launch
-after these changes runs migration 002 and the defaults-v4 migration; both are
-tested but watch the logs (`%APPDATA%\com.natkins.localdictate\logs`) on first
-real run.
+### Visual QA results (on real hardware, real DB)
+
+- Migration 002 (`audio_path`) and defaults v4 ran cleanly on the live DB; a
+  pre-migration backup sits at
+  `%APPDATA%\Roaming\com.natkins.localdictate\localdictate.sqlite3.bak-pre-qa-20260611`.
+- Timeout-transcribe: recording stopped at the cap with reason `Timeout`,
+  transcribed, returned to Idle. Freeze bug confirmed dead.
+- Focus guard: with the dashboard foregrounded, paste refocused the next
+  real app and never typed into LocalDictate.
+- Clips: saved, valid 16 kHz mono WAVs of the trimmed audio; History shows
+  Play only on clip-backed rows. (Owner uses pill-confirmation Copy live.)
+- Transcribe-a-file: WAV → exact text, Save writes `<source>.txt`,
+  MP4 without ffmpeg → friendly `ffmpeg_required` message.
+- ffmpeg is now installed for real (winget `Gyan.FFmpeg`, on user PATH); the
+  running instance was relaunched with the fresh PATH. **Video transcription
+  not yet exercised by the owner** — first MP4 through the card confirms it.
+- Incremental streaming needs chunk RMS ≥ 0.03 to segment; quiet audio (e.g.
+  speaker playback picked up by the mic) silently falls back to full-clip
+  transcription. The owner's real voice segments fine (0 ms stop-to-text).
 
 ## Next steps (priority order)
 
-1. **Visual QA of this session's work** on the Windows machine: build
-   (`npm run tauri build` from `app\` in the Windows clone, or dev run), then:
-   dictate past a short max duration to confirm transcription fires; check all
-   three pill modes incl. resize; play a clip from the archive; dictate while
-   the dashboard is focused and confirm the text lands in the previous app.
-2. **Notes feature** — designed but NOT approved in detail; confirm specifics
-   with the owner before building big pieces. Decided so far: a dedicated
+1. **Owner verifies the feel** of the v0.2.0 install: pill growth/anchoring,
+   `Ctrl+Alt+F` toggle, `Ctrl+Alt+V` into a terminal (was opening Windows
+   Terminal's settings JSON), one MP4 through Transcribe-a-file.
+2. **Push + release**: owner must flip the repo public for the update check
+   to work at all (API 404s on private), then push and tag `v0.2.0` — the
+   tag-triggered CI builds and attaches the installer. Until a release newer
+   than the installed version exists, the checker just reports up-to-date.
+3. **Notes feature** — designed but NOT approved in detail; confirm specifics
+   with the owner before building big pieces. Decided so far: dedicated
    note-taking hotkey (owner suggested a `~`+Q-style chord; exact bind TBD),
-   pill turns **blue** while taking a note (normal dictation stays
-   yellow/orange), notes save as normal transcripts but flagged as notes, a
-   Notes section in the dashboard, optional local-LLM analysis with a
-   user-editable prompt stored in settings, Google Drive sync via a new
-   Integrations tab. Architecture decision already made: **plain Google Drive
-   REST + OAuth, not MCP**.
-3. **Remove the OpenWhispr model-cache fallback** (`model_manager.rs::external_model_dirs`,
-   the `~/.cache/openwhispr/whisper-models` entry) once the owner confirms
-   OpenWhispr is uninstalled. It caused "model can't be deleted" confusion
-   (delete only touches the app's own dir, then the resolver finds the cache
-   copy again). Keep `LOCALDICTATE_MODEL_DIR`.
-4. Carry-overs from `docs/STATUS_AND_NEXT_STEPS.md`: flip repo public,
-   auto-updater, code signing.
+   pill turns **blue** while taking a note, notes save as flagged transcripts,
+   a Notes section in the dashboard, optional local-LLM analysis with a
+   user-editable prompt, Google Drive sync via a new Integrations tab.
+   Architecture decision already made: **plain Google Drive REST + OAuth, not MCP**.
+4. **Remove the OpenWhispr model-cache fallback** (`model_manager.rs::external_model_dirs`)
+   once the owner confirms OpenWhispr is uninstalled. Its ~10 GB cache still
+   exists at `C:\Users\natha\.cache\openwhispr`. Keep `LOCALDICTATE_MODEL_DIR`.
+5. Carry-overs: real auto-updater (`tauri-plugin-updater`, needs signing
+   keys), code signing.
+6. Housekeeping: owner may want to delete the QA "quick brown fox" transcripts
+   from History; QA scratch files live in `C:\Users\natha\AppData\Local\Temp\ld-qa\`
+   (safe to delete wholesale).
 
 ## Conventions & gotchas
 
@@ -71,33 +86,43 @@ real run.
   `git fetch /home/natkins/personal/tools/localdictate main && git merge --ff-only FETCH_HEAD`,
   then `cd /mnt/c && cmd.exe /c "cd /d C:\Users\natha\Projects\Tools\localdictate\app\src-tauri && cargo check 2>&1"`
   (likewise `cargo test`).
+- **The owner is usually AT the machine during sessions** — no input
+  injection, no audio playback, no focus stealing while he works. Verify via
+  logs (`%LOCALAPPDATA%\com.natkins.localdictate\logs\LocalDictate.log` — note
+  LOCALAPPDATA, not APPDATA) and direct SQLite edits (settings JSON in the
+  `settings` table; the backend re-reads per recording, the pill re-reads per
+  state change). Ship to him by building the NSIS bundle and upgrading
+  silently (`LocalDictate_*_setup.exe /S`) — he launches the installed app,
+  and single-instance means dev-exe launches just focus it.
+- Frontend webview bugs (permissions, window management) only surface in a
+  real run — the pill capability bug survived 88 green tests.
 - Commit per logical change with a `Co-Authored-By: Claude ...` trailer. Push
-  only when the owner asks (this session did not push).
+  only when the owner asks.
 - Shipped-default changes go through `CURRENT_DEFAULTS_VERSION` +
-  `migrate_defaults` in `settings.rs` (only migrate values still on the old
-  default). Brand-new settings fields just need `#[serde(default = ...)]`.
-- DB schema changes: numbered SQL files in `app/src-tauri/migrations/`, applied
-  in `db.rs::apply_migrations`; "duplicate column name" is treated as
-  already-migrated.
+  `migrate_defaults` in `settings.rs`. Brand-new settings fields just need
+  `#[serde(default = ...)]` (see `dashboard_hotkey_toggles`).
+- DB schema changes: numbered SQL files in `app/src-tauri/migrations/`,
+  applied in `db.rs::apply_migrations`.
 - Frontend check: `npx tsc --noEmit -p tsconfig.json` then `npm run build` in `app/`.
-- The owner dictates long, stream-of-consciousness requests and prefers
-  multi-part batches fanned out to **parallel subagents partitioned by file
-  ownership** (no shared files, agents never run git; orchestrator commits and
-  verifies).
-- Owner deleted/is deleting OpenWhispr; its cache at
-  `C:\Users\natha\.cache\openwhispr` (~10 GB) may still exist.
+- The owner dictates long, stream-of-consciousness requests; transcription
+  garbles words — ask one targeted question when a requirement is ambiguous,
+  otherwise pick the sensible reading and say so.
+- reqwest is compiled with `default-features = false` — no `json()` on
+  responses; use `text()` + `serde_json`.
 
 ## File map
 
-- `app/src-tauri/src/audio.rs` — capture, silence auto-stop, timeout thread (freeze fix in `timeout_recording_for_app`), stop-grace capture
-- `app/src-tauri/src/incremental.rs` — live phrase segmentation; segment tail padding
+- `app/src-tauri/src/audio.rs` — capture, silence auto-stop, timeout thread, stop-grace capture
+- `app/src-tauri/src/incremental.rs` — live phrase segmentation (350 ms silence, tail padding)
 - `app/src-tauri/src/file_transcribe.rs` — transcribe-a-file backend (whisper-cli + ffmpeg fallback)
-- `app/src-tauri/src/dictation.rs` — transcribe pipeline; `save_audio_clip` moves the WAV when clips are on
-- `app/src-tauri/src/output.rs` — paste/insert + the focus guard (`ensure_foreign_focus`)
-- `app/src-tauri/src/settings.rs` — AppSettings, defaults v4, `PillDisplayMode`
+- `app/src-tauri/src/dictation.rs` — transcribe pipeline; `save_audio_clip`
+- `app/src-tauri/src/output.rs` — paste/insert, focus guard, `wait_for_modifier_release`
+- `app/src-tauri/src/update_check.rs` — GitHub latest-release version check
+- `app/src-tauri/src/settings.rs` — AppSettings, defaults v4, `dashboard_hotkey_toggles`
+- `app/src-tauri/src/tray.rs` — `toggle_dashboard` / `open_dashboard`
 - `app/src-tauri/src/db.rs` — SQLite, migrations, clip-file cleanup
-- `app/src-tauri/src/model_manager.rs` — model catalog/download; OpenWhispr fallback to remove (step 4)
-- `app/src-tauri/src/commands.rs`, `lib.rs` — Tauri command surface (`get_transcript_audio` etc.)
-- `app/src/App.tsx` — dashboard (settings rows, transcript archive with playback)
-- `app/src/PillApp.tsx`, `app/src/pill.css` — pill display modes, confirmation state
-- `app/src/backend.ts` — TS command wrappers and types (`audioPath`, `pillDisplayMode`)
+- `app/src-tauri/src/commands.rs`, `lib.rs` — Tauri command surface
+- `app/src-tauri/capabilities/pill.json` — pill window ACL (set-size/scale-factor matter)
+- `app/src/App.tsx` — dashboard (AboutView has the update check)
+- `app/src/PillApp.tsx`, `app/src/pill.css` — pill modes, dynamic text growth, serialized window ops
+- `app/src/backend.ts` — TS command wrappers and types
