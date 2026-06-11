@@ -58,10 +58,9 @@ sessions).
 1. **Owner verifies the feel** of the v0.2.0 install: pill growth/anchoring,
    `Ctrl+Alt+F` toggle, `Ctrl+Alt+V` into a terminal (was opening Windows
    Terminal's settings JSON), one MP4 through Transcribe-a-file.
-2. **Push + release**: owner must flip the repo public for the update check
-   to work at all (API 404s on private), then push and tag `v0.2.0` — the
-   tag-triggered CI builds and attaches the installer. Until a release newer
-   than the installed version exists, the checker just reports up-to-date.
+2. ~~Push + release~~ **Done 2026-06-11**: repo is public, all commits pushed,
+   `v0.2.0` tag pushed and the Release workflow ran. The update-check API
+   verified working against the public repo.
 3. **Notes feature** — designed but NOT approved in detail; confirm specifics
    with the owner before building big pieces. Decided so far: dedicated
    note-taking hotkey (owner suggested a `~`+Q-style chord; exact bind TBD),
@@ -69,9 +68,10 @@ sessions).
    a Notes section in the dashboard, optional local-LLM analysis with a
    user-editable prompt, Google Drive sync via a new Integrations tab.
    Architecture decision already made: **plain Google Drive REST + OAuth, not MCP**.
-4. **Remove the OpenWhispr model-cache fallback** (`model_manager.rs::external_model_dirs`)
-   once the owner confirms OpenWhispr is uninstalled. Its ~10 GB cache still
-   exists at `C:\Users\natha\.cache\openwhispr`. Keep `LOCALDICTATE_MODEL_DIR`.
+4. ~~OpenWhispr fallback~~ **Done 2026-06-11**: fallback removed from
+   `model_manager.rs` (`LOCALDICTATE_MODEL_DIR` kept), 6.2 GB cache deleted.
+   The owner KEEPS OpenWhispr installed — an empty locked `qdrant-data` dir
+   remains under `~/.cache/openwhispr` because the app was running.
 5. Carry-overs: real auto-updater (`tauri-plugin-updater`, needs signing
    keys), code signing.
 6. Housekeeping: owner may want to delete the QA "quick brown fox" transcripts
