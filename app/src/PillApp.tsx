@@ -59,8 +59,13 @@ type PillLayout = "dot" | "bar" | "text";
 const LAYOUT_SIZES: Record<PillLayout, { width: number; height: number }> = {
   dot: { width: 58, height: 56 },
   bar: { width: 230, height: 56 },
-  text: { width: 340, height: 170 },
+  text: { width: 320, height: 80 },
 };
+
+/** Text mode starts at the compact LAYOUT_SIZES.text height and grows with
+ * the transcript (bottom edge anchored) up to this cap; older lines then
+ * clip off the top. */
+const TEXT_MAX_HEIGHT = 150;
 
 function pillLayout(
   mode: PillDisplayMode,
@@ -198,6 +203,9 @@ function PillApp() {
   const settingsRef = useRef<AppSettings | null>(null);
   const positionedRef = useRef(false);
   const sizedLayoutRef = useRef<PillLayout | null>(null);
+  /** Logical height the window was last sized to (layout base or text growth). */
+  const windowHeightRef = useRef<number | null>(null);
+  const textRef = useRef<HTMLDivElement | null>(null);
   const pointerRef = useRef<{ x: number; y: number; dragging: boolean } | null>(
     null,
   );
@@ -396,15 +404,16 @@ function PillApp() {
     const show = async () => {
       try {
         if (sizedLayoutRef.current !== layout) {
-          const previous = sizedLayoutRef.current;
+          const previousHeight = windowHeightRef.current;
           sizedLayoutRef.current = layout;
           const size = LAYOUT_SIZES[layout];
+          windowHeightRef.current = size.height;
           // Keep the bottom edge anchored across layout changes so a taller
           // pill grows upward instead of clipping below the screen.
           const deltaY =
-            previous !== null && positionedRef.current
+            previousHeight !== null && positionedRef.current
               ? Math.round(
-                  (LAYOUT_SIZES[previous].height - size.height) *
+                  (previousHeight - size.height) *
                     (await pillWindow.scaleFactor()),
                 )
               : 0;
@@ -458,6 +467,53 @@ function PillApp() {
       }
     };
   }, [status, showPill, pillX, pillY, updatedAt, confirming, layout]);
+
+  // Grow the text-mode window with the transcript (and shrink back when a new
+  // recording starts), keeping the bottom edge anchored. Measures how much
+  // taller the clipped transcript wants to be and resizes between the compact
+  // base height and TEXT_MAX_HEIGHT.
+  const liveText = partial?.text ?? "";
+  const confirmedText = confirmation?.text ?? "";
+  useEffect(() => {
+    if (layout !== "text" || !positionedRef.current) {
+      return;
+    }
+    const pillWindow = getCurrentWindow();
+    const grow = async () => {
+      // Let the DOM settle so measurements reflect the latest text.
+      await new Promise(requestAnimationFrame);
+      const el = textRef.current;
+      const current = windowHeightRef.current ?? LAYOUT_SIZES.text.height;
+      if (!el || sizedLayoutRef.current !== "text") {
+        return;
+      }
+      const desired = Math.max(
+        LAYOUT_SIZES.text.height,
+        Math.min(TEXT_MAX_HEIGHT, current - el.clientHeight + el.scrollHeight),
+      );
+      if (Math.abs(desired - current) < 2) {
+        return;
+      }
+      try {
+        const deltaY = Math.round(
+          (current - desired) * (await pillWindow.scaleFactor()),
+        );
+        const position = await pillWindow.outerPosition();
+        windowHeightRef.current = desired;
+        await pillWindow.setSize(
+          new LogicalSize(LAYOUT_SIZES.text.width, desired),
+        );
+        if (deltaY !== 0) {
+          await pillWindow.setPosition(
+            new PhysicalPosition(position.x, position.y + deltaY),
+          );
+        }
+      } catch {
+        // Window management is unavailable outside Tauri.
+      }
+    };
+    void grow();
+  }, [layout, liveText, confirmedText, updatedAt]);
 
   const handleStop = useCallback(async () => {
     setStopping(true);
@@ -560,7 +616,9 @@ function PillApp() {
             </button>
           </div>
           {layout === "text" ? (
-            <div className="pill-text">{confirmation.text}</div>
+            <div className="pill-text" ref={textRef}>
+              {confirmation.text}
+            </div>
           ) : null}
         </div>
       ) : isRecording ? (
@@ -570,7 +628,7 @@ function PillApp() {
           <div className="pill-rec">
             <Visualizer />
             {displayMode === "visualizer_with_text" ? (
-              <div className="pill-text">
+              <div className="pill-text" ref={textRef}>
                 {partialText || "Listening..."}
               </div>
             ) : null}
