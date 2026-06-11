@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 /// Bumped whenever a shipped default changes in a way that should be applied
 /// once to existing installs (see `migrate_defaults`). Stored settings with a
 /// lower `defaults_version` get the new defaults applied exactly once.
-pub const CURRENT_DEFAULTS_VERSION: u32 = 1;
+pub const CURRENT_DEFAULTS_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,11 +58,11 @@ pub struct AppSettings {
 }
 
 fn default_silence_auto_stop_enabled() -> bool {
-    true
+    false
 }
 
 fn default_silence_auto_stop_ms() -> u32 {
-    2_000
+    5_000
 }
 
 fn default_incremental_transcription_enabled() -> bool {
@@ -194,6 +194,12 @@ impl AppSettings {
             self.output_mode = OutputMode::AutoPaste;
         }
 
+        // v2: auto-stop on silence became opt-in. It shipped enabled by
+        // default, so installs that still have it on never chose it.
+        if self.defaults_version < 2 && self.silence_auto_stop_enabled {
+            self.silence_auto_stop_enabled = false;
+        }
+
         self.defaults_version = CURRENT_DEFAULTS_VERSION;
         true
     }
@@ -211,9 +217,9 @@ impl AppSettings {
             ));
         }
 
-        if !(500..=10_000).contains(&self.silence_auto_stop_ms) {
+        if !(500..=30_000).contains(&self.silence_auto_stop_ms) {
             return Err(SettingsValidationError::new(
-                "silenceAutoStopMs must be between 500 and 10000.",
+                "silenceAutoStopMs must be between 500 and 30000.",
             ));
         }
 
@@ -262,8 +268,8 @@ mod tests {
         assert_eq!(settings.max_recording_ms, 180_000);
         assert_eq!(settings.output_mode, OutputMode::AutoPaste);
         assert_eq!(settings.paste_method, PasteMethod::DirectInsert);
-        assert!(settings.silence_auto_stop_enabled);
-        assert_eq!(settings.silence_auto_stop_ms, 2_000);
+        assert!(!settings.silence_auto_stop_enabled);
+        assert_eq!(settings.silence_auto_stop_ms, 5_000);
         assert!(settings.incremental_transcription_enabled);
         assert_eq!(settings.vocabulary_prompt, "");
         assert!(settings.history_enabled);
@@ -288,10 +294,10 @@ mod tests {
         settings.silence_auto_stop_ms = 500;
         assert!(settings.validate().is_ok());
 
-        settings.silence_auto_stop_ms = 10_000;
+        settings.silence_auto_stop_ms = 30_000;
         assert!(settings.validate().is_ok());
 
-        settings.silence_auto_stop_ms = 10_001;
+        settings.silence_auto_stop_ms = 30_001;
         assert!(settings.validate().is_err());
     }
 
@@ -309,6 +315,24 @@ mod tests {
 
         // Already migrated: never runs again.
         assert!(!settings.migrate_defaults());
+    }
+
+    #[test]
+    fn migrates_auto_stop_to_opt_in_once() {
+        let mut settings = AppSettings {
+            defaults_version: 1,
+            silence_auto_stop_enabled: true,
+            ..AppSettings::default()
+        };
+
+        assert!(settings.migrate_defaults());
+        assert!(!settings.silence_auto_stop_enabled);
+        assert_eq!(settings.defaults_version, CURRENT_DEFAULTS_VERSION);
+
+        // Re-enabling after migration sticks.
+        settings.silence_auto_stop_enabled = true;
+        assert!(!settings.migrate_defaults());
+        assert!(settings.silence_auto_stop_enabled);
     }
 
     #[test]
@@ -368,8 +392,8 @@ mod tests {
         let settings: AppSettings = serde_json::from_value(json).unwrap();
 
         assert_eq!(settings.defaults_version, 0);
-        assert!(settings.silence_auto_stop_enabled);
-        assert_eq!(settings.silence_auto_stop_ms, 2_000);
+        assert!(!settings.silence_auto_stop_enabled);
+        assert_eq!(settings.silence_auto_stop_ms, 5_000);
         assert!(settings.incremental_transcription_enabled);
         assert_eq!(settings.vocabulary_prompt, "");
         assert_eq!(settings.output_mode, OutputMode::SaveOnly);

@@ -2384,7 +2384,7 @@ function AudioView({
             />
           </SettingRow>
           <SettingRow
-            description="End toggle/manual recordings after a pause (hold-to-talk is unaffected)."
+            description="End toggle/manual recordings after a long pause. Off: keep listening through pauses; phrases still transcribe live in the background."
             label="Auto-stop on silence"
           >
             <Toggle
@@ -2412,11 +2412,12 @@ function AudioView({
               }
               value={String(settings.silenceAutoStopMs)}
             >
-              <option value="1000">1s</option>
-              <option value="1500">1.5s</option>
               <option value="2000">2s</option>
               <option value="3000">3s</option>
               <option value="5000">5s</option>
+              <option value="10000">10s</option>
+              <option value="15000">15s</option>
+              <option value="30000">30s</option>
             </select>
           </SettingRow>
           <SettingRow
