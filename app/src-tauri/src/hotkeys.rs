@@ -211,6 +211,10 @@ pub struct HotkeyRuntimeState {
     /// Whether Q fired during the current toggle hold; a fired chord
     /// suppresses the release-toggle.
     note_chord_fired: AtomicBool,
+    /// Whether the toggle key is physically held right now. The async arm
+    /// thread checks it after registering so a tap that ended before the
+    /// registration completed never leaks the Q grab.
+    toggle_held: AtomicBool,
 }
 
 impl HotkeyRuntimeState {
@@ -274,11 +278,16 @@ impl HotkeyRuntimeState {
         }
     }
 
-    fn arm_note_key(&self, shortcut: Shortcut) {
+    /// Stores the registered note key, unless the toggle hold already ended;
+    /// returns false in that case so the caller unregisters it again.
+    fn arm_note_key(&self, shortcut: Shortcut) -> bool {
         if let Ok(mut guard) = self.note_key.lock() {
-            *guard = Some(shortcut);
+            if self.toggle_held.load(Ordering::SeqCst) {
+                *guard = Some(shortcut);
+                return true;
+            }
         }
-        self.note_chord_fired.store(false, Ordering::SeqCst);
+        false
     }
 
     fn disarm_note_key(&self) -> Option<Shortcut> {
@@ -573,8 +582,16 @@ fn handle_pressed(app: &AppHandle, action: HotkeyAction) {
         HotkeyAction::HoldToTalk => tray::start_dictation(app, false),
         // The toggle acts on RELEASE: while the key is held, Q is grabbed as
         // the note chord, and a fired chord suppresses the release-toggle.
+        // The grab itself runs on a separate thread - the global-shortcut
+        // manager's lock is held while this handler runs, and registering
+        // inline deadlocks the main thread.
         HotkeyAction::ToggleDictation => {
-            arm_note_chord(app);
+            if let Some(runtime) = app.try_state::<HotkeyRuntimeState>() {
+                runtime.toggle_held.store(true, Ordering::SeqCst);
+                runtime.note_chord_fired.store(false, Ordering::SeqCst);
+            }
+            let app = app.clone();
+            std::thread::spawn(move || arm_note_chord(&app));
             Ok(())
         }
         HotkeyAction::PasteLastTranscript => tray::paste_last_transcript(app),
@@ -606,7 +623,8 @@ fn handle_released(app: &AppHandle, action: HotkeyAction) {
             }
         }
         HotkeyAction::ToggleDictation => {
-            if !disarm_note_chord(app) {
+            let fired = disarm_note_chord(app);
+            if !fired {
                 if let Err(error) = toggle_dictation(app) {
                     audio::emit_recording_error(app, error);
                 }
@@ -626,7 +644,15 @@ fn arm_note_chord(app: &AppHandle) {
     };
     let shortcut = Shortcut::new(None, NOTE_CHORD_CODE);
     match app.global_shortcut().register(shortcut) {
-        Ok(()) => runtime.arm_note_key(shortcut),
+        Ok(()) => {
+            if !runtime.arm_note_key(shortcut) {
+                // The tap ended before registration finished: release the
+                // grab immediately so Q keeps typing normally.
+                if let Err(error) = app.global_shortcut().unregister(shortcut) {
+                    log::error!("Could not release the note-chord key grab: {}", error);
+                }
+            }
+        }
         Err(error) => log::warn!(
             "Note chord unavailable: could not grab Q during the toggle hold: {}",
             error
@@ -634,15 +660,20 @@ fn arm_note_chord(app: &AppHandle) {
     }
 }
 
-/// Releases the Q grab; returns whether the note chord fired during the hold.
+/// Ends the toggle hold and schedules the Q-grab release (on a thread - see
+/// handle_pressed); returns whether the note chord fired during the hold.
 fn disarm_note_chord(app: &AppHandle) -> bool {
     let Some(runtime) = app.try_state::<HotkeyRuntimeState>() else {
         return false;
     };
+    runtime.toggle_held.store(false, Ordering::SeqCst);
     if let Some(shortcut) = runtime.disarm_note_key() {
-        if let Err(error) = app.global_shortcut().unregister(shortcut) {
-            log::error!("Could not release the note-chord key grab: {}", error);
-        }
+        let app = app.clone();
+        std::thread::spawn(move || {
+            if let Err(error) = app.global_shortcut().unregister(shortcut) {
+                log::error!("Could not release the note-chord key grab: {}", error);
+            }
+        });
     }
     runtime.note_chord_fired()
 }
