@@ -55,6 +55,15 @@ sessions).
 
 ## Next steps (priority order)
 
+0a. **Notes v1 shipped and owner-verified on hardware (2026-06-12):**
+   tilde toggles on RELEASE via a permanent native GetAsyncKeyState watcher
+   (plugin events for unmodified keys proved unreliable, and plugin
+   register/unregister deadlocks on the main thread - see the
+   hotkeys.rs commit trail); tilde+Q grabs Q from a worker thread and
+   starts a blue-pill note. Empty notes are not saved (empty-transcript
+   rule). Injected (synthetic) backquote presses are invisible to both the
+   plugin and GetAsyncKeyState while the hotkey is registered - hotkey QA
+   needs the owner's physical keypresses.
 0. **Notes v1 shipped (2026-06-11 late):** toggle hotkey acts on tilde
    RELEASE; holding tilde and tapping Q starts a blue-pill note dictation
    (saved flagged `is_note`, history-only, never auto-pasted; migration 003).
@@ -84,6 +93,22 @@ sessions).
 6. Housekeeping: owner may want to delete the QA "quick brown fox" transcripts
    from History; QA scratch files live in `C:\Users\natha\AppData\Local\Temp\ld-qa\`
    (safe to delete wholesale).
+
+## Stable vs Dev testing flavors (added 2026-06-11 late)
+
+The owner dictates with the INSTALLED stable app all day; agent test builds
+must not stomp it. `app/src-tauri/tauri.dev-flavor.conf.json` overrides
+productName ("LocalDictate Dev") and identifier
+(`com.natkins.localdictate.dev`), giving the dev flavor its own app-data
+dir, DB, and single-instance lock - it runs side-by-side with stable
+(verified). Workflow: test with `npm run tauri:dev-flavor` (writes
+`target/release/app.exe` - the flavor is baked in at build time, so always
+rebuild the right flavor before launching); launch it with
+`LOCALDICTATE_MODEL_DIR=C:\Users\natha\AppData\Roaming\com.natkins.localdictate\models`
+so it reuses stable's models. Global hotkeys belong to whichever instance
+registered first - close stable when testing hotkeys in dev. Ship to stable
+only when the owner says so: full `npm run tauri build` + silent NSIS
+upgrade.
 
 ## Conventions & gotchas
 
