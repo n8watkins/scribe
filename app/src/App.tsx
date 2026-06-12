@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion as getAppVersion } from "@tauri-apps/api/app";
+import { check as checkUpdaterPackage } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import {
   AlertCircle,
   Archive,
@@ -2922,6 +2924,8 @@ function AboutView() {
     null,
   );
   const [updateError, setUpdateError] = useState<string | null>(null);
+  const [installing, setInstalling] = useState(false);
+  const [installStatus, setInstallStatus] = useState<string | null>(null);
 
   useEffect(() => {
     void getAppVersion().then(setVersion).catch(() => setVersion("unknown"));
@@ -2940,6 +2944,55 @@ function AboutView() {
       setUpdateError(commandErrorMessage(cause));
     } finally {
       setChecking(false);
+    }
+  };
+
+  const handleInstallUpdate = async () => {
+    if (installing) {
+      return;
+    }
+    setInstalling(true);
+    setUpdateError(null);
+    setInstallStatus("Contacting the release server...");
+    try {
+      const update = await checkUpdaterPackage();
+      if (!update) {
+        setInstallStatus(null);
+        setUpdateError(
+          "The latest release has no signed update package — use View release to download the installer.",
+        );
+        return;
+      }
+      let downloaded = 0;
+      let total: number | null = null;
+      await update.downloadAndInstall((event) => {
+        switch (event.event) {
+          case "Started":
+            total = event.data.contentLength ?? null;
+            setInstallStatus("Downloading update...");
+            break;
+          case "Progress":
+            downloaded += event.data.chunkLength;
+            setInstallStatus(
+              total
+                ? `Downloading update... ${Math.round((downloaded / total) * 100)}%`
+                : "Downloading update...",
+            );
+            break;
+          case "Finished":
+            setInstallStatus("Installing... the app will restart.");
+            break;
+        }
+      });
+      // On Windows the installer closes and restarts the app itself, so
+      // execution rarely gets past downloadAndInstall; relaunch covers the
+      // platforms/paths where it does.
+      await relaunch();
+    } catch (cause) {
+      setInstallStatus(null);
+      setUpdateError(commandErrorMessage(cause));
+    } finally {
+      setInstalling(false);
     }
   };
 
@@ -2971,6 +3024,7 @@ function AboutView() {
         <SettingRow
           description={
             updateError ??
+            installStatus ??
             (updateResult
               ? updateResult.updateAvailable
                 ? `Version ${updateResult.latestVersion} is available (you have ${updateResult.currentVersion}).`
@@ -2980,13 +3034,24 @@ function AboutView() {
           label="Updates"
         >
           {updateResult?.updateAvailable ? (
-            <button
-              className="primary-button"
-              onClick={() => void openReleasePage(updateResult.releaseUrl)}
-              type="button"
-            >
-              View release
-            </button>
+            <>
+              <button
+                className="primary-button"
+                disabled={installing}
+                onClick={() => void handleInstallUpdate()}
+                type="button"
+              >
+                {installing ? "Installing..." : "Install update"}
+              </button>
+              <button
+                className="ghost-button"
+                disabled={installing}
+                onClick={() => void openReleasePage(updateResult.releaseUrl)}
+                type="button"
+              >
+                View release
+              </button>
+            </>
           ) : (
             <button
               className="ghost-button"

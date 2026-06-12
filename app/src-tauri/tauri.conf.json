@@ -39,9 +39,21 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNBRTk5MzY2QkRBQUI2MDIKUldRQ3RxcTlacFBwT3FUeEhHd2VSbk5YRlV3M0lNcFRjMENQclROQkNnVkxOQlp0cmNKVm1qMSsK",
+      "endpoints": [
+        "https://github.com/n8watkins/localdictate/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi"],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

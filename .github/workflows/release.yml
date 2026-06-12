@@ -56,7 +56,36 @@ jobs:
 
       - name: Build installers
         working-directory: app
+        env:
+          # Signs the NSIS updater artifact (createUpdaterArtifacts).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: npm run tauri build
+
+      # The in-app updater fetches latest.json from the latest release; it
+      # points at the signed NSIS installer of this release.
+      - name: Generate updater manifest (latest.json)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $nsisDir = "app/src-tauri/target/release/bundle/nsis"
+          $setup = Get-ChildItem -Path $nsisDir -Filter "*-setup.exe" | Select-Object -First 1
+          if (-not $setup) { throw "No NSIS setup exe found" }
+          $sigFile = "$($setup.FullName).sig"
+          if (-not (Test-Path $sigFile)) { throw "No updater signature next to $($setup.Name); is TAURI_SIGNING_PRIVATE_KEY set?" }
+          $tag = "${{ github.ref_name }}"
+          $manifest = [ordered]@{
+            version  = $tag.TrimStart("v")
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = @{
+              "windows-x86_64" = @{
+                signature = (Get-Content $sigFile -Raw)
+                url = "https://github.com/${{ github.repository }}/releases/download/$tag/$($setup.Name)"
+              }
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 4 | Set-Content "$nsisDir/latest.json" -Encoding utf8
+          Get-Content "$nsisDir/latest.json"
 
       - name: Attach installers to release
         if: startsWith(github.ref, 'refs/tags/')
@@ -64,6 +93,8 @@ jobs:
         with:
           files: |
             app/src-tauri/target/release/bundle/nsis/*-setup.exe
+            app/src-tauri/target/release/bundle/nsis/*-setup.exe.sig
+            app/src-tauri/target/release/bundle/nsis/latest.json
             app/src-tauri/target/release/bundle/msi/*.msi
           generate_release_notes: true
 
@@ -74,4 +105,5 @@ jobs:
           name: localdictate-installers
           path: |
             app/src-tauri/target/release/bundle/nsis/*-setup.exe
+            app/src-tauri/target/release/bundle/nsis/*-setup.exe.sig
             app/src-tauri/target/release/bundle/msi/*.msi
