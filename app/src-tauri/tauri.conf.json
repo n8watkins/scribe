@@ -41,7 +41,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNBRTk5MzY2QkRBQUI2MDIKUldRQ3RxcTlacFBwT3FUeEhHd2VSbk5YRlV3M0lNcFRjMENQclROQkNnVkxOQlp0cmNKVm1qMSsK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc1NzhGOUZCMzNCMTY5MjYKUldRbWFiRXorL2w0ZFRPa3UrTndQclVKblJKODJFY1hlVlIwYkhnYTJCVGNoNXduSTBadWJHaHYK",
       "endpoints": [
         "https://github.com/n8watkins/localdictate/releases/latest/download/latest.json"
       ],
