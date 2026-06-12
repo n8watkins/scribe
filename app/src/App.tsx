@@ -1477,8 +1477,17 @@ function SettingsView({
   actions: ViewActions;
   settings: AppSettings;
 }) {
-  return (
-    <section className="view-grid">
+  const tabs: {
+    id: string;
+    title: string;
+    icon: ReactNode;
+    render: () => ReactNode;
+  }[] = [
+    {
+      id: "app-behavior",
+      title: "App behavior",
+      icon: <MonitorCog aria-hidden="true" size={16} />,
+      render: () => (
       <SectionPanel
         icon={<MonitorCog aria-hidden="true" size={16} />}
         title="App behavior"
@@ -1580,7 +1589,13 @@ function SettingsView({
           />
         </SettingRow>
       </SectionPanel>
-
+      ),
+    },
+    {
+      id: "output",
+      title: "Output",
+      icon: <SlidersHorizontal aria-hidden="true" size={16} />,
+      render: () => (
       <SectionPanel
         icon={<SlidersHorizontal aria-hidden="true" size={16} />}
         title="Output"
@@ -1625,7 +1640,13 @@ function SettingsView({
           </select>
         </SettingRow>
       </SectionPanel>
-
+      ),
+    },
+    {
+      id: "vocabulary",
+      title: "Custom vocabulary",
+      icon: <BookOpen aria-hidden="true" size={16} />,
+      render: () => (
       <SectionPanel
         icon={<BookOpen aria-hidden="true" size={16} />}
         title="Custom vocabulary"
@@ -1643,7 +1664,13 @@ function SettingsView({
           value={settings.vocabularyPrompt}
         />
       </SectionPanel>
-
+      ),
+    },
+    {
+      id: "notes-analysis",
+      title: "Notes analysis",
+      icon: <Sparkles aria-hidden="true" size={16} />,
+      render: () => (
       <SectionPanel
         icon={<Sparkles aria-hidden="true" size={16} />}
         title="Notes analysis"
@@ -1702,8 +1729,46 @@ function SettingsView({
           value={settings.notesAnalysisPrompt}
         />
       </SectionPanel>
+      ),
+    },
+    {
+      id: "google-drive",
+      title: "Google Drive",
+      icon: <Cloud aria-hidden="true" size={16} />,
+      render: () => <GoogleDrivePanel actions={actions} settings={settings} />,
+    },
+  ];
 
-      <GoogleDrivePanel actions={actions} settings={settings} />
+  const [activeTab, setActiveTab] = useState(tabs[0].id);
+  const active = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
+
+  return (
+    <section className="view-grid">
+      <div className="settings-tabs" role="tablist" aria-label="Settings sections">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            id={`settings-tab-${tab.id}`}
+            aria-controls={`settings-panel-${tab.id}`}
+            aria-selected={tab.id === active.id}
+            className={`settings-tab${tab.id === active.id ? " is-active" : ""}`}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            {tab.icon}
+            <span>{tab.title}</span>
+          </button>
+        ))}
+      </div>
+      <div
+        className="settings-tabpanel"
+        role="tabpanel"
+        id={`settings-panel-${active.id}`}
+        aria-labelledby={`settings-tab-${active.id}`}
+      >
+        {active.render()}
+      </div>
     </section>
   );
 }

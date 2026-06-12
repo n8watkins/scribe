@@ -551,6 +551,57 @@ button:disabled {
   gap: 8px;
 }
 
+/* Settings tab bar: a single-row, wrapping list of section tabs that
+   spans the full width of the two-column view grid. The active tab uses
+   the cyan accent; the tabpanel below it holds the active section. */
+.settings-tabs {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 5px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 7px;
+  background:
+    linear-gradient(180deg, rgba(23, 32, 51, 0.82), rgba(13, 19, 32, 0.92)),
+    #0d1320;
+}
+
+.settings-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 11px;
+  border-radius: 6px;
+  color: #94a3b8;
+  background: transparent;
+  border: 1px solid transparent;
+  font-size: 12px;
+  font-weight: 760;
+  white-space: nowrap;
+  transition:
+    color 140ms ease,
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.settings-tab:hover {
+  color: #e2e8f0;
+  border-color: rgba(34, 211, 238, 0.42);
+}
+
+.settings-tab.is-active {
+  color: #06111f;
+  background: #22d3ee;
+  border-color: rgba(34, 211, 238, 0.72);
+  box-shadow: 0 8px 20px rgba(34, 211, 238, 0.16);
+}
+
+.settings-tabpanel {
+  grid-column: 1 / -1;
+}
+
 .split-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.08fr) minmax(270px, 0.92fr);
