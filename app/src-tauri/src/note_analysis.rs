@@ -145,3 +145,136 @@ fn truncate(text: &str, max_chars: usize) -> String {
         format!("{}…", truncated)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    /// One-shot OpenAI-compatible mock: answers `responses` connections in
+    /// order, capturing each request's first line + body.
+    fn mock_server(responses: Vec<String>) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+
+        let handle = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buffer = [0_u8; 65536];
+                let mut request = Vec::new();
+                // Read until the headers are complete, then the body per
+                // Content-Length (requests here are small and unchunked).
+                loop {
+                    let read = stream.read(&mut buffer).unwrap();
+                    request.extend_from_slice(&buffer[..read]);
+                    let text = String::from_utf8_lossy(&request);
+                    if let Some(headers_end) = text.find("\r\n\r\n") {
+                        let content_length = text
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|value| value.trim().parse::<usize>().unwrap())
+                            })
+                            .unwrap_or(0);
+                        if request.len() >= headers_end + 4 + content_length {
+                            break;
+                        }
+                    }
+                }
+                requests.push(String::from_utf8_lossy(&request).into_owned());
+                let payload = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response.len(),
+                    response
+                );
+                stream.write_all(payload.as_bytes()).unwrap();
+            }
+            requests
+        });
+
+        (endpoint, handle)
+    }
+
+    fn completion_response(content: &str, model: &str) -> String {
+        serde_json::json!({
+            "model": model,
+            "choices": [{ "message": { "role": "assistant", "content": content } }],
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn explicit_model_round_trips_prompt_and_note() {
+        let (endpoint, handle) = mock_server(vec![completion_response(
+            " Summary.\n- Do the thing ",
+            "qwen2.5-7b-instruct",
+        )]);
+
+        let outcome = analyze_text(
+            &format!("{}/", endpoint), // trailing slash must be tolerated
+            "my-model",
+            "Summarize.",
+            "note text here",
+        )
+        .unwrap();
+
+        assert_eq!(outcome.analysis, "Summary.\n- Do the thing");
+        // The server-reported model wins over the requested one.
+        assert_eq!(outcome.model, "qwen2.5-7b-instruct");
+
+        let requests = handle.join().unwrap();
+        assert!(requests[0].starts_with("POST /v1/chat/completions"));
+        assert!(requests[0].contains("\"my-model\""));
+        assert!(requests[0].contains("Summarize."));
+        assert!(requests[0].contains("note text here"));
+    }
+
+    #[test]
+    fn empty_model_uses_first_listed_model() {
+        let models = serde_json::json!({
+            "data": [{ "id": "loaded-model" }, { "id": "other" }],
+        })
+        .to_string();
+        let (endpoint, handle) = mock_server(vec![
+            models,
+            completion_response("ok", "loaded-model"),
+        ]);
+
+        let outcome = analyze_text(&endpoint, "  ", "p", "n").unwrap();
+        assert_eq!(outcome.model, "loaded-model");
+
+        let requests = handle.join().unwrap();
+        assert!(requests[0].starts_with("GET /v1/models"));
+        assert!(requests[1].contains("\"loaded-model\""));
+    }
+
+    #[test]
+    fn empty_model_list_is_a_clear_error() {
+        let (endpoint, handle) =
+            mock_server(vec![serde_json::json!({ "data": [] }).to_string()]);
+
+        let error = analyze_text(&endpoint, "", "p", "n").unwrap_err();
+        assert!(error.to_string().contains("lists no models"));
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn blank_completion_content_is_an_error() {
+        let (endpoint, handle) =
+            mock_server(vec![completion_response("   ", "m")]);
+
+        let error = analyze_text(&endpoint, "m", "p", "n").unwrap_err();
+        assert!(error.to_string().contains("no analysis text"));
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn unreachable_server_mentions_the_endpoint() {
+        // A port from the dynamic range with nothing listening.
+        let error = analyze_text("http://127.0.0.1:59997/v1", "m", "p", "n").unwrap_err();
+        assert!(error.to_string().contains("127.0.0.1:59997"));
+    }
+}
