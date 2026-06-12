@@ -27,6 +27,15 @@ pub struct Transcript {
     /// auto-pasted, and listed in the dashboard's Notes view.
     #[serde(default)]
     pub is_note: bool,
+    /// Local-LLM analysis of the transcript text (shape is whatever the
+    /// user's analysis prompt asked for). Set on demand from the Notes view.
+    #[serde(default)]
+    pub analysis: Option<String>,
+    /// The model that produced `analysis`, as reported by the LLM server.
+    #[serde(default)]
+    pub analysis_model: Option<String>,
+    #[serde(default)]
+    pub analysis_created_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +81,9 @@ impl Transcript {
             transcription_latency_ms: None,
             audio_path: None,
             is_note: false,
+            analysis: None,
+            analysis_model: None,
+            analysis_created_at: None,
         })
     }
 }

@@ -56,6 +56,21 @@ pub struct AppSettings {
     pub history_enabled: bool,
     pub save_audio_clips: bool,
     pub history_retention_days: Option<u16>,
+    /// Local-LLM analysis of notes (on demand from the Notes view). Off by
+    /// default; talks to an OpenAI-compatible server (LM Studio, Ollama, ...).
+    #[serde(default)]
+    pub notes_analysis_enabled: bool,
+    /// The user-editable instruction sent as the system prompt; the note text
+    /// is the user message. Defines what "analysis" produces.
+    #[serde(default = "default_notes_analysis_prompt")]
+    pub notes_analysis_prompt: String,
+    /// Base URL of the OpenAI-compatible API (no trailing /chat/completions).
+    #[serde(default = "default_notes_analysis_endpoint")]
+    pub notes_analysis_endpoint: String,
+    /// Model name to request. Empty means "first model the server lists",
+    /// which on LM Studio is whatever model is loaded.
+    #[serde(default)]
+    pub notes_analysis_model: String,
     /// Saved floating pill window position (physical pixels). None means the
     /// frontend places the pill at its bottom-center default.
     #[serde(default)]
@@ -83,6 +98,17 @@ fn default_pill_display_mode() -> PillDisplayMode {
 
 fn default_dashboard_hotkey_toggles() -> bool {
     true
+}
+
+fn default_notes_analysis_prompt() -> String {
+    "Summarize this dictated note in one or two sentences, then list any \
+     action items as bullet points. If there are none, say \"No action items.\""
+        .to_string()
+}
+
+fn default_notes_analysis_endpoint() -> String {
+    // LM Studio's local server default.
+    "http://127.0.0.1:1234/v1".to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,6 +222,10 @@ impl Default for AppSettings {
             history_enabled: true,
             save_audio_clips: true,
             history_retention_days: Some(30),
+            notes_analysis_enabled: false,
+            notes_analysis_prompt: default_notes_analysis_prompt(),
+            notes_analysis_endpoint: default_notes_analysis_endpoint(),
+            notes_analysis_model: String::new(),
             pill_x: None,
             pill_y: None,
             hotkeys: HotkeySettings::default(),
@@ -293,6 +323,20 @@ impl AppSettings {
             ));
         }
 
+        if self.notes_analysis_enabled {
+            let endpoint = self.notes_analysis_endpoint.trim();
+            if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
+                return Err(SettingsValidationError::new(
+                    "notesAnalysisEndpoint must be an http(s) URL when notes analysis is enabled.",
+                ));
+            }
+            if self.notes_analysis_prompt.trim().is_empty() {
+                return Err(SettingsValidationError::new(
+                    "notesAnalysisPrompt cannot be empty when notes analysis is enabled.",
+                ));
+            }
+        }
+
         Ok(())
     }
 }
@@ -342,6 +386,26 @@ mod tests {
             settings.pill_display_mode,
             PillDisplayMode::VisualizerWithText
         );
+        assert!(!settings.notes_analysis_enabled);
+        assert!(!settings.notes_analysis_prompt.is_empty());
+        assert_eq!(settings.notes_analysis_endpoint, "http://127.0.0.1:1234/v1");
+        assert_eq!(settings.notes_analysis_model, "");
+    }
+
+    #[test]
+    fn notes_analysis_validation_only_applies_when_enabled() {
+        let mut settings = AppSettings::default();
+        settings.notes_analysis_endpoint = "not a url".to_string();
+        assert!(settings.validate().is_ok());
+
+        settings.notes_analysis_enabled = true;
+        assert!(settings.validate().is_err());
+
+        settings.notes_analysis_endpoint = "http://127.0.0.1:1234/v1".to_string();
+        assert!(settings.validate().is_ok());
+
+        settings.notes_analysis_prompt = "  ".to_string();
+        assert!(settings.validate().is_err());
     }
 
     #[test]

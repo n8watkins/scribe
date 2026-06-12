@@ -14,6 +14,7 @@ use crate::{
 const INITIAL_MIGRATION: &str = include_str!("../migrations/001_initial.sql");
 const AUDIO_CLIPS_MIGRATION: &str = include_str!("../migrations/002_audio_clips.sql");
 const NOTES_MIGRATION: &str = include_str!("../migrations/003_notes.sql");
+const NOTE_ANALYSIS_MIGRATION: &str = include_str!("../migrations/004_note_analysis.sql");
 const SETTINGS_KEY: &str = "app_settings";
 const LAST_TRANSCRIPT_ID_KEY: &str = "last_transcript_id";
 const LAST_TRANSCRIPT_BUFFER_KEY: &str = "last_transcript_buffer";
@@ -72,7 +73,7 @@ impl Database {
             .prepare(
                 "SELECT id, text, created_at, duration_ms, word_count, character_count,
                         model_id, language, output_mode, paste_method, transcription_latency_ms,
-                        audio_path, is_note
+                        audio_path, is_note, analysis, analysis_model, analysis_created_at
                  FROM transcripts
                  ORDER BY created_at DESC
                  LIMIT ?1",
@@ -118,7 +119,7 @@ impl Database {
                 .prepare(&format!(
                     "SELECT id, text, created_at, duration_ms, word_count, character_count,
                             model_id, language, output_mode, paste_method, transcription_latency_ms,
-                            audio_path, is_note
+                            audio_path, is_note, analysis, analysis_model, analysis_created_at
                      FROM transcripts
                      WHERE text LIKE ?1 ESCAPE '\\'{}
                      ORDER BY created_at DESC
@@ -152,7 +153,7 @@ impl Database {
                 .prepare(&format!(
                     "SELECT id, text, created_at, duration_ms, word_count, character_count,
                             model_id, language, output_mode, paste_method, transcription_latency_ms,
-                            audio_path, is_note
+                            audio_path, is_note, analysis, analysis_model, analysis_created_at
                      FROM transcripts
                      {}
                      ORDER BY created_at DESC
@@ -411,8 +412,8 @@ impl Database {
                 "INSERT OR REPLACE INTO transcripts (
                     id, text, created_at, duration_ms, word_count, character_count,
                     model_id, language, output_mode, paste_method, transcription_latency_ms,
-                    audio_path, is_note
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                    audio_path, is_note, analysis, analysis_model, analysis_created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
                 params![
                     transcript.id,
                     transcript.text,
@@ -427,6 +428,12 @@ impl Database {
                     transcript.transcription_latency_ms,
                     transcript.audio_path,
                     transcript.is_note,
+                    transcript.analysis,
+                    transcript.analysis_model,
+                    transcript
+                        .analysis_created_at
+                        .as_ref()
+                        .map(|date| date.to_rfc3339()),
                 ],
             )
             .map_err(CommandError::database)?;
@@ -439,7 +446,7 @@ impl Database {
             .query_row(
                 "SELECT id, text, created_at, duration_ms, word_count, character_count,
                         model_id, language, output_mode, paste_method, transcription_latency_ms,
-                        audio_path, is_note
+                        audio_path, is_note, analysis, analysis_model, analysis_created_at
                  FROM transcripts
                  WHERE id = ?1",
                 [id],
@@ -482,6 +489,30 @@ impl Database {
             .map_err(CommandError::database)?;
 
         Ok(transcript)
+    }
+
+    /// Stores (or replaces) the local-LLM analysis of a transcript and
+    /// returns the updated row.
+    pub fn save_note_analysis(
+        &self,
+        id: &str,
+        analysis: &str,
+        model: &str,
+    ) -> Result<Transcript, CommandError> {
+        let updated = self
+            .conn
+            .execute(
+                "UPDATE transcripts
+                 SET analysis = ?2, analysis_model = ?3, analysis_created_at = ?4
+                 WHERE id = ?1",
+                params![id, analysis, model, Utc::now().to_rfc3339()],
+            )
+            .map_err(CommandError::database)?;
+        if updated == 0 {
+            return Err(transcript_not_found(id));
+        }
+        self.get_transcript_by_id(id)?
+            .ok_or_else(|| transcript_not_found(id))
     }
 
     pub fn delete_transcript(&self, id: &str) -> Result<(), CommandError> {
@@ -583,6 +614,11 @@ fn apply_migrations(conn: &Connection) -> Result<(), CommandError> {
             return Err(CommandError::database(error));
         }
     }
+    if let Err(error) = conn.execute_batch(NOTE_ANALYSIS_MIGRATION) {
+        if !error.to_string().contains("duplicate column name") {
+            return Err(CommandError::database(error));
+        }
+    }
     Ok(())
 }
 
@@ -619,6 +655,13 @@ fn transcript_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Transcript> 
         transcription_latency_ms: row.get(10)?,
         audio_path: row.get(11)?,
         is_note: row.get::<_, Option<bool>>(12)?.unwrap_or(false),
+        analysis: row.get(13)?,
+        analysis_model: row.get(14)?,
+        analysis_created_at: row.get::<_, Option<String>>(15)?.and_then(|date| {
+            DateTime::parse_from_rfc3339(&date)
+                .ok()
+                .map(|date| date.with_timezone(&Utc))
+        }),
     })
 }
 
@@ -716,6 +759,37 @@ mod tests {
 
         let queried = db.search_transcripts(Some("note"), true, 10, 0).unwrap();
         assert_eq!(queried.total, 1);
+    }
+
+    #[test]
+    fn note_analysis_round_trips_and_replaces() {
+        let db = Database::in_memory().unwrap();
+        let mut note = transcript_with_text("remember to file taxes");
+        note.is_note = true;
+        db.save_last_transcript(&note).unwrap();
+
+        let saved = db
+            .save_note_analysis(&note.id, "Summary.\n- File taxes", "qwen2.5-7b")
+            .unwrap();
+        assert_eq!(saved.analysis.as_deref(), Some("Summary.\n- File taxes"));
+        assert_eq!(saved.analysis_model.as_deref(), Some("qwen2.5-7b"));
+        assert!(saved.analysis_created_at.is_some());
+
+        // Re-running replaces the stored analysis.
+        let replaced = db
+            .save_note_analysis(&note.id, "New summary.", "llama-3.1-8b")
+            .unwrap();
+        assert_eq!(replaced.analysis.as_deref(), Some("New summary."));
+        assert_eq!(replaced.analysis_model.as_deref(), Some("llama-3.1-8b"));
+
+        // The analysis comes back through the search path too.
+        let result = db.search_transcripts(None, true, 10, 0).unwrap();
+        assert_eq!(
+            result.transcripts[0].analysis.as_deref(),
+            Some("New summary.")
+        );
+
+        assert!(db.save_note_analysis("tx_missing", "x", "y").is_err());
     }
 
     /// A transcript plus a real on-disk clip file (the transcript id keeps

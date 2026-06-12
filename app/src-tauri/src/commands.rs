@@ -395,6 +395,57 @@ pub fn open_models_folder(app: tauri::AppHandle) -> Result<(), CommandError> {
     open_folder(&app, dir)
 }
 
+/// Runs the user's notes-analysis prompt over a saved transcript via the
+/// configured local LLM server and stores the result on the row. Async so
+/// the (possibly slow) local inference happens on a blocking worker. The
+/// Notes view only offers this for notes, but any transcript id works.
+#[tauri::command]
+pub async fn analyze_note(
+    app: tauri::AppHandle,
+    transcript_id: String,
+) -> Result<Transcript, CommandError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<BackendState>();
+        // Read everything up front and drop the DB lock before the
+        // long-running HTTP call.
+        let (settings, transcript) = {
+            let db = state.db()?;
+            let settings = db.get_settings()?;
+            let transcript = db.get_transcript_by_id(&transcript_id)?.ok_or_else(|| {
+                CommandError::new(
+                    "transcript_not_found",
+                    format!(
+                        "Transcript {} was not found in local history.",
+                        transcript_id
+                    ),
+                )
+            })?;
+            (settings, transcript)
+        };
+
+        if !settings.notes_analysis_enabled {
+            return Err(CommandError::new(
+                "note_analysis_disabled",
+                "Notes analysis is turned off in Settings.",
+            ));
+        }
+
+        let outcome = crate::note_analysis::analyze_text(
+            &settings.notes_analysis_endpoint,
+            &settings.notes_analysis_model,
+            &settings.notes_analysis_prompt,
+            &transcript.text,
+        )?;
+
+        let saved = state
+            .db()?
+            .save_note_analysis(&transcript_id, &outcome.analysis, &outcome.model);
+        saved
+    })
+    .await
+    .map_err(|error| CommandError::new("note_analysis_failed", error.to_string()))?
+}
+
 #[tauri::command]
 pub async fn check_for_update() -> Result<crate::update_check::UpdateCheckResult, CommandError> {
     tauri::async_runtime::spawn_blocking(crate::update_check::check_for_update)

@@ -9,6 +9,7 @@ pub mod hotkeys;
 pub mod incremental;
 pub mod model_manager;
 pub mod models;
+pub mod note_analysis;
 pub mod output;
 pub mod settings;
 pub mod stats;
@@ -188,6 +189,7 @@ pub fn run() {
             commands::open_models_folder,
             commands::transcribe_recording,
             commands::transcribe_file,
+            commands::analyze_note,
             commands::save_text_file,
             commands::paste_last_transcript,
             commands::copy_last_transcript,
