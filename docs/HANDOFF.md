@@ -10,7 +10,7 @@ local push-to-talk dictation via whisper.cpp. Hold `Ctrl+Win` (or tap `` ` ``),
 talk, and text is typed at the cursor by a locally running model. The owner
 (Nathan) uses it daily on Windows 11; it is his personal tool and he is the only
 stakeholder. Source of truth is the WSL repo
-(`/home/natkins/personal/tools/localdictate`); a Windows clone at
+(`/home/natkins/n8builds/tools/localdictate`); a Windows clone at
 `C:\Users\natha\Projects\Tools\localdictate` exists solely to build/test with the
 Windows toolchain. GitHub: `https://github.com/n8watkins/localdictate`.
 
@@ -55,6 +55,13 @@ sessions).
 
 ## Next steps (priority order)
 
+0. **Notes v1 shipped (2026-06-11 late):** toggle hotkey acts on tilde
+   RELEASE; holding tilde and tapping Q starts a blue-pill note dictation
+   (saved flagged `is_note`, history-only, never auto-pasted; migration 003).
+   New Notes view; archive pages are 25 records. Installed on the owner's
+   machine; owner has NOT yet confirmed the chord feel on real hardware.
+   Note: the WSL repo moved to `/home/natkins/n8builds/tools/localdictate`
+   (owner reorganized his home dir mid-session).
 1. **Owner verifies the feel** of the v0.2.0 install: pill growth/anchoring,
    `Ctrl+Alt+F` toggle, `Ctrl+Alt+V` into a terminal (was opening Windows
    Terminal's settings JSON), one MP4 through Transcribe-a-file.
@@ -83,7 +90,7 @@ sessions).
 - **Windows verification is mandatory** for Rust changes: almost everything is
   `#[cfg(windows)]`; green WSL `cargo check` proves nothing. Sync the clone
   without pushing: from `/mnt/c/Users/natha/Projects/Tools/localdictate`,
-  `git fetch /home/natkins/personal/tools/localdictate main && git merge --ff-only FETCH_HEAD`,
+  `git fetch /home/natkins/n8builds/tools/localdictate main && git merge --ff-only FETCH_HEAD`,
   then `cd /mnt/c && cmd.exe /c "cd /d C:\Users\natha\Projects\Tools\localdictate\app\src-tauri && cargo check 2>&1"`
   (likewise `cargo test`).
 - **The owner is usually AT the machine during sessions** — no input
