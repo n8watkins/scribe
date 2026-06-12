@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:dev-flavor": "tauri build --no-bundle --config src-tauri/tauri.dev-flavor.conf.json"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
