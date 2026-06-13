@@ -203,13 +203,56 @@ fn parse_output_text(output_txt_path: &Path, stdout: &[u8]) -> Result<String, Co
 /// produce identically trimmed text. Whisper's non-speech annotations are
 /// removed: silent audio otherwise types literal "[BLANK_AUDIO]" markers.
 pub(crate) fn normalize_transcript_text(raw_text: &str) -> String {
-    raw_text
+    let joined = raw_text
         .lines()
         .map(strip_noise_annotations)
+        .map(|line| strip_pause_ellipses(&line))
         .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(" ");
+    tidy_punctuation_spacing(&joined)
+}
+
+/// Whisper renders speech pauses as an ellipsis ("..." or the "…" character).
+/// Drop them so dictation reads as normal speech instead of hesitant,
+/// dotted-out fragments. A single "." is a real sentence period and is kept;
+/// only runs of two or more dots (and the unicode ellipsis) are removed.
+fn strip_pause_ellipses(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '…' => out.push(' '),
+            '.' => {
+                let mut dots = 1;
+                while chars.peek() == Some(&'.') {
+                    chars.next();
+                    dots += 1;
+                }
+                // 2+ dots = a pause ellipsis -> a space; a lone dot stays.
+                out.push(if dots >= 2 { ' ' } else { '.' });
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Removes whitespace left immediately before sentence punctuation (a common
+/// artifact once a pause ellipsis between a word and its punctuation is
+/// dropped, e.g. "Where ?" -> "Where?").
+fn tidy_punctuation_spacing(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if matches!(c, ',' | '.' | '?' | '!' | ';' | ':') {
+            while out.ends_with(' ') {
+                out.pop();
+            }
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Drops whisper's bracketed/parenthesized non-speech annotations, e.g.
@@ -303,6 +346,25 @@ mod tests {
             normalize_transcript_text("Use array[0] and (see notes)."),
             "Use array[0] and (see notes)."
         );
+    }
+
+    #[test]
+    fn pause_ellipses_are_removed_but_periods_kept() {
+        // The pause-dots that Whisper inserts for hesitations are dropped.
+        assert_eq!(
+            normalize_transcript_text("So, uh... Where... Okay, what's the status?"),
+            "So, uh Where Okay, what's the status?"
+        );
+        // The unicode ellipsis is handled too, and the space it leaves before
+        // punctuation is tidied.
+        assert_eq!(normalize_transcript_text("Where… ?"), "Where?");
+        // A normal sentence period survives untouched.
+        assert_eq!(
+            normalize_transcript_text("I went home. Then I slept."),
+            "I went home. Then I slept."
+        );
+        // A line that was only an ellipsis collapses to nothing.
+        assert_eq!(normalize_transcript_text("..."), "");
     }
 
     #[test]
