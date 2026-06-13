@@ -538,9 +538,11 @@ pub async fn google_sign_out(app: tauri::AppHandle) -> Result<AppSettings, Comma
     Ok(settings)
 }
 
-/// Pushes the current notes (or all transcripts, per the toggle) to Google
-/// Drive as dated Markdown, creating the folder structure as needed. The daily
-/// files are regenerated from the DB, so this is safe to run repeatedly.
+/// Pushes the current notes (is_note=1 only, in Phase 1) to Google Drive as
+/// dated Markdown, creating the folder structure as needed. The daily files are
+/// regenerated from the DB, so this is safe to run repeatedly. The
+/// `drive_sync_all_transcripts` setting is a reserved stub for a future
+/// separate transcript backup and is intentionally not consulted here yet.
 #[tauri::command]
 pub async fn drive_sync_now(
     app: tauri::AppHandle,

@@ -74,10 +74,13 @@ fn migrate_pre_rebrand_data(app: &tauri::AppHandle, new_data_dir: &std::path::Pa
         return;
     }
 
-    // Idempotency: if the new DB already exists, migration already ran (or a
-    // fresh install has already initialized its own DB). Leave it untouched.
-    let new_db = new_data_dir.join("scribe.sqlite3");
-    if new_db.exists() {
+    // Idempotency is gated on a completion marker written ONLY after a full,
+    // successful migration — not merely on the new DB existing. If migration is
+    // interrupted after the DB lands but before clips/models copy, guarding on
+    // the DB alone would skip those forever; the marker lets the next launch
+    // resume the (skip-existing) clips/models copy instead.
+    let marker = new_data_dir.join(".rebrand-migrated");
+    if marker.exists() {
         return;
     }
 
@@ -87,23 +90,49 @@ fn migrate_pre_rebrand_data(app: &tauri::AppHandle, new_data_dir: &std::path::Pa
         new_data_dir.display()
     );
 
-    // Copy the SQLite DB and its WAL/SHM sidecars, renaming the prefix.
-    for (old_name, new_name) in [
-        ("localdictate.sqlite3", "scribe.sqlite3"),
-        ("localdictate.sqlite3-wal", "scribe.sqlite3-wal"),
-        ("localdictate.sqlite3-shm", "scribe.sqlite3-shm"),
-    ] {
-        let src = old_data_dir.join(old_name);
-        if src.exists() {
-            let dst = new_data_dir.join(new_name);
-            if let Err(error) = std::fs::copy(&src, &dst) {
-                log::warn!("Could not copy {} during rebrand migration: {}", old_name, error);
+    let new_db = new_data_dir.join("scribe.sqlite3");
+    // Track whether every step succeeded; the marker is only written if so, so
+    // an incomplete migration retries on the next launch.
+    let mut complete = true;
+
+    // Copy the DB only when the destination has none yet. Stage to a temp file
+    // and atomically rename into place, so a crash or failed copy can never
+    // leave a truncated scribe.sqlite3 that the app would then try to open.
+    if !new_db.exists() {
+        let old_db = old_data_dir.join("localdictate.sqlite3");
+        if old_db.is_file() {
+            let staging = new_data_dir.join("scribe.sqlite3.migrating");
+            let _ = std::fs::remove_file(&staging);
+            match std::fs::copy(&old_db, &staging) {
+                Ok(_) => {
+                    // Sidecars first (SQLite recovers if they're stale), then
+                    // the main DB is renamed in last as the atomic commit point.
+                    for (old_name, new_name) in [
+                        ("localdictate.sqlite3-wal", "scribe.sqlite3-wal"),
+                        ("localdictate.sqlite3-shm", "scribe.sqlite3-shm"),
+                    ] {
+                        let src = old_data_dir.join(old_name);
+                        if src.exists() {
+                            let _ = std::fs::copy(&src, new_data_dir.join(new_name));
+                        }
+                    }
+                    if let Err(error) = std::fs::rename(&staging, &new_db) {
+                        log::warn!("Could not finalize migrated database: {}", error);
+                        let _ = std::fs::remove_file(&staging);
+                        complete = false;
+                    }
+                }
+                Err(error) => {
+                    log::warn!("Could not copy database during rebrand migration: {}", error);
+                    let _ = std::fs::remove_file(&staging);
+                    complete = false;
+                }
             }
         }
     }
 
-    // Copy the clips and models subdirectories, skipping anything that already
-    // exists at the destination.
+    // Clips and models: resumable (skip-existing), so re-running after an
+    // interrupted migration just fills in whatever is missing.
     for subdir in ["clips", "models"] {
         let src = old_data_dir.join(subdir);
         if src.is_dir() {
@@ -113,11 +142,17 @@ fn migrate_pre_rebrand_data(app: &tauri::AppHandle, new_data_dir: &std::path::Pa
                     subdir,
                     error
                 );
+                complete = false;
             }
         }
     }
 
-    log::info!("Pre-rebrand data migration complete");
+    if complete {
+        let _ = std::fs::write(&marker, b"migrated\n");
+        log::info!("Pre-rebrand data migration complete");
+    } else {
+        log::warn!("Rebrand migration incomplete; it will retry on the next launch");
+    }
 }
 
 /// Recursively copy `from` into `to`, creating `to` (and subdirectories) as
