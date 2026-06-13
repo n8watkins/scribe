@@ -295,30 +295,33 @@ fn copy_and_paste_transcript_text(
 }
 
 /// Default "Paste (keeps your clipboard)": borrow the clipboard to send a real
-/// Ctrl+V, then put the user's previous clipboard text back. This makes the
+/// Ctrl+V, then put the user's previous clipboard contents back. This makes the
 /// insert land as a single atomic paste (unlike the keystroke path, which can
 /// visibly stream characters in chat/browser/Electron apps) without
 /// permanently consuming the clipboard.
 ///
-/// Sequence: save the current clipboard text -> set the clipboard to the
-/// transcript -> send Ctrl+V (which first waits for the paste-hotkey modifiers
-/// to release, so the chord can't combine with the injected V) -> small delay
-/// to let the target app finish reading the clipboard -> restore the saved
-/// text.
+/// Sequence: snapshot ALL current clipboard formats (raw Win32) -> set the
+/// clipboard to the transcript text -> send Ctrl+V (which first waits for the
+/// paste-hotkey modifiers to release, so the chord can't combine with the
+/// injected V) -> small delay to let the target app finish reading the
+/// clipboard -> restore every snapshotted format.
 ///
-/// CAVEAT: restore covers TEXT clipboards (the ~99% case). If the previous
-/// clipboard held an image, files, or other non-text data, it cannot be
-/// perfectly restored — we can only put back text. In that case the transcript
-/// is cleared off the clipboard so it isn't left behind, but the original
-/// non-text payload is gone.
+/// FIDELITY: unlike the old text-only restore, this captures the full clipboard
+/// as raw bytes per format, so a previously-copied IMAGE or set of FILES
+/// survives the paste, not just text. See `save_clipboard_snapshot` for the
+/// formats that are captured vs. skipped (the skipped ones — raw GDI bitmap /
+/// metafile handles and delayed-render formats — virtually always co-occur with
+/// a GlobalAlloc-backed variant such as CF_DIB/CF_DIBV5/CF_HDROP that IS
+/// captured, so images and files still restore correctly).
 fn clipboard_paste(
     transcript: &Transcript,
     output_mode: OutputMode,
 ) -> Result<OutputResult, CommandError> {
-    // Borrow: remember whatever text the user had on the clipboard so it can be
-    // restored after the paste. A read failure (e.g. the clipboard currently
-    // holds an image, so there is no text) is treated as "no previous text".
-    let previous_text = get_clipboard_text().unwrap_or(None);
+    // Borrow: snapshot every clipboard format the user currently has as raw
+    // bytes so the full payload (text, image, files, ...) can be restored after
+    // the paste. A snapshot failure (e.g. another app is holding the clipboard)
+    // is treated as "nothing to restore" so the paste still proceeds.
+    let snapshot = platform::save_clipboard_snapshot();
 
     set_clipboard_text(&transcript.text)?;
     // Let the clipboard write settle before the paste reads it.
@@ -327,15 +330,13 @@ fn clipboard_paste(
     // Ctrl+V, so a still-held paste chord can't scramble the keystroke.
     platform::send_paste_shortcut()?;
     // Give the target app time to read the clipboard before we overwrite it
-    // again with the restore, otherwise it may paste the restored text instead.
+    // again with the restore, otherwise it may paste the restored data instead.
     thread::sleep(Duration::from_millis(120));
 
-    // Restore: put the user's previous clipboard text back. When there was no
-    // previous text, clear the clipboard so the transcript isn't left behind.
-    let restore = match &previous_text {
-        Some(text) => set_clipboard_text(text),
-        None => set_clipboard_text(""),
-    };
+    // Restore: put the user's previous clipboard contents back. When the
+    // snapshot was empty (nothing was there, or it couldn't be captured) this
+    // clears the clipboard so the transcript isn't left behind.
+    let restore = platform::restore_clipboard_snapshot(&snapshot);
 
     match restore {
         Ok(()) => Ok(OutputResult {
@@ -371,29 +372,6 @@ fn clipboard_paste(
             message: "Pasted transcript, but couldn't restore your previous clipboard."
                 .to_string(),
         }),
-    }
-}
-
-/// Reads the current clipboard text. Returns `Ok(None)` when the clipboard has
-/// no text payload (e.g. it holds an image or files) — that is an expected
-/// state for borrow-and-restore, not an error. Mirrors `set_clipboard_text`.
-fn get_clipboard_text() -> Result<Option<String>, CommandError> {
-    let mut clipboard = arboard::Clipboard::new().map_err(|error| {
-        CommandError::new(
-            "clipboard_unavailable",
-            format!("Could not access the clipboard. {}", error),
-        )
-    })?;
-
-    match clipboard.get_text() {
-        Ok(text) => Ok(Some(text)),
-        // arboard returns ContentNotAvailable when the clipboard holds no text
-        // (e.g. an image); that is a normal "no previous text" case here.
-        Err(arboard::Error::ContentNotAvailable) => Ok(None),
-        Err(error) => Err(CommandError::new(
-            "clipboard_read_failed",
-            format!("Could not read the current clipboard text. {}", error),
-        )),
     }
 }
 
@@ -537,8 +515,15 @@ impl Drop for PasteStateGuard<'_> {
 mod platform {
     use crate::error::CommandError;
     use std::{mem::size_of, thread, time::Duration};
-    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND};
     use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    use windows::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData, OpenClipboard,
+        SetClipboardData,
+    };
+    use windows::Win32::System::Memory::{
+        GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
+    };
     use windows::Win32::System::Threading::GetCurrentProcessId;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
@@ -709,6 +694,180 @@ mod platform {
         Ok(())
     }
 
+    /// Closes the clipboard on drop so every early return in the snapshot/
+    /// restore routines still releases it. The OS clipboard is a single global
+    /// lock — leaking it open would wedge copy/paste for the whole desktop.
+    struct ClipboardGuard;
+
+    impl Drop for ClipboardGuard {
+        fn drop(&mut self) {
+            // Best effort: nothing useful to do if the close itself fails.
+            let _ = unsafe { CloseClipboard() };
+        }
+    }
+
+    /// Opens the clipboard, retrying a few times because another app may briefly
+    /// hold it (Win32 allows only one owner at a time). Returns a guard that
+    /// closes it on drop.
+    fn open_clipboard_with_retry() -> Result<ClipboardGuard, CommandError> {
+        const ATTEMPTS: u32 = 6;
+        for attempt in 0..ATTEMPTS {
+            // HWND::default() (null) ties the clipboard to the current task
+            // without associating a specific window, which is fine here.
+            if unsafe { OpenClipboard(HWND::default()) }.is_ok() {
+                return Ok(ClipboardGuard);
+            }
+            if attempt + 1 < ATTEMPTS {
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+        Err(CommandError::new(
+            "clipboard_unavailable",
+            "Could not open the clipboard; another app may be holding it.",
+        ))
+    }
+
+    /// Clipboard formats backed by GDI/handle objects rather than HGLOBAL
+    /// memory. `GlobalLock`/`GlobalSize` are invalid on these handles, so they
+    /// cannot be byte-captured and are skipped. Images and files are unaffected
+    /// because they also publish GlobalAlloc-backed variants (CF_DIB/CF_DIBV5
+    /// for images, CF_HDROP for files) that ARE captured here.
+    fn is_non_hglobal_format(format: u32) -> bool {
+        // CF_BITMAP, CF_METAFILEPICT, CF_PALETTE, CF_ENHMETAFILE, and the
+        // owner-display / private display variants.
+        matches!(
+            format,
+            2      // CF_BITMAP
+                | 3  // CF_METAFILEPICT
+                | 9  // CF_PALETTE
+                | 14 // CF_ENHMETAFILE
+                | 0x80 // CF_OWNERDISPLAY
+                | 0x82 // CF_DSPBITMAP
+                | 0x83 // CF_DSPMETAFILEPICT
+                | 0x8E // CF_DSPENHMETAFILE
+        )
+    }
+
+    /// Snapshots EVERY currently-available clipboard format as raw bytes so the
+    /// full payload (text, image, files, ...) can be restored after a borrow.
+    ///
+    /// For each enumerated format: read its data handle; null handles are
+    /// delayed-render placeholders (the data isn't materialized) and are
+    /// skipped; raw GDI/handle formats (see `is_non_hglobal_format`) are skipped
+    /// because they aren't HGLOBAL memory; everything else is treated as HGLOBAL
+    /// and its bytes are copied out via GlobalLock/GlobalSize.
+    ///
+    /// Returns an empty vec on any failure (e.g. the clipboard couldn't be
+    /// opened) so the caller can still paste; the worst case is that the
+    /// previous clipboard is cleared rather than restored.
+    pub fn save_clipboard_snapshot() -> Vec<(u32, Vec<u8>)> {
+        let _guard = match open_clipboard_with_retry() {
+            Ok(guard) => guard,
+            Err(error) => {
+                log::warn!("Clipboard snapshot skipped: {}", error.message);
+                return Vec::new();
+            }
+        };
+
+        let mut snapshot: Vec<(u32, Vec<u8>)> = Vec::new();
+        let mut format = unsafe { EnumClipboardFormats(0) };
+        while format != 0 {
+            if !is_non_hglobal_format(format) {
+                // A null/invalid handle is GetClipboardData's Err case here and
+                // signals delayed rendering — there is nothing to copy.
+                if let Ok(handle) = unsafe { GetClipboardData(format) } {
+                    let hglobal = HGLOBAL(handle.0);
+                    let ptr = unsafe { GlobalLock(hglobal) };
+                    if !ptr.is_null() {
+                        let size = unsafe { GlobalSize(hglobal) };
+                        if size > 0 {
+                            let mut bytes = vec![0u8; size];
+                            unsafe {
+                                std::ptr::copy_nonoverlapping(
+                                    ptr as *const u8,
+                                    bytes.as_mut_ptr(),
+                                    size,
+                                );
+                            }
+                            snapshot.push((format, bytes));
+                        }
+                        // GlobalUnlock returns Err once the lock count hits 0,
+                        // which is the normal success case here, so ignore it.
+                        let _ = unsafe { GlobalUnlock(hglobal) };
+                    }
+                }
+            }
+
+            format = unsafe { EnumClipboardFormats(format) };
+        }
+
+        snapshot
+    }
+
+    /// Restores a snapshot produced by `save_clipboard_snapshot`: clears the
+    /// clipboard, then republishes each captured format from a freshly allocated
+    /// HGLOBAL.
+    ///
+    /// Ownership: after a SUCCESSFUL `SetClipboardData` the system owns the
+    /// HGLOBAL and will free it, so it must NOT be freed here. The block is only
+    /// freed when `SetClipboardData` fails (data never handed off).
+    pub fn restore_clipboard_snapshot(snapshot: &[(u32, Vec<u8>)]) -> Result<(), CommandError> {
+        let _guard = open_clipboard_with_retry()?;
+
+        // Take ownership of the clipboard and drop the transcript that is on it
+        // before republishing the saved formats.
+        unsafe { EmptyClipboard() }.map_err(|error| {
+            CommandError::new(
+                "clipboard_clear_failed",
+                format!("Could not clear the clipboard before restore. {}", error),
+            )
+        })?;
+
+        for (format, bytes) in snapshot {
+            // Allocate at least one byte so GlobalLock is always valid, even for
+            // a (rare) zero-length format; only the real bytes are copied in.
+            let alloc_size = bytes.len().max(1);
+            let hglobal = unsafe { GlobalAlloc(GMEM_MOVEABLE, alloc_size) }.map_err(|error| {
+                CommandError::new(
+                    "clipboard_alloc_failed",
+                    format!("Could not allocate memory to restore the clipboard. {}", error),
+                )
+            })?;
+
+            let ptr = unsafe { GlobalLock(hglobal) };
+            if ptr.is_null() {
+                // Hand the just-allocated (never-published) block back to the OS.
+                let _ = unsafe { GlobalFree(hglobal) };
+                return Err(CommandError::new(
+                    "clipboard_lock_failed",
+                    "Could not lock memory to restore the clipboard.",
+                ));
+            }
+
+            if !bytes.is_empty() {
+                unsafe {
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
+                }
+            }
+            let _ = unsafe { GlobalUnlock(hglobal) };
+
+            // SetClipboardData takes ownership of the HGLOBAL on success.
+            match unsafe { SetClipboardData(*format, HANDLE(hglobal.0)) } {
+                Ok(_) => {}
+                Err(error) => {
+                    // Data was not handed off, so we still own the block.
+                    let _ = unsafe { GlobalFree(hglobal) };
+                    return Err(CommandError::new(
+                        "clipboard_set_failed",
+                        format!("Could not restore a clipboard format. {}", error),
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn send_paste_shortcut() -> Result<(), CommandError> {
         wait_for_modifier_release();
 
@@ -780,6 +939,19 @@ mod platform {
             "paste_unsupported",
             "Programmatic paste is currently implemented for Windows only.",
         ))
+    }
+
+    /// Non-Windows stub: there is no raw Win32 clipboard to snapshot, so report
+    /// "nothing captured". The full-fidelity borrow-and-restore path is
+    /// Windows-only (the app itself targets Windows).
+    pub fn save_clipboard_snapshot() -> Vec<(u32, Vec<u8>)> {
+        Vec::new()
+    }
+
+    /// Non-Windows stub: nothing was snapshotted, so there is nothing to
+    /// restore. Treated as a successful no-op.
+    pub fn restore_clipboard_snapshot(_snapshot: &[(u32, Vec<u8>)]) -> Result<(), CommandError> {
+        Ok(())
     }
 }
 
