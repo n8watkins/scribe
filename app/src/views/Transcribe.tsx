@@ -11,14 +11,12 @@ import {
 import type { ViewActions } from "../types";
 import {
   canStartRecording,
-  clipboardStatus,
   formatHotkey,
   formatMsReadable,
-  outputModeOptions,
-  pasteMethodOptions,
   recordingStageTitle,
 } from "../lib/format";
-import { SegmentedControl, StatePill } from "../components/primitives";
+import { StatePill, Toggle } from "../components/primitives";
+import { SettingRow } from "../components/layout";
 import {
   LastTranscriptCard,
   LiveTranscript,
@@ -105,26 +103,22 @@ export function TranscribeView({
         <article className="panel-card">
           <div className="section-heading compact">
             <h2>Output behavior</h2>
-            <span className="pill preserve">{clipboardStatus(settings)}</span>
           </div>
-          <SegmentedControl
-            disabled={actions.savingSettings}
-            onChange={(outputMode) => actions.updateSettings({ outputMode })}
-            options={outputModeOptions}
-            selected={settings.outputMode}
-          />
-        </article>
-
-        <article className="panel-card">
-          <div className="section-heading compact">
-            <h2>Paste method</h2>
-          </div>
-          <SegmentedControl
-            disabled={actions.savingSettings}
-            onChange={(pasteMethod) => actions.updateSettings({ pasteMethod })}
-            options={pasteMethodOptions}
-            selected={settings.pasteMethod}
-          />
+          <SettingRow
+            description="On: your transcript is pasted automatically when you stop talking. Off: it's saved to the buffer — paste it anywhere with the Paste-last hotkey."
+            label="Auto-insert after dictation"
+          >
+            <Toggle
+              checked={settings.outputMode === "auto_paste"}
+              disabled={actions.savingSettings}
+              label="Auto-insert after dictation"
+              onChange={(on) =>
+                actions.updateSettings({
+                  outputMode: on ? "auto_paste" : "save_only",
+                })
+              }
+            />
+          </SettingRow>
         </article>
 
         <LastTranscriptCard

@@ -18,13 +18,9 @@ import {
   type GoogleStatus,
 } from "../backend";
 import type { ViewActions } from "../types";
-import {
-  formatHotkey,
-  outputModeOptions,
-  pasteMethodOptions,
-} from "../lib/format";
+import { formatHotkey } from "../lib/format";
 import { SectionPanel, SettingRow } from "../components/layout";
-import { SegmentedControl, Toggle } from "../components/primitives";
+import { Toggle } from "../components/primitives";
 
 export function SettingsView({
   actions,
@@ -170,25 +166,18 @@ export function SettingsView({
         title="Output"
       >
         <SettingRow
-          description={`Auto paste inserts text at the cursor when transcription finishes. Save only keeps it in the Last Transcript Buffer for ${formatHotkey(settings.hotkeys.pasteLastTranscript)}.`}
-          label="Output mode"
+          description={`On: your transcript is pasted automatically when you stop talking. Off: it's saved to the buffer — paste it anywhere with ${formatHotkey(settings.hotkeys.pasteLastTranscript)}.`}
+          label="Auto-insert after dictation"
         >
-          <SegmentedControl
+          <Toggle
+            checked={settings.outputMode === "auto_paste"}
             disabled={actions.savingSettings}
-            onChange={(outputMode) => actions.updateSettings({ outputMode })}
-            options={outputModeOptions}
-            selected={settings.outputMode}
-          />
-        </SettingRow>
-        <SettingRow
-          description="How transcripts reach the focused app."
-          label="Paste method"
-        >
-          <SegmentedControl
-            disabled={actions.savingSettings}
-            onChange={(pasteMethod) => actions.updateSettings({ pasteMethod })}
-            options={pasteMethodOptions}
-            selected={settings.pasteMethod}
+            label="Auto-insert after dictation"
+            onChange={(on) =>
+              actions.updateSettings({
+                outputMode: on ? "auto_paste" : "save_only",
+              })
+            }
           />
         </SettingRow>
         <SettingRow

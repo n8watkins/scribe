@@ -6,29 +6,9 @@ import type {
   MicrophoneInfo,
   ModelDownloadProgress,
   ModelInfo,
-  OutputMode,
-  PasteMethod,
   Transcript,
 } from "../backend";
 import type { ViewName } from "../types";
-
-export const outputModeOptions: { label: string; value: OutputMode }[] = [
-  { label: "Auto Paste", value: "auto_paste" },
-  { label: "Save Only", value: "save_only" },
-  { label: "Copy", value: "copy_clipboard" },
-  { label: "Copy + Paste", value: "copy_and_paste" },
-];
-
-// Two honest choices. The default `clipboard_paste` sends one real Ctrl+V and
-// then restores the user's previous clipboard text; `direct_insert` types the
-// transcript out as keystrokes and never touches the clipboard. A
-// SegmentedControl with an unrecognized stored value (e.g. the legacy
-// `clipboard_restore`) simply highlights no segment, so it renders without
-// crashing.
-export const pasteMethodOptions: { label: string; value: PasteMethod }[] = [
-  { label: "Paste instantly (keeps clipboard)", value: "clipboard_paste" },
-  { label: "Type it out (no clipboard)", value: "direct_insert" },
-];
 
 /// Renders a millisecond value as a human-readable duration, e.g.
 /// 300 -> "0.3 s", 5000 -> "5 s", 600000 -> "10 min".
@@ -46,20 +26,12 @@ export function formatMsReadable(ms: number): string {
 }
 
 // Short, honest label driven by the actual paste method. `direct_insert` types
-// the transcript out and never touches the clipboard; the default
-// `clipboard_paste` borrows the clipboard for one Ctrl+V and then restores it,
-// so the user's clipboard is kept.
+// the transcript out as keystrokes; the default `clipboard_paste` momentarily
+// borrows the clipboard for one Ctrl+V and then restores the previous contents.
 export function clipboardStatus(settings: AppSettings) {
   return settings.pasteMethod === "direct_insert"
-    ? "Clipboard untouched"
-    : "Clipboard kept";
-}
-
-export function outputModeLabel(outputMode: OutputMode) {
-  return (
-    outputModeOptions.find((option) => option.value === outputMode)?.label ??
-    outputMode
-  );
+    ? "Types it out"
+    : "Clipboard restored";
 }
 
 export function routeToView(route: string): ViewName | null {

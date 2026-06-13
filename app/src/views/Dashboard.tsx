@@ -9,10 +9,8 @@ import {
 import type { DashboardData, MicrophoneInfo, ModelInfo } from "../backend";
 import type { ViewActions, ViewName } from "../types";
 import {
-  clipboardStatus,
   isSelectedModelReady,
   microphoneDisplayName,
-  outputModeLabel,
   statusCardValue,
 } from "../lib/format";
 import { HotkeyList, StatusCard } from "../components/layout";
@@ -83,10 +81,9 @@ export function DashboardView({
         <StatusCard
           action="Change"
           Icon={Clipboard}
-          label="Output mode"
+          label="Auto-insert"
           onAction={() => setActiveView("Settings")}
-          status={<span className="pill preserve">{clipboardStatus(settings)}</span>}
-          value={outputModeLabel(settings.outputMode)}
+          value={settings.outputMode === "auto_paste" ? "On" : "Off"}
         />
       </section>
 
