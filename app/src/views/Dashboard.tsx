@@ -13,6 +13,7 @@ import {
   isSelectedModelReady,
   microphoneDisplayName,
   outputModeLabel,
+  statusCardValue,
 } from "../lib/format";
 import { HotkeyList, StatusCard } from "../components/layout";
 import { StatePill } from "../components/primitives";
@@ -62,7 +63,7 @@ export function DashboardView({
           label="Current status"
           onAction={() => setActiveView("Transcribe")}
           status={<StatePill appState={appState} />}
-          value={appState.status}
+          value={statusCardValue(appState.status)}
         />
         <StatusCard
           action="Choose"
@@ -77,13 +78,6 @@ export function DashboardView({
           Icon={Database}
           label="Active model"
           onAction={() => setActiveView("Models")}
-          status={
-            settings.selectedModelId ? (
-              <span className="pill selected">Selected</span>
-            ) : (
-              <span className="pill pending">Not selected</span>
-            )
-          }
           value={settings.selectedModelId ?? "Choose a model"}
         />
         <StatusCard
@@ -104,6 +98,7 @@ export function DashboardView({
           onCopy={actions.copyLastTranscript}
           onPaste={actions.pasteLastTranscript}
           pasting={actions.pastingLastTranscript}
+          settings={settings}
           transcript={lastTranscript}
         />
 

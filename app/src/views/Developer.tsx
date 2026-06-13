@@ -1,0 +1,95 @@
+import { useEffect, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Gauge } from "lucide-react";
+import { SectionPanel, SettingRow } from "../components/layout";
+
+export function DeveloperView() {
+  // The webview content size is what CSS breakpoints (e.g. .status-grid
+  // auto-fit) actually respond to, so it's the must-have readout.
+  const [contentSize, setContentSize] = useState({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  });
+  // The Tauri outer window size (physical pixels incl. frame). Nice-to-have;
+  // unavailable outside the Tauri runtime, so failures are ignored.
+  const [outerSize, setOuterSize] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
+
+  useEffect(() => {
+    const onResize = () =>
+      setContentSize({
+        width: window.innerWidth,
+        height: window.innerHeight,
+      });
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    const readOuter = async () => {
+      try {
+        const size = await getCurrentWindow().outerSize();
+        if (!disposed) {
+          setOuterSize({ width: size.width, height: size.height });
+        }
+      } catch {
+        // Not running under Tauri (or the call failed); content size stands in.
+      }
+    };
+
+    void readOuter();
+    // Keep the outer size fresh as the window is resized.
+    void getCurrentWindow()
+      .onResized(() => {
+        void readOuter();
+      })
+      .then((dispose) => {
+        if (disposed) {
+          dispose();
+        } else {
+          unlisten = dispose;
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  return (
+    <section className="view-grid">
+      <SectionPanel
+        icon={<Gauge aria-hidden="true" size={16} />}
+        title="Window resolution"
+      >
+        <SettingRow
+          description="The webview content size (window.innerWidth x innerHeight). This is the value CSS breakpoints respond to."
+          label="Content size (CSS px)"
+        >
+          <strong>
+            {contentSize.width} x {contentSize.height}
+          </strong>
+        </SettingRow>
+        <SettingRow
+          description="The Tauri outer window size in physical pixels, including the window frame."
+          label="Outer window (physical px)"
+        >
+          <strong>
+            {outerSize ? `${outerSize.width} x ${outerSize.height}` : "Unavailable"}
+          </strong>
+        </SettingRow>
+        <p className="muted vocab-hint">
+          Resize the window to watch these update live. More developer
+          diagnostics will land in this panel.
+        </p>
+      </SectionPanel>
+    </section>
+  );
+}

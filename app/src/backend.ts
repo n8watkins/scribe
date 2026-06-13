@@ -55,6 +55,7 @@ export type AppSettings = {
   dashboardHotkeyToggles: boolean;
   notificationsEnabled: boolean;
   soundsEnabled: boolean;
+  developerSettingsEnabled: boolean;
   recordingMode: RecordingMode;
   minRecordingMs: number;
   maxRecordingMs: number;

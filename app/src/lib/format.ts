@@ -19,9 +19,14 @@ export const outputModeOptions: { label: string; value: OutputMode }[] = [
   { label: "Copy + Paste", value: "copy_and_paste" },
 ];
 
+// Two honest choices. `direct_insert` inserts without touching the clipboard;
+// `clipboard_paste` copies + Ctrl+V and leaves the transcript on the clipboard.
+// A SegmentedControl with an unrecognized stored value (e.g. the legacy
+// `clipboard_restore`) simply highlights no segment, so it renders without
+// crashing.
 export const pasteMethodOptions: { label: string; value: PasteMethod }[] = [
-  { label: "Direct Insert", value: "direct_insert" },
-  { label: "Compatibility Paste", value: "clipboard_restore" },
+  { label: "Insert (clipboard untouched)", value: "direct_insert" },
+  { label: "Clipboard paste", value: "clipboard_paste" },
 ];
 
 /// Renders a millisecond value as a human-readable duration, e.g.
@@ -39,22 +44,12 @@ export function formatMsReadable(ms: number): string {
   return seconds > 0 ? `${minutes} min ${seconds} s` : `${minutes} min`;
 }
 
+// Short, honest label driven by the actual paste method. `direct_insert` never
+// touches the clipboard; every other method goes through it.
 export function clipboardStatus(settings: AppSettings) {
-  if (
-    settings.outputMode === "copy_clipboard" ||
-    settings.outputMode === "copy_and_paste"
-  ) {
-    return "Copied to Clipboard";
-  }
-
-  if (
-    settings.outputMode === "auto_paste" ||
-    settings.pasteMethod === "clipboard_restore"
-  ) {
-    return "Clipboard Preserved";
-  }
-
-  return "Clipboard Untouched";
+  return settings.pasteMethod === "direct_insert"
+    ? "Clipboard untouched"
+    : "Uses clipboard";
 }
 
 export function outputModeLabel(outputMode: OutputMode) {
@@ -219,15 +214,47 @@ export function microphoneDisplayName(
   microphones: MicrophoneInfo[] | null,
   selectedMicId: string | null,
 ) {
-  if (!selectedMicId) {
-    return "Default input device";
-  }
-
+  // The list is still loading; show a neutral placeholder rather than a
+  // generic "Default input device" that might be wrong.
   if (!microphones) {
     return "—";
   }
 
+  // No explicit selection: resolve the actual default device's real name so
+  // the tile shows the device the user will record with, not a generic label.
+  if (!selectedMicId) {
+    return (
+      microphones.find((microphone) => microphone.isDefault)?.name ??
+      "Default input device"
+    );
+  }
+
   return selectedMicrophoneLabel(microphones, selectedMicId);
+}
+
+// Dashboard "Current status" tile value. The StatePill badge already shows the
+// raw status word, so this gives a complementary phrase that is never identical
+// to it (avoids the old "Recording / Recording" duplication).
+export function statusCardValue(status: AppStateSnapshot["status"]) {
+  switch (status) {
+    case "Recording":
+      return "Capturing audio";
+    case "Stopping":
+      return "Finishing capture";
+    case "Transcribing":
+      return "Transcribing locally";
+    case "Pasting":
+      return "Inserting transcript";
+    case "Ready":
+      return "Transcript ready";
+    case "Error":
+      return "Needs attention";
+    case "Paused":
+      return "Resume to record";
+    case "Idle":
+    default:
+      return "Ready for dictation";
+  }
 }
 
 export function recordingStageTitle(status: AppStateSnapshot["status"]) {

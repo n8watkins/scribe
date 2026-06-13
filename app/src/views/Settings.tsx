@@ -144,6 +144,19 @@ export function SettingsView({
             onChange={(soundsEnabled) => actions.updateSettings({ soundsEnabled })}
           />
         </SettingRow>
+        <SettingRow
+          description="Show a Developer panel in the sidebar with diagnostics like the live window resolution."
+          label="Enable developer settings"
+        >
+          <Toggle
+            checked={settings.developerSettingsEnabled}
+            disabled={actions.savingSettings}
+            label="Enable developer settings"
+            onChange={(developerSettingsEnabled) =>
+              actions.updateSettings({ developerSettingsEnabled })
+            }
+          />
+        </SettingRow>
       </SectionPanel>
       ),
     },

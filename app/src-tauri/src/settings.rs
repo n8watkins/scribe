@@ -25,6 +25,10 @@ pub struct AppSettings {
     pub dashboard_hotkey_toggles: bool,
     pub notifications_enabled: bool,
     pub sounds_enabled: bool,
+    /// Reveals a Developer panel in the sidebar with diagnostics (e.g. the live
+    /// window resolution). Off by default; opt-in from Settings.
+    #[serde(default)]
+    pub developer_settings_enabled: bool,
     /// Inert: hold-to-talk and toggle hotkeys both always work now. The field
     /// is kept so existing DB settings JSON (and serde round-trips) keep
     /// working unchanged.
@@ -258,6 +262,7 @@ impl Default for AppSettings {
             dashboard_hotkey_toggles: default_dashboard_hotkey_toggles(),
             notifications_enabled: true,
             sounds_enabled: true,
+            developer_settings_enabled: false,
             recording_mode: RecordingMode::Both,
             min_recording_ms: 300,
             max_recording_ms: 600_000,
@@ -449,6 +454,7 @@ mod tests {
         assert!(!settings.notes_analysis_prompt.is_empty());
         assert_eq!(settings.notes_analysis_endpoint, "http://127.0.0.1:1234/v1");
         assert_eq!(settings.notes_analysis_model, "");
+        assert!(!settings.developer_settings_enabled);
     }
 
     #[test]
@@ -637,6 +643,9 @@ mod tests {
         assert_eq!(settings.silence_auto_stop_ms, 60_000);
         assert!(settings.incremental_transcription_enabled);
         assert_eq!(settings.vocabulary_prompt, "");
+        // The new field is absent from this legacy JSON, so #[serde(default)]
+        // must fill it in as false rather than failing to deserialize.
+        assert!(!settings.developer_settings_enabled);
         assert_eq!(settings.output_mode, OutputMode::SaveOnly);
         assert_eq!(
             settings.pill_display_mode,

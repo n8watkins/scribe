@@ -78,7 +78,7 @@ export function StatusCard({
   Icon: LucideIcon;
   label: string;
   onAction: () => void;
-  status: ReactNode;
+  status?: ReactNode;
   value: string;
 }) {
   return (
@@ -88,7 +88,7 @@ export function StatusCard({
           <Icon aria-hidden="true" size={13} />
           {label}
         </span>
-        {status}
+        {status ?? null}
       </div>
       <div className="status-card-body">
         <strong title={value}>{value}</strong>

@@ -10,6 +10,7 @@ import {
   Info,
   Keyboard,
   Mic,
+  MonitorCog,
   NotebookPen,
   Radio,
   Settings as SettingsIcon,
@@ -65,6 +66,7 @@ import { HotkeysView } from "./views/Hotkeys";
 import { ModelsView } from "./views/Models";
 import { AudioView } from "./views/Audio";
 import { AboutView } from "./views/About";
+import { DeveloperView } from "./views/Developer";
 
 const navItems: { label: ViewName; Icon: LucideIcon }[] = [
   { label: "Dashboard", Icon: Gauge },
@@ -121,6 +123,10 @@ const viewTitles: Record<ViewName, { eyebrow: string; title: string }> = {
     eyebrow: "Audio",
     title: "Microphone input and recording quality",
   },
+  Developer: {
+    eyebrow: "Developer",
+    title: "Diagnostics and developer tools",
+  },
   About: {
     eyebrow: "About",
     title: "Private local dictation for Windows",
@@ -156,9 +162,30 @@ function App() {
   const soundsEnabledRef = useRef(false);
   const heading = viewTitles[activeView];
 
+  // The Developer panel is opt-in (Settings -> App behavior). Insert it just
+  // before About when enabled so the diagnostics sit at the end of the list.
+  const developerEnabled =
+    dashboardData?.settings.developerSettingsEnabled ?? false;
+  const visibleNavItems: { label: ViewName; Icon: LucideIcon }[] =
+    developerEnabled
+      ? [
+          ...navItems.slice(0, navItems.length - 1),
+          { label: "Developer", Icon: MonitorCog },
+          navItems[navItems.length - 1],
+        ]
+      : navItems;
+
   useEffect(() => {
     soundsEnabledRef.current = dashboardData?.settings.soundsEnabled ?? false;
   }, [dashboardData?.settings.soundsEnabled]);
+
+  // If the Developer panel is turned off while it is the active view, fall back
+  // to the Dashboard so the user isn't stranded on a now-hidden page.
+  useEffect(() => {
+    if (activeView === "Developer" && !developerEnabled) {
+      setActiveView("Dashboard");
+    }
+  }, [activeView, developerEnabled]);
 
   const showNotice = useCallback(
     (message: string, tone: ToastNotice["tone"] = "info") => {
@@ -529,7 +556,7 @@ function App() {
         </div>
 
         <nav className="nav-list" aria-label="Primary">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = item.Icon;
             return (
               <button
@@ -589,7 +616,7 @@ function App() {
                   type="button"
                 >
                   <Eraser aria-hidden="true" size={13} />
-                  Cancel
+                  Discard
                 </button>
               </>
             ) : (
@@ -665,6 +692,8 @@ function renderView(
       return <ModelsView actions={actions} settings={data.settings} />;
     case "Audio":
       return <AudioView actions={actions} settings={data.settings} />;
+    case "Developer":
+      return <DeveloperView />;
     case "About":
       return <AboutView />;
     case "Dashboard":

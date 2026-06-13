@@ -8,8 +8,9 @@ import {
   Square,
   Trash2,
 } from "lucide-react";
-import type { Transcript } from "../backend";
+import type { AppSettings, Transcript } from "../backend";
 import {
+  clipboardStatus,
   formatCount,
   formatDateTime,
   formatDuration,
@@ -27,6 +28,7 @@ export function LastTranscriptCard({
   onCopy,
   onPaste,
   pasting,
+  settings,
   transcript,
 }: {
   clearing: boolean;
@@ -36,6 +38,7 @@ export function LastTranscriptCard({
   onCopy: () => Promise<void>;
   onPaste: () => Promise<void>;
   pasting: boolean;
+  settings: AppSettings;
   transcript: Transcript | null;
 }) {
   const hasTranscript = Boolean(transcript);
@@ -48,14 +51,16 @@ export function LastTranscriptCard({
           <p className="eyebrow">Last Transcript Buffer</p>
           <h2>{hasTranscript ? "Ready to insert later" : "No transcript stored"}</h2>
         </div>
-        <span className="pill preserve">Clipboard Preserved</span>
+        <span className="pill preserve">{clipboardStatus(settings)}</span>
       </div>
 
       {transcript ? (
         <>
           <p
             className={
-              compact ? "transcript-text compact-text" : "transcript-text"
+              compact
+                ? "transcript-text compact-text"
+                : "transcript-text buffer-preview"
             }
           >
             {transcript.text}

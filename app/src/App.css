@@ -287,7 +287,9 @@ button:disabled {
 
 .status-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* Auto-fit: tiles wrap to 4/3/2/1 columns by available width and never clip
+     their badge or action button. Owner can fine-tune the 240px floor later. */
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 8px;
   margin-bottom: 8px;
 }
@@ -338,6 +340,12 @@ button:disabled {
 
 .status-card-body strong {
   flex: 1;
+  /* Truncate long values (device names, model ids) instead of stretching the
+     tile and clipping the action button at narrow widths. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-card .ghost-button {
@@ -345,6 +353,25 @@ button:disabled {
   min-height: 22px;
   padding-inline: 7px;
   font-size: 11px;
+}
+
+/* Keep the tile header from clipping at narrow widths: let it wrap, let the
+   label truncate, and keep the status badge intact on its own line. */
+.status-card .card-header {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.status-card .card-header > span:first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-card .card-header > .pill {
+  flex: 0 0 auto;
 }
 
 .card-header,
@@ -524,6 +551,18 @@ button:disabled {
   min-height: 64px;
   font-size: 12px;
   line-height: 1.5;
+}
+
+/* Clamp the Last Transcript Buffer preview so a long transcript can't stretch
+   the dashboard. ~5 lines, then ellipsis (a full viewer comes in a later
+   phase). max-height is a fallback for browsers without line-clamp. */
+.buffer-preview {
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  max-height: calc(5 * 1.6em + 20px);
 }
 
 .metadata-row {
@@ -1481,9 +1520,8 @@ kbd {
 }
 
 @media (max-width: 880px) {
-  .status-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+  /* .status-grid intentionally not overridden here — its auto-fit track
+     handles wrapping (4/3/2/1) on its own, with no hard 2-column jump. */
 
   .main-grid {
     grid-template-columns: 1fr;

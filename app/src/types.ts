@@ -11,6 +11,7 @@ export type ViewName =
   | "Hotkeys"
   | "Models"
   | "Audio"
+  | "Developer"
   | "About";
 
 export type LoadState = "loading" | "ready" | "error";

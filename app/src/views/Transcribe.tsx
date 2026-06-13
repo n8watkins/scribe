@@ -76,24 +76,28 @@ export function TranscribeView({
             <Mic aria-hidden="true" size={16} />
             {actions.recordingBusy ? "Working..." : "Start"}
           </button>
-          <button
-            className="secondary-button"
-            disabled={actions.recordingBusy || appState.status !== "Recording"}
-            onClick={() => void actions.stopRecording()}
-            type="button"
-          >
-            <Square aria-hidden="true" size={15} />
-            Stop
-          </button>
-          <button
-            className="ghost-button"
-            disabled={actions.recordingBusy || appState.status !== "Recording"}
-            onClick={() => void actions.cancelRecording()}
-            type="button"
-          >
-            <Eraser aria-hidden="true" size={15} />
-            Cancel
-          </button>
+          {appState.status === "Recording" ? (
+            <>
+              <button
+                className="secondary-button"
+                disabled={actions.recordingBusy}
+                onClick={() => void actions.stopRecording()}
+                type="button"
+              >
+                <Square aria-hidden="true" size={15} />
+                Stop
+              </button>
+              <button
+                className="ghost-button"
+                disabled={actions.recordingBusy}
+                onClick={() => void actions.cancelRecording()}
+                type="button"
+              >
+                <Eraser aria-hidden="true" size={15} />
+                Discard
+              </button>
+            </>
+          ) : null}
         </div>
       </article>
 
@@ -131,6 +135,7 @@ export function TranscribeView({
           onCopy={actions.copyLastTranscript}
           onPaste={actions.pasteLastTranscript}
           pasting={actions.pastingLastTranscript}
+          settings={settings}
           transcript={lastTranscript}
         />
       </div>
