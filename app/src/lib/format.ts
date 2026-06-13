@@ -6,6 +6,7 @@ import type {
   MicrophoneInfo,
   ModelDownloadProgress,
   ModelInfo,
+  OutputMode,
   Transcript,
 } from "../backend";
 import type { ViewName } from "../types";
@@ -25,13 +26,40 @@ export function formatMsReadable(ms: number): string {
   return seconds > 0 ? `${minutes} min ${seconds} s` : `${minutes} min`;
 }
 
-// Short, honest label driven by the actual paste method. `direct_insert` types
-// the transcript out as keystrokes; the default `clipboard_paste` momentarily
-// borrows the clipboard for one Ctrl+V and then restores the previous contents.
+// The four `outputMode` values are presented to the owner as two independent
+// switches: "Auto-insert after dictation" (paste for you vs. buffer only) and
+// "Keep my clipboard" (borrow-and-restore vs. leave the transcript on the
+// clipboard). These helpers map between the two representations.
+export function isAutoInsert(mode: OutputMode): boolean {
+  return mode === "auto_paste" || mode === "copy_and_paste";
+}
+
+export function isKeepClipboard(mode: OutputMode): boolean {
+  return mode === "auto_paste" || mode === "save_only";
+}
+
+export function outputModeFromToggles(
+  autoInsert: boolean,
+  keepClipboard: boolean,
+): OutputMode {
+  if (autoInsert) {
+    return keepClipboard ? "auto_paste" : "copy_and_paste";
+  }
+  return keepClipboard ? "save_only" : "copy_clipboard";
+}
+
+// Short, honest label driven by the actual paste method and output mode.
+// `direct_insert` types the transcript out as keystrokes; otherwise, when the
+// owner keeps their clipboard, Scribe momentarily borrows it for one Ctrl+V and
+// then restores the previous contents — and when they don't, it simply leaves
+// the transcript on the clipboard for them to paste.
 export function clipboardStatus(settings: AppSettings) {
-  return settings.pasteMethod === "direct_insert"
-    ? "Types it out"
-    : "Clipboard restored";
+  if (settings.pasteMethod === "direct_insert") {
+    return "Types it out";
+  }
+  return isKeepClipboard(settings.outputMode)
+    ? "Clipboard restored"
+    : "On your clipboard";
 }
 
 export function routeToView(route: string): ViewName | null {

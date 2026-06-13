@@ -13,6 +13,9 @@ import {
   canStartRecording,
   formatHotkey,
   formatMsReadable,
+  isAutoInsert,
+  isKeepClipboard,
+  outputModeFromToggles,
   recordingStageTitle,
 } from "../lib/format";
 import { StatePill, Toggle } from "../components/primitives";
@@ -109,12 +112,33 @@ export function TranscribeView({
             label="Auto-insert after dictation"
           >
             <Toggle
-              checked={settings.outputMode === "auto_paste"}
+              checked={isAutoInsert(settings.outputMode)}
               disabled={actions.savingSettings}
               label="Auto-insert after dictation"
               onChange={(on) =>
                 actions.updateSettings({
-                  outputMode: on ? "auto_paste" : "save_only",
+                  outputMode: outputModeFromToggles(
+                    on,
+                    isKeepClipboard(settings.outputMode),
+                  ),
+                })
+              }
+            />
+          </SettingRow>
+          <SettingRow
+            description="On: Scribe borrows your clipboard for the paste, then restores what you had — Ctrl+V keeps working with your stuff. Off: it leaves the transcript on your clipboard so you paste it yourself with any bind (Ctrl+V / Shift+Insert), replacing your previous clipboard."
+            label="Keep my clipboard"
+          >
+            <Toggle
+              checked={isKeepClipboard(settings.outputMode)}
+              disabled={actions.savingSettings}
+              label="Keep my clipboard"
+              onChange={(on) =>
+                actions.updateSettings({
+                  outputMode: outputModeFromToggles(
+                    isAutoInsert(settings.outputMode),
+                    on,
+                  ),
                 })
               }
             />
