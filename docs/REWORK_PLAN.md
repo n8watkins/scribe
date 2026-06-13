@@ -31,6 +31,36 @@ Related docs: [PRD.md](./PRD.md), [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN
 
 ---
 
+## 0.1 Owner approvals & refinements (2026-06-13, post-review)
+
+**Phase 1 approved to build:** Workstream A (insertion) + the dashboard-overflow
+slice of B, plus the two enablers below.
+
+- **Insertion default = atomic-burst keystroke injection** (clipboard-free). The
+  **UI Automation experiment is APPROVED** — run in parallel (subagent) toward a true
+  atomic, clipboard-free insert; if reliable on the owner's daily apps it can become
+  the default. Full-fidelity clipboard restore stays parked.
+- **Refactor approved (Model 2):** split `App.tsx` into per-view modules FIRST so
+  frontend agents parallelize without colliding.
+- **Combine output = BOTH:** produce insertable text *and* allow saving a new entry.
+- **Resolution readout → Developer Settings (not dev-build-gated):** add an "Enable
+  developer settings" toggle in Settings; when on, a **Developer** item appears in the
+  left sidebar holding the live resolution readout (window WxH + content width) as a
+  toggle. Works in any build once enabled.
+- **Dev/stable hotkey coexistence (Wave 2):** the **Scribe Dev** flavor
+  (`com.natkins.scribe.dev`, `is_dev_flavor` in `lib.rs:32`, separate settings store)
+  must seed **different default hotkeys** so dev + stable don't fight over global binds
+  when both run. Add a **"Load my production defaults"** button in Developer settings
+  to switch dev to the real binds when running dev alone.
+- **Dictionary redesigned — see §3.1.**
+
+**Verification in this env:** Windows targets are installed
+(`x86_64-pc-windows-msvc` / `-gnu`), so `cargo check --target x86_64-pc-windows-msvc`
+**type-checks the `#[cfg(windows)]` code** (can't run here). Frontend: `tsc --noEmit`
++ `vite build`. Real runtime checks happen on the owner's Windows box.
+
+---
+
 ## 1. Guiding principles & constraints
 
 - **Clipboard-free insertion is the product promise**, not a nice-to-have
@@ -271,6 +301,28 @@ Settings for both modes; visualizer edges visibly quieter than the center.
 
 ---
 
+## 3.1 Dictionary redesign (replaces "Custom vocabulary") — Workstream F
+
+Today "custom vocabulary" = Whisper `initial_prompt` (a soft bias). The owner expected
+"say X → get Y". Split into **two clearly-labelled layers:**
+
+1. **Context hint (old behavior, renamed):** a short natural-language prompt that
+   primes Whisper toward your domain/spellings/proper nouns. Soft, probabilistic, not
+   find-replace. *Starter prompt to ship (editable):*
+   > "Casual technical dictation by Nathan. Common terms: Scribe, Tauri, Rust,
+   > TypeScript, React, whisper.cpp, Claude, Anthropic, GitHub, LM Studio, SQLite,
+   > YouTube, vidIQ. Prefer these spellings; transcribe spoken punctuation."
+2. **Text replacements (the real, intuitive Dictionary):** a deterministic
+   post-transcription table of **spoken phrase → output text**, applied after Whisper,
+   before insertion. E.g. "my email" → an address; "clawed"/"cloud code" → "Claude
+   Code"; "new line" → an actual newline; "arrow function" → "=>". Case-insensitive,
+   longest-match-first, word-boundary aware; optional regex later.
+
+This directly answers the owner: the new Dictionary **is** "say X → get Y" (Layer 2);
+Layer 1 is only a hint. *(Workstream F / later phase — captured now so it's not lost.)*
+
+---
+
 ## 4. Deep-dive: the insertion / clipboard fix (Workstream A)
 
 The owner's ask, restated: *"paste with Ctrl+Alt+V and insert the last transcript
@@ -317,7 +369,7 @@ with the restore step removed.
 - Confirm/ą add a **transcribing spinner** state on the buffer/pill so "we're
   working, insert happens when done" is visible.
 
-### Experiments (subagent, NOT default, lower priority)
+### Experiments — UIA insert APPROVED (running in Phase 1 as a subagent); restore parked
 - **UI Automation atomic insert** (`TextPattern`/`ValuePattern`): a *true* atomic,
   clipboard-free, keystroke-free insert for **supported** controls (standard edits,
   many browser fields), with keystroke fallback. This is the only path that could
