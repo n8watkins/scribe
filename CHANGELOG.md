@@ -4,6 +4,15 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.4.1 — 2026-06-13
+
+- **Full-fidelity clipboard restore.** The instant paste (auto-paste *and*
+  `Ctrl+Alt+V`) now snapshots and restores the *entire* clipboard — images
+  (CF_DIB/CF_DIBV5) and files (CF_HDROP), not just text — so borrowing the
+  clipboard for one `Ctrl+V` leaves it exactly as it was. (Raw GDI
+  bitmap/metafile handles and delayed-render formats are skipped, but images and
+  files also publish a byte-copyable variant that is restored.)
+
 ## 0.4.0 — 2026-06-13
 
 - **Insertion overhauled.** Auto-paste *and* Paste-last-transcript (`Ctrl+Alt+V`)
