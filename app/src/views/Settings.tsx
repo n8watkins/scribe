@@ -1,0 +1,658 @@
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  BookOpen,
+  Cloud,
+  MonitorCog,
+  SlidersHorizontal,
+  Sparkles,
+} from "lucide-react";
+import {
+  commandErrorMessage,
+  driveOrganizeNow,
+  driveSyncNow,
+  googleSignIn,
+  googleSignOut,
+  googleStatus,
+  type AppSettings,
+  type DriveSyncReport,
+  type GoogleStatus,
+} from "../backend";
+import type { ViewActions } from "../types";
+import {
+  formatHotkey,
+  outputModeOptions,
+  pasteMethodOptions,
+} from "../lib/format";
+import { SectionPanel, SettingRow } from "../components/layout";
+import { SegmentedControl, Toggle } from "../components/primitives";
+
+export function SettingsView({
+  actions,
+  settings,
+}: {
+  actions: ViewActions;
+  settings: AppSettings;
+}) {
+  const tabs: {
+    id: string;
+    title: string;
+    icon: ReactNode;
+    render: () => ReactNode;
+  }[] = [
+    {
+      id: "app-behavior",
+      title: "App behavior",
+      icon: <MonitorCog aria-hidden="true" size={16} />,
+      render: () => (
+      <SectionPanel
+        icon={<MonitorCog aria-hidden="true" size={16} />}
+        title="App behavior"
+      >
+        <SettingRow
+          description="Start Scribe when Windows starts."
+          label="Launch at startup"
+        >
+          <Toggle
+            checked={settings.launchAtStartup}
+            disabled={actions.savingSettings}
+            label="Launch at startup"
+            onChange={(launchAtStartup) =>
+              actions.updateSettings({ launchAtStartup })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          description="Keep the app available from the system tray."
+          label="Minimize to tray"
+        >
+          <Toggle
+            checked={settings.minimizeToTray}
+            disabled={actions.savingSettings}
+            label="Minimize to tray"
+            onChange={(minimizeToTray) =>
+              actions.updateSettings({ minimizeToTray })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          description="The dashboard hotkey minimizes the window again when it is already focused."
+          label="Dashboard hotkey toggles"
+        >
+          <Toggle
+            checked={settings.dashboardHotkeyToggles}
+            disabled={actions.savingSettings}
+            label="Dashboard hotkey toggles"
+            onChange={(dashboardHotkeyToggles) =>
+              actions.updateSettings({ dashboardHotkeyToggles })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          description="Always-on-top capture status overlay."
+          label="Show floating status pill"
+        >
+          <Toggle
+            checked={settings.showFloatingPill}
+            disabled={actions.savingSettings}
+            label="Show floating status pill"
+            onChange={(showFloatingPill) =>
+              actions.updateSettings({ showFloatingPill })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          description="What the pill shows while you dictate."
+          label="Pill display mode"
+        >
+          <select
+            disabled={actions.savingSettings}
+            onChange={(event) =>
+              actions.updateSettings({
+                pillDisplayMode:
+                  event.currentTarget.value === "dot"
+                    ? "dot"
+                    : event.currentTarget.value === "visualizer"
+                      ? "visualizer"
+                      : "visualizer_with_text",
+              })
+            }
+            value={settings.pillDisplayMode}
+          >
+            <option value="dot">Dot</option>
+            <option value="visualizer">Visualizer</option>
+            <option value="visualizer_with_text">Visualizer + text</option>
+          </select>
+        </SettingRow>
+        <SettingRow
+          description="Display completion and failure notices."
+          label="Notifications"
+        >
+          <Toggle
+            checked={settings.notificationsEnabled}
+            disabled={actions.savingSettings}
+            label="Notifications"
+            onChange={(notificationsEnabled) =>
+              actions.updateSettings({ notificationsEnabled })
+            }
+          />
+        </SettingRow>
+        <SettingRow description="Play start and stop capture tones." label="Sounds">
+          <Toggle
+            checked={settings.soundsEnabled}
+            disabled={actions.savingSettings}
+            label="Sounds"
+            onChange={(soundsEnabled) => actions.updateSettings({ soundsEnabled })}
+          />
+        </SettingRow>
+      </SectionPanel>
+      ),
+    },
+    {
+      id: "output",
+      title: "Output",
+      icon: <SlidersHorizontal aria-hidden="true" size={16} />,
+      render: () => (
+      <SectionPanel
+        icon={<SlidersHorizontal aria-hidden="true" size={16} />}
+        title="Output"
+      >
+        <SettingRow
+          description={`Auto paste inserts text at the cursor when transcription finishes. Save only keeps it in the Last Transcript Buffer for ${formatHotkey(settings.hotkeys.pasteLastTranscript)}.`}
+          label="Output mode"
+        >
+          <SegmentedControl
+            disabled={actions.savingSettings}
+            onChange={(outputMode) => actions.updateSettings({ outputMode })}
+            options={outputModeOptions}
+            selected={settings.outputMode}
+          />
+        </SettingRow>
+        <SettingRow
+          description="How transcripts reach the focused app."
+          label="Paste method"
+        >
+          <SegmentedControl
+            disabled={actions.savingSettings}
+            onChange={(pasteMethod) => actions.updateSettings({ pasteMethod })}
+            options={pasteMethodOptions}
+            selected={settings.pasteMethod}
+          />
+        </SettingRow>
+        <SettingRow
+          description="Speech recognition language preference."
+          label="Language"
+        >
+          <select
+            disabled={actions.savingSettings}
+            onChange={(event) =>
+              actions.updateSettings({
+                language: event.currentTarget.value === "auto" ? "auto" : "en",
+              })
+            }
+            value={settings.language}
+          >
+            <option value="auto">Auto detect</option>
+            <option value="en">English</option>
+          </select>
+        </SettingRow>
+      </SectionPanel>
+      ),
+    },
+    {
+      id: "vocabulary",
+      title: "Custom vocabulary",
+      icon: <BookOpen aria-hidden="true" size={16} />,
+      render: () => (
+      <SectionPanel
+        icon={<BookOpen aria-hidden="true" size={16} />}
+        title="Custom vocabulary"
+      >
+        <p className="muted vocab-hint">
+          Names and jargon Whisper should expect, e.g. "Tauri, natkins,
+          whisper.cpp". Improves recognition of unusual words.
+        </p>
+        <BlurSavedTextArea
+          ariaLabel="Custom vocabulary"
+          onSave={(vocabularyPrompt) =>
+            actions.updateSettings({ vocabularyPrompt })
+          }
+          placeholder="Tauri, natkins, whisper.cpp"
+          value={settings.vocabularyPrompt}
+        />
+      </SectionPanel>
+      ),
+    },
+    {
+      id: "notes-analysis",
+      title: "Notes analysis",
+      icon: <Sparkles aria-hidden="true" size={16} />,
+      render: () => (
+      <SectionPanel
+        icon={<Sparkles aria-hidden="true" size={16} />}
+        title="Notes analysis"
+      >
+        <SettingRow
+          description="Analyze notes on demand from the Notes view using a local LLM server (LM Studio, Ollama, or any OpenAI-compatible API). Nothing leaves this machine."
+          label="Analyze notes with a local LLM"
+        >
+          <Toggle
+            checked={settings.notesAnalysisEnabled}
+            disabled={actions.savingSettings}
+            label="Analyze notes with a local LLM"
+            onChange={(notesAnalysisEnabled) =>
+              actions.updateSettings({ notesAnalysisEnabled })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          description="Base URL of the local server's OpenAI-compatible API. LM Studio's default is http://127.0.0.1:1234/v1."
+          label="Server endpoint"
+        >
+          <BlurSavedInput
+            ariaLabel="Notes analysis server endpoint"
+            onSave={(notesAnalysisEndpoint) =>
+              actions.updateSettings({ notesAnalysisEndpoint })
+            }
+            placeholder="http://127.0.0.1:1234/v1"
+            value={settings.notesAnalysisEndpoint}
+          />
+        </SettingRow>
+        <SettingRow
+          description="Leave empty to use whatever model the server has loaded."
+          label="Model"
+        >
+          <BlurSavedInput
+            ariaLabel="Notes analysis model"
+            onSave={(notesAnalysisModel) =>
+              actions.updateSettings({ notesAnalysisModel })
+            }
+            placeholder="Loaded model (automatic)"
+            value={settings.notesAnalysisModel}
+          />
+        </SettingRow>
+        <p className="muted vocab-hint">
+          Analysis prompt — the note text is sent along with this instruction,
+          so it alone decides what analysis produces (summary, action items,
+          tags, ...).
+        </p>
+        <BlurSavedTextArea
+          ariaLabel="Notes analysis prompt"
+          onSave={(notesAnalysisPrompt) =>
+            actions.updateSettings({ notesAnalysisPrompt })
+          }
+          placeholder="Summarize this dictated note..."
+          rows={4}
+          value={settings.notesAnalysisPrompt}
+        />
+      </SectionPanel>
+      ),
+    },
+    {
+      id: "google-drive",
+      title: "Google Drive",
+      icon: <Cloud aria-hidden="true" size={16} />,
+      render: () => <GoogleDrivePanel actions={actions} settings={settings} />,
+    },
+  ];
+
+  const [activeTab, setActiveTab] = useState(tabs[0].id);
+  const active = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
+
+  return (
+    <section className="view-grid">
+      <div className="settings-tabs" role="tablist" aria-label="Settings sections">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            id={`settings-tab-${tab.id}`}
+            aria-controls={`settings-panel-${tab.id}`}
+            aria-selected={tab.id === active.id}
+            className={`settings-tab${tab.id === active.id ? " is-active" : ""}`}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            {tab.icon}
+            <span>{tab.title}</span>
+          </button>
+        ))}
+      </div>
+      <div
+        className="settings-tabpanel"
+        role="tabpanel"
+        id={`settings-panel-${active.id}`}
+        aria-labelledby={`settings-tab-${active.id}`}
+      >
+        {active.render()}
+      </div>
+    </section>
+  );
+}
+
+function GoogleDrivePanel({
+  actions,
+  settings,
+}: {
+  actions: ViewActions;
+  settings: AppSettings;
+}) {
+  const [status, setStatus] = useState<GoogleStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [lastReport, setLastReport] = useState<DriveSyncReport | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const reloadStatus = useCallback(async () => {
+    try {
+      const next = await googleStatus();
+      setStatus(next);
+    } catch (cause) {
+      setError(commandErrorMessage(cause));
+    }
+  }, []);
+
+  useEffect(() => {
+    void reloadStatus();
+  }, [reloadStatus]);
+
+  // Source of truth is a stored token (status.signedIn), not the email —
+  // the email can be blank on tokens granted before the email scope.
+  const signedIn = status?.signedIn ?? false;
+
+  const handleSignIn = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+
+    try {
+      const updated = await googleSignIn();
+      actions.updateSettings(updated);
+      await reloadStatus();
+    } catch (cause) {
+      setError(commandErrorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  }, [actions, reloadStatus]);
+
+  const handleSignOut = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    setLastReport(null);
+
+    try {
+      const updated = await googleSignOut();
+      actions.updateSettings(updated);
+      await reloadStatus();
+    } catch (cause) {
+      setError(commandErrorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  }, [actions, reloadStatus]);
+
+  const handleSyncNow = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+
+    try {
+      const report = await driveSyncNow();
+      setLastReport(report);
+      setNotice(
+        `Synced ${report.syncedNotes} notes into ${report.filesWritten} file(s).`,
+      );
+    } catch (cause) {
+      setError(commandErrorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const handleOrganizeNow = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+
+    try {
+      const wrote = await driveOrganizeNow();
+      setNotice(
+        wrote
+          ? "Organized today's notes into a Drive file."
+          : "No notes for today yet — nothing to organize.",
+      );
+    } catch (cause) {
+      setError(commandErrorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  return (
+    <SectionPanel
+      icon={<Cloud aria-hidden="true" size={16} />}
+      title="Google Drive"
+    >
+      {status && !status.configured ? (
+        <p className="muted vocab-hint">
+          This build isn't configured for Google Drive sync.
+        </p>
+      ) : !signedIn ? (
+        <>
+          <p className="muted vocab-hint">
+            Connect a Google account to back up your notes to Google Drive.
+            Sign-in opens your browser to grant access.
+          </p>
+          <div className="setting-control">
+            <button
+              className="primary-button"
+              disabled={busy}
+              onClick={() => void handleSignIn()}
+              type="button"
+            >
+              {busy ? "Signing in…" : "Sign in with Google"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <SettingRow
+            description="The connected Google account that notes are synced to."
+            label="Connected account"
+          >
+            <div className="setting-control">
+              <span className="pill preserve">
+                {settings.driveAccountEmail || status?.email || "Signed in"}
+              </span>
+              <button
+                className="secondary-button"
+                disabled={busy}
+                onClick={() => void handleSignOut()}
+                type="button"
+              >
+                {busy ? "Working…" : "Sign out"}
+              </button>
+            </div>
+          </SettingRow>
+          <SettingRow
+            description="Write a Drive copy whenever a note is saved or analyzed."
+            label="Sync notes to Google Drive"
+          >
+            <Toggle
+              checked={settings.driveSyncEnabled}
+              disabled={actions.savingSettings || busy}
+              label="Sync notes to Google Drive"
+              onChange={(driveSyncEnabled) =>
+                actions.updateSettings({ driveSyncEnabled })
+              }
+            />
+          </SettingRow>
+          <SettingRow
+            description="At the hour below, the local LLM reorganizes the previous day's notes into a tidy Drive file."
+            label="End-of-day auto-organize (local LLM)"
+          >
+            <Toggle
+              checked={settings.driveOrganizeEnabled}
+              disabled={actions.savingSettings || busy}
+              label="End-of-day auto-organize (local LLM)"
+              onChange={(driveOrganizeEnabled) =>
+                actions.updateSettings({ driveOrganizeEnabled })
+              }
+            />
+          </SettingRow>
+          <SettingRow
+            description="Hour of day (local time) for the daily organize pass."
+            label="Daily organize hour (local time)"
+          >
+            <select
+              disabled={actions.savingSettings || busy}
+              onChange={(event) =>
+                actions.updateSettings({
+                  driveOrganizeHour: Number(event.currentTarget.value),
+                })
+              }
+              value={String(settings.driveOrganizeHour)}
+            >
+              {Array.from({ length: 24 }, (_, hour) => (
+                <option key={hour} value={hour}>
+                  {String(hour).padStart(2, "0")}:00
+                </option>
+              ))}
+            </select>
+          </SettingRow>
+          <p className="muted vocab-hint">
+            Auto-organize needs the local LLM (notes analysis) running.
+          </p>
+          <div className="setting-control">
+            <button
+              className="secondary-button"
+              disabled={busy}
+              onClick={() => void handleSyncNow()}
+              type="button"
+            >
+              {busy ? "Syncing…" : "Sync now"}
+            </button>
+            <button
+              className="secondary-button"
+              disabled={busy}
+              onClick={() => void handleOrganizeNow()}
+              type="button"
+            >
+              {busy ? "Working…" : "Organize today now"}
+            </button>
+          </div>
+        </>
+      )}
+      {notice ? <p className="muted vocab-hint">{notice}</p> : null}
+      {!notice && lastReport ? (
+        <p className="muted vocab-hint">
+          Last sync: {lastReport.syncedNotes} notes, {lastReport.filesWritten}{" "}
+          file(s).
+        </p>
+      ) : null}
+      {error ? (
+        <p className="muted vocab-hint" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </SectionPanel>
+  );
+}
+
+/** Single-line text setting that saves on blur (and on unmount, like the
+ * vocabulary field) so every keystroke does not hit the settings command. */
+function BlurSavedInput({
+  ariaLabel,
+  onSave,
+  placeholder,
+  value,
+}: {
+  ariaLabel: string;
+  onSave: (value: string) => void;
+  placeholder?: string;
+  value: string;
+}) {
+  const [draft, setDraft] = useState(value);
+  const latestRef = useRef({ draft, onSave, value });
+  latestRef.current = { draft, onSave, value };
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  useEffect(
+    () => () => {
+      const latest = latestRef.current;
+      if (latest.draft !== latest.value) {
+        latest.onSave(latest.draft);
+      }
+    },
+    [],
+  );
+
+  return (
+    <input
+      aria-label={ariaLabel}
+      onBlur={() => {
+        if (draft !== value) {
+          onSave(draft);
+        }
+      }}
+      onChange={(event) => setDraft(event.currentTarget.value)}
+      placeholder={placeholder}
+      type="text"
+      value={draft}
+    />
+  );
+}
+
+
+function BlurSavedTextArea({
+  ariaLabel,
+  onSave,
+  placeholder,
+  rows = 3,
+  value,
+}: {
+  ariaLabel: string;
+  onSave: (value: string) => void;
+  placeholder?: string;
+  rows?: number;
+  value: string;
+}) {
+  const [draft, setDraft] = useState(value);
+  const latestRef = useRef({ draft, onSave, value });
+  latestRef.current = { draft, onSave, value };
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  // Flush an unsaved draft if the view unmounts before blur fires.
+  useEffect(
+    () => () => {
+      const latest = latestRef.current;
+      if (latest.draft !== latest.value) {
+        latest.onSave(latest.draft);
+      }
+    },
+    [],
+  );
+
+  return (
+    <textarea
+      aria-label={ariaLabel}
+      className="vocab-textarea"
+      onBlur={() => {
+        if (draft !== value) {
+          onSave(draft);
+        }
+      }}
+      onChange={(event) => setDraft(event.currentTarget.value)}
+      placeholder={placeholder}
+      rows={rows}
+      value={draft}
+    />
+  );
+}
