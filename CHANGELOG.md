@@ -4,6 +4,15 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.4.2 — 2026-06-13
+
+- **Simplified insertion controls.** Output behavior is now a single
+  **"Auto-insert after dictation"** on/off toggle (On = paste when you stop
+  talking; Off = save to the buffer, insert with the Paste-last hotkey),
+  replacing the old output-mode + paste-method pickers. The keystroke
+  "type it out" mode moved to **Developer → Experimental insert**. Clipboard
+  status labels are now honest about borrow-and-restore.
+
 ## 0.4.1 — 2026-06-13
 
 - **Full-fidelity clipboard restore.** The instant paste (auto-paste *and*
