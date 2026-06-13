@@ -189,8 +189,17 @@ pub enum OutputMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PasteMethod {
+    /// Default. Inject the transcript as synthetic keystrokes; the system
+    /// clipboard is never read or written.
     DirectInsert,
-    ClipboardRestore,
+    /// Opt-in. Put the transcript on the system clipboard and send Ctrl+V,
+    /// leaving the transcript on the clipboard afterwards (no restore).
+    ///
+    /// `serde(alias)` keeps settings stored under the old `clipboard_restore`
+    /// name deserializing into this variant, so existing installs are
+    /// unaffected by the rename.
+    #[serde(alias = "clipboard_restore")]
+    ClipboardPaste,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -633,6 +642,60 @@ mod tests {
             settings.pill_display_mode,
             PillDisplayMode::VisualizerWithText
         );
+    }
+
+    #[test]
+    fn paste_method_serializes_with_new_name() {
+        let json = serde_json::to_string(&PasteMethod::ClipboardPaste).unwrap();
+        assert_eq!(json, "\"clipboard_paste\"");
+
+        let json = serde_json::to_string(&PasteMethod::DirectInsert).unwrap();
+        assert_eq!(json, "\"direct_insert\"");
+    }
+
+    #[test]
+    fn paste_method_accepts_legacy_clipboard_restore_alias() {
+        // Settings stored before the ClipboardRestore -> ClipboardPaste rename
+        // must still deserialize so existing installs are not broken.
+        let legacy: PasteMethod = serde_json::from_str("\"clipboard_restore\"").unwrap();
+        assert_eq!(legacy, PasteMethod::ClipboardPaste);
+
+        let current: PasteMethod = serde_json::from_str("\"clipboard_paste\"").unwrap();
+        assert_eq!(current, PasteMethod::ClipboardPaste);
+    }
+
+    #[test]
+    fn full_settings_json_with_legacy_paste_method_deserializes() {
+        // A whole stored settings blob using the old paste-method string still
+        // round-trips into the current AppSettings shape.
+        let json = serde_json::json!({
+            "launchAtStartup": false,
+            "minimizeToTray": true,
+            "showFloatingPill": true,
+            "notificationsEnabled": true,
+            "soundsEnabled": true,
+            "recordingMode": "both",
+            "minRecordingMs": 300,
+            "maxRecordingMs": 600000,
+            "silenceTrimEnabled": true,
+            "selectedMicId": null,
+            "selectedModelId": "small.en-q5_1",
+            "language": "en",
+            "outputMode": "auto_paste",
+            "pasteMethod": "clipboard_restore",
+            "historyEnabled": true,
+            "saveAudioClips": true,
+            "historyRetentionDays": 30,
+            "hotkeys": {
+                "holdToTalk": "Ctrl+Win",
+                "toggleDictation": "Backquote",
+                "pasteLastTranscript": "Ctrl+Alt+V",
+                "openDashboard": "Ctrl+Alt+F"
+            }
+        });
+
+        let settings: AppSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(settings.paste_method, PasteMethod::ClipboardPaste);
     }
 
     #[test]

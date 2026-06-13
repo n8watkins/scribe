@@ -28,7 +28,14 @@ export type OutputMode =
   | "auto_paste"
   | "copy_clipboard"
   | "copy_and_paste";
-export type PasteMethod = "direct_insert" | "clipboard_restore";
+// "clipboard_paste" is the current opt-in mode. "clipboard_restore" is its
+// legacy name, still accepted by the Rust enum via a serde alias and kept here
+// for back-compat (e.g. settings stored before the rename, and the UI's
+// not-yet-migrated option list). New code should use "clipboard_paste".
+export type PasteMethod =
+  | "direct_insert"
+  | "clipboard_paste"
+  | "clipboard_restore";
 export type HistoryRetentionDays = 7 | 30 | 90 | 365 | null;
 export type PillDisplayMode = "dot" | "visualizer" | "visualizer_with_text";
 
@@ -115,11 +122,10 @@ export type OutputAction =
 export type OutputStatus = "completed" | "clipboard_restore_failed";
 
 export type ClipboardPreservation =
-  | "not_needed"
-  | "preserved"
-  | "text_only_preserved"
-  | "text_only_restore_failed"
-  | "clipboard_owned_by_mode";
+  // The system clipboard was never read or written (default insert).
+  | "untouched"
+  // The transcript was placed on the clipboard and left there.
+  | "replaced_with_transcript";
 
 export type OutputResult = {
   transcriptId: string;

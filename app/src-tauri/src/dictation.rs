@@ -234,6 +234,9 @@ fn transcribe_recording_inner(
     };
 
     let _ = app.emit("scribe:dictation-transcribed", &result);
+    // Output fires exactly once here, on the final assembled transcript — never
+    // per partial. Any "streaming" feel comes from the DirectInsert keystroke
+    // injection, not from multiple output passes.
     // Notes are for the archive, not the cursor: never auto-paste them.
     if !transcript.is_note {
         if let Err(error) = output::handle_transcription_output(app, &transcript, &settings) {
