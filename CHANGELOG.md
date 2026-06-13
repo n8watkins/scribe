@@ -4,6 +4,14 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.4.3 — 2026-06-13
+
+- **"Keep my clipboard" toggle** — the second insertion switch. Together,
+  **Auto-insert** × **Keep my clipboard** select the behavior: paste &
+  restore / buffer-only / paste & leave-on-clipboard / copy-only. Completes the
+  insertion/paste design (auto-insert toggle + clipboard toggle + rebindable
+  Paste-last hotkey + full-fidelity restore + Dev keystroke fallback).
+
 ## 0.4.2 — 2026-06-13
 
 - **Simplified insertion controls.** Output behavior is now a single
