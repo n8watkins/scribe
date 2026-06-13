@@ -1162,6 +1162,8 @@ function HistoryView({
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [busyTranscriptId, setBusyTranscriptId] = useState<string | null>(null);
   const [clearingHistory, setClearingHistory] = useState(false);
+  const [syncingToDrive, setSyncingToDrive] = useState(false);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const playbackRef = useRef<HTMLAudioElement | null>(null);
   const { settings } = data;
@@ -1369,7 +1371,31 @@ function HistoryView({
               value={query}
             />
           </div>
-          {notesOnly ? null : (
+          {notesOnly ? (
+            settings.driveSyncEnabled ? (
+              <button
+                className="secondary-button"
+                disabled={syncingToDrive}
+                onClick={() => {
+                  setSyncingToDrive(true);
+                  setSyncNotice(null);
+                  setHistoryError(null);
+                  driveSyncNow()
+                    .then((report) =>
+                      setSyncNotice(
+                        `Synced ${report.syncedNotes} note(s) to Google Drive.`,
+                      ),
+                    )
+                    .catch((cause) => setHistoryError(commandErrorMessage(cause)))
+                    .finally(() => setSyncingToDrive(false));
+                }}
+                type="button"
+              >
+                <Cloud aria-hidden="true" size={15} />
+                {syncingToDrive ? "Syncing…" : "Sync to Drive"}
+              </button>
+            ) : null
+          ) : (
             <button
               className="secondary-button"
               disabled={clearingHistory || total === 0}
@@ -1381,6 +1407,11 @@ function HistoryView({
             </button>
           )}
         </div>
+        {syncNotice ? (
+          <p className="muted" style={{ margin: "8px 2px 0" }}>
+            {syncNotice}
+          </p>
+        ) : null}
       </article>
 
       <article className="panel-card span-2">
