@@ -369,7 +369,17 @@ with the restore step removed.
 - Confirm/ą add a **transcribing spinner** state on the buffer/pill so "we're
   working, insert happens when done" is visible.
 
-### Experiments — UIA insert APPROVED (running in Phase 1 as a subagent); restore parked
+### Experiments — UIA insert: DONE, verdict PARTIAL; restore parked
+
+**Outcome (2026-06-13):** UIA's `TextPattern`/`IUIAutomationTextRange` is **read-only**
+from the client (no `InsertText`/`SetText`). The only atomic client-side write is
+`ValuePattern::SetValue`, which **replaces the whole control value** (no caret insert)
+and is absent/read-only in browsers, Electron, terminals, and most editors. So a true
+atomic, clipboard-free UIA insert is reliable only for **empty value-backed edit
+controls**. Verdict: keep the hardened keystroke insert as the default; UIA would only
+be an opt-in with a keystroke fallback, worth shipping only if a Windows app-matrix
+shows a real win. Full report: `docs/EXPERIMENT_UIA_INSERT.md`. Prototype parked on
+branch `worktree-agent-a4954df2133cd0a2f` (NOT merged).
 - **UI Automation atomic insert** (`TextPattern`/`ValuePattern`): a *true* atomic,
   clipboard-free, keystroke-free insert for **supported** controls (standard edits,
   many browser fields), with keystroke fallback. This is the only path that could
