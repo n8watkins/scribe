@@ -693,7 +693,7 @@ function renderView(
     case "Audio":
       return <AudioView actions={actions} settings={data.settings} />;
     case "Developer":
-      return <DeveloperView />;
+      return <DeveloperView refresh={actions.refresh} />;
     case "About":
       return <AboutView />;
     case "Dashboard":

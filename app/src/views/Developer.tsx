@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import { getName as getAppName } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Gauge } from "lucide-react";
+import { Gauge, Keyboard } from "lucide-react";
+import { commandErrorMessage, loadProductionHotkeyDefaults } from "../backend";
 import { SectionPanel, SettingRow } from "../components/layout";
 
-export function DeveloperView() {
+export function DeveloperView({ refresh }: { refresh: () => Promise<void> }) {
   // The webview content size is what CSS breakpoints (e.g. .status-grid
   // auto-fit) actually respond to, so it's the must-have readout.
   const [contentSize, setContentSize] = useState({
@@ -16,6 +18,33 @@ export function DeveloperView() {
     width: number;
     height: number;
   } | null>(null);
+  // The "Load production defaults" control only matters for Scribe Dev (which
+  // seeds its own non-conflicting binds).
+  const [isDevFlavor, setIsDevFlavor] = useState(false);
+  const [loadingDefaults, setLoadingDefaults] = useState(false);
+  const [defaultsNotice, setDefaultsNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    void getAppName()
+      .then((name) => setIsDevFlavor(name.includes("Dev")))
+      .catch(() => {});
+  }, []);
+
+  const handleLoadProductionDefaults = async () => {
+    setLoadingDefaults(true);
+    setDefaultsNotice(null);
+    try {
+      await loadProductionHotkeyDefaults();
+      await refresh();
+      setDefaultsNotice(
+        "Loaded your production binds. Quit stable Scribe to avoid conflicts.",
+      );
+    } catch (cause) {
+      setDefaultsNotice(commandErrorMessage(cause));
+    } finally {
+      setLoadingDefaults(false);
+    }
+  };
 
   useEffect(() => {
     const onResize = () =>
@@ -90,6 +119,31 @@ export function DeveloperView() {
           diagnostics will land in this panel.
         </p>
       </SectionPanel>
+
+      {isDevFlavor ? (
+        <SectionPanel
+          icon={<Keyboard aria-hidden="true" size={16} />}
+          title="Developer hotkeys"
+        >
+          <SettingRow
+            description="Scribe Dev seeds non-conflicting binds (Ctrl+Shift+ variants) so it can run alongside stable Scribe. Load your production binds to use your real shortcuts when running Dev alone."
+            label="Load my production defaults"
+          >
+            <button
+              className="secondary-button"
+              disabled={loadingDefaults}
+              onClick={() => void handleLoadProductionDefaults()}
+              type="button"
+            >
+              <Keyboard aria-hidden="true" size={15} />
+              {loadingDefaults ? "Loading..." : "Load production defaults"}
+            </button>
+          </SettingRow>
+          {defaultsNotice ? (
+            <p className="muted vocab-hint">{defaultsNotice}</p>
+          ) : null}
+        </SectionPanel>
+      ) : null}
     </section>
   );
 }

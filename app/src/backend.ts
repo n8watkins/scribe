@@ -56,6 +56,7 @@ export type AppSettings = {
   notificationsEnabled: boolean;
   soundsEnabled: boolean;
   developerSettingsEnabled: boolean;
+  devHotkeysSeeded: boolean;
   recordingMode: RecordingMode;
   minRecordingMs: number;
   maxRecordingMs: number;
@@ -572,6 +573,12 @@ export function rebindHotkey(
 
 export function resetHotkeysToDefaults(): Promise<HotkeyStatus> {
   return invoke("reset_hotkeys_to_defaults");
+}
+
+/** Switches the Dev flavor's hotkeys to the production (stable) defaults — for
+ * running Scribe Dev alone with your real binds. */
+export function loadProductionHotkeyDefaults(): Promise<HotkeyStatus> {
+  return invoke("load_production_hotkey_defaults");
 }
 
 export function commandErrorMessage(error: unknown): string {
