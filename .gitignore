@@ -1,0 +1,2 @@
+# Claude Code local agent state (git worktrees, task transcripts) — never commit
+.claude/
