@@ -15,6 +15,7 @@ pub mod models;
 pub mod note_analysis;
 pub mod note_sync;
 pub mod output;
+pub mod output_uia;
 pub mod settings;
 pub mod stats;
 pub mod transcript;
@@ -365,6 +366,7 @@ pub fn run() {
             commands::copy_last_transcript,
             commands::paste_transcript,
             commands::copy_transcript,
+            commands::experimental_uia_insert,
             commands::list_models,
             commands::download_model,
             commands::cancel_model_download,

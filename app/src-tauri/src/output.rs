@@ -53,6 +53,14 @@ pub struct OutputResult {
     pub message: String,
 }
 
+/// Hand keyboard focus back to the foreign app the user was in before Scribe
+/// took focus. Additive thin wrapper over the platform helper so experimental
+/// insert paths (e.g. `output_uia`) can reuse the exact same focus-handoff the
+/// paste flow relies on, without duplicating its Z-order walk.
+pub fn ensure_foreign_focus() -> Result<(), CommandError> {
+    platform::ensure_foreign_focus()
+}
+
 pub fn handle_transcription_output(
     app: &AppHandle,
     transcript: &Transcript,

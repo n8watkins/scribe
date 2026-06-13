@@ -648,6 +648,22 @@ pub fn copy_transcript(app: tauri::AppHandle, id: String) -> Result<OutputResult
     output::copy_transcript(&app, &id)
 }
 
+/// EXPERIMENT: insert `text` into the previously focused foreign control via UI
+/// Automation — no clipboard, no synthesized keystrokes. Hands focus back to the
+/// foreign app first (the command can fire while a Scribe window is focused),
+/// then drives the focused control's UIA ValuePattern. Returns an outcome whose
+/// `inserted` flag is false (not an error) when UIA cannot safely write, so a
+/// caller can fall back to keystrokes. Not wired into the normal output flow.
+#[tauri::command]
+pub fn experimental_uia_insert(
+    text: String,
+) -> Result<crate::output_uia::UiaInsertOutcome, CommandError> {
+    // Same focus-handoff the paste flow uses, so we target the user's prior app
+    // rather than Scribe itself.
+    output::ensure_foreign_focus()?;
+    crate::output_uia::insert_focused(&text)
+}
+
 #[tauri::command]
 pub fn list_models(
     app: tauri::AppHandle,

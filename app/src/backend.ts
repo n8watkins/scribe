@@ -358,6 +358,23 @@ export function copyTranscript(id: string): Promise<OutputResult> {
   return invoke("copy_transcript", { id });
 }
 
+/** EXPERIMENT: clipboard-free, keystroke-free insertion via Windows UI
+ * Automation. `inserted` is false (not an error) when UIA cannot safely write
+ * the focused control, in which case the caller should fall back to keystrokes. */
+export type UiaInsertOutcome = {
+  inserted: boolean;
+  method: string;
+  controlType: string | null;
+  elementName: string | null;
+  message: string;
+};
+
+/** EXPERIMENT: try a true atomic UIA insert into the previously focused app.
+ * Does NOT touch the clipboard or synthesize keystrokes. Opt-in test path only. */
+export function experimentalUiaInsert(text: string): Promise<UiaInsertOutcome> {
+  return invoke("experimental_uia_insert", { text });
+}
+
 export function listRecentTranscripts({
   limit,
 }: {
