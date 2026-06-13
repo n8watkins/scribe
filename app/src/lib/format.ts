@@ -26,7 +26,7 @@ export const outputModeOptions: { label: string; value: OutputMode }[] = [
 // `clipboard_restore`) simply highlights no segment, so it renders without
 // crashing.
 export const pasteMethodOptions: { label: string; value: PasteMethod }[] = [
-  { label: "Paste (keeps your clipboard)", value: "clipboard_paste" },
+  { label: "Paste instantly (keeps clipboard)", value: "clipboard_paste" },
   { label: "Type it out (no clipboard)", value: "direct_insert" },
 ];
 

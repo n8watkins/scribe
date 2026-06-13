@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 /// Bumped whenever a shipped default changes in a way that should be applied
 /// once to existing installs (see `migrate_defaults`). Stored settings with a
 /// lower `defaults_version` get the new defaults applied exactly once.
-pub const CURRENT_DEFAULTS_VERSION: u32 = 4;
+pub const CURRENT_DEFAULTS_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -380,6 +380,15 @@ impl AppSettings {
             }
         }
 
+        // v5: the default paste method changed from DirectInsert (types the
+        // transcript out as keystrokes) to ClipboardPaste (one Ctrl+V that
+        // restores your clipboard). Installs still on the old DirectInsert
+        // default are moved; a deliberate "Type it out" choice made after this
+        // migration runs is preserved.
+        if self.defaults_version < 5 && self.paste_method == PasteMethod::DirectInsert {
+            self.paste_method = PasteMethod::ClipboardPaste;
+        }
+
         self.defaults_version = CURRENT_DEFAULTS_VERSION;
         true
     }
@@ -519,6 +528,32 @@ mod tests {
 
         settings.silence_auto_stop_ms = 300_001;
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn migrates_direct_insert_paste_to_clipboard_once() {
+        let mut settings = AppSettings {
+            defaults_version: 4,
+            paste_method: PasteMethod::DirectInsert,
+            ..AppSettings::default()
+        };
+
+        assert!(settings.migrate_defaults());
+        assert_eq!(settings.paste_method, PasteMethod::ClipboardPaste);
+        assert_eq!(settings.defaults_version, CURRENT_DEFAULTS_VERSION);
+    }
+
+    #[test]
+    fn does_not_override_deliberate_type_it_out_after_migration() {
+        // A user who deliberately picks "Type it out" after the v5 migration
+        // (defaults_version already current) is never flipped back.
+        let mut settings = AppSettings {
+            paste_method: PasteMethod::DirectInsert,
+            ..AppSettings::default()
+        };
+
+        assert!(!settings.migrate_defaults());
+        assert_eq!(settings.paste_method, PasteMethod::DirectInsert);
     }
 
     #[test]
