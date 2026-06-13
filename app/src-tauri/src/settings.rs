@@ -29,6 +29,11 @@ pub struct AppSettings {
     /// window resolution). Off by default; opt-in from Settings.
     #[serde(default)]
     pub developer_settings_enabled: bool,
+    /// True once the Scribe Dev flavor has seeded its non-conflicting hotkey
+    /// defaults (or the user loaded production defaults), so the one-shot dev
+    /// seeding never overrides the binds again.
+    #[serde(default)]
+    pub dev_hotkeys_seeded: bool,
     /// Inert: hold-to-talk and toggle hotkeys both always work now. The field
     /// is kept so existing DB settings JSON (and serde round-trips) keep
     /// working unchanged.
@@ -249,6 +254,18 @@ impl HotkeySettings {
             false
         }
     }
+
+    /// Non-conflicting binds for the Scribe Dev flavor, so running Dev next to
+    /// stable Scribe doesn't fight over the same global shortcuts. Each differs
+    /// from the production default by an extra Shift.
+    pub fn dev_defaults() -> Self {
+        Self {
+            hold_to_talk: "Ctrl+Shift+Win".to_string(),
+            toggle_dictation: "Ctrl+Shift+Backquote".to_string(),
+            paste_last_transcript: "Ctrl+Alt+Shift+V".to_string(),
+            open_dashboard: "Ctrl+Alt+Shift+F".to_string(),
+        }
+    }
 }
 
 impl Default for AppSettings {
@@ -263,6 +280,7 @@ impl Default for AppSettings {
             notifications_enabled: true,
             sounds_enabled: true,
             developer_settings_enabled: false,
+            dev_hotkeys_seeded: false,
             recording_mode: RecordingMode::Both,
             min_recording_ms: 300,
             max_recording_ms: 600_000,
@@ -455,6 +473,7 @@ mod tests {
         assert_eq!(settings.notes_analysis_endpoint, "http://127.0.0.1:1234/v1");
         assert_eq!(settings.notes_analysis_model, "");
         assert!(!settings.developer_settings_enabled);
+        assert!(!settings.dev_hotkeys_seeded);
     }
 
     #[test]
@@ -646,6 +665,7 @@ mod tests {
         // The new field is absent from this legacy JSON, so #[serde(default)]
         // must fill it in as false rather than failing to deserialize.
         assert!(!settings.developer_settings_enabled);
+        assert!(!settings.dev_hotkeys_seeded);
         assert_eq!(settings.output_mode, OutputMode::SaveOnly);
         assert_eq!(
             settings.pill_display_mode,

@@ -317,12 +317,46 @@ pub fn reset_hotkeys_to_defaults(
 ) -> Result<HotkeyStatus, CommandError> {
     let mut settings = state.db()?.get_settings()?;
     let previous_hotkeys = settings.hotkeys.clone();
+    // "Defaults" are flavor-specific: the Dev flavor resets to its
+    // non-conflicting binds, stable resets to the production binds.
+    let next_hotkeys = if crate::is_dev_flavor(&app) {
+        crate::settings::HotkeySettings::dev_defaults()
+    } else {
+        AppSettings::default().hotkeys
+    };
+
+    hotkeys::validate_hotkeys(&next_hotkeys)?;
+    let failures = hotkeys::replace_hotkeys(&app, &previous_hotkeys, &next_hotkeys)?;
+
+    settings.hotkeys = next_hotkeys.clone();
+    settings.dev_hotkeys_seeded = true;
+    if let Err(error) = state.db()?.save_settings(&settings) {
+        let _ = hotkeys::replace_hotkeys(&app, &next_hotkeys, &previous_hotkeys);
+        return Err(error);
+    }
+
+    hotkeys::emit_registration_failures(&app, &failures);
+    hotkeys::status(&app, &settings.hotkeys)
+}
+
+/// Loads the production (stable-flavor) hotkey defaults. Exposed for the Dev
+/// flavor's Developer panel so you can switch Dev back to your real binds when
+/// running it alone. Sets `dev_hotkeys_seeded` so the one-shot dev seeding
+/// never re-applies the Dev binds on the next launch.
+#[tauri::command]
+pub fn load_production_hotkey_defaults(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, BackendState>,
+) -> Result<HotkeyStatus, CommandError> {
+    let mut settings = state.db()?.get_settings()?;
+    let previous_hotkeys = settings.hotkeys.clone();
     let next_hotkeys = AppSettings::default().hotkeys;
 
     hotkeys::validate_hotkeys(&next_hotkeys)?;
     let failures = hotkeys::replace_hotkeys(&app, &previous_hotkeys, &next_hotkeys)?;
 
     settings.hotkeys = next_hotkeys.clone();
+    settings.dev_hotkeys_seeded = true;
     if let Err(error) = state.db()?.save_settings(&settings) {
         let _ = hotkeys::replace_hotkeys(&app, &next_hotkeys, &previous_hotkeys);
         return Err(error);

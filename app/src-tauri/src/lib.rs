@@ -243,6 +243,19 @@ pub fn run() {
                 );
                 settings_migrated = true;
             }
+            // The Scribe Dev flavor seeds non-conflicting hotkey defaults the
+            // first time it runs, so it can run alongside stable Scribe without
+            // fighting over the same global binds. Only untouched (still
+            // production) binds are remapped; the flag makes this one-shot so a
+            // later "Load my production defaults" sticks.
+            if is_dev_flavor(app.handle()) && !settings.dev_hotkeys_seeded {
+                if settings.hotkeys == crate::settings::HotkeySettings::default() {
+                    settings.hotkeys = crate::settings::HotkeySettings::dev_defaults();
+                    log::info!("Seeded Scribe Dev hotkey defaults");
+                }
+                settings.dev_hotkeys_seeded = true;
+                settings_migrated = true;
+            }
             if settings_migrated {
                 db.save_settings(&settings)?;
             }
@@ -348,6 +361,7 @@ pub fn run() {
             commands::get_hotkey_status,
             commands::rebind_hotkey,
             commands::reset_hotkeys_to_defaults,
+            commands::load_production_hotkey_defaults,
             commands::open_dashboard,
             commands::list_microphones,
             commands::start_recording,

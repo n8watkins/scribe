@@ -1340,4 +1340,22 @@ mod tests {
             Ok(ParsedShortcut::Plugin(_))
         ));
     }
+
+    #[test]
+    fn dev_hotkeys_validate_and_differ_from_production() {
+        let dev = HotkeySettings::dev_defaults();
+        // Each Dev bind must be individually registerable.
+        assert!(validate_hotkeys(&dev).is_ok());
+        assert!(matches!(
+            parse_shortcut(&dev.hold_to_talk),
+            Ok(ParsedShortcut::ModifierChord(_))
+        ));
+        // ...and differ from production on every action so the two flavors
+        // never fight over the same global shortcut when both run.
+        let prod = HotkeySettings::default();
+        assert_ne!(prod.hold_to_talk, dev.hold_to_talk);
+        assert_ne!(prod.toggle_dictation, dev.toggle_dictation);
+        assert_ne!(prod.paste_last_transcript, dev.paste_last_transcript);
+        assert_ne!(prod.open_dashboard, dev.open_dashboard);
+    }
 }
