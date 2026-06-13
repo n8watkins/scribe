@@ -198,11 +198,15 @@ pub enum OutputMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PasteMethod {
-    /// Default. Inject the transcript as synthetic keystrokes; the system
-    /// clipboard is never read or written.
+    /// Opt-in fallback. Inject the transcript as synthetic keystrokes; the
+    /// system clipboard is never read or written. Use this for apps that block
+    /// synthetic Ctrl+V — the trade-off is that long inserts can visibly stream
+    /// character by character.
     DirectInsert,
-    /// Opt-in. Put the transcript on the system clipboard and send Ctrl+V,
-    /// leaving the transcript on the clipboard afterwards (no restore).
+    /// Default. Borrow the clipboard to send a real Ctrl+V (one atomic paste),
+    /// then restore the user's previous clipboard text. Lands cleanly in
+    /// chat/browser/Electron apps without permanently consuming the clipboard.
+    /// Text-clipboard restore only (see `clipboard_paste` in `output.rs`).
     ///
     /// `serde(alias)` keeps settings stored under the old `clipboard_restore`
     /// name deserializing into this variant, so existing installs are
@@ -293,7 +297,7 @@ impl Default for AppSettings {
             language: Language::En,
             vocabulary_prompt: String::new(),
             output_mode: OutputMode::AutoPaste,
-            paste_method: PasteMethod::DirectInsert,
+            paste_method: PasteMethod::ClipboardPaste,
             history_enabled: true,
             save_audio_clips: true,
             history_retention_days: Some(30),
@@ -457,7 +461,7 @@ mod tests {
         assert_eq!(settings.min_recording_ms, 300);
         assert_eq!(settings.max_recording_ms, 600_000);
         assert_eq!(settings.output_mode, OutputMode::AutoPaste);
-        assert_eq!(settings.paste_method, PasteMethod::DirectInsert);
+        assert_eq!(settings.paste_method, PasteMethod::ClipboardPaste);
         assert!(settings.silence_auto_stop_enabled);
         assert_eq!(settings.silence_auto_stop_ms, 60_000);
         assert!(settings.incremental_transcription_enabled);

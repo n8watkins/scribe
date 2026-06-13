@@ -123,9 +123,16 @@ export type OutputAction =
 export type OutputStatus = "completed" | "clipboard_restore_failed";
 
 export type ClipboardPreservation =
-  // The system clipboard was never read or written (default insert).
+  // The system clipboard was never read or written (the opt-in keystroke insert).
   | "untouched"
-  // The transcript was placed on the clipboard and left there.
+  // The transcript was pasted via a borrowed clipboard, then the user's
+  // previous clipboard text was restored (the default paste).
+  | "restored_after_paste"
+  // The transcript was pasted, but the previous clipboard text could not be
+  // restored, so the transcript is still on the clipboard.
+  | "restore_failed"
+  // The transcript was placed on the clipboard and left there on purpose
+  // (Copy and Copy + Paste output modes).
   | "replaced_with_transcript";
 
 export type OutputResult = {

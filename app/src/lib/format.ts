@@ -19,14 +19,15 @@ export const outputModeOptions: { label: string; value: OutputMode }[] = [
   { label: "Copy + Paste", value: "copy_and_paste" },
 ];
 
-// Two honest choices. `direct_insert` inserts without touching the clipboard;
-// `clipboard_paste` copies + Ctrl+V and leaves the transcript on the clipboard.
-// A SegmentedControl with an unrecognized stored value (e.g. the legacy
+// Two honest choices. The default `clipboard_paste` sends one real Ctrl+V and
+// then restores the user's previous clipboard text; `direct_insert` types the
+// transcript out as keystrokes and never touches the clipboard. A
+// SegmentedControl with an unrecognized stored value (e.g. the legacy
 // `clipboard_restore`) simply highlights no segment, so it renders without
 // crashing.
 export const pasteMethodOptions: { label: string; value: PasteMethod }[] = [
-  { label: "Insert (clipboard untouched)", value: "direct_insert" },
-  { label: "Clipboard paste", value: "clipboard_paste" },
+  { label: "Paste (keeps your clipboard)", value: "clipboard_paste" },
+  { label: "Type it out (no clipboard)", value: "direct_insert" },
 ];
 
 /// Renders a millisecond value as a human-readable duration, e.g.
@@ -44,12 +45,14 @@ export function formatMsReadable(ms: number): string {
   return seconds > 0 ? `${minutes} min ${seconds} s` : `${minutes} min`;
 }
 
-// Short, honest label driven by the actual paste method. `direct_insert` never
-// touches the clipboard; every other method goes through it.
+// Short, honest label driven by the actual paste method. `direct_insert` types
+// the transcript out and never touches the clipboard; the default
+// `clipboard_paste` borrows the clipboard for one Ctrl+V and then restores it,
+// so the user's clipboard is kept.
 export function clipboardStatus(settings: AppSettings) {
   return settings.pasteMethod === "direct_insert"
     ? "Clipboard untouched"
-    : "Uses clipboard";
+    : "Clipboard kept";
 }
 
 export function outputModeLabel(outputMode: OutputMode) {
