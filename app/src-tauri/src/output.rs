@@ -24,17 +24,22 @@ pub enum OutputAction {
 #[serde(rename_all = "snake_case")]
 pub enum OutputStatus {
     Completed,
+    /// Kept for serde back-compat with previously emitted/persisted payloads.
+    /// No output path produces it anymore: clipboard paste deliberately leaves
+    /// the transcript on the clipboard, so there is no restore step to fail.
     ClipboardRestoreFailed,
 }
 
+/// Honest description of what each output path did to the system clipboard.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClipboardPreservation {
-    NotNeeded,
-    Preserved,
-    TextOnlyPreserved,
-    TextOnlyRestoreFailed,
-    ClipboardOwnedByMode,
+    /// The system clipboard was never read or written (the default
+    /// clipboard-free insert).
+    Untouched,
+    /// The transcript was placed on the system clipboard and left there
+    /// (clipboard paste, copy, and copy-and-paste).
+    ReplacedWithTranscript,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,14 +160,12 @@ fn paste_transcript_text(
                     copied: false,
                     pasted: true,
                     clipboard_restored: None,
-                    clipboard_preservation: ClipboardPreservation::Preserved,
+                    clipboard_preservation: ClipboardPreservation::Untouched,
                     clipboard_restore_error: None,
-                    message: "Inserted transcript without touching the clipboard.".to_string(),
+                    message: "Inserted transcript. Clipboard untouched.".to_string(),
                 })
             }
-            PasteMethod::ClipboardRestore => {
-                compatibility_paste_with_restore(transcript, output_mode)
-            }
+            PasteMethod::ClipboardPaste => clipboard_paste(transcript, output_mode),
         }
     })();
 
@@ -207,7 +210,7 @@ fn copy_transcript_text(
             copied: true,
             pasted: false,
             clipboard_restored: None,
-            clipboard_preservation: ClipboardPreservation::ClipboardOwnedByMode,
+            clipboard_preservation: ClipboardPreservation::ReplacedWithTranscript,
             clipboard_restore_error: None,
             message: "Copied transcript to the clipboard.".to_string(),
         })
@@ -258,11 +261,11 @@ fn copy_and_paste_transcript_text(
             action: OutputAction::CopyAndPaste,
             status: OutputStatus::Completed,
             output_mode,
-            paste_method: Some(PasteMethod::ClipboardRestore),
+            paste_method: Some(PasteMethod::ClipboardPaste),
             copied: true,
             pasted: true,
             clipboard_restored: None,
-            clipboard_preservation: ClipboardPreservation::ClipboardOwnedByMode,
+            clipboard_preservation: ClipboardPreservation::ReplacedWithTranscript,
             clipboard_restore_error: None,
             message: "Copied transcript to the clipboard and pasted it.".to_string(),
         })
@@ -284,73 +287,30 @@ fn copy_and_paste_transcript_text(
     }
 }
 
-fn compatibility_paste_with_restore(
+/// Opt-in "Clipboard paste": put the transcript on the system clipboard and
+/// send Ctrl+V. The transcript is deliberately left on the clipboard — there
+/// is no save/restore (the owner finds borrow-and-restore hacky). The honest
+/// trade-off is that the user's previous clipboard contents are replaced.
+fn clipboard_paste(
     transcript: &Transcript,
     output_mode: OutputMode,
 ) -> Result<OutputResult, CommandError> {
-    let previous_text = get_clipboard_text().ok();
-
     set_clipboard_text(&transcript.text)?;
     thread::sleep(Duration::from_millis(60));
     platform::send_paste_shortcut()?;
-    thread::sleep(Duration::from_millis(120));
-
-    let restore_result = match previous_text {
-        Some(previous_text) => set_clipboard_text(&previous_text).map(|_| true),
-        None => Err(CommandError::new(
-            "clipboard_restore_failed",
-            "Compatibility paste could not restore the previous clipboard because only text clipboard preservation is implemented and no previous text was available.",
-        )),
-    };
-
-    let (status, clipboard_restored, clipboard_preservation, clipboard_restore_error, message) =
-        match restore_result {
-            Ok(true) => (
-                OutputStatus::Completed,
-                Some(true),
-                ClipboardPreservation::TextOnlyPreserved,
-                None,
-                "Pasted transcript and restored the previous text clipboard contents.".to_string(),
-            ),
-            Ok(false) => unreachable!(),
-            Err(error) => (
-                OutputStatus::ClipboardRestoreFailed,
-                Some(false),
-                ClipboardPreservation::TextOnlyRestoreFailed,
-                Some(error.message.clone()),
-                "Pasted transcript, but the previous clipboard contents could not be restored."
-                    .to_string(),
-            ),
-        };
 
     Ok(OutputResult {
         transcript_id: transcript.id.clone(),
         action: OutputAction::Paste,
-        status,
+        status: OutputStatus::Completed,
         output_mode,
-        paste_method: Some(PasteMethod::ClipboardRestore),
+        paste_method: Some(PasteMethod::ClipboardPaste),
         copied: true,
         pasted: true,
-        clipboard_restored,
-        clipboard_preservation,
-        clipboard_restore_error,
-        message,
-    })
-}
-
-fn get_clipboard_text() -> Result<String, CommandError> {
-    let mut clipboard = arboard::Clipboard::new().map_err(|error| {
-        CommandError::new(
-            "clipboard_unavailable",
-            format!("Could not read the clipboard. {}", error),
-        )
-    })?;
-
-    clipboard.get_text().map_err(|error| {
-        CommandError::new(
-            "clipboard_text_unavailable",
-            format!("Could not read text from the clipboard. {}", error),
-        )
+        clipboard_restored: None,
+        clipboard_preservation: ClipboardPreservation::ReplacedWithTranscript,
+        clipboard_restore_error: None,
+        message: "Pasted transcript. Transcript left on the clipboard.".to_string(),
     })
 }
 
@@ -499,8 +459,18 @@ mod platform {
     use windows::Win32::System::Threading::GetCurrentProcessId;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
-        KEYEVENTF_UNICODE, VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT, VK_V,
+        KEYEVENTF_UNICODE, VIRTUAL_KEY, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN,
+        VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_V,
     };
+
+    /// Every modifier whose held state would otherwise combine with injected
+    /// characters. Includes the generic (`VK_CONTROL`) and side-specific
+    /// (`VK_LCONTROL`/`VK_RCONTROL`) virtual keys so an explicit key-up is
+    /// emitted for whichever one Windows is actually tracking.
+    const MODIFIER_KEYS: [VIRTUAL_KEY; 11] = [
+        VK_CONTROL, VK_LCONTROL, VK_RCONTROL, VK_MENU, VK_LMENU, VK_RMENU, VK_SHIFT, VK_LSHIFT,
+        VK_RSHIFT, VK_LWIN, VK_RWIN,
+    ];
     use windows::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW,
         GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow, GWL_EXSTYLE, GW_HWNDNEXT,
@@ -583,10 +553,9 @@ mod platform {
     /// "," into Ctrl+Alt+"," and open their settings JSON — so wait for
     /// every modifier to come back up before sending input.
     fn wait_for_modifier_release() {
-        const MODIFIERS: [VIRTUAL_KEY; 5] = [VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN];
         let deadline = std::time::Instant::now() + Duration::from_millis(1_500);
         loop {
-            let held = MODIFIERS
+            let held = MODIFIER_KEYS
                 .iter()
                 .any(|vk| (unsafe { GetAsyncKeyState(vk.0 as i32) } as u16) & 0x8000 != 0);
             if !held {
@@ -600,11 +569,42 @@ mod platform {
         }
     }
 
+    /// Defensive backstop to `wait_for_modifier_release`: synthesize an explicit
+    /// key-up for every modifier still physically down. Even if the user keeps
+    /// holding the paste chord past the wait deadline, this guarantees the
+    /// modifiers are logically up before any character is injected, so a typed
+    /// "," can never be seen as Ctrl+Alt+"," (which scrambles Windows Terminal
+    /// and opens settings JSON). Sent as one burst, immediately before the text.
+    fn release_held_modifiers() -> Result<(), CommandError> {
+        let releases: Vec<INPUT> = MODIFIER_KEYS
+            .iter()
+            .filter(|vk| (unsafe { GetAsyncKeyState(vk.0 as i32) } as u16) & 0x8000 != 0)
+            .map(|vk| keyboard_input(*vk, 0, KEYEVENTF_KEYUP))
+            .collect();
+
+        if releases.is_empty() {
+            return Ok(());
+        }
+
+        send_inputs(&releases, "modifier release")
+    }
+
+    /// Maximum INPUT events per `SendInput` call. The whole transcript is sent
+    /// in a single call so it lands as one atomic insert (not a visible crawl);
+    /// only pathologically long text is split, and then into large chunks so it
+    /// still appears as at most a couple of bursts. Each UTF-16 unit is two
+    /// INPUTs (key-down + key-up), so this caps a chunk at ~2000 characters.
+    const MAX_INPUTS_PER_BURST: usize = 4000;
+
     pub fn direct_insert_text(text: &str) -> Result<(), CommandError> {
         wait_for_modifier_release();
+        // Backstop: force-release anything still held so injected characters
+        // cannot combine into shortcuts in the target app.
+        release_held_modifiers()?;
 
-        let mut inputs = Vec::with_capacity(256);
-
+        // Build the INPUTs for the entire transcript up front so the common case
+        // is a single SendInput call (one atomic insert).
+        let mut inputs: Vec<INPUT> = Vec::with_capacity(text.len().saturating_mul(2));
         for unit in text.encode_utf16() {
             inputs.push(keyboard_input(VIRTUAL_KEY(0), unit, KEYEVENTF_UNICODE));
             inputs.push(keyboard_input(
@@ -612,15 +612,15 @@ mod platform {
                 unit,
                 KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
             ));
-
-            if inputs.len() >= 240 {
-                send_inputs(&inputs, "direct insert")?;
-                inputs.clear();
-            }
         }
 
-        if !inputs.is_empty() {
-            send_inputs(&inputs, "direct insert")?;
+        if inputs.is_empty() {
+            return Ok(());
+        }
+
+        // One call for normal-length transcripts; large chunks only if huge.
+        for chunk in inputs.chunks(MAX_INPUTS_PER_BURST) {
+            send_inputs(chunk, "direct insert")?;
         }
 
         Ok(())
@@ -705,7 +705,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn direct_insert_result_reports_clipboard_preserved() {
+    fn direct_insert_result_reports_clipboard_untouched() {
         let transcript = Transcript::new_last_buffer("hello", Some(100), None, None).unwrap();
 
         let result = OutputResult {
@@ -717,16 +717,47 @@ mod tests {
             copied: false,
             pasted: true,
             clipboard_restored: None,
-            clipboard_preservation: ClipboardPreservation::Preserved,
+            clipboard_preservation: ClipboardPreservation::Untouched,
             clipboard_restore_error: None,
-            message: "Inserted transcript without touching the clipboard.".to_string(),
+            message: "Inserted transcript. Clipboard untouched.".to_string(),
+        };
+
+        // The default insert path must never report touching the clipboard.
+        assert_eq!(
+            result.clipboard_preservation,
+            ClipboardPreservation::Untouched
+        );
+        assert!(!result.copied);
+        assert!(result.pasted);
+    }
+
+    #[test]
+    fn clipboard_paste_result_reports_transcript_left_on_clipboard() {
+        let transcript = Transcript::new_last_buffer("hello", Some(100), None, None).unwrap();
+
+        // Mirrors what `clipboard_paste` produces: the transcript is copied and
+        // deliberately left on the clipboard (no restore).
+        let result = OutputResult {
+            transcript_id: transcript.id,
+            action: OutputAction::Paste,
+            status: OutputStatus::Completed,
+            output_mode: OutputMode::AutoPaste,
+            paste_method: Some(PasteMethod::ClipboardPaste),
+            copied: true,
+            pasted: true,
+            clipboard_restored: None,
+            clipboard_preservation: ClipboardPreservation::ReplacedWithTranscript,
+            clipboard_restore_error: None,
+            message: "Pasted transcript. Transcript left on the clipboard.".to_string(),
         };
 
         assert_eq!(
             result.clipboard_preservation,
-            ClipboardPreservation::Preserved
+            ClipboardPreservation::ReplacedWithTranscript
         );
-        assert!(!result.copied);
+        assert!(result.copied);
         assert!(result.pasted);
+        assert!(result.clipboard_restored.is_none());
+        assert!(result.clipboard_restore_error.is_none());
     }
 }
