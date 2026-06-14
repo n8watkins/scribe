@@ -4,6 +4,20 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.19 — 2026-06-14
+
+- **Seamless, branded auto-update.** New versions now download and install **on
+  launch** behind a Scribe-branded "Updating…" screen (logo + progress) instead
+  of the Windows installer — silent install, then a relaunch. New **"Install
+  updates automatically"** toggle in About; both *check* and *auto-install* are
+  **on by default** and can be turned off. Manual install always still works,
+  and any failure falls back gracefully (never blocks the app).
+- **Color themes.** Pick from 6 themes — **Midnight** (default, identical to
+  before), Ocean, Slate, Emerald, Violet, and a light **Daylight** — in the new
+  **Themes** view. (The floating pill keeps its own colors for now.)
+- **Docs:** added `docs/COMPETITIVE-ANALYSIS.md` (Scribe vs. the field + a
+  prioritized gap list) and refreshed the README to the current feature set.
+
 ## 0.5.18 — 2026-06-14
 
 - **Simplified the update UI.** The topbar indicator is now a single
