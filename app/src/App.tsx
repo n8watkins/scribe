@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getName as getAppName } from "@tauri-apps/api/app";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   isPermissionGranted,
   requestPermission,
@@ -17,12 +18,14 @@ import {
   Info,
   Keyboard,
   Mic,
+  Minus,
   MonitorCog,
   NotebookPen,
   Radio,
   Settings as SettingsIcon,
   ShieldCheck,
   Square,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -112,6 +115,47 @@ async function notifyUpdateAvailable(version: string) {
   } catch {
     // Notifications can be unavailable (permissions, platform); fail quietly.
   }
+}
+
+/** Custom window title bar (the main window runs with `decorations: false`).
+ * The bar itself is the OS drag region (`data-tauri-drag-region`); the three
+ * controls drive the native window. Replaces the native chrome so there's no
+ * second "Scribe" in the top-left. */
+function TitleBar({ isDev }: { isDev: boolean }) {
+  const win = getCurrentWindow();
+  return (
+    <div className="titlebar" data-tauri-drag-region>
+      <span className="titlebar-brand" data-tauri-drag-region>
+        Scribe{isDev ? " Dev" : ""}
+      </span>
+      <div className="window-controls">
+        <button
+          aria-label="Minimize"
+          className="win-ctl"
+          onClick={() => void win.minimize()}
+          type="button"
+        >
+          <Minus aria-hidden="true" size={15} />
+        </button>
+        <button
+          aria-label="Maximize"
+          className="win-ctl"
+          onClick={() => void win.toggleMaximize()}
+          type="button"
+        >
+          <Square aria-hidden="true" size={12} />
+        </button>
+        <button
+          aria-label="Close"
+          className="win-ctl win-close"
+          onClick={() => void win.close()}
+          type="button"
+        >
+          <X aria-hidden="true" size={16} />
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function App() {
@@ -600,6 +644,8 @@ function App() {
 
   return (
     <div className="app-shell">
+      <TitleBar isDev={isDevFlavor} />
+      <div className="app-body">
       <aside className="sidebar">
         <div className="brand">
           <img className="brand-mark" src={scribeIcon} alt="" aria-hidden="true" />
@@ -715,6 +761,7 @@ function App() {
           : null}
         {toast ? <Toast notice={toast} /> : null}
       </main>
+      </div>
     </div>
   );
 }

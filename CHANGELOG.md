@@ -4,6 +4,15 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.14 — 2026-06-14
+
+- **Custom window title bar.** The main window now runs without native Windows
+  chrome and draws its own slim bar (drag region + minimize / maximize / close),
+  so there's no second "Scribe" label in the top-left.
+- **Note on the taskbar / Task Manager icon:** it's already the correct Scribe
+  logo in the build — a stale icon there is Windows' **icon cache** after
+  updating in place, which a clean install (or a reboot) refreshes.
+
 ## 0.5.13 — 2026-06-14
 
 - **Update notifications you won't miss.** Scribe now re-checks for a new release
