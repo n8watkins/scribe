@@ -1,0 +1,139 @@
+/* Batch E: History & Notes view styles.
+ *
+ * Scoped to the History/Notes archive only (every rule is qualified by
+ * `.history-row`, `.history-scroll`, or `.notes-*`), so nothing here can leak
+ * into Dashboard / Transcribe, which use a different card component. The
+ * transcript ROW markup lives in the shared `components/transcript.tsx`
+ * (`TranscriptRow`), which this batch must not edit — so the row-level changes
+ * below (#1 action grid, #2 inline see-more, #3 expanded scroll) are expressed
+ * purely as CSS against that existing markup. See the batch report for the one
+ * small JSX tweak to `transcript.tsx` that makes the see-more truly inline. */
+
+/* ---------------------------------------------------------------------------
+ * #1 — History action buttons as a 2-column grid instead of one long row.
+ *
+ * `.row-actions` is shared (also used by Models / Hotkeys headers as a flex
+ * button row), so we only re-grid it WHEN it sits inside a `.history-row`.
+ * Two columns mirror the existing `.control-grid` pattern; actions flow into as
+ * many rows as needed (e.g. 4 actions → 2×2, 6 → 3×2). The actions are fixed
+ * 28px square `.icon-button`s, so the columns hug their content and the block
+ * stays compact and right-aligned in the row rather than stretching.
+ * ------------------------------------------------------------------------- */
+.history-row .row-actions {
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  justify-content: end;
+  gap: 6px;
+  width: max-content;
+  margin-left: auto;
+}
+
+/* ---------------------------------------------------------------------------
+ * #2 — "See more" inline at the END of the snippet, not stranded on its own
+ * line below the meta.
+ *
+ * The collapsed-row markup order is: snippet <p> → (optional analysis) → meta
+ * <span> → see-more <button>. We turn the row's text column into a flex column
+ * and use `order` to pull the see-more affordance up to sit immediately after
+ * the snippet text, reading as a trailing "See more" rather than a detached
+ * line at the very bottom. Kept left-aligned and compact.
+ *
+ * For a TRUE inline "…see more" tail on the same line as the last word, the
+ * see-more <button> must render as a trailing inline child of the snippet <p>
+ * in `transcript.tsx` (see report); `.transcript-clamp .see-more-button` below
+ * styles that case too.
+ * ------------------------------------------------------------------------- */
+.history-row > div:first-child {
+  display: flex;
+  flex-direction: column;
+}
+
+.history-row .transcript-clamp {
+  order: 0;
+}
+
+.history-row .note-analysis {
+  order: 1;
+}
+
+/* Pull the see-more directly beneath the snippet (above the muted meta line)
+ * and keep it inline-sized so it never spans the full width as its own band. */
+.history-row .see-more-button {
+  order: 2;
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+.history-row .history-row-meta {
+  order: 3;
+}
+
+/* When the see-more is rendered INLINE inside the snippet paragraph (the
+ * recommended `transcript.tsx` tweak), present it as a "…see more" tail right
+ * after the text rather than a block on the next line. */
+.history-row .transcript-clamp .see-more-button,
+.history-row .transcript-full .see-more-button {
+  display: inline;
+  order: initial;
+  margin: 0 0 0 4px;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+ * #3 — Expanded items can get very tall: cap the height and scroll inside.
+ *
+ * The shared sheet already caps `.transcript-full`; we reinforce it here so the
+ * behavior is owned by this view and easy to tune, and so it still holds if the
+ * base rule changes. A slightly smaller cap keeps a long expanded note from
+ * dominating the list while the surrounding `.history-scroll` still scrolls.
+ * ------------------------------------------------------------------------- */
+.history-row p.transcript-full {
+  max-height: 220px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+ * #4 — Notes view: the "Dictate notes — hold ~ and tap Q" hint sits to the
+ * RIGHT of the "N of M local records" line, not as a standalone block.
+ *
+ * The records line is the right-hand `.muted` span in the Notes section
+ * heading; we wrap it plus the hint in `.notes-records` so they share the
+ * right side of the heading. The hint is a quiet, smaller pill-less caption.
+ * (Icon-left of the "Notes" title is handled by the existing
+ * `.section-heading.compact > h2` inline-flex rule once the icon is the first
+ * child of the <h2> — done in History.tsx.)
+ * ------------------------------------------------------------------------- */
+.notes-records {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px 10px;
+}
+
+.notes-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #67e8f9;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* At the app's narrow breakpoint (760px) the section heading stacks and the
+ * `.history-row` collapses to one column. Keep the 2-wide action grid (the
+ * buttons are tiny squares) but left-align it under the now full-width row, and
+ * let the records + hint group align to the start of the stacked heading. */
+@media (max-width: 760px) {
+  .notes-records {
+    justify-content: flex-start;
+  }
+
+  .history-row .row-actions {
+    justify-content: start;
+    margin-left: 0;
+  }
+}

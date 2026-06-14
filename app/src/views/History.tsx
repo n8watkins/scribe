@@ -3,6 +3,7 @@ import {
   Archive,
   Cloud,
   Layers,
+  NotebookPen,
   RefreshCw,
   Search,
   Settings as SettingsIcon,
@@ -28,6 +29,7 @@ import {
 import type { ViewActions } from "../types";
 import { EmptyState, InlineError } from "../components/feedback";
 import { TranscriptRow } from "../components/transcript";
+import "./history.css";
 
 /// Converts a `YYYY-MM-DD` date-input value into the UTC instant for LOCAL
 /// midnight `dayOffset` days later. The date picker reports a calendar day in
@@ -496,10 +498,27 @@ export function HistoryView({
 
       <article className="panel-card span-2">
         <div className="section-heading compact">
-          <h2>{notesOnly ? "Notes" : "Transcript archive"}</h2>
-          <Archive aria-hidden="true" size={16} />
-          <span className="muted">
-            {pageStart}-{pageEnd} of {total} local records
+          {notesOnly ? (
+            <h2>
+              <NotebookPen aria-hidden="true" size={16} />
+              Notes
+            </h2>
+          ) : (
+            <>
+              <h2>Transcript archive</h2>
+              <Archive aria-hidden="true" size={16} />
+            </>
+          )}
+          <span className="notes-records">
+            <span className="muted">
+              {pageStart}-{pageEnd} of {total} local records
+            </span>
+            {notesOnly ? (
+              <span className="notes-hint">
+                <NotebookPen aria-hidden="true" size={12} />
+                Dictate notes — hold ~ and tap Q
+              </span>
+            ) : null}
           </span>
         </div>
         {historyError ? (
