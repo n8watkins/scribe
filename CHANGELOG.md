@@ -4,6 +4,25 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.6 — 2026-06-14
+
+UI feedback wave (built by three parallel agents in isolated worktrees):
+
+- **Hotkeys** redesigned: click the bind itself to rebind (no more "Rebind"
+  button or "Registered" pill); status now shows *only* failures with the
+  reason; bigger, more readable bind + description text; Press/Release sits
+  beside the bind; de-duplicated heading; Reset/Refresh moved to a quiet toolbar.
+- **Visualizer** (Transcribe/Audio): wider, snappier (asymmetric attack/decay),
+  and a multi-color cyan→blue→purple gradient across the bars.
+- **History**: inline "…see more" at the end of the snippet, the whole collapsed
+  transcript is clickable to expand, and "See less" now scrolls back to the top
+  (bug fix); action buttons in two rows; a select-all / deselect-all control.
+- **About**: full-width detail rows (no more cramped two-column splits), the
+  real on-disk data path with an Open-folder button, a clearer privacy line, a
+  feature list, and a Setup checklist.
+- **Clear transcript history** now uses an on-brand confirmation dialog instead
+  of the native browser popup.
+
 ## 0.5.5 — 2026-06-14
 
 - **Audio:** the "Default input device" option (and the input label) now shows
