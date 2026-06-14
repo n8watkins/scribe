@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Cloud,
   CloudOff,
+  Download,
   FolderSync,
   HardDriveUpload,
   RefreshCw,
@@ -10,11 +11,14 @@ import {
   commandErrorMessage,
   driveOrganizeNow,
   driveSyncNow,
+  exportTranscripts,
   googleSignIn,
   googleSignOut,
   googleStatus,
   type AppSettings,
   type DriveSyncReport,
+  type ExportFormat,
+  type ExportScope,
   type GoogleStatus,
 } from "../backend";
 import type { ViewActions } from "../types";
@@ -41,6 +45,9 @@ export function SyncView({
   const [lastReport, setLastReport] = useState<DriveSyncReport | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("markdown");
+  const [exportScope, setExportScope] = useState<ExportScope>("all");
+  const [exporting, setExporting] = useState(false);
 
   const reloadStatus = useCallback(async () => {
     try {
@@ -131,6 +138,24 @@ export function SyncView({
       setBusy(false);
     }
   }, []);
+
+  const handleExport = useCallback(async () => {
+    setExporting(true);
+    setError(null);
+    setNotice(null);
+
+    try {
+      const path = await exportTranscripts(exportScope, exportFormat);
+      // A null path means the user cancelled the save dialog — stay quiet.
+      if (path) {
+        setNotice(`Exported to ${path}`);
+      }
+    } catch (cause) {
+      setError(commandErrorMessage(cause));
+    } finally {
+      setExporting(false);
+    }
+  }, [exportFormat, exportScope]);
 
   return (
     <section className="view-grid">
@@ -234,13 +259,13 @@ export function SyncView({
               />
             </SettingRow>
             <SettingRow
-              description="Coming soon: export every transcript (not just notes) to Drive for a full-history backup. Note sync is the only Drive backup wired up today."
-              label="Back up all transcripts (coming soon)"
+              description="Also back up every dictation transcript (not just notes) to a separate “Scribe Transcripts” folder in Drive, for a full-history backup."
+              label="Back up all transcripts"
             >
               <Toggle
                 checked={settings.driveSyncAllTranscripts}
-                disabled
-                label="Back up all transcripts (coming soon)"
+                disabled={actions.savingSettings || busy}
+                label="Back up all transcripts"
                 onChange={(driveSyncAllTranscripts) =>
                   actions.updateSettings({ driveSyncAllTranscripts })
                 }
@@ -329,6 +354,59 @@ export function SyncView({
           </SectionPanel>
         </>
       ) : null}
+
+      <SectionPanel
+        icon={<Download aria-hidden="true" size={16} />}
+        title="Export to a file"
+      >
+        <p className="muted vocab-hint">
+          Save your transcripts to a local file. No account needed — this writes
+          straight to a folder you pick.
+        </p>
+        <SettingRow
+          description="Markdown for reading, CSV for spreadsheets, JSON for the full raw data."
+          label="Format"
+        >
+          <select
+            disabled={exporting}
+            onChange={(event) =>
+              setExportFormat(event.currentTarget.value as ExportFormat)
+            }
+            value={exportFormat}
+          >
+            <option value="markdown">Markdown (.md)</option>
+            <option value="csv">CSV (.csv)</option>
+            <option value="json">JSON (.json)</option>
+          </select>
+        </SettingRow>
+        <SettingRow
+          description="Which transcripts to include in the export."
+          label="What to export"
+        >
+          <select
+            disabled={exporting}
+            onChange={(event) =>
+              setExportScope(event.currentTarget.value as ExportScope)
+            }
+            value={exportScope}
+          >
+            <option value="all">All transcripts</option>
+            <option value="notes">Notes only</option>
+            <option value="dictation">Dictation only</option>
+          </select>
+        </SettingRow>
+        <div className="setting-control">
+          <button
+            className="secondary-button"
+            disabled={exporting}
+            onClick={() => void handleExport()}
+            type="button"
+          >
+            <Download aria-hidden="true" size={15} />
+            {exporting ? "Exporting…" : "Export…"}
+          </button>
+        </div>
+      </SectionPanel>
 
       {notice ? <p className="muted vocab-hint sync-status-line">{notice}</p> : null}
       {!notice && lastReport ? (

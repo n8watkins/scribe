@@ -23,6 +23,9 @@ use crate::transcript::Transcript;
 const API_BASE: &str = "https://www.googleapis.com/drive/v3";
 const UPLOAD_BASE: &str = "https://www.googleapis.com/upload/drive/v3";
 const ROOT_FOLDER_NAME: &str = "Scribe Voice Notes";
+/// Distinct root for the full-history transcript backup, kept separate from the
+/// notes folder so the curated notes log and the raw transcript dump never mix.
+const TRANSCRIPTS_ROOT_FOLDER_NAME: &str = "Scribe Transcripts";
 const FOLDER_MIME: &str = "application/vnd.google-apps.folder";
 const TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -84,6 +87,44 @@ impl Drive {
 
             files_written += 1;
             synced_notes += day_notes.len() as u32;
+        }
+
+        Ok(SyncReport { synced_notes, files_written })
+    }
+
+    /// Backs up *every* supplied transcript into a DISTINCT root folder
+    /// ("Scribe Transcripts"), grouped by `YYYY-MM` month folders with one
+    /// daily Markdown file per local calendar day — mirroring `sync_notes` but
+    /// for the full-history dump rather than the curated notes log. The daily
+    /// file is rebuilt from the supplied transcripts each run, so it is
+    /// idempotent: syncing twice yields one file per day, not duplicates.
+    pub fn sync_all_transcripts(
+        &self,
+        transcripts: &[Transcript],
+    ) -> Result<SyncReport, CommandError> {
+        let root = self.ensure_folder(None, TRANSCRIPTS_ROOT_FOLDER_NAME)?;
+
+        // Group by the transcript's *local* calendar day so file names match
+        // the owner's clock, not UTC — same convention as the notes sync.
+        let mut by_day: BTreeMap<String, Vec<&Transcript>> = BTreeMap::new();
+        for transcript in transcripts {
+            let day = transcript
+                .created_at
+                .with_timezone(&Local)
+                .format("%Y-%m-%d")
+                .to_string();
+            by_day.entry(day).or_default().push(transcript);
+        }
+
+        let mut files_written = 0_u32;
+        let mut synced_notes = 0_u32;
+        for (day, mut day_items) in by_day {
+            day_items.sort_by_key(|item| item.created_at);
+            let content = render_transcripts_daily(&day, &day_items);
+            self.write_into_month(&root, &day, &format!("{day}.md"), &content)?;
+
+            files_written += 1;
+            synced_notes += day_items.len() as u32;
         }
 
         Ok(SyncReport { synced_notes, files_written })
@@ -288,6 +329,24 @@ fn render_daily(day: &str, notes: &[&Transcript]) -> String {
     out
 }
 
+/// Renders one day's transcripts into the daily Markdown file for the
+/// full-history backup. Like `render_daily` but plainer: a timestamped entry
+/// per transcript with its text (no analysis blockquote — the transcript dump
+/// is the raw record, the notes log carries the summaries).
+fn render_transcripts_daily(day: &str, transcripts: &[&Transcript]) -> String {
+    let heading = chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
+        .map(|date| format!("{} {}, {}", date.format("%B"), date.day(), date.year()))
+        .unwrap_or_else(|_| day.to_string());
+    let mut out = format!("# {heading}\n\n");
+    for transcript in transcripts {
+        out.push_str(&format!("**{}**\n\n", format_time(transcript.created_at)));
+        out.push_str(transcript.text.trim());
+        out.push('\n');
+        out.push('\n');
+    }
+    out
+}
+
 /// 12-hour local time like "3:51 PM" (no leading zero on the hour).
 fn format_time(at: chrono::DateTime<chrono::Utc>) -> String {
     let local = at.with_timezone(&Local);
@@ -451,6 +510,47 @@ mod tests {
         // An un-analyzed note has no summary blockquote at all (no clutter).
         assert!(requests[3].contains("no summary here"));
         assert!(!requests[3].contains("> "));
+    }
+
+    #[test]
+    fn sync_all_transcripts_creates_distinct_root_then_writes_daily_file() {
+        // Same shape as the notes test, but into the "Scribe Transcripts" root:
+        // find+create root, find+create month, find(empty)+create daily, upload.
+        let (base, handle) = mock_server(vec![
+            json!({ "files": [] }).to_string(),    // find root
+            json!({ "id": "root1" }).to_string(),  // create root
+            json!({ "files": [] }).to_string(),    // find month
+            json!({ "id": "month1" }).to_string(), // create month
+            json!({ "files": [] }).to_string(),    // find daily
+            json!({ "id": "daily1" }).to_string(), // create daily
+            json!({ "id": "daily1" }).to_string(), // upload content
+        ]);
+
+        let at = Utc.with_ymd_and_hms(2026, 6, 12, 18, 30, 0).unwrap();
+        // A dictation transcript (not a note); its analysis must NOT be rendered.
+        let mut tx = note("tx_1", "draft the quarterly update", Some("Summary: ignore me"), at);
+        tx.is_note = false;
+        let transcripts = vec![tx];
+
+        let drive = Drive::with_base("tok", &base);
+        let report = drive.sync_all_transcripts(&transcripts).unwrap();
+
+        assert_eq!(report.files_written, 1);
+        assert_eq!(report.synced_notes, 1);
+
+        let requests = handle.join().unwrap();
+        assert_eq!(requests.len(), 7);
+        assert!(requests.iter().all(|r| r.contains("Bearer tok")));
+        // The first call queries for the DISTINCT transcripts root folder, not
+        // the notes folder.
+        assert!(requests[0].starts_with("GET /files?q="));
+        assert!(requests[0].contains(encode("Scribe Transcripts").as_str()));
+        assert!(!requests[0].contains(encode("Scribe Voice Notes").as_str()));
+        // The upload PATCH carried the transcript text but not the analysis
+        // (the raw dump has no summary blockquote).
+        assert!(requests[6].starts_with("PATCH /files/daily1?uploadType=media"));
+        assert!(requests[6].contains("draft the quarterly update"));
+        assert!(!requests[6].contains("Summary: ignore me"));
     }
 
     #[test]

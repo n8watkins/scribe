@@ -62,6 +62,51 @@ pub fn collect_and_sync(app: &AppHandle, service: &str) -> Result<SyncReport, Co
     Drive::new(token)?.sync_notes(&notes)
 }
 
+/// Backs up every DICTATION transcript to Google Drive's distinct "Scribe
+/// Transcripts" folder when `drive_sync_all_transcripts` is on. Notes are
+/// deliberately excluded here: they already sync as the curated daily log via
+/// `collect_and_sync`/`sync_notes`, so this covers only the ordinary dictation
+/// transcripts that the notes path skips — together the two give a full backup
+/// without writing any transcript into both folders. Blocking (DB + network),
+/// so callers run it off the main thread; the DB lock is dropped before the
+/// network call. A no-op (empty report) when the setting is off or there are no
+/// dictation transcripts.
+pub fn collect_and_sync_all_transcripts(
+    app: &AppHandle,
+    service: &str,
+) -> Result<SyncReport, CommandError> {
+    let dictations = {
+        let state = app.state::<BackendState>();
+        let db = state.db()?;
+        let settings = db.get_settings()?;
+        if !settings.drive_sync_all_transcripts {
+            return Ok(SyncReport {
+                synced_notes: 0,
+                files_written: 0,
+            });
+        }
+        if settings.drive_account_email.is_empty()
+            && !crate::google_oauth::has_stored_token(service)
+        {
+            return Err(CommandError::new(
+                "google_not_signed_in",
+                "Sign in to Google in Settings → Integrations first.",
+            ));
+        }
+        db.search_dictation_transcripts(100_000, 0)?.transcripts
+    };
+
+    if dictations.is_empty() {
+        return Ok(SyncReport {
+            synced_notes: 0,
+            files_written: 0,
+        });
+    }
+
+    let token = crate::google_oauth::access_token(service)?;
+    Drive::new(token)?.sync_all_transcripts(&dictations)
+}
+
 /// Owns the channel that note-save events are pushed onto. Held in Tauri's
 /// managed state; dropping it (on app exit) ends the worker thread.
 pub struct DriveSyncWorker {
@@ -109,6 +154,24 @@ fn worker_loop(app: AppHandle, service: String, rx: Receiver<()>) {
             Err(error) => {
                 log::warn!("Auto-sync to Google Drive failed: {}", error.message)
             }
+        }
+
+        // When "back up all transcripts" is on, also push the dictation
+        // transcripts to their own Drive folder. Gated inside
+        // collect_and_sync_all_transcripts on the setting, and kept resilient:
+        // a Drive error here is logged, never propagated, so it can't take the
+        // worker thread down (the note sync above already succeeded).
+        match collect_and_sync_all_transcripts(&app, &service) {
+            Ok(report) if report.files_written > 0 => log::info!(
+                "Auto-backed-up {} transcript(s) into {} Drive file(s)",
+                report.synced_notes,
+                report.files_written
+            ),
+            Ok(_) => {}
+            Err(error) => log::warn!(
+                "Auto-backup of all transcripts to Google Drive failed: {}",
+                error.message
+            ),
         }
     }
 }

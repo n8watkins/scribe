@@ -187,6 +187,51 @@ impl Database {
         })
     }
 
+    /// Fetches DICTATION transcripts only (`is_note = 0`), newest-first,
+    /// paginated by `limit`/`offset`. The mirror of the `notes_only` path on
+    /// `search_transcripts`, used by the all-transcripts Drive backup (notes
+    /// sync via the separate notes log, so they are excluded here).
+    pub fn search_dictation_transcripts(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<TranscriptSearchResult, CommandError> {
+        let total: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM transcripts WHERE COALESCE(is_note, 0) = 0",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(CommandError::database)?;
+
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, text, created_at, duration_ms, word_count, character_count,
+                        model_id, language, output_mode, paste_method, transcription_latency_ms,
+                        audio_path, is_note, analysis, analysis_model, analysis_created_at
+                 FROM transcripts
+                 WHERE COALESCE(is_note, 0) = 0
+                 ORDER BY created_at DESC
+                 LIMIT ?1 OFFSET ?2",
+            )
+            .map_err(CommandError::database)?;
+        let rows = stmt
+            .query_map([limit, offset], transcript_from_row)
+            .map_err(CommandError::database)?;
+        let transcripts = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(CommandError::database)?;
+
+        Ok(TranscriptSearchResult {
+            transcripts,
+            total: total.max(0) as u32,
+            limit,
+            offset,
+        })
+    }
+
     /// Loads the given transcripts, orders them oldest-first by `created_at`,
     /// and joins their text with `separator`. Ids that don't resolve are
     /// skipped; an empty result (no id resolved) is an error.
@@ -863,6 +908,21 @@ mod tests {
             )
             .unwrap();
         assert_eq!(queried.total, 1);
+    }
+
+    #[test]
+    fn dictation_only_search_excludes_notes() {
+        let db = Database::in_memory().unwrap();
+        db.save_last_transcript(&transcript_with_text("regular dictation"))
+            .unwrap();
+        let mut note = transcript_with_text("note to self");
+        note.is_note = true;
+        db.save_last_transcript(&note).unwrap();
+
+        let dictations = db.search_dictation_transcripts(10, 0).unwrap();
+        assert_eq!(dictations.total, 1);
+        assert_eq!(dictations.transcripts[0].text, "regular dictation");
+        assert!(!dictations.transcripts[0].is_note);
     }
 
     #[test]

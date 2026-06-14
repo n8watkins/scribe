@@ -816,11 +816,11 @@ pub async fn google_sign_out(app: tauri::AppHandle) -> Result<AppSettings, Comma
     Ok(settings)
 }
 
-/// Pushes the current notes (is_note=1 only, in Phase 1) to Google Drive as
-/// dated Markdown, creating the folder structure as needed. The daily files are
-/// regenerated from the DB, so this is safe to run repeatedly. The
-/// `drive_sync_all_transcripts` setting is a reserved stub for a future
-/// separate transcript backup and is intentionally not consulted here yet.
+/// Pushes the current notes (is_note=1 only) to Google Drive as dated Markdown,
+/// creating the folder structure as needed. The daily files are regenerated
+/// from the DB, so this is safe to run repeatedly. This is the notes log only;
+/// the separate full-history transcript backup (`drive_sync_all_transcripts`)
+/// runs from the auto-sync worker on its own trigger, not from this command.
 #[tauri::command]
 pub async fn drive_sync_now(
     app: tauri::AppHandle,
@@ -848,6 +848,105 @@ pub async fn drive_organize_now(
     })
     .await
     .map_err(|error| CommandError::new("drive_organize_failed", error.to_string()))?
+}
+
+/// Exports transcripts to a local file the user picks via a native save dialog.
+/// `scope` selects which rows ("all" | "notes" | "dictation"); `format` selects
+/// the renderer ("markdown" | "csv" | "json"). Returns the saved absolute path,
+/// or None when the user cancels the dialog. Unlike the Drive backup this needs
+/// no Google account — it is a purely local save.
+#[tauri::command]
+pub fn export_transcripts(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, BackendState>,
+    scope: String,
+    format: String,
+) -> Result<Option<String>, CommandError> {
+    // Fetch the rows for the scope. A large cap so a normal history exports in
+    // one pass; notes/dictation reuse the same filtered queries the rest of the
+    // app uses.
+    let db = state.db()?;
+    let transcripts = match scope.as_str() {
+        "all" => {
+            db.search_transcripts(
+                None,
+                false,
+                None,
+                None,
+                TranscriptSort::OldestFirst,
+                1_000_000,
+                0,
+            )?
+            .transcripts
+        }
+        "notes" => {
+            db.search_transcripts(
+                None,
+                true,
+                None,
+                None,
+                TranscriptSort::OldestFirst,
+                1_000_000,
+                0,
+            )?
+            .transcripts
+        }
+        "dictation" => db.search_dictation_transcripts(1_000_000, 0)?.transcripts,
+        other => {
+            return Err(CommandError::new(
+                "invalid_export_scope",
+                format!("Unknown export scope \"{}\". Expected all, notes, or dictation.", other),
+            ));
+        }
+    };
+    drop(db);
+
+    let (contents, extension) = match format.as_str() {
+        "markdown" => (crate::export::to_markdown(&transcripts), "md"),
+        "csv" => (crate::export::to_csv(&transcripts), "csv"),
+        "json" => (crate::export::to_json(&transcripts), "json"),
+        other => {
+            return Err(CommandError::new(
+                "invalid_export_format",
+                format!("Unknown export format \"{}\". Expected markdown, csv, or json.", other),
+            ));
+        }
+    };
+
+    let default_name = format!(
+        "scribe-export-{}.{}",
+        chrono::Local::now().format("%Y-%m-%d"),
+        extension
+    );
+
+    #[cfg(windows)]
+    {
+        let start = effective_data_dir(&app).unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let picked = rfd::FileDialog::new()
+            .set_title("Export transcripts")
+            .set_directory(&start)
+            .set_file_name(&default_name)
+            .save_file();
+        let Some(path) = picked else {
+            return Ok(None);
+        };
+        std::fs::write(&path, contents.as_bytes()).map_err(|error| {
+            CommandError::new(
+                "export_failed",
+                format!("Could not write {}. {}", path.display(), error),
+            )
+        })?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (app, contents, default_name);
+        Err(CommandError::new(
+            "save_dialog_unsupported",
+            "The export save dialog is only available in the Windows build.",
+        ))
+    }
 }
 
 fn open_folder(app: &tauri::AppHandle, dir: std::path::PathBuf) -> Result<(), CommandError> {
