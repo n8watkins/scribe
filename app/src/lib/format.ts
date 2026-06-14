@@ -243,6 +243,14 @@ export function selectedMicrophoneLabel(
   );
 }
 
+/** Windows wraps capture devices as "Microphone (Realtek(R) Audio)"; show the
+ * inner device name so tiles read "Realtek(R) Audio", not the boilerplate. */
+export function cleanMicName(name: string): string {
+  const trimmed = name.trim();
+  const wrapped = /^microphone\s*\((.+)\)\s*$/i.exec(trimmed);
+  return wrapped ? wrapped[1].trim() : trimmed;
+}
+
 export function microphoneDisplayName(
   microphones: MicrophoneInfo[] | null,
   selectedMicId: string | null,
@@ -256,13 +264,13 @@ export function microphoneDisplayName(
   // No explicit selection: resolve the actual default device's real name so
   // the tile shows the device the user will record with, not a generic label.
   if (!selectedMicId) {
-    return (
+    return cleanMicName(
       microphones.find((microphone) => microphone.isDefault)?.name ??
-      "Default input device"
+        "Default input device",
     );
   }
 
-  return selectedMicrophoneLabel(microphones, selectedMicId);
+  return cleanMicName(selectedMicrophoneLabel(microphones, selectedMicId));
 }
 
 // Dashboard "Current status" tile value. The StatePill badge already shows the

@@ -15,7 +15,6 @@ import {
   statusCardValue,
 } from "../lib/format";
 import { HotkeyList, StatusCard } from "../components/layout";
-import { StatePill } from "../components/primitives";
 import { LastTranscriptCard } from "../components/transcript";
 
 export function DashboardView({
@@ -57,30 +56,29 @@ export function DashboardView({
 
       <section className="status-grid" aria-label="Current setup">
         <StatusCard
-          action="Record"
+          action="Open Transcribe"
           Icon={Gauge}
-          label="Current status"
+          label="Status"
           onAction={() => setActiveView("Transcribe")}
-          status={<StatePill appState={appState} />}
           value={statusCardValue(appState.status)}
         />
         <StatusCard
-          action="Choose"
+          action="Open Audio"
           Icon={Mic}
-          label="Active microphone"
+          label="Active mic"
           onAction={() => setActiveView("Audio")}
           status={<span className="status-dot success" />}
           value={microphoneDisplayName(microphones, settings.selectedMicId)}
         />
         <StatusCard
-          action="Manage"
+          action="Open Models"
           Icon={Database}
           label="Active model"
           onAction={() => setActiveView("Models")}
           value={settings.selectedModelId ?? "Choose a model"}
         />
         <StatusCard
-          action="Change"
+          action="Open Settings"
           Icon={Clipboard}
           label="Auto-insert"
           onAction={() => setActiveView("Settings")}

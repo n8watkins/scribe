@@ -1,5 +1,5 @@
 import { type ReactNode } from "react";
-import { type LucideIcon } from "lucide-react";
+import { ArrowUpRight, type LucideIcon } from "lucide-react";
 import type { AppSettings, BasicStats } from "../backend";
 import {
   formatHotkey,
@@ -83,19 +83,23 @@ export function StatusCard({
 }) {
   return (
     <article className="metric-card status-card">
-      <div className="card-header">
-        <span>
-          <Icon aria-hidden="true" size={13} />
-          {label}
-        </span>
-        {status ?? null}
-      </div>
-      <div className="status-card-body">
+      <span className="status-card-icon" aria-hidden="true">
+        <Icon size={17} />
+      </span>
+      <span className="status-card-main">
+        <span className="status-card-label">{label}</span>
         <strong title={value}>{value}</strong>
-        <button className="ghost-button" onClick={onAction} type="button">
-          {action}
-        </button>
-      </div>
+      </span>
+      {status ?? null}
+      <button
+        aria-label={action}
+        className="status-card-go"
+        onClick={onAction}
+        title={action}
+        type="button"
+      >
+        <ArrowUpRight aria-hidden="true" size={15} />
+      </button>
     </article>
   );
 }
