@@ -650,6 +650,7 @@ function App() {
               models,
               liveTranscript,
               settingsTabId,
+              showNotice,
             )
           : null}
         {toast ? <Toast notice={toast} /> : null}
@@ -667,6 +668,7 @@ function renderView(
   models: ModelInfo[] | null,
   liveTranscript: PartialTranscriptEvent | null,
   settingsTabId: string | null,
+  showNotice: (message: string, tone?: ToastNotice["tone"]) => void,
 ) {
   switch (activeView) {
     case "Transcribe":
@@ -720,6 +722,7 @@ function renderView(
           microphones={microphones}
           models={models}
           setActiveView={setActiveView}
+          showNotice={showNotice}
         />
       );
   }

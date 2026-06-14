@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Clipboard,
   Database,
@@ -5,10 +6,18 @@ import {
   Gauge,
   Keyboard,
   Mic,
+  Wand2,
 } from "lucide-react";
-import type { DashboardData, MicrophoneInfo, ModelInfo } from "../backend";
-import type { ViewActions, ViewName } from "../types";
 import {
+  commandErrorMessage,
+  transformSelection,
+  type DashboardData,
+  type MicrophoneInfo,
+  type ModelInfo,
+} from "../backend";
+import type { ToastNotice, ViewActions, ViewName } from "../types";
+import {
+  formatHotkey,
   isAutoInsert,
   isSelectedModelReady,
   microphoneDisplayName,
@@ -23,12 +32,14 @@ export function DashboardView({
   microphones,
   models,
   setActiveView,
+  showNotice,
 }: {
   actions: ViewActions;
   data: DashboardData;
   microphones: MicrophoneInfo[] | null;
   models: ModelInfo[] | null;
   setActiveView: (view: ViewName) => void;
+  showNotice?: (message: string, tone?: ToastNotice["tone"]) => void;
 }) {
   const { appState, lastTranscript, settings } = data;
   const modelReady = isSelectedModelReady(models, settings.selectedModelId);
@@ -112,7 +123,93 @@ export function DashboardView({
           </div>
           <HotkeyList compact settings={settings} />
         </article>
+
+        <TransformSelectionPanel
+          shortcut={settings.hotkeys.transformSelection}
+          showNotice={showNotice}
+        />
       </section>
     </>
+  );
+}
+
+/** Inline AI editor: the user highlights text in any app, types an instruction
+ * here, and Scribe copies the selection, rewrites it with the local LLM, and
+ * pastes the result back over the selection. This is the typed-instruction v1
+ * of the selected-text transform; the matching hotkey opens this panel. */
+function TransformSelectionPanel({
+  shortcut,
+  showNotice,
+}: {
+  shortcut: string;
+  showNotice?: (message: string, tone?: ToastNotice["tone"]) => void;
+}) {
+  const [instruction, setInstruction] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async () => {
+    const trimmed = instruction.trim();
+    if (!trimmed || busy) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      // The focused app keeps the highlighted selection; the backend sends
+      // Ctrl+C to grab it, transforms it, and pastes the result back.
+      const result = await transformSelection(trimmed);
+      showNotice?.(result.message ?? "Selection transformed.", "success");
+    } catch (caught) {
+      const message = commandErrorMessage(caught);
+      setError(message);
+      showNotice?.(message, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <article className="panel-card">
+      <div className="section-heading compact">
+        <h2>Transform selection</h2>
+        <span className="muted">{formatHotkey(shortcut)}</span>
+      </div>
+      <p className="muted">
+        Highlight text in any app, describe the change, and Scribe rewrites it in
+        place with your local LLM.
+      </p>
+      <textarea
+        className="transform-instruction"
+        aria-label="Transform instruction"
+        placeholder="e.g. make this concise, translate to Spanish, fix grammar"
+        rows={2}
+        value={instruction}
+        onChange={(event) => setInstruction(event.target.value)}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+            event.preventDefault();
+            void run();
+          }
+        }}
+        disabled={busy}
+      />
+      <div className="section-heading compact">
+        <button
+          className="primary-button"
+          onClick={() => void run()}
+          type="button"
+          disabled={busy || instruction.trim().length === 0}
+        >
+          <Wand2 aria-hidden="true" size={15} />
+          {busy ? "Transforming..." : "Transform selection"}
+        </button>
+      </div>
+      {error ? (
+        <p className="muted" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </article>
   );
 }

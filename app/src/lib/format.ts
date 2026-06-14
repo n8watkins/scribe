@@ -347,6 +347,11 @@ export function hotkeyRows(settings: AppSettings) {
       label: "Discard / Cancel",
       value: settings.hotkeys.discardDictation,
     },
+    {
+      action: "transformSelection",
+      label: "Transform Selection",
+      value: settings.hotkeys.transformSelection,
+    },
   ];
 }
 

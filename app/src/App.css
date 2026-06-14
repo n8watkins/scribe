@@ -507,6 +507,12 @@ button:disabled {
   font-size: 13px;
 }
 
+/* Selected-text transform instruction box on the Dashboard. */
+.transform-instruction {
+  min-height: 52px;
+  margin: 6px 0 10px;
+}
+
 .transcript-text {
   min-height: 84px;
   margin: 0;

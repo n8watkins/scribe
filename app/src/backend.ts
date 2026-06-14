@@ -57,10 +57,14 @@ export type HotkeySettings = {
   pasteLastTranscript: string;
   openDashboard: string;
   discardDictation: string;
+  /** Selected-text transform: rewrite the highlighted text with the local LLM
+   * per a typed/spoken instruction, replacing it in place. */
+  transformSelection: string;
   toggleDictationTrigger: TriggerEdge;
   pasteLastTranscriptTrigger: TriggerEdge;
   openDashboardTrigger: TriggerEdge;
   discardDictationTrigger: TriggerEdge;
+  transformSelectionTrigger: TriggerEdge;
 };
 
 /** Deterministic post-transcription replacement: whenever `from` is spoken,
@@ -327,7 +331,8 @@ export type HotkeyAction =
   | "toggleDictation"
   | "pasteLastTranscript"
   | "openDashboard"
-  | "discardDictation";
+  | "discardDictation"
+  | "transformSelection";
 
 export type HotkeyBinding = {
   action: string;
@@ -412,6 +417,15 @@ export function pasteTranscript(id: string): Promise<OutputResult> {
 
 export function copyTranscript(id: string): Promise<OutputResult> {
   return invoke("copy_transcript", { id });
+}
+
+/** Selected-text transform: copies whatever text is highlighted in the focused
+ * app, rewrites it with the local LLM per `instruction`, and pastes the result
+ * back over the selection. Windows-only (errors elsewhere). */
+export function transformSelection(
+  instruction: string,
+): Promise<OutputResult> {
+  return invoke("transform_selection", { instruction });
 }
 
 export function listRecentTranscripts({
