@@ -13,10 +13,10 @@ import {
   type RecordingErrorEvent,
 } from "../backend";
 import type { ViewActions } from "../types";
-import { formatMsReadable, selectedMicrophoneLabel } from "../lib/format";
+import { selectedMicrophoneLabel } from "../lib/format";
 import { EmptyState, InlineError } from "../components/feedback";
 import { SectionPanel, SettingRow } from "../components/layout";
-import { Toggle } from "../components/primitives";
+import { MsInput, Toggle } from "../components/primitives";
 import { Waveform } from "../components/transcript";
 
 export function AudioView({
@@ -263,31 +263,20 @@ export function AudioView({
             />
           </SettingRow>
           <SettingRow
-            description="Pause length that ends the recording."
-            label="Auto-stop pause"
+            description="Pause length that ends the recording, in milliseconds."
+            label="Auto-stop pause (ms)"
           >
-            <select
-              aria-label="Auto-stop pause length"
+            <MsInput
+              ariaLabel="Auto-stop pause length in milliseconds"
               disabled={
                 actions.savingSettings || !settings.silenceAutoStopEnabled
               }
-              onChange={(event) =>
-                actions.updateSettings({
-                  silenceAutoStopMs: Number(event.currentTarget.value),
-                })
+              min={1000}
+              onCommit={(silenceAutoStopMs) =>
+                actions.updateSettings({ silenceAutoStopMs })
               }
-              value={String(settings.silenceAutoStopMs)}
-            >
-              <option value="2000">2s</option>
-              <option value="3000">3s</option>
-              <option value="5000">5s</option>
-              <option value="10000">10s</option>
-              <option value="15000">15s</option>
-              <option value="30000">30s</option>
-              <option value="60000">60s</option>
-              <option value="120000">2min</option>
-              <option value="300000">5min</option>
-            </select>
+              value={settings.silenceAutoStopMs}
+            />
           </SettingRow>
           <SettingRow
             description="Transcribe phrases in the background while you talk so text is ready the moment you stop."
@@ -306,39 +295,29 @@ export function AudioView({
             description="Ignore captures below this length, in milliseconds."
             label="Minimum duration (ms)"
           >
-            <div className="duration-field">
-              <input
-                disabled={actions.savingSettings}
-                min={1}
-                onChange={(event) =>
-                  actions.updateSettings({
-                    minRecordingMs: Number(event.currentTarget.value),
-                  })
-                }
-                type="number"
-                value={settings.minRecordingMs}
-              />
-              <small className="muted">= {formatMsReadable(settings.minRecordingMs)}</small>
-            </div>
+            <MsInput
+              ariaLabel="Minimum duration in milliseconds"
+              disabled={actions.savingSettings}
+              min={1}
+              onCommit={(minRecordingMs) =>
+                actions.updateSettings({ minRecordingMs })
+              }
+              value={settings.minRecordingMs}
+            />
           </SettingRow>
           <SettingRow
             description="Cap single dictation sessions, in milliseconds (600000 = 10 minutes)."
             label="Maximum duration (ms)"
           >
-            <div className="duration-field">
-              <input
-                disabled={actions.savingSettings}
-                min={settings.minRecordingMs}
-                onChange={(event) =>
-                  actions.updateSettings({
-                    maxRecordingMs: Number(event.currentTarget.value),
-                  })
-                }
-                type="number"
-                value={settings.maxRecordingMs}
-              />
-              <small className="muted">= {formatMsReadable(settings.maxRecordingMs)}</small>
-            </div>
+            <MsInput
+              ariaLabel="Maximum duration in milliseconds"
+              disabled={actions.savingSettings}
+              min={settings.minRecordingMs}
+              onCommit={(maxRecordingMs) =>
+                actions.updateSettings({ maxRecordingMs })
+              }
+              value={settings.maxRecordingMs}
+            />
           </SettingRow>
           <SettingRow description="Keep original clips for review." label="Save raw audio">
             <Toggle

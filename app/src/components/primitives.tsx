@@ -1,6 +1,6 @@
-import { type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { AppStateSnapshot } from "../backend";
-import { stateTone } from "../lib/format";
+import { formatMsReadable, stateTone } from "../lib/format";
 
 export function Toggle({
   checked,
@@ -50,6 +50,67 @@ export function IconButton({
     >
       {children}
     </button>
+  );
+}
+
+/** A digit-only millisecond field (no spinner) that shows a live "≈ Ns"
+ * read-out. It keeps the keystrokes in local state and only commits on blur or
+ * Enter, so typing never re-renders the rest of the settings column. */
+export function MsInput({
+  ariaLabel,
+  disabled = false,
+  min = 1,
+  onCommit,
+  value,
+}: {
+  ariaLabel: string;
+  disabled?: boolean;
+  min?: number;
+  onCommit: (ms: number) => void;
+  value: number;
+}) {
+  const [text, setText] = useState(String(value));
+
+  // Re-sync from props when the committed value changes elsewhere (reset to
+  // defaults, a backend clamp). Safe mid-edit: we only commit on blur, so the
+  // prop doesn't change while typing.
+  useEffect(() => {
+    setText(String(value));
+  }, [value]);
+
+  const commit = () => {
+    const parsed = Number(text);
+    if (text.trim() === "" || !Number.isFinite(parsed)) {
+      setText(String(value));
+      return;
+    }
+    const next = Math.max(min, Math.round(parsed));
+    setText(String(next));
+    if (next !== value) {
+      onCommit(next);
+    }
+  };
+
+  return (
+    <div className="duration-field">
+      <input
+        aria-label={ariaLabel}
+        disabled={disabled}
+        inputMode="numeric"
+        onBlur={commit}
+        onChange={(event) =>
+          setText(event.currentTarget.value.replace(/[^0-9]/g, ""))
+        }
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.currentTarget.blur();
+          }
+        }}
+        type="text"
+        value={text}
+      />
+      <small className="muted">≈ {formatMsReadable(Number(text) || 0)}</small>
+    </div>
   );
 }
 

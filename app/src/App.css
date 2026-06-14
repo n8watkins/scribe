@@ -35,6 +35,18 @@ textarea {
   font: inherit;
 }
 
+/* No number spinners anywhere — fields are typed, not nudged. */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
 button {
   cursor: pointer;
 }
@@ -1111,7 +1123,7 @@ textarea {
 }
 
 .setting-control {
-  min-width: 150px;
+  min-width: 96px;
   display: flex;
   justify-content: flex-end;
 }
@@ -1129,12 +1141,12 @@ textarea {
 }
 
 .setting-control .segmented-control {
-  width: min(240px, 100%);
+  width: min(184px, 100%);
 }
 
 .setting-control select,
 .setting-control input {
-  max-width: 190px;
+  max-width: 132px;
 }
 
 .control-grid {
