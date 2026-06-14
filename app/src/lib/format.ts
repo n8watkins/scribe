@@ -134,20 +134,31 @@ export function isSelectedModelReady(
     return false;
   }
 
+  return isModelDownloaded(selected.status);
+}
+
+// A model is considered downloaded (present on disk and usable) for these
+// download-states. `selected`/`loaded` are runtime overlays the backend may
+// report on top of a downloaded file. Selection itself is the `model.selected`
+// boolean — kept separate from this download-state check on purpose.
+export function isModelDownloaded(status: ModelInfo["status"]) {
   return (
-    selected.status === "downloaded" ||
-    selected.status === "selected" ||
-    selected.status === "loaded" ||
-    selected.status === "update_available"
+    status === "downloaded" ||
+    status === "selected" ||
+    status === "loaded" ||
+    status === "update_available"
   );
 }
 
+// Label for the *download state* only (never "Selected"; selection is shown by
+// its own control). "not_downloaded" returns "" so the resting state of most
+// models stays quiet rather than rendering a loud badge.
 export function modelStatusLabel(status: ModelInfo["status"]) {
   const labels: Record<ModelInfo["status"], string> = {
-    not_downloaded: "Not downloaded",
+    not_downloaded: "",
     downloading: "Downloading",
     downloaded: "Downloaded",
-    selected: "Selected",
+    selected: "Downloaded",
     loaded: "Loaded",
     failed: "Failed",
     update_available: "Update available",
@@ -156,24 +167,46 @@ export function modelStatusLabel(status: ModelInfo["status"]) {
   return labels[status];
 }
 
-export function modelStatusClass(status: ModelInfo["status"], selected: boolean) {
-  if (selected || status === "selected" || status === "loaded") {
-    return "pill selected";
-  }
-
+// Pill class for the *download state* only. "not_downloaded" gets no pill
+// (returns ""); callers render it as plain muted text instead of a badge.
+export function modelStatusClass(status: ModelInfo["status"]) {
   if (status === "failed") {
     return "pill error";
   }
 
-  if (status === "downloading" || status === "update_available") {
+  if (status === "downloading") {
     return "pill pending";
   }
 
-  if (status === "downloaded") {
+  if (status === "update_available") {
+    return "pill pending";
+  }
+
+  if (status === "loaded") {
+    return "pill selected";
+  }
+
+  if (status === "downloaded" || status === "selected") {
     return "pill ready";
   }
 
-  return "pill preserve";
+  return "";
+}
+
+// Human-readable total of a byte count, mirroring the backend's MiB/GiB
+// (base-1024) catalog labels so the summary header matches per-model sizes.
+export function diskUsedLabel(totalBytes: number) {
+  if (!Number.isFinite(totalBytes) || totalBytes <= 0) {
+    return "0 MiB";
+  }
+
+  const gib = totalBytes / 1024 ** 3;
+  if (gib >= 1) {
+    return `${Number(gib.toFixed(1))} GiB`;
+  }
+
+  const mib = totalBytes / 1024 ** 2;
+  return `${Math.max(1, Math.round(mib))} MiB`;
 }
 
 export function progressPercent(
@@ -184,11 +217,7 @@ export function progressPercent(
     return Math.max(0, Math.min(100, progress.percent));
   }
 
-  if (
-    model.status === "downloaded" ||
-    model.status === "selected" ||
-    model.status === "loaded"
-  ) {
+  if (isModelDownloaded(model.status)) {
     return 100;
   }
 

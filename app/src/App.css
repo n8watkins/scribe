@@ -1272,6 +1272,107 @@ textarea {
   font-size: 11px;
 }
 
+/* Models view: at-a-glance summary header (active model + storage + open
+   folder). Two info tiles flex, the action sits at the end and never shrinks. */
+.models-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.models-summary-item {
+  display: grid;
+  gap: 2px;
+  flex: 1 1 200px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 6px;
+  background: rgba(7, 11, 20, 0.36);
+}
+
+.models-summary-label {
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.models-summary-value {
+  display: block;
+  overflow: hidden;
+  min-width: 0;
+  color: #f8fafc;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.models-summary-action {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.models-summary-note {
+  margin: 8px 0 0;
+}
+
+/* Accordion header for the collapsible "Browse models" catalog. */
+.accordion-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 2px 0;
+  color: #f8fafc;
+  background: transparent;
+  border: 0;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.accordion-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.accordion-toggle-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.accordion-chevron {
+  color: #94a3b8;
+  transition: transform 160ms ease;
+}
+
+.accordion-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+/* The catalog scrolls internally so the page stays a fixed height at the
+   default window size no matter how many models exist. */
+.model-scroll {
+  max-height: 320px;
+  margin-top: 8px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 6px;
+  background: rgba(7, 11, 20, 0.28);
+}
+
+.model-scroll .model-table {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
 .model-table {
   gap: 0;
   overflow: hidden;
@@ -1280,25 +1381,14 @@ textarea {
   background: rgba(7, 11, 20, 0.28);
 }
 
-.model-table-header,
+/* Row layout: [select radio] [name + meta + progress] [download status]
+   [actions]. The name column flexes and the trailing columns shrink to their
+   content so the status/action don't leave a wide empty gutter on the right. */
 .model-row {
   display: grid;
-  grid-template-columns: minmax(170px, 1fr) 80px 110px auto;
-  gap: 8px;
-  align-items: center;
-}
-
-.model-table-header {
-  padding: 6px 9px;
-  color: #94a3b8;
-  background: rgba(15, 23, 42, 0.62);
-  border-bottom: 1px solid rgba(148, 163, 184, 0.13);
-  font-size: 10px;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-.model-row {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 10px;
+  padding: 7px 10px;
   border-width: 0 0 1px;
   border-radius: 0;
   background: transparent;
@@ -1309,13 +1399,63 @@ textarea {
   border-bottom: 0;
 }
 
-.model-row > div:first-child {
-  display: grid;
-  gap: 4px;
+.model-row.is-selected {
+  background: rgba(34, 211, 238, 0.06);
 }
 
-.model-row > span:not(.pill) {
-  color: #cbd5e1;
+.model-select {
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+}
+
+.model-select input {
+  width: 15px;
+  height: 15px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  accent-color: #22d3ee;
+  cursor: pointer;
+}
+
+.model-select input:disabled {
+  cursor: not-allowed;
+}
+
+.model-row-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+/* The muted second line: catalog size + filename. Truncates rather than
+   wrapping so rows stay one logical line tall at the default width. */
+.model-row .model-row-sub {
+  display: block;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-row-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.model-row-status .pill {
+  gap: 3px;
+}
+
+/* "Not downloaded" — the resting state of most models, deliberately quiet
+   (plain muted text, no badge). */
+.model-row .model-row-resting {
+  color: #64748b;
   font-size: 11px;
 }
 
@@ -1722,11 +1862,21 @@ kbd {
   .history-row,
   .history-row:has(.history-row-select),
   .hotkey-editor-row,
-  .model-row,
-  .model-table-header,
   .settings-row,
   .recording-stage {
     grid-template-columns: 1fr;
+  }
+
+  /* Keep the select radio beside the model name; let status + actions wrap to
+     the row below rather than each stacking full-width. */
+  .model-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .model-row-status,
+  .model-row .row-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
   }
 
   .combine-button {
@@ -1759,10 +1909,6 @@ kbd {
   .setting-control .segmented-control {
     max-width: none;
     width: 100%;
-  }
-
-  .model-table-header {
-    display: none;
   }
 
   .search-field,
