@@ -9,7 +9,8 @@ import {
   Square,
   Trash2,
 } from "lucide-react";
-import type { AppSettings, Transcript } from "../backend";
+import { listen } from "@tauri-apps/api/event";
+import type { AppSettings, AudioLevelEvent, Transcript } from "../backend";
 import {
   clipboardStatus,
   formatCount,
@@ -263,16 +264,85 @@ export function LiveTranscript({ text }: { text: string }) {
   );
 }
 
+const WAVEFORM_BARS = 7;
+// Center bars react more than the edges, so the shape reads as a waveform.
+const WAVEFORM_ENVELOPE = [0.5, 0.72, 0.92, 1, 0.92, 0.72, 0.5];
+const WAVEFORM_REST = 0.16;
+
+/** Live input visualizer: the bars react to the same `audio://level` stream the
+ * floating pill uses, easing toward the mic level each frame (no per-frame React
+ * state). They settle to a flat resting line whenever recording isn't active. */
 export function Waveform() {
+  const barsRef = useRef<Array<HTMLSpanElement | null>>([]);
+  const levelRef = useRef(0);
+  const displayRef = useRef<number[]>(
+    new Array(WAVEFORM_BARS).fill(WAVEFORM_REST),
+  );
+
+  useEffect(() => {
+    let disposed = false;
+    let frame = 0;
+    const unlisteners: Array<() => void> = [];
+
+    const track = async () => {
+      const stops = await Promise.all([
+        listen<AudioLevelEvent>("audio://level", (event) => {
+          levelRef.current = Math.max(0, Math.min(1, event.payload.rms));
+        }),
+        // Level events stop arriving when recording ends; zero the target so
+        // the bars ease back to rest instead of freezing at the last value.
+        listen<{ status: string }>("scribe:app-state", (event) => {
+          if (event.payload.status !== "Recording") {
+            levelRef.current = 0;
+          }
+        }),
+      ]);
+      if (disposed) {
+        stops.forEach((stop) => stop());
+      } else {
+        unlisteners.push(...stops);
+      }
+    };
+
+    const tick = () => {
+      const level = levelRef.current;
+      const display = displayRef.current;
+      for (let i = 0; i < WAVEFORM_BARS; i += 1) {
+        // A little per-bar shimmer keeps it lively rather than a flat block.
+        const jitter = level > 0.02 ? 0.82 + Math.random() * 0.36 : 1;
+        const target = Math.min(
+          1,
+          WAVEFORM_REST + level * WAVEFORM_ENVELOPE[i] * jitter,
+        );
+        display[i] += (target - display[i]) * 0.32;
+        const bar = barsRef.current[i];
+        if (bar) {
+          bar.style.transform = `scaleY(${display[i].toFixed(3)})`;
+        }
+      }
+      frame = requestAnimationFrame(tick);
+    };
+
+    void track();
+    frame = requestAnimationFrame(tick);
+
+    return () => {
+      disposed = true;
+      cancelAnimationFrame(frame);
+      unlisteners.forEach((stop) => stop());
+    };
+  }, []);
+
   return (
     <div className="recording-visual" aria-hidden="true">
-      <span />
-      <span />
-      <span />
-      <span />
-      <span />
-      <span />
-      <span />
+      {Array.from({ length: WAVEFORM_BARS }, (_, i) => (
+        <span
+          key={i}
+          ref={(element) => {
+            barsRef.current[i] = element;
+          }}
+        />
+      ))}
     </div>
   );
 }

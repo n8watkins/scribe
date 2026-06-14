@@ -462,37 +462,13 @@ button:disabled {
 
 .recording-visual span {
   width: 5px;
+  height: 26px;
   border-radius: 999px;
   background: linear-gradient(180deg, #22d3ee, #8b5cf6);
-  opacity: 0.76;
-}
-
-.recording-visual span:nth-child(1) {
-  height: 11px;
-}
-
-.recording-visual span:nth-child(2) {
-  height: 18px;
-}
-
-.recording-visual span:nth-child(3) {
-  height: 24px;
-}
-
-.recording-visual span:nth-child(4) {
-  height: 15px;
-}
-
-.recording-visual span:nth-child(5) {
-  height: 26px;
-}
-
-.recording-visual span:nth-child(6) {
-  height: 19px;
-}
-
-.recording-visual span:nth-child(7) {
-  height: 12px;
+  opacity: 0.85;
+  transform-origin: center;
+  transform: scaleY(0.16);
+  will-change: transform;
 }
 
 .buffer-card {
