@@ -472,16 +472,16 @@ button:disabled {
   width: 100%;
 }
 
-/* Bars are a fixed, modest width and centered (smaller strip overall). Per-bar
-   color is set inline in `Waveform`: a center-vs-edges palette (cyan center,
-   purple edges, symmetric) with a vertical gradient for depth; the background
-   below is only a fallback if inline styles are unavailable. */
+/* Bars are a fixed, modest width and centered (smaller strip overall). Every
+   bar is the SAME real top-to-bottom vertical gradient (cyan at the top fading
+   to purple at the bottom); scaleY is driven from JS by the pill's rolling
+   waveform engine in `Waveform`. */
 .recording-visual span {
-  flex: 0 1 8px;
+  flex: 0 1 7px;
   min-width: 3px;
   height: 20px;
   border-radius: 999px;
-  background: linear-gradient(180deg, #22d3ee, #5b3aa6);
+  background: linear-gradient(180deg, #67e8f9 0%, #8b5cf6 100%);
   opacity: 0.92;
   transform-origin: center;
   transform: scaleY(0.14);

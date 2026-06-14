@@ -167,9 +167,7 @@ export function TranscriptRow({
             {item.text}
           </p>
         ) : (
-          <p className="transcript-clamp" title={item.text}>
-            {item.text}
-          </p>
+          <p className="transcript-clamp">{item.text}</p>
         )}
         {item.analysis ? (
           <div className="note-analysis">
@@ -282,58 +280,53 @@ export function LiveTranscript({ text }: { text: string }) {
   );
 }
 
-const WAVEFORM_BARS = 13;
-const WAVEFORM_CENTER = (WAVEFORM_BARS - 1) / 2;
-// Center bars react more than the edges, so the shape reads as a waveform.
-// A smooth bell across all bars keeps the strip from looking blocky.
-const WAVEFORM_ENVELOPE = Array.from({ length: WAVEFORM_BARS }, (_, i) => {
-  const t = i / (WAVEFORM_BARS - 1); // 0..1 across the strip
-  // Raised-cosine bell: 0.5 at the edges, 1 at the center.
-  return 0.5 + 0.5 * Math.sin(Math.PI * t);
+// The in-app waveform is the floating pill's `Visualizer` engine verbatim (see
+// PillApp.tsx): a rolling history of recent mic levels scrolls left as new
+// samples enter on the right, instead of every bar pulsing off the current
+// level. Keep these constants in lockstep with the pill so both read identically.
+const BAR_COUNT = 15;
+// Bars never collapse to nothing; silence reads as a low resting line.
+const BAR_MIN_SCALE = 0.14;
+const BAR_ATTACK = 0.45;
+const BAR_DECAY = 0.16;
+// The waveform tapers toward both ends so the edges stay quieter than the
+// center. Ends of the envelope reach this fraction of the center's height.
+const BAR_EDGE_GAIN = 0.3;
+// Normal speech RMS sits around 0.03-0.15, so raw values barely move the bars.
+// Normalize against this ceiling before the perceptual curve.
+const RMS_CEILING = 0.07;
+
+/**
+ * Raised-cosine (Hann-style) envelope over the bar index: ~1.0 at the center,
+ * falling smoothly to BAR_EDGE_GAIN at both ends. Computed once from the bar
+ * count and applied to each bar's dynamic height so the waveform fades out at
+ * its edges. A single bar (or no bars) degrades to a flat 1.0.
+ */
+const BAR_ENVELOPE: number[] = Array.from({ length: BAR_COUNT }, (_, i) => {
+  if (BAR_COUNT <= 1) {
+    return 1;
+  }
+  const hann = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (BAR_COUNT - 1));
+  return BAR_EDGE_GAIN + (1 - BAR_EDGE_GAIN) * hann;
 });
-const WAVEFORM_REST = 0.14;
-// Mirror the floating pill's perceptual response (see PillApp `perceptualLevel`,
-// BAR_ATTACK/BAR_DECAY): raw mic RMS sits low, so normalize against this ceiling
-// and take a sqrt so the bars pop on speech instead of barely moving.
-const WAVEFORM_RMS_CEILING = 0.07;
-const WAVEFORM_ATTACK = 0.45;
-const WAVEFORM_DECAY = 0.16;
-// Symmetric center-vs-edges palette: the CENTER bars are cyan and both the LEFT
-// and RIGHT edges fade to purple, interpolated by distance from the middle (NOT
-// left→right) so the strip mirrors around its center.
-const WAVEFORM_CENTER_COLOR = [0x22, 0xd3, 0xee]; // #22d3ee cyan
-const WAVEFORM_EDGE_COLOR = [0x8b, 0x5c, 0xf6]; // #8b5cf6 purple
 
-/** Maps raw mic RMS to a 0..1 perceptual level (matches the pill's curve). */
-function waveformLevel(rms: number): number {
-  return Math.sqrt(Math.min(1, Math.max(0, rms) / WAVEFORM_RMS_CEILING));
+/** Maps raw mic RMS to a 0..1 perceptual level that visibly animates bars. */
+function perceptualLevel(rms: number): number {
+  return Math.sqrt(Math.min(1, Math.max(0, rms) / RMS_CEILING));
 }
 
-/** Per-bar base color interpolated by DISTANCE FROM CENTER: cyan in the middle,
- * purple at either edge, identical on both sides so the strip is symmetric. The
- * bar element then layers a vertical (top→bottom) gradient on top for depth. */
-function waveformBarColor(index: number): string {
-  const distance = Math.abs(index - WAVEFORM_CENTER) / WAVEFORM_CENTER; // 0..1
-  const mix = (a: number, b: number) => Math.round(a + (b - a) * distance);
-  const r = mix(WAVEFORM_CENTER_COLOR[0], WAVEFORM_EDGE_COLOR[0]);
-  const g = mix(WAVEFORM_CENTER_COLOR[1], WAVEFORM_EDGE_COLOR[1]);
-  const b = mix(WAVEFORM_CENTER_COLOR[2], WAVEFORM_EDGE_COLOR[2]);
-  const top = `rgb(${r}, ${g}, ${b})`;
-  // Vertical gradient: the bar's own hue at the top, a darker shade of it at the
-  // bottom, giving each bar depth rather than a flat fill.
-  const bottom = `rgb(${Math.round(r * 0.62)}, ${Math.round(g * 0.62)}, ${Math.round(b * 0.62)})`;
-  return `linear-gradient(180deg, ${top}, ${bottom})`;
-}
-
-/** Live input visualizer: the bars react to the same `audio://level` stream the
- * floating pill uses, easing toward the mic level each frame (no per-frame React
- * state). They settle to a flat resting line whenever recording isn't active. */
+/**
+ * Live input visualizer: the exact rolling-waveform engine the floating pill
+ * uses (PillApp `Visualizer`). New mic samples enter on the right and scroll
+ * left as the history shifts; a requestAnimationFrame loop eases the displayed
+ * bars toward their targets by mutating `transform: scaleY(...)` directly (no
+ * per-frame React state). The history drains back to rest whenever recording
+ * isn't active.
+ */
 export function Waveform() {
   const barsRef = useRef<Array<HTMLSpanElement | null>>([]);
-  const levelRef = useRef(0);
-  const displayRef = useRef<number[]>(
-    new Array(WAVEFORM_BARS).fill(WAVEFORM_REST),
-  );
+  const historyRef = useRef<number[]>(new Array(BAR_COUNT).fill(0));
+  const displayRef = useRef<number[]>(new Array(BAR_COUNT).fill(0));
 
   useEffect(() => {
     let disposed = false;
@@ -343,13 +336,17 @@ export function Waveform() {
     const track = async () => {
       const stops = await Promise.all([
         listen<AudioLevelEvent>("audio://level", (event) => {
-          levelRef.current = waveformLevel(event.payload.rms);
+          const history = historyRef.current;
+          history.push(perceptualLevel(event.payload.rms));
+          if (history.length > BAR_COUNT) {
+            history.shift();
+          }
         }),
-        // Level events stop arriving when recording ends; zero the target so
-        // the bars ease back to rest instead of freezing at the last value.
+        // Level events stop arriving when recording ends; clear the history so
+        // the bars scroll back to rest instead of freezing at the last values.
         listen<{ status: string }>("scribe:app-state", (event) => {
           if (event.payload.status !== "Recording") {
-            levelRef.current = 0;
+            historyRef.current.fill(0);
           }
         }),
       ]);
@@ -361,20 +358,17 @@ export function Waveform() {
     };
 
     const tick = () => {
-      const level = levelRef.current;
+      const history = historyRef.current;
       const display = displayRef.current;
-      for (let i = 0; i < WAVEFORM_BARS; i += 1) {
-        // A little per-bar shimmer keeps it lively rather than a flat block.
-        const jitter = level > 0.02 ? 0.82 + Math.random() * 0.36 : 1;
-        const target = Math.min(
-          1,
-          WAVEFORM_REST + level * WAVEFORM_ENVELOPE[i] * jitter,
-        );
-        // Asymmetric ease (matches the pill): rise fast toward a louder target,
-        // settle slower, so the strip feels responsive without flickering.
-        const ease =
-          target > display[i] ? WAVEFORM_ATTACK : WAVEFORM_DECAY;
-        display[i] += (target - display[i]) * ease;
+      for (let i = 0; i < BAR_COUNT; i += 1) {
+        // The edge taper scales only the moving part, so the resting line
+        // (BAR_MIN_SCALE) stays flat across every bar.
+        const target =
+          BAR_MIN_SCALE +
+          (history[i] ?? 0) * BAR_ENVELOPE[i] * (1 - BAR_MIN_SCALE);
+        const current = display[i];
+        const rate = target > current ? BAR_ATTACK : BAR_DECAY;
+        display[i] = current + (target - current) * rate;
         const bar = barsRef.current[i];
         if (bar) {
           bar.style.transform = `scaleY(${display[i].toFixed(3)})`;
@@ -395,13 +389,12 @@ export function Waveform() {
 
   return (
     <div className="recording-visual" aria-hidden="true">
-      {Array.from({ length: WAVEFORM_BARS }, (_, i) => (
+      {Array.from({ length: BAR_COUNT }, (_, i) => (
         <span
           key={i}
           ref={(element) => {
             barsRef.current[i] = element;
           }}
-          style={{ background: waveformBarColor(i) }}
         />
       ))}
     </div>
