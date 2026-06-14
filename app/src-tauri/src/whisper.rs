@@ -16,6 +16,9 @@ pub struct WhisperRequest {
     pub model_path: PathBuf,
     pub wav_path: PathBuf,
     pub language: String,
+    /// Run Whisper's translate task (`--translate`): output English regardless
+    /// of the spoken language. Requires a multilingual model.
+    pub translate: bool,
     /// Custom vocabulary / spelling hints; passed as `--prompt` when the
     /// trimmed value is non-empty.
     pub vocabulary_prompt: String,
@@ -70,6 +73,7 @@ pub(crate) fn transcribe_with_output_prefix(
         &request.model_path,
         &request.wav_path,
         &request.language,
+        request.translate,
         output_prefix,
         &request.vocabulary_prompt,
     );
@@ -130,6 +134,7 @@ fn whisper_args(
     model_path: &Path,
     wav_path: &Path,
     language: &str,
+    translate: bool,
     output_prefix: &Path,
     vocabulary_prompt: &str,
 ) -> Vec<String> {
@@ -145,6 +150,12 @@ fn whisper_args(
         output_prefix.to_string_lossy().to_string(),
         "--no-timestamps".to_string(),
     ];
+
+    // Translate task: whisper.cpp emits English for any spoken language. Only
+    // meaningful on a multilingual model; the UI guards the pairing.
+    if translate {
+        args.push("--translate".to_string());
+    }
 
     let vocabulary_prompt = vocabulary_prompt.trim();
     if !vocabulary_prompt.is_empty() {
@@ -308,6 +319,7 @@ mod tests {
             Path::new("models/ggml-small.en-q5_1.bin"),
             Path::new("temp/input.wav"),
             "en",
+            false,
             Path::new("temp/out"),
             "",
         );
@@ -327,6 +339,40 @@ mod tests {
                 "--no-timestamps",
             ]
         );
+        // No translate task unless explicitly requested.
+        assert!(!args.iter().any(|arg| arg == "--translate"));
+    }
+
+    #[test]
+    fn passes_language_code_and_translate_flag() {
+        // A non-English language code is forwarded verbatim, and translate adds
+        // exactly one --translate flag (English output for any spoken language).
+        let args = whisper_args(
+            Path::new("models/ggml-small.bin"),
+            Path::new("temp/input.wav"),
+            "es",
+            true,
+            Path::new("temp/out"),
+            "",
+        );
+
+        let lang_index = args.iter().position(|arg| arg == "--language").unwrap();
+        assert_eq!(args[lang_index + 1], "es");
+        assert_eq!(args.iter().filter(|arg| *arg == "--translate").count(), 1);
+    }
+
+    #[test]
+    fn auto_detect_language_is_passed_through() {
+        let args = whisper_args(
+            Path::new("models/ggml-base.bin"),
+            Path::new("temp/input.wav"),
+            "auto",
+            false,
+            Path::new("temp/out"),
+            "",
+        );
+        let lang_index = args.iter().position(|arg| arg == "--language").unwrap();
+        assert_eq!(args[lang_index + 1], "auto");
     }
 
     #[test]
@@ -373,6 +419,7 @@ mod tests {
             Path::new("model.bin"),
             Path::new("input.wav"),
             "en",
+            false,
             Path::new("out"),
             "   \n\t ",
         );
@@ -386,6 +433,7 @@ mod tests {
             Path::new("model.bin"),
             Path::new("input.wav"),
             "en",
+            false,
             Path::new("out"),
             "  Scribe, Tauri, WASAPI; \"quoted\" & spaced terms  ",
         );

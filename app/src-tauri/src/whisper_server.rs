@@ -55,6 +55,9 @@ const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 struct ServerConfig {
     model_path: PathBuf,
     language: String,
+    /// Translate task (English output). Part of the launch config: changing it
+    /// requires a server restart, since it is passed as a launch argument.
+    translate: bool,
 }
 
 impl ServerConfig {
@@ -62,6 +65,7 @@ impl ServerConfig {
         Self {
             model_path: request.model_path.clone(),
             language: request.language.clone(),
+            translate: request.translate,
         }
     }
 }
@@ -413,7 +417,13 @@ fn ensure_server(
         .map_err(|error| error.message)?;
     let port = find_free_port()?;
     let threads = server_threads();
-    let args = server_args(&config.model_path, &config.language, port, threads);
+    let args = server_args(
+        &config.model_path,
+        &config.language,
+        config.translate,
+        port,
+        threads,
+    );
 
     log::info!(
         "Starting whisper-server on {}:{} (model {}, language {}, {} threads)",
@@ -515,8 +525,14 @@ fn server_threads() -> usize {
         .clamp(1, 8)
 }
 
-fn server_args(model_path: &Path, language: &str, port: u16, threads: usize) -> Vec<String> {
-    vec![
+fn server_args(
+    model_path: &Path,
+    language: &str,
+    translate: bool,
+    port: u16,
+    threads: usize,
+) -> Vec<String> {
+    let mut args = vec![
         "--model".to_string(),
         model_path.to_string_lossy().to_string(),
         "--host".to_string(),
@@ -527,7 +543,15 @@ fn server_args(model_path: &Path, language: &str, port: u16, threads: usize) -> 
         threads.to_string(),
         "--language".to_string(),
         language.to_string(),
-    ]
+    ];
+
+    // Translate task (English output for any spoken language). Launch-time
+    // argument, so a change to it restarts the server (see ServerConfig).
+    if translate {
+        args.push("--translate".to_string());
+    }
+
+    args
 }
 
 fn server_root_url(port: u16) -> String {
@@ -560,7 +584,7 @@ mod tests {
 
     #[test]
     fn builds_server_args_without_prompt() {
-        let args = server_args(Path::new("models/ggml-base.en.bin"), "en", 8090, 4);
+        let args = server_args(Path::new("models/ggml-base.en.bin"), "en", false, 8090, 4);
 
         assert_eq!(
             args,
@@ -579,6 +603,17 @@ mod tests {
         );
         // The vocabulary prompt is per-request, never a launch argument.
         assert!(!args.iter().any(|arg| arg == "--prompt"));
+        // Translate is off here, so no --translate flag.
+        assert!(!args.iter().any(|arg| arg == "--translate"));
+    }
+
+    #[test]
+    fn server_args_include_translate_when_enabled() {
+        let args = server_args(Path::new("models/ggml-small.bin"), "es", true, 8090, 4);
+
+        let lang_index = args.iter().position(|arg| arg == "--language").unwrap();
+        assert_eq!(args[lang_index + 1], "es");
+        assert_eq!(args.iter().filter(|arg| *arg == "--translate").count(), 1);
     }
 
     #[test]
@@ -613,6 +648,7 @@ mod tests {
         let current = ServerConfig {
             model_path: PathBuf::from("models/ggml-base.en.bin"),
             language: "en".to_string(),
+            translate: false,
         };
 
         assert!(!needs_restart(&current, &current.clone()));
@@ -621,6 +657,7 @@ mod tests {
             &ServerConfig {
                 model_path: PathBuf::from("models/ggml-small.en-q5_1.bin"),
                 language: "en".to_string(),
+                translate: false,
             }
         ));
         assert!(needs_restart(
@@ -628,6 +665,16 @@ mod tests {
             &ServerConfig {
                 model_path: current.model_path.clone(),
                 language: "auto".to_string(),
+                translate: false,
+            }
+        ));
+        // Toggling translate also requires a restart (it is a launch arg).
+        assert!(needs_restart(
+            &current,
+            &ServerConfig {
+                model_path: current.model_path.clone(),
+                language: "en".to_string(),
+                translate: true,
             }
         ));
     }

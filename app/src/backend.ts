@@ -22,7 +22,49 @@ export type AppStateSnapshot = {
 };
 
 export type RecordingMode = "hold" | "toggle" | "both";
-export type Language = "auto" | "en";
+/** Transcription language preference: the Whisper auto-detect sentinel "auto",
+ * or a lowercase ISO-639-1 code ("en", "es", "fr", ...). Stored as a bare
+ * string, so values written by older English-only builds ("auto"/"en") still
+ * load. See SUPPORTED_LANGUAGES for the curated picker set. */
+export type Language = string;
+
+/** Auto-detect sentinel value for `AppSettings.language`. */
+export const LANGUAGE_AUTO = "auto";
+
+/** Curated [code, label] languages for the picker — a sensible subset of
+ * Whisper's ~99 languages. Kept in sync with `SUPPORTED_LANGUAGES` in the Rust
+ * `settings.rs`. "auto" (auto-detect) is offered separately in the UI. */
+export const SUPPORTED_LANGUAGES: readonly (readonly [string, string])[] = [
+  ["en", "English"],
+  ["es", "Spanish"],
+  ["fr", "French"],
+  ["de", "German"],
+  ["it", "Italian"],
+  ["pt", "Portuguese"],
+  ["nl", "Dutch"],
+  ["ru", "Russian"],
+  ["uk", "Ukrainian"],
+  ["pl", "Polish"],
+  ["tr", "Turkish"],
+  ["sv", "Swedish"],
+  ["no", "Norwegian"],
+  ["da", "Danish"],
+  ["fi", "Finnish"],
+  ["cs", "Czech"],
+  ["el", "Greek"],
+  ["ro", "Romanian"],
+  ["hu", "Hungarian"],
+  ["ar", "Arabic"],
+  ["he", "Hebrew"],
+  ["hi", "Hindi"],
+  ["id", "Indonesian"],
+  ["vi", "Vietnamese"],
+  ["th", "Thai"],
+  ["ko", "Korean"],
+  ["ja", "Japanese"],
+  ["zh", "Chinese"],
+  ["ca", "Catalan"],
+];
 export type OutputMode =
   | "save_only"
   | "auto_paste"
@@ -97,6 +139,9 @@ export type AppSettings = {
   selectedMicId: string | null;
   selectedModelId: string | null;
   language: Language;
+  /** Run Whisper's translate task: emit English for any spoken language.
+   * Requires a multilingual model. Defaults false. */
+  translateToEnglish: boolean;
   vocabularyPrompt: string;
   textReplacements: TextReplacement[];
   outputMode: OutputMode;
@@ -234,6 +279,9 @@ export type ModelInfo = {
   checksum: ModelChecksum | null;
   selected: boolean;
   downloadedAt: string | null;
+  /** Whether the model can transcribe non-English languages (and translate to
+   * English). English-only (`.en`) builds are false. */
+  multilingual: boolean;
 };
 
 export type ModelDownloadProgress = {

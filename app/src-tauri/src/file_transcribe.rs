@@ -74,6 +74,7 @@ pub fn transcribe_file(app: &AppHandle, path: &str) -> Result<TranscribeFileResu
         model_path,
         wav_path: input_path,
         language: whisper_language(&settings.language),
+        translate: settings.translate_to_english,
         vocabulary_prompt: settings.vocabulary_prompt.clone(),
     };
     let output_prefix = work_dir.join(format!("file-{}", Uuid::new_v4().simple()));

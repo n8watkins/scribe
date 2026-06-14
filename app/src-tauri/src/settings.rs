@@ -76,6 +76,12 @@ pub struct AppSettings {
     pub selected_mic_id: Option<String>,
     pub selected_model_id: Option<String>,
     pub language: Language,
+    /// Run Whisper's translate task: transcribe any spoken language and emit
+    /// English. Requires a multilingual model. Off by default and absent from
+    /// pre-multilingual settings JSON, so `#[serde(default)]` fills it false —
+    /// existing installs are unaffected.
+    #[serde(default)]
+    pub translate_to_english: bool,
     /// Custom vocabulary / spelling hints passed to whisper.cpp via
     /// `--prompt` when non-empty.
     #[serde(default)]
@@ -274,11 +280,95 @@ pub enum RecordingMode {
     Both,
 }
 
+/// The transcription language preference, stored as a lowercase ISO-639-1 code
+/// (e.g. "en", "es", "fr") or the sentinel "auto" for Whisper's language
+/// auto-detection.
+///
+/// Serialized transparently as a bare string, so settings JSON written by
+/// earlier English-only builds — which only ever stored `"auto"` or `"en"` —
+/// deserializes unchanged. New codes round-trip the same way.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Language {
-    Auto,
-    En,
+#[serde(transparent)]
+pub struct Language(String);
+
+/// Whisper's auto-detect sentinel.
+pub const LANGUAGE_AUTO: &str = "auto";
+
+/// Curated set of languages offered in the UI: the code Whisper expects and an
+/// English display name. Deliberately a sensible subset of Whisper's ~99
+/// languages (not the full list, which is unwieldy in a dropdown). "auto" is
+/// surfaced separately as the auto-detect option, so it is not repeated here.
+/// Any code Whisper itself accepts still works if stored directly; this list
+/// only drives the picker and validation.
+pub const SUPPORTED_LANGUAGES: &[(&str, &str)] = &[
+    ("en", "English"),
+    ("es", "Spanish"),
+    ("fr", "French"),
+    ("de", "German"),
+    ("it", "Italian"),
+    ("pt", "Portuguese"),
+    ("nl", "Dutch"),
+    ("ru", "Russian"),
+    ("uk", "Ukrainian"),
+    ("pl", "Polish"),
+    ("tr", "Turkish"),
+    ("sv", "Swedish"),
+    ("no", "Norwegian"),
+    ("da", "Danish"),
+    ("fi", "Finnish"),
+    ("cs", "Czech"),
+    ("el", "Greek"),
+    ("ro", "Romanian"),
+    ("hu", "Hungarian"),
+    ("ar", "Arabic"),
+    ("he", "Hebrew"),
+    ("hi", "Hindi"),
+    ("id", "Indonesian"),
+    ("vi", "Vietnamese"),
+    ("th", "Thai"),
+    ("ko", "Korean"),
+    ("ja", "Japanese"),
+    ("zh", "Chinese"),
+    ("ca", "Catalan"),
+];
+
+impl Language {
+    /// Auto-detect (`"auto"`).
+    pub fn auto() -> Self {
+        Self(LANGUAGE_AUTO.to_string())
+    }
+
+    /// English (`"en"`), the historical default.
+    pub fn english() -> Self {
+        Self("en".to_string())
+    }
+
+    /// The raw stored code ("auto" or an ISO-639-1 code).
+    pub fn code(&self) -> &str {
+        &self.0
+    }
+
+    /// True for the auto-detect sentinel.
+    pub fn is_auto(&self) -> bool {
+        self.0 == LANGUAGE_AUTO
+    }
+
+    /// True when the selection is plain English (so an English-only model is
+    /// fine). Auto-detect is treated as needing a multilingual model.
+    pub fn is_english(&self) -> bool {
+        self.0 == "en"
+    }
+
+    /// Whether the code is recognized: "auto" or one of the curated codes.
+    pub fn is_known(&self) -> bool {
+        self.is_auto() || SUPPORTED_LANGUAGES.iter().any(|(code, _)| *code == self.0)
+    }
+}
+
+impl Default for Language {
+    fn default() -> Self {
+        Self::english()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -482,7 +572,8 @@ impl Default for AppSettings {
             incremental_transcription_enabled: default_incremental_transcription_enabled(),
             selected_mic_id: None,
             selected_model_id: Some("small.en-q5_1".to_string()),
-            language: Language::En,
+            language: Language::english(),
+            translate_to_english: false,
             vocabulary_prompt: String::new(),
             text_replacements: Vec::new(),
             output_mode: OutputMode::AutoPaste,
@@ -611,6 +702,15 @@ impl AppSettings {
             ));
         }
 
+        // The language must be "auto" or a code from the curated list. Legacy
+        // values ("auto"/"en") are covered by the list, so old settings stay
+        // valid.
+        if !self.language.is_known() {
+            return Err(SettingsValidationError::new(
+                "language must be \"auto\" or a supported ISO-639-1 code.",
+            ));
+        }
+
         if !matches!(self.history_retention_days, Some(7 | 30 | 90 | 365) | None) {
             return Err(SettingsValidationError::new(
                 "historyRetentionDays must be 7, 30, 90, 365, or null.",
@@ -707,6 +807,82 @@ mod tests {
         assert_eq!(settings.theme, "midnight");
         assert_eq!(settings.pill_color_normal, "#fbbf24");
         assert_eq!(settings.pill_color_note, "#38bdf8");
+    }
+
+    #[test]
+    fn language_legacy_values_round_trip() {
+        // The two values earlier builds ever stored must still deserialize, as
+        // the bare strings they always were.
+        let auto: Language = serde_json::from_str("\"auto\"").unwrap();
+        assert!(auto.is_auto());
+        assert_eq!(auto.code(), "auto");
+
+        let en: Language = serde_json::from_str("\"en\"").unwrap();
+        assert!(en.is_english());
+        assert_eq!(en.code(), "en");
+
+        // And they serialize back to the same bare strings (transparent repr).
+        assert_eq!(serde_json::to_string(&Language::auto()).unwrap(), "\"auto\"");
+        assert_eq!(
+            serde_json::to_string(&Language::english()).unwrap(),
+            "\"en\""
+        );
+    }
+
+    #[test]
+    fn language_new_codes_round_trip_and_validate() {
+        let es: Language = serde_json::from_str("\"es\"").unwrap();
+        assert_eq!(es.code(), "es");
+        assert!(es.is_known());
+        assert!(!es.is_english());
+        assert!(!es.is_auto());
+
+        let mut settings = AppSettings {
+            language: es,
+            ..AppSettings::default()
+        };
+        assert!(settings.validate().is_ok());
+
+        // An unknown code is rejected by validation.
+        settings.language = Language("zz".to_string());
+        assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn translate_to_english_defaults_off_and_is_absent_from_legacy_json() {
+        assert!(!AppSettings::default().translate_to_english);
+
+        // Legacy settings JSON never had translateToEnglish; serde default
+        // fills it false so existing installs keep the English-only behavior.
+        let json = serde_json::json!({
+            "launchAtStartup": false,
+            "minimizeToTray": true,
+            "showFloatingPill": true,
+            "notificationsEnabled": true,
+            "soundsEnabled": true,
+            "recordingMode": "both",
+            "minRecordingMs": 300,
+            "maxRecordingMs": 600000,
+            "silenceTrimEnabled": true,
+            "selectedMicId": null,
+            "selectedModelId": "small.en-q5_1",
+            "language": "en",
+            "outputMode": "auto_paste",
+            "pasteMethod": "clipboard_paste",
+            "historyEnabled": true,
+            "saveAudioClips": true,
+            "historyRetentionDays": 30,
+            "hotkeys": {
+                "holdToTalk": "Ctrl+Win",
+                "toggleDictation": "Backquote",
+                "pasteLastTranscript": "Ctrl+Alt+V",
+                "openDashboard": "Ctrl+Alt+F"
+            }
+        });
+
+        let settings: AppSettings = serde_json::from_value(json).unwrap();
+        assert!(!settings.translate_to_english);
+        assert!(settings.language.is_english());
     }
 
     #[test]

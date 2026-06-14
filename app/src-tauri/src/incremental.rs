@@ -412,6 +412,7 @@ pub fn start_session(
 struct SegmentContext {
     model_path: PathBuf,
     language: String,
+    translate: bool,
     vocabulary_prompt: String,
 }
 
@@ -502,6 +503,7 @@ fn transcribe_segment(
                 model_path: context.model_path.clone(),
                 wav_path: wav_path.to_path_buf(),
                 language: context.language.clone(),
+                translate: context.translate,
                 vocabulary_prompt: prompt_with_context(&context.vocabulary_prompt, accumulated),
             },
         )
@@ -520,6 +522,7 @@ fn segment_context(app: &AppHandle) -> Result<SegmentContext, String> {
     Ok(SegmentContext {
         model_path,
         language: crate::dictation::whisper_language(&settings.language),
+        translate: settings.translate_to_english,
         vocabulary_prompt: settings.vocabulary_prompt,
     })
 }
