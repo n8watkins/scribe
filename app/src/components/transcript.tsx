@@ -133,9 +133,20 @@ export function TranscriptRow({
   selected?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const fullRef = useRef<HTMLParagraphElement | null>(null);
   // Only offer the toggle when there is genuinely more to reveal than the
   // single-line snippet already shows (multi-line, or longer than the cap).
   const canExpand = item.text.includes("\n") || item.text.trim().length > 140;
+
+  const collapse = () => {
+    // BUG fix: the expanded body scrolls internally, so reset it to the top
+    // before collapsing — otherwise a later re-expand would start mid-transcript
+    // instead of at the beginning.
+    if (fullRef.current) {
+      fullRef.current.scrollTop = 0;
+    }
+    setExpanded(false);
+  };
 
   return (
     <div className={selected ? "history-row is-selected" : "history-row"}>
@@ -150,10 +161,47 @@ export function TranscriptRow({
       ) : null}
       <div>
         {expanded && canExpand ? (
-          <p className="transcript-full">{item.text}</p>
+          <p className="transcript-full" ref={fullRef}>
+            {item.text}{" "}
+            <button
+              className="text-button see-more-button"
+              onClick={collapse}
+              type="button"
+            >
+              See less
+            </button>
+          </p>
         ) : (
-          <p className="transcript-clamp" title={item.text}>
+          // The whole collapsed snippet is the expand affordance: clicking
+          // anywhere in the clamped text (or the trailing "…see more") opens it.
+          <p
+            className={
+              canExpand
+                ? "transcript-clamp is-expandable"
+                : "transcript-clamp"
+            }
+            onClick={canExpand ? () => setExpanded(true) : undefined}
+            role={canExpand ? "button" : undefined}
+            tabIndex={canExpand ? 0 : undefined}
+            title={item.text}
+            onKeyDown={
+              canExpand
+                ? (event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setExpanded(true);
+                    }
+                  }
+                : undefined
+            }
+          >
             {item.text}
+            {canExpand ? (
+              <span aria-hidden="true" className="see-more-inline">
+                {" "}
+                …see more
+              </span>
+            ) : null}
           </p>
         )}
         {item.analysis ? (
@@ -168,15 +216,6 @@ export function TranscriptRow({
         <span className="history-row-meta">
           {formatDateTime(item.createdAt)} · {transcriptMeta(item)}
         </span>
-        {canExpand ? (
-          <button
-            className="text-button see-more-button"
-            onClick={() => setExpanded((value) => !value)}
-            type="button"
-          >
-            {expanded ? "See less" : "See more"}
-          </button>
-        ) : null}
       </div>
       <div className="row-actions">
         {onAnalyze ? (
@@ -264,10 +303,40 @@ export function LiveTranscript({ text }: { text: string }) {
   );
 }
 
-const WAVEFORM_BARS = 7;
+const WAVEFORM_BARS = 13;
 // Center bars react more than the edges, so the shape reads as a waveform.
-const WAVEFORM_ENVELOPE = [0.5, 0.72, 0.92, 1, 0.92, 0.72, 0.5];
+// A smooth bell across all bars keeps the wider strip from looking blocky.
+const WAVEFORM_ENVELOPE = Array.from({ length: WAVEFORM_BARS }, (_, i) => {
+  const t = i / (WAVEFORM_BARS - 1); // 0..1 across the strip
+  // Raised-cosine bell: 0.5 at the edges, 1 at the center.
+  return 0.5 + 0.5 * Math.sin(Math.PI * t);
+});
 const WAVEFORM_REST = 0.16;
+// Snappier than the old single 0.32 ease: jump UP fast on louder input so the
+// strip tracks speech onsets, fall a touch slower so it doesn't strobe.
+const WAVEFORM_ATTACK = 0.6;
+const WAVEFORM_DECAY = 0.4;
+// Horizontal hue progression so the whole strip reads as one multi-color
+// gradient (cyan → blue → purple) rather than every bar an identical gradient.
+const WAVEFORM_STOPS = ["#22d3ee", "#38bdf8", "#8b5cf6"] as const;
+
+/** Interpolated bar color across the strip: cyan at the left edge, blue in the
+ * middle, purple at the right, so the bars together form a horizontal gradient. */
+function waveformColor(index: number): string {
+  const t = WAVEFORM_BARS > 1 ? index / (WAVEFORM_BARS - 1) : 0;
+  const scaled = t * (WAVEFORM_STOPS.length - 1);
+  const lo = Math.min(Math.floor(scaled), WAVEFORM_STOPS.length - 2);
+  const frac = scaled - lo;
+  const mix = (a: number, b: number) => Math.round(a + (b - a) * frac);
+  const parse = (hex: string) => [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ];
+  const [r1, g1, b1] = parse(WAVEFORM_STOPS[lo]);
+  const [r2, g2, b2] = parse(WAVEFORM_STOPS[lo + 1]);
+  return `rgb(${mix(r1, r2)}, ${mix(g1, g2)}, ${mix(b1, b2)})`;
+}
 
 /** Live input visualizer: the bars react to the same `audio://level` stream the
  * floating pill uses, easing toward the mic level each frame (no per-frame React
@@ -314,7 +383,11 @@ export function Waveform() {
           1,
           WAVEFORM_REST + level * WAVEFORM_ENVELOPE[i] * jitter,
         );
-        display[i] += (target - display[i]) * 0.32;
+        // Asymmetric ease: rise fast toward a louder target, settle a bit
+        // slower, so the strip feels responsive without flickering.
+        const ease =
+          target > display[i] ? WAVEFORM_ATTACK : WAVEFORM_DECAY;
+        display[i] += (target - display[i]) * ease;
         const bar = barsRef.current[i];
         if (bar) {
           bar.style.transform = `scaleY(${display[i].toFixed(3)})`;
@@ -341,6 +414,7 @@ export function Waveform() {
           ref={(element) => {
             barsRef.current[i] = element;
           }}
+          style={{ background: waveformColor(i) }}
         />
       ))}
     </div>

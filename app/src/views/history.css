@@ -21,61 +21,73 @@
  * ------------------------------------------------------------------------- */
 .history-row .row-actions {
   display: grid;
-  grid-template-columns: repeat(2, auto);
+  /* Exactly TWO rows; buttons fill top-to-bottom and add columns as needed
+   * (4 actions → 2×2, 5 → fills to 3 cols, 6 → 3×2). */
+  grid-auto-flow: column;
+  grid-template-rows: repeat(2, auto);
+  grid-auto-columns: auto;
   justify-content: end;
+  align-content: center;
   gap: 6px;
   width: max-content;
   margin-left: auto;
 }
 
 /* ---------------------------------------------------------------------------
- * #2 — "See more" inline at the END of the snippet, not stranded on its own
- * line below the meta.
+ * #2 — "See more" INLINE at the end of the snippet, the whole collapsed snippet
+ * clickable, and "See less" resetting the scroll (the JS half of that reset
+ * lives in `TranscriptRow`).
  *
- * The collapsed-row markup order is: snippet <p> → (optional analysis) → meta
- * <span> → see-more <button>. We turn the row's text column into a flex column
- * and use `order` to pull the see-more affordance up to sit immediately after
- * the snippet text, reading as a trailing "See more" rather than a detached
- * line at the very bottom. Kept left-aligned and compact.
- *
- * For a TRUE inline "…see more" tail on the same line as the last word, the
- * see-more <button> must render as a trailing inline child of the snippet <p>
- * in `transcript.tsx` (see report); `.transcript-clamp .see-more-button` below
- * styles that case too.
+ * The collapsed snippet is `<p class="transcript-clamp is-expandable">` holding
+ * the text plus a trailing `<span class="see-more-inline"> …see more</span>`.
+ * The <p> stays a 3-line `-webkit-box` clamp; we anchor the "…see more" tail to
+ * the bottom-right corner with a short fade so it's always legible at the end of
+ * the visible text (a tail inside the clamped flow would get truncated away).
+ * The entire <p> is the expand affordance — hover makes that obvious.
  * ------------------------------------------------------------------------- */
-.history-row > div:first-child {
-  display: flex;
-  flex-direction: column;
+.history-row p.transcript-clamp.is-expandable {
+  position: relative;
+  cursor: pointer;
+  /* Reserve room on the last line so the absolutely-positioned tail never sits
+   * on top of the final words. */
+  padding-right: 4px;
 }
 
-.history-row .transcript-clamp {
-  order: 0;
+.history-row p.transcript-clamp.is-expandable:hover {
+  color: #e2e8f0;
 }
 
-.history-row .note-analysis {
-  order: 1;
+/* The trailing "…see more": light (NOT washed-out) and smaller than the body.
+ * Pinned to the bottom-right with a gradient fade behind it so it reads as the
+ * end of the text even when the snippet is clamped. */
+.history-row .see-more-inline {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  padding-left: 22px;
+  color: #cbd5e1;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    rgba(7, 11, 20, 0) 0%,
+    rgba(7, 11, 20, 0.92) 42%,
+    rgba(7, 11, 20, 0.98) 100%
+  );
 }
 
-/* Pull the see-more directly beneath the snippet (above the muted meta line)
- * and keep it inline-sized so it never spans the full width as its own band. */
-.history-row .see-more-button {
-  order: 2;
-  align-self: flex-start;
-  margin-top: 2px;
+.history-row p.transcript-clamp.is-expandable:hover .see-more-inline {
+  color: #67e8f9;
 }
 
-.history-row .history-row-meta {
-  order: 3;
-}
-
-/* When the see-more is rendered INLINE inside the snippet paragraph (the
- * recommended `transcript.tsx` tweak), present it as a "…see more" tail right
- * after the text rather than a block on the next line. */
-.history-row .transcript-clamp .see-more-button,
+/* "See less" renders inline as the trailing child of the expanded paragraph;
+ * keep it on its own from the body text with a small leading gap. */
 .history-row .transcript-full .see-more-button {
   display: inline;
-  order: initial;
   margin: 0 0 0 4px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -114,6 +126,19 @@
   gap: 4px 10px;
 }
 
+/* This heading (the archive/notes one — the only `.section-heading` carrying a
+ * `.notes-records` span) packs its leading items to the left so the optional
+ * select-all chip + title stay anchored left while the records line is pushed to
+ * the right edge, instead of the shared `space-between` scattering them once a
+ * fourth (select-all) item appears. */
+.section-heading.compact:has(.notes-records) {
+  justify-content: flex-start;
+}
+
+.section-heading.compact:has(.notes-records) .notes-records {
+  margin-left: auto;
+}
+
 .notes-hint {
   display: inline-flex;
   align-items: center;
@@ -123,8 +148,39 @@
   white-space: nowrap;
 }
 
+/* ---------------------------------------------------------------------------
+ * #5 — Select-all / deselect-all control on the LEFT of the archive.
+ *
+ * Rendered as the FIRST child of the archive `.section-heading.compact` only
+ * while a selection is active. `margin-right: auto` claims the left edge and
+ * pushes the title + records group to the right, so it reads as a leading
+ * control. Styled as a quiet on-brand chip that brightens on hover. */
+.select-all-button {
+  order: -1;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 4px;
+  padding: 3px 8px;
+  color: #67e8f9;
+  background: rgba(34, 211, 238, 0.08);
+  border: 1px solid rgba(34, 211, 238, 0.28);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease;
+}
+
+.select-all-button:hover {
+  background: rgba(34, 211, 238, 0.16);
+  border-color: rgba(34, 211, 238, 0.45);
+}
+
 /* At the app's narrow breakpoint (760px) the section heading stacks and the
- * `.history-row` collapses to one column. Keep the 2-wide action grid (the
+ * `.history-row` collapses to one column. Keep the 2-row action grid (the
  * buttons are tiny squares) but left-align it under the now full-width row, and
  * let the records + hint group align to the start of the stacked heading. */
 @media (max-width: 760px) {

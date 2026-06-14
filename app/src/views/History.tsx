@@ -3,10 +3,12 @@ import {
   Archive,
   Cloud,
   Layers,
+  ListChecks,
   NotebookPen,
   RefreshCw,
   Search,
   Settings as SettingsIcon,
+  SquareCheckBig,
   Trash2,
 } from "lucide-react";
 import {
@@ -282,6 +284,32 @@ export function HistoryView({
     );
   }, []);
 
+  // Whether every transcript currently on the page is selected, so the
+  // select-all control can flip to "Deselect all" once nothing more can be
+  // added on this page.
+  const allVisibleSelected = useMemo(
+    () =>
+      transcripts.length > 0 &&
+      transcripts.every((item) => selectedIds.includes(item.id)),
+    [transcripts, selectedIds],
+  );
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedIds((previous) => {
+      const visibleIds = transcripts.map((item) => item.id);
+      const everySelected =
+        visibleIds.length > 0 &&
+        visibleIds.every((id) => previous.includes(id));
+      if (everySelected) {
+        // Deselect just this page's items, leaving any off-page selection.
+        const visible = new Set(visibleIds);
+        return previous.filter((id) => !visible.has(id));
+      }
+      // Union the current selection with every visible id (no duplicates).
+      return Array.from(new Set([...previous, ...visibleIds]));
+    });
+  }, [transcripts]);
+
   const closeCombine = useCallback(() => {
     setCombinedText(null);
     setCombineCopied(false);
@@ -498,6 +526,20 @@ export function HistoryView({
 
       <article className="panel-card span-2">
         <div className="section-heading compact">
+          {selectedCount > 0 ? (
+            <button
+              className="select-all-button"
+              onClick={toggleSelectAll}
+              type="button"
+            >
+              {allVisibleSelected ? (
+                <SquareCheckBig aria-hidden="true" size={14} />
+              ) : (
+                <ListChecks aria-hidden="true" size={14} />
+              )}
+              {allVisibleSelected ? "Deselect all" : "Select all"}
+            </button>
+          ) : null}
           {notesOnly ? (
             <h2>
               <NotebookPen aria-hidden="true" size={16} />
