@@ -539,6 +539,20 @@ button {
   color: #cbd5e1;
 }
 
+/* The second toggle ("Install updates automatically") sits directly under the
+   first, so it skips the divider/extra top gap to read as one grouped block. */
+.about-autoinstall {
+  margin-top: 8px;
+  padding-top: 0;
+  border-top: none;
+}
+
+.about-autoinstall-hint {
+  display: block;
+  margin-top: 5px;
+  color: #64748b;
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.52;

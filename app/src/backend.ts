@@ -82,6 +82,7 @@ export type AppSettings = {
   soundsEnabled: boolean;
   developerSettingsEnabled: boolean;
   autoUpdateCheckEnabled: boolean;
+  autoInstallUpdates: boolean;
   /** Selected color theme key for the main window (e.g. "midnight", "ocean").
    * Maps to a CSS palette via `data-theme`; "midnight" is the default look. */
   theme: string;

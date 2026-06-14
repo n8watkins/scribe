@@ -7,6 +7,8 @@ import {
   requestPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
+import { check as checkUpdaterPackage } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import {
   BarChart3,
   Cloud,
@@ -68,6 +70,10 @@ import type {
 } from "./types";
 import { canStartRecording, formatHotkey, routeToView } from "./lib/format";
 import { ErrorPanel, InlineError, LoadingPanel, Toast } from "./components/feedback";
+import {
+  UpdateOverlay,
+  type UpdateOverlayState,
+} from "./components/UpdateOverlay";
 import { DashboardView } from "./views/Dashboard";
 import { TranscribeView } from "./views/Transcribe";
 import { HistoryView } from "./views/History";
@@ -180,6 +186,11 @@ function App() {
   const [toast, setToast] = useState<ToastNotice | null>(null);
   const [isDevFlavor, setIsDevFlavor] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
+  // Drives the branded auto-update screen. Non-null while an on-launch silent
+  // install is downloading/installing (or showing its error/Continue state);
+  // null hides the overlay and returns to the app.
+  const [autoUpdateState, setAutoUpdateState] =
+    useState<UpdateOverlayState | null>(null);
   // Timestamp of the last successful auto poll, surfaced in About so the polling
   // is observable (the "last checked" line ticks each cycle).
   const [lastUpdateCheck, setLastUpdateCheck] = useState<number | null>(null);
@@ -189,6 +200,22 @@ function App() {
   const autoUpdateCheckRef = useRef(true);
   autoUpdateCheckRef.current =
     dashboardData?.settings.autoUpdateCheckEnabled ?? true;
+  // Mirror the auto-install setting the same way. Defaults to on until settings
+  // load; the on-launch flow only proceeds when BOTH this and the check toggle
+  // are on (and waits for settings to actually load first).
+  const autoInstallUpdatesRef = useRef(true);
+  autoInstallUpdatesRef.current =
+    dashboardData?.settings.autoInstallUpdates ?? true;
+  // One-shot guard: the silent auto-install runs at most once per launch (and
+  // never loops, even if the download fails and we fall back to the chip).
+  const autoInstallAttemptedRef = useRef(false);
+  // Only auto-install once the user's actual settings have loaded — until then
+  // the toggle refs hold their (on) defaults, and we don't want to silently
+  // install against a saved opt-out that simply hasn't been read yet.
+  const settingsLoadedRef = useRef(false);
+  if (dashboardData) {
+    settingsLoadedRef.current = true;
+  }
 
   // The dev flavor labels itself so two running instances are tellable apart.
   useEffect(() => {
@@ -294,6 +321,67 @@ function App() {
     void refresh();
   }, [refresh]);
 
+  // Seamless, branded auto-install — ON LAUNCH ONLY. Downloads the signed
+  // update package quietly (NSIS installMode "quiet"; currentUser = no
+  // elevation) behind the Scribe-branded UpdateOverlay, wiring real progress
+  // into it, then relaunches. Guarded to run at most once per launch.
+  //
+  // HARD GUARDRAILS: any failure/timeout (offline, unsigned release, install
+  // error) hides the overlay, logs a warning, and falls back to the normal
+  // chip/manual path — it must NEVER block the app or brick updates. Runs only
+  // when BOTH autoUpdateCheckEnabled AND autoInstallUpdates are on.
+  const runAutoInstall = useCallback(async (version: string) => {
+    setAutoUpdateState({ phase: "preparing", version });
+    try {
+      // The updater's own check() resolves the *signed* package (null if the
+      // latest release ships no updater artifact); this is the same call the
+      // manual About → Install path uses, so behavior matches exactly.
+      const update = await checkUpdaterPackage();
+      if (!update) {
+        throw new Error("No signed update package for the latest release.");
+      }
+      let downloaded = 0;
+      let total: number | null = null;
+      await update.downloadAndInstall((event) => {
+        switch (event.event) {
+          case "Started":
+            total = event.data.contentLength ?? null;
+            setAutoUpdateState({
+              phase: "downloading",
+              version,
+              percent: total ? 0 : null,
+            });
+            break;
+          case "Progress":
+            downloaded += event.data.chunkLength;
+            setAutoUpdateState({
+              phase: "downloading",
+              version,
+              percent: total ? (downloaded / total) * 100 : null,
+            });
+            break;
+          case "Finished":
+            setAutoUpdateState({ phase: "restarting", version });
+            break;
+        }
+      });
+      // On Windows the installer typically restarts the app itself, so we rarely
+      // get here; relaunch covers the paths/platforms where execution continues.
+      await relaunch();
+    } catch (cause) {
+      // Fall back to the normal manual path: keep the chip (updateInfo is
+      // already set) and surface the branded error with a Continue button.
+      console.warn("Auto-install failed; falling back to manual update.", cause);
+      const message =
+        cause instanceof Error ? cause.message : String(cause ?? "Unknown error");
+      setAutoUpdateState({
+        phase: "error",
+        version,
+        message: `${message} You can still install it from About → Updates.`,
+      });
+    }
+  }, []);
+
   // Update check: ~5s after launch, every minute (iteration cadence), and
   // whenever the window regains focus. The first time a given version is seen we
   // fire an in-app toast AND an OS notification (the latter reaches the user even
@@ -303,7 +391,7 @@ function App() {
   useEffect(() => {
     let lastNotifiedVersion: string | null = null;
 
-    const runCheck = () => {
+    const runCheck = (launch: boolean) => {
       if (!autoUpdateCheckRef.current) {
         return;
       }
@@ -329,25 +417,38 @@ function App() {
             });
             void notifyUpdateAvailable(result.latestVersion);
           }
+          // Seamless install only on the launch check (never mid-session — we
+          // don't interrupt active work; mid-session detection keeps just the
+          // chip). Guarded to fire once, and only when auto-install is on. If
+          // it can't run, the chip/manual path above already covers the user.
+          if (
+            launch &&
+            settingsLoadedRef.current &&
+            autoInstallUpdatesRef.current &&
+            !autoInstallAttemptedRef.current
+          ) {
+            autoInstallAttemptedRef.current = true;
+            void runAutoInstall(result.latestVersion);
+          }
         })
         .catch(() => {});
     };
 
-    const timer = window.setTimeout(runCheck, 5000);
+    const timer = window.setTimeout(() => runCheck(true), 5000);
     // ITERATION CADENCE: poll every 60s while we're actively shipping/testing
     // updates so detection is immediate. For production this should be ~6h — the
     // on-launch and on-focus checks already make a new release feel instant, so
     // the interval is just a backstop for long open-and-idle sessions (and 60s
     // would hit GitHub's ~60/hr unauthenticated limit).
-    const interval = window.setInterval(runCheck, 60 * 1000);
-    const onFocus = () => runCheck();
+    const interval = window.setInterval(() => runCheck(false), 60 * 1000);
+    const onFocus = () => runCheck(false);
     window.addEventListener("focus", onFocus);
     return () => {
       window.clearTimeout(timer);
       window.clearInterval(interval);
       window.removeEventListener("focus", onFocus);
     };
-  }, []);
+  }, [runAutoInstall]);
 
   useEffect(() => {
     if (!toast) {
@@ -675,6 +776,12 @@ function App() {
 
   return (
     <div className="app-shell">
+      {autoUpdateState ? (
+        <UpdateOverlay
+          state={autoUpdateState}
+          onDismiss={() => setAutoUpdateState(null)}
+        />
+      ) : null}
       <TitleBar isDev={isDevFlavor} />
       <div className="app-body">
       <aside className="sidebar">
@@ -859,10 +966,14 @@ function renderView(
       return (
         <AboutView
           autoCheckEnabled={data.settings.autoUpdateCheckEnabled}
+          autoInstallEnabled={data.settings.autoInstallUpdates}
           autoUpdateInfo={updateInfo}
           lastUpdateCheck={lastUpdateCheck}
           onToggleAutoCheck={(enabled) =>
             actions.updateSettings({ autoUpdateCheckEnabled: enabled })
+          }
+          onToggleAutoInstall={(enabled) =>
+            actions.updateSettings({ autoInstallUpdates: enabled })
           }
           setActiveView={setActiveView}
         />
