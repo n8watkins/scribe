@@ -1,0 +1,102 @@
+/* Sync view: the hub for backing up / exporting notes and transcripts to
+   outside destinations (today: Google Drive). Shared shells (view-grid,
+   panel-card, settings-list, pill, status-dot, setting-control, vocab-hint)
+   come from App.css; this file only adds the Sync-specific bits — the
+   destination header row, the organize-prompt field, and the status/footer
+   lines — on the on-brand cyan palette. */
+
+/* Header row at the top of the Connection panel: a cyan icon chip, the
+   destination name + blurb, and the connection state pill pinned right. */
+.sync-destination-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+}
+
+.sync-destination-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  color: #67e8f9;
+  background: rgba(34, 211, 238, 0.1);
+  border: 1px solid rgba(34, 211, 238, 0.18);
+}
+
+.sync-destination-meta {
+  display: grid;
+  gap: 2px;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.sync-destination-meta strong {
+  color: #f8fafc;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.sync-destination-meta small {
+  color: #64748b;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.sync-destination-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+/* Tighten the gap between an icon and its label inside the state pills. */
+.sync-destination-state .pill {
+  gap: 4px;
+}
+
+/* Organize-prompt field: a label/description block stacked above the textarea,
+   mirroring SettingRow's left column but full width so the prompt has room. */
+.sync-prompt-field {
+  display: grid;
+  gap: 8px;
+}
+
+.sync-prompt-label {
+  display: grid;
+  gap: 2px;
+}
+
+.sync-prompt-label strong {
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.sync-prompt-label small {
+  color: #64748b;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+/* Sync now / organize report + error lines sit between panels. A subtle cyan
+   left rule ties them to the brand without competing with the panel cards. */
+.sync-status-line {
+  margin: -2px 0 0;
+  padding-left: 10px;
+  border-left: 2px solid rgba(34, 211, 238, 0.3);
+}
+
+.sync-status-line[role="alert"] {
+  border-left-color: rgba(239, 68, 68, 0.4);
+}
+
+/* Footer hint that more destinations are coming — keeps Sync reading like a
+   hub rather than a single toggle. */
+.sync-more-note {
+  margin: 2px 0 0;
+  text-align: center;
+}

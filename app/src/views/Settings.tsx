@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   BookOpen,
-  Cloud,
   Plus,
   SlidersHorizontal,
   Sparkles,
@@ -9,15 +8,8 @@ import {
 } from "lucide-react";
 import {
   commandErrorMessage,
-  driveOrganizeNow,
-  driveSyncNow,
-  googleSignIn,
-  googleSignOut,
-  googleStatus,
   llmStatus,
   type AppSettings,
-  type DriveSyncReport,
-  type GoogleStatus,
   type LlmStatus,
   type TextReplacement,
 } from "../backend";
@@ -391,12 +383,6 @@ export function SettingsView({
       </article>
       ),
     },
-    {
-      id: "google-drive",
-      title: "Google Drive",
-      icon: <Cloud aria-hidden="true" size={16} />,
-      render: () => <GoogleDrivePanel actions={actions} settings={settings} />,
-    },
   ];
 
   const [activeTab, setActiveTab] = useState(
@@ -552,236 +538,6 @@ function LlmConnectionCard({
         </p>
       ) : null}
     </div>
-  );
-}
-
-function GoogleDrivePanel({
-  actions,
-  settings,
-}: {
-  actions: ViewActions;
-  settings: AppSettings;
-}) {
-  const [status, setStatus] = useState<GoogleStatus | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [lastReport, setLastReport] = useState<DriveSyncReport | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const reloadStatus = useCallback(async () => {
-    try {
-      const next = await googleStatus();
-      setStatus(next);
-    } catch (cause) {
-      setError(commandErrorMessage(cause));
-    }
-  }, []);
-
-  useEffect(() => {
-    void reloadStatus();
-  }, [reloadStatus]);
-
-  // Source of truth is a stored token (status.signedIn), not the email —
-  // the email can be blank on tokens granted before the email scope.
-  const signedIn = status?.signedIn ?? false;
-
-  const handleSignIn = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-
-    try {
-      const updated = await googleSignIn();
-      actions.updateSettings(updated);
-      await reloadStatus();
-    } catch (cause) {
-      setError(commandErrorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  }, [actions, reloadStatus]);
-
-  const handleSignOut = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    setLastReport(null);
-
-    try {
-      const updated = await googleSignOut();
-      actions.updateSettings(updated);
-      await reloadStatus();
-    } catch (cause) {
-      setError(commandErrorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  }, [actions, reloadStatus]);
-
-  const handleSyncNow = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-
-    try {
-      const report = await driveSyncNow();
-      setLastReport(report);
-      setNotice(
-        `Synced ${report.syncedNotes} notes into ${report.filesWritten} file(s).`,
-      );
-    } catch (cause) {
-      setError(commandErrorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  }, []);
-
-  const handleOrganizeNow = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-
-    try {
-      const wrote = await driveOrganizeNow();
-      setNotice(
-        wrote
-          ? "Organized today's notes into a Drive file."
-          : "No notes for today yet — nothing to organize.",
-      );
-    } catch (cause) {
-      setError(commandErrorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  }, []);
-
-  return (
-    <article className="panel-card">
-      <div className="settings-list">
-      {status && !status.configured ? (
-        <p className="muted vocab-hint">
-          This build isn't configured for Google Drive sync.
-        </p>
-      ) : !signedIn ? (
-        <>
-          <p className="muted vocab-hint">
-            Connect a Google account to back up your notes to Google Drive.
-            Sign-in opens your browser to grant access.
-          </p>
-          <div className="setting-control">
-            <button
-              className="primary-button"
-              disabled={busy}
-              onClick={() => void handleSignIn()}
-              type="button"
-            >
-              {busy ? "Signing in…" : "Sign in with Google"}
-            </button>
-          </div>
-        </>
-      ) : (
-        <>
-          <SettingRow
-            description="The connected Google account that notes are synced to."
-            label="Connected account"
-          >
-            <div className="setting-control">
-              <span className="pill preserve">
-                {settings.driveAccountEmail || status?.email || "Signed in"}
-              </span>
-              <button
-                className="secondary-button"
-                disabled={busy}
-                onClick={() => void handleSignOut()}
-                type="button"
-              >
-                {busy ? "Working…" : "Sign out"}
-              </button>
-            </div>
-          </SettingRow>
-          <SettingRow
-            description="Write a Drive copy whenever a note is saved or analyzed."
-            label="Sync notes to Google Drive"
-          >
-            <Toggle
-              checked={settings.driveSyncEnabled}
-              disabled={actions.savingSettings || busy}
-              label="Sync notes to Google Drive"
-              onChange={(driveSyncEnabled) =>
-                actions.updateSettings({ driveSyncEnabled })
-              }
-            />
-          </SettingRow>
-          <SettingRow
-            description="At the hour below, the local LLM reorganizes the previous day's notes into a tidy Drive file."
-            label="End-of-day auto-organize (local LLM)"
-          >
-            <Toggle
-              checked={settings.driveOrganizeEnabled}
-              disabled={actions.savingSettings || busy}
-              label="End-of-day auto-organize (local LLM)"
-              onChange={(driveOrganizeEnabled) =>
-                actions.updateSettings({ driveOrganizeEnabled })
-              }
-            />
-          </SettingRow>
-          <SettingRow
-            description="Hour of day (local time) for the daily organize pass."
-            label="Daily organize hour (local time)"
-          >
-            <select
-              disabled={actions.savingSettings || busy}
-              onChange={(event) =>
-                actions.updateSettings({
-                  driveOrganizeHour: Number(event.currentTarget.value),
-                })
-              }
-              value={String(settings.driveOrganizeHour)}
-            >
-              {Array.from({ length: 24 }, (_, hour) => (
-                <option key={hour} value={hour}>
-                  {String(hour).padStart(2, "0")}:00
-                </option>
-              ))}
-            </select>
-          </SettingRow>
-          <p className="muted vocab-hint">
-            Auto-organize needs the local LLM (notes analysis) running.
-          </p>
-          <div className="setting-control">
-            <button
-              className="secondary-button"
-              disabled={busy}
-              onClick={() => void handleSyncNow()}
-              type="button"
-            >
-              {busy ? "Syncing…" : "Sync now"}
-            </button>
-            <button
-              className="secondary-button"
-              disabled={busy}
-              onClick={() => void handleOrganizeNow()}
-              type="button"
-            >
-              {busy ? "Working…" : "Organize today now"}
-            </button>
-          </div>
-        </>
-      )}
-      {notice ? <p className="muted vocab-hint">{notice}</p> : null}
-      {!notice && lastReport ? (
-        <p className="muted vocab-hint">
-          Last sync: {lastReport.syncedNotes} notes, {lastReport.filesWritten}{" "}
-          file(s).
-        </p>
-      ) : null}
-      {error ? (
-        <p className="muted vocab-hint" role="alert">
-          {error}
-        </p>
-      ) : null}
-      </div>
-    </article>
   );
 }
 

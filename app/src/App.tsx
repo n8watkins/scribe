@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getName as getAppName } from "@tauri-apps/api/app";
 import {
   BarChart3,
+  Cloud,
   Database,
   Download,
   Eraser,
@@ -69,6 +70,7 @@ import { ModelsView } from "./views/Models";
 import { AudioView } from "./views/Audio";
 import { AboutView } from "./views/About";
 import { DeveloperView } from "./views/Developer";
+import { SyncView } from "./views/Sync";
 import scribeIcon from "./assets/scribe-icon.png";
 
 const navItems: { label: ViewName; Icon: LucideIcon }[] = [
@@ -76,6 +78,7 @@ const navItems: { label: ViewName; Icon: LucideIcon }[] = [
   { label: "Transcribe", Icon: Mic },
   { label: "History", Icon: HistoryIcon },
   { label: "Notes", Icon: NotebookPen },
+  { label: "Sync", Icon: Cloud },
   { label: "Stats", Icon: BarChart3 },
   { label: "Settings", Icon: SettingsIcon },
   { label: "Data & Privacy", Icon: ShieldCheck },
@@ -678,6 +681,8 @@ function renderView(
       return <HistoryView actions={actions} data={data} />;
     case "Notes":
       return <HistoryView actions={actions} data={data} notesOnly />;
+    case "Sync":
+      return <SyncView actions={actions} settings={data.settings} />;
     case "Stats":
       return <StatsView stats={data.stats} />;
     case "Settings":

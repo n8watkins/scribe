@@ -5,6 +5,7 @@ export type ViewName =
   | "Transcribe"
   | "History"
   | "Notes"
+  | "Sync"
   | "Stats"
   | "Settings"
   | "Data & Privacy"
