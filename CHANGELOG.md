@@ -4,6 +4,16 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.17 — 2026-06-14
+
+- **Polling back to 1 minute** while we're actively iterating on the updater, so
+  detection is immediate during testing. (Production target is ~6 hours — the
+  on-launch and on-focus checks already make a release feel instant.)
+- **Dismiss from About, too.** The Updates section now has a **Dismiss** button
+  next to Install / View, and shows a "Dismissed — you can still install it here"
+  note once dismissed. Dismiss is shared with the topbar chip, so it works from
+  either place.
+
 ## 0.5.16 — 2026-06-14
 
 - **Update polling dialed back to every 5 minutes** (the 0.5.15 1-minute test

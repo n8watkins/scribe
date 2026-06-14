@@ -91,6 +91,8 @@ export function AboutView({
   setActiveView,
   lastUpdateCheck,
   autoUpdateInfo,
+  dismissedUpdateVersion,
+  onDismissUpdate,
 }: {
   setActiveView?: (view: ViewName) => void;
   /** Timestamp (ms) of the last successful background update poll, so the
@@ -100,6 +102,11 @@ export function AboutView({
    * always reflect an available update (persisting past a topbar dismiss)
    * without the user manually checking. */
   autoUpdateInfo?: UpdateCheckResult | null;
+  /** The version currently dismissed (hides the topbar chip), so About can show
+   * a "dismissed" state instead of the Dismiss button. */
+  dismissedUpdateVersion?: string | null;
+  /** Dismiss the given version (shared with the topbar chip). */
+  onDismissUpdate?: (version: string) => void;
 }) {
   const [version, setVersion] = useState("...");
   const [dataDir, setDataDir] = useState<string | null>(null);
@@ -254,6 +261,23 @@ export function AboutView({
                     <ExternalLink aria-hidden="true" size={15} />
                     View release
                   </button>
+                  {effectiveUpdate.latestVersion === dismissedUpdateVersion ? (
+                    <span className="muted about-dismissed-note">
+                      Dismissed — you won't be nagged, but you can still install
+                      it here.
+                    </span>
+                  ) : (
+                    <button
+                      className="ghost-button about-update-button"
+                      disabled={installing}
+                      onClick={() =>
+                        onDismissUpdate?.(effectiveUpdate.latestVersion)
+                      }
+                      type="button"
+                    >
+                      Dismiss
+                    </button>
+                  )}
                 </>
               ) : (
                 <button

@@ -197,6 +197,19 @@ function App() {
   const dismissedUpdateRef = useRef(dismissedUpdateVersion);
   dismissedUpdateRef.current = dismissedUpdateVersion;
 
+  // Dismiss an available update — shared by the topbar chip and About. Hides the
+  // chip and silences the toast/OS notification for that version; persisted so
+  // it sticks across restarts until a newer version ships. About still shows the
+  // update so installing later stays one stop away.
+  const dismissUpdate = useCallback((version: string) => {
+    setDismissedUpdateVersion(version);
+    try {
+      localStorage.setItem("scribe.dismissedUpdate", version);
+    } catch {
+      // localStorage can be unavailable; the in-memory state still applies.
+    }
+  }, []);
+
   // The dev flavor labels itself so two running instances are tellable apart.
   useEffect(() => {
     void getAppName()
@@ -335,11 +348,12 @@ function App() {
         .catch(() => {});
 
     const timer = window.setTimeout(runCheck, 5000);
-    // Poll every 5 minutes (12/hr — well under GitHub's ~60/hr unauthenticated
-    // limit), plus the on-launch and on-focus checks, so a new release surfaces
-    // quickly without risking rate-limit failures. (0.5.15 briefly polled every
-    // 60s to verify polling works.)
-    const interval = window.setInterval(runCheck, 5 * 60 * 1000);
+    // ITERATION CADENCE: poll every 60s while we're actively shipping/testing
+    // updates so detection is immediate. For production this should be ~6h — the
+    // on-launch and on-focus checks already make a new release feel instant, so
+    // the interval is just a backstop for long open-and-idle sessions (and 60s
+    // would hit GitHub's ~60/hr unauthenticated limit).
+    const interval = window.setInterval(runCheck, 60 * 1000);
     const onFocus = () => runCheck();
     window.addEventListener("focus", onFocus);
     return () => {
@@ -738,18 +752,7 @@ function App() {
                 <button
                   aria-label="Dismiss this update"
                   className="icon-button update-chip-dismiss"
-                  onClick={() => {
-                    setDismissedUpdateVersion(updateInfo.latestVersion);
-                    try {
-                      localStorage.setItem(
-                        "scribe.dismissedUpdate",
-                        updateInfo.latestVersion,
-                      );
-                    } catch {
-                      // localStorage can be unavailable; the in-memory state
-                      // still hides it for this session.
-                    }
-                  }}
+                  onClick={() => dismissUpdate(updateInfo.latestVersion)}
                   title="Dismiss (you can still update from About)"
                   type="button"
                 >
@@ -821,6 +824,8 @@ function App() {
               showNotice,
               lastUpdateCheck,
               updateInfo,
+              dismissUpdate,
+              dismissedUpdateVersion,
             )
           : null}
         {toast ? <Toast notice={toast} /> : null}
@@ -842,6 +847,8 @@ function renderView(
   showNotice: (message: string, tone?: ToastNotice["tone"]) => void,
   lastUpdateCheck: number | null,
   updateInfo: UpdateCheckResult | null,
+  onDismissUpdate: (version: string) => void,
+  dismissedUpdateVersion: string | null,
 ) {
   switch (activeView) {
     case "Transcribe":
@@ -888,7 +895,9 @@ function renderView(
       return (
         <AboutView
           autoUpdateInfo={updateInfo}
+          dismissedUpdateVersion={dismissedUpdateVersion}
           lastUpdateCheck={lastUpdateCheck}
+          onDismissUpdate={onDismissUpdate}
           setActiveView={setActiveView}
         />
       );
