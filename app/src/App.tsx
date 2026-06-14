@@ -326,6 +326,24 @@ function App() {
           showNotice(event.payload.message, "error");
           scheduleRefresh();
         }),
+        // Voice Transform Selection outcome. The user invoked this by hotkey, so
+        // its result is high-signal: toast directly (like hotkey-failure notices)
+        // rather than gating on the notifications setting — a silent failure
+        // would leave the selection unchanged with no explanation.
+        listen<string>("scribe:selection-transformed", () => {
+          setToast({
+            id: Date.now(),
+            tone: "success",
+            message: "Selection transformed.",
+          });
+        }),
+        listen<string>("scribe:selection-transform-failed", (event) => {
+          setToast({
+            id: Date.now(),
+            tone: "error",
+            message: event.payload || "Couldn't transform the selection.",
+          });
+        }),
         listen<{ route: string }>("scribe:navigate", (event) => {
           const route = routeToView(event.payload.route);
           if (route) {

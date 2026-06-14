@@ -32,7 +32,8 @@ const hotkeyActionHints: Record<string, string> = {
   pasteLastTranscript: "Insert the Last Transcript Buffer",
   openDashboard: "Bring up this dashboard",
   discardDictation: "Cancel the current recording without transcribing",
-  transformSelection: "Open the transform panel for your highlighted text",
+  transformSelection:
+    "Tap, speak an instruction for the highlighted text, then tap again (or pause) — Scribe rewrites it in place. Or type one in the Dashboard panel.",
 };
 
 const triggerLabels: Record<TriggerEdge, string> = {

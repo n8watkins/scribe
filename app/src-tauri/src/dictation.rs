@@ -165,6 +165,15 @@ fn transcribe_recording_inner(
     let mut final_text =
         crate::text_replace::apply(&whisper_result.text, &settings.text_replacements);
 
+    // A voice Transform Selection recording: the transcribed text is the user's
+    // spoken *instruction*, not dictation. Route it to the transform engine —
+    // rewrite the selection captured when the recording started, paste it back
+    // in place — and skip the normal cleanup / save / paste path entirely.
+    #[cfg(windows)]
+    if recording.is_transform {
+        return finish_selection_transform(app, &settings, &final_text);
+    }
+
     // Optional local-LLM polish (filler removal, punctuation/casing, light
     // formatting) before the text is saved or pasted. Non-blocking with a
     // raw-text fallback: cleanup() returns the original text on any
@@ -276,6 +285,58 @@ fn transcribe_recording_inner(
         }
     }
     Ok(Some(result))
+}
+
+/// Completes a voice Transform Selection: the `instruction` is the transcribed
+/// spoken command; the selection was captured (and stashed on `BackendState`)
+/// when the recording started. Runs the local-LLM transform and pastes the
+/// result over the still-active selection. Nothing is saved as a transcript and
+/// the normal dictation output never runs. The state machine always leaves
+/// Transcribing (success or a toasted, recoverable failure — never a wedged
+/// Error for a routine LLM miss).
+#[cfg(windows)]
+fn finish_selection_transform(
+    app: &AppHandle,
+    settings: &crate::settings::AppSettings,
+    instruction: &str,
+) -> Result<Option<DictationResult>, CommandError> {
+    let state = app.state::<BackendState>();
+
+    let Some(captured) = state.take_pending_transform() else {
+        log::warn!("Transform recording finished but no selection was captured.");
+        transition_after_empty(app);
+        let _ = app.emit(
+            "scribe:selection-transform-failed",
+            "No selected text was captured. Highlight text, then trigger Transform Selection.",
+        );
+        return Ok(None);
+    };
+
+    let outcome = crate::selection_transform::transform(
+        &captured.selection,
+        instruction,
+        &settings.notes_analysis_endpoint,
+        &settings.notes_analysis_model,
+    )
+    .and_then(|text| {
+        crate::selection_transform::apply_result(app, &text, &captured, true).map(|_| text)
+    });
+
+    // Done either way: return to Idle. A failure toasts rather than parking the
+    // app in Error, since a missed LLM call is routine and recoverable.
+    match outcome {
+        Ok(text) => {
+            transition_after_success(app);
+            log::info!("Selection transform applied ({} chars).", text.len());
+            let _ = app.emit("scribe:selection-transformed", &text);
+        }
+        Err(error) => {
+            transition_after_empty(app);
+            log::warn!("Selection transform failed: {}", error.message);
+            let _ = app.emit("scribe:selection-transform-failed", &error.message);
+        }
+    }
+    Ok(None)
 }
 
 /// Waits (bounded) for the incremental coordinator's assembled text and turns

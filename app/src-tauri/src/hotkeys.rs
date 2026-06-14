@@ -990,11 +990,10 @@ fn run_action(app: &AppHandle, action: HotkeyAction) {
         // Discards the in-progress recording without transcribing. A no-op when
         // nothing is recording, so a stray press is harmless.
         HotkeyAction::DiscardDictation => audio::cancel_recording_for_app(app),
-        // v1 (typed-instruction): bring up the dashboard's transform panel,
-        // where the user types the instruction for the highlighted text. The
-        // voice path (record the spoken instruction and route it straight into
-        // the transform engine) is the planned next step — see report.
-        HotkeyAction::TransformSelection => tray::open_dashboard(app, Some("dashboard")),
+        // Voice path: capture the selection, record a spoken instruction, and
+        // route the transcription into the transform engine (rewrite in place).
+        // The typed-instruction Dashboard panel remains as an alternative.
+        HotkeyAction::TransformSelection => toggle_transform(app),
         HotkeyAction::HoldToTalk => return,
     };
 
@@ -1086,6 +1085,59 @@ fn toggle_dictation(app: &AppHandle) -> Result<(), CommandError> {
         AppStatus::Recording => tray::stop_dictation(app),
         _ => Ok(()),
     }
+}
+
+/// Voice Transform Selection (tap to start, tap again — or let silence
+/// auto-stop end it — to finish). Starting captures the focused app's selection
+/// and records a spoken *instruction*; stopping flows through the normal
+/// stop→transcribe path, but because the recording is flagged `is_transform`
+/// the transcription is routed to the transform engine (rewrite the captured
+/// selection in place) instead of being saved/pasted as dictation. Mirrors
+/// `toggle_dictation`'s start/stop gating.
+#[cfg(windows)]
+fn toggle_transform(app: &AppHandle) -> Result<(), CommandError> {
+    let state = app.state::<BackendState>();
+    let status = state.app_state()?.status().clone();
+    match status {
+        AppStatus::Idle | AppStatus::Ready | AppStatus::Error => start_transform(app),
+        AppStatus::Recording => tray::stop_dictation(app),
+        _ => Ok(()),
+    }
+}
+
+/// Off-Windows there is no selection capture (SendInput/clipboard), so fall
+/// back to surfacing the typed-instruction Dashboard panel.
+#[cfg(not(windows))]
+fn toggle_transform(app: &AppHandle) -> Result<(), CommandError> {
+    tray::open_dashboard(app, Some("dashboard"))
+}
+
+/// Captures the focused app's current selection and starts a transform
+/// recording for the spoken instruction. Aborts with a friendly notice when
+/// nothing is selected, so the user never records an instruction for an empty
+/// selection.
+#[cfg(windows)]
+fn start_transform(app: &AppHandle) -> Result<(), CommandError> {
+    let captured = crate::selection_transform::capture_selection()?;
+    if captured.selection.trim().is_empty() {
+        let _ = app.emit(
+            "scribe:selection-transform-failed",
+            "Highlight some text first, then trigger Transform Selection.",
+        );
+        return Ok(());
+    }
+
+    let state = app.state::<BackendState>();
+    state.set_pending_transform(captured);
+
+    let request = audio::StartRecordingRequest {
+        is_transform: true,
+        ..Default::default()
+    };
+    audio::start_recording_for_app(app, Some(request), true)?;
+    let status = state.app_state()?.status().clone();
+    tray::update_tray_status(app, status);
+    Ok(())
 }
 
 fn unregister_hotkey_set(app: &AppHandle, hotkeys: &HotkeySettings) {

@@ -25,6 +25,10 @@ pub struct BackendState {
     db: Mutex<Database>,
     model_downloads: DownloadRegistry,
     incremental: crate::incremental::Registry,
+    /// Selection captured when a voice Transform Selection recording starts,
+    /// held until that recording's transcription consumes it.
+    #[cfg(windows)]
+    pending_transform: Mutex<Option<crate::selection_transform::CapturedSelection>>,
 }
 
 impl BackendState {
@@ -35,7 +39,35 @@ impl BackendState {
             db: Mutex::new(db),
             model_downloads: DownloadRegistry::default(),
             incremental: crate::incremental::Registry::default(),
+            #[cfg(windows)]
+            pending_transform: Mutex::new(None),
         }
+    }
+
+    /// Stashes the selection captured at the start of a voice transform. One-shot
+    /// and overwritten on each transform trigger; a leftover entry (e.g. the
+    /// recording was too short to transcribe) is only ever read by the next
+    /// transform recording — ordinary dictation never consults it — so it can
+    /// never be misapplied.
+    #[cfg(windows)]
+    pub fn set_pending_transform(
+        &self,
+        captured: crate::selection_transform::CapturedSelection,
+    ) {
+        if let Ok(mut slot) = self.pending_transform.lock() {
+            *slot = Some(captured);
+        }
+    }
+
+    /// Takes the pending transform selection, if any (consumed exactly once).
+    #[cfg(windows)]
+    pub fn take_pending_transform(
+        &self,
+    ) -> Option<crate::selection_transform::CapturedSelection> {
+        self.pending_transform
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take())
     }
 
     pub fn app_state(&self) -> Result<std::sync::MutexGuard<'_, AppStateMachine>, CommandError> {

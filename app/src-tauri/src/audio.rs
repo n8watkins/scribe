@@ -78,6 +78,12 @@ pub struct StartRecordingRequest {
     /// never auto-pasted; the pill renders blue while it records.
     #[serde(default)]
     pub is_note: bool,
+    /// Selected-text transform: this recording captures a spoken *instruction*.
+    /// Its transcribed text is routed to the transform engine (rewrite the
+    /// previously-captured selection) instead of being saved/pasted as
+    /// dictation. Set only by the Transform Selection hotkey path.
+    #[serde(default)]
+    pub is_transform: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -92,6 +98,7 @@ pub struct RecordingSessionInfo {
     pub max_duration_ms: u64,
     pub is_test_clip: bool,
     pub is_note: bool,
+    pub is_transform: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,6 +126,8 @@ pub struct RecordingResult {
     pub stopped_at: DateTime<Utc>,
     #[serde(default)]
     pub is_note: bool,
+    #[serde(default)]
+    pub is_transform: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -277,6 +286,7 @@ impl AudioService {
             max_duration_ms,
             is_test_clip,
             is_note: request.is_note && !is_test_clip,
+            is_transform: request.is_transform && !is_test_clip,
         };
         let (chunk_tx, chunk_rx) = unbounded::<AudioChunk>();
         let (control_tx, control_rx) = unbounded::<WorkerControl>();
@@ -549,6 +559,7 @@ pub fn record_test_clip_for_app(
         microphone_id: None,
         max_duration_ms: Some(duration_ms.saturating_add(1_000)),
         is_note: false,
+        is_transform: false,
     };
     // Test clips are never silence auto-stopped: they run for a fixed
     // duration and must capture whatever the mic hears.
@@ -996,6 +1007,7 @@ fn recording_result(
         started_at: info.started_at,
         stopped_at,
         is_note: info.is_note,
+        is_transform: info.is_transform,
     }
 }
 
