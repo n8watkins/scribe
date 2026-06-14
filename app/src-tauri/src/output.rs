@@ -88,6 +88,46 @@ pub fn handle_transcription_output(
     result.map(Some)
 }
 
+/// Pastes arbitrary `text` into the focused app, replacing any active
+/// selection. Reuses the full dictation paste path (foreign-focus guard,
+/// borrow-the-clipboard, modifier release, atomic Ctrl+V, then restore), so the
+/// text lands the same way a dictation would. Used by the selected-text
+/// transform to drop the rewritten text over the original selection.
+///
+/// The text is wrapped in an ephemeral, never-persisted `Transcript` purely to
+/// reuse `paste_transcript_text`; nothing is saved to history. Output events
+/// (`scribe:output-*`) are suppressed because this is not a dictation.
+pub fn paste_text(app: &AppHandle, text: &str) -> Result<OutputResult, CommandError> {
+    let transcript = Transcript::new_last_buffer(text, None, None, None).ok_or_else(|| {
+        CommandError::new(
+            "transform_result_empty",
+            "The transform produced no text to paste.",
+        )
+    })?;
+    let paste_method = app
+        .state::<BackendState>()
+        .db()
+        .and_then(|db| db.get_settings())
+        .map(|settings| settings.paste_method)
+        .unwrap_or(PasteMethod::ClipboardPaste);
+
+    paste_transcript_text(app, &transcript, OutputMode::AutoPaste, paste_method, false)
+}
+
+/// Snapshots every clipboard format as raw bytes (text, image, files, ...) so
+/// it can be restored later. Public wrapper over the platform snapshot used by
+/// the selected-text transform to preserve the user's pre-capture clipboard.
+/// Returns an empty vec on any failure (treated as "nothing to restore").
+pub fn save_clipboard_snapshot() -> Vec<(u32, Vec<u8>)> {
+    platform::save_clipboard_snapshot()
+}
+
+/// Restores a snapshot produced by `save_clipboard_snapshot`. Public wrapper
+/// over the platform restore used by the selected-text transform.
+pub fn restore_clipboard_snapshot(snapshot: &[(u32, Vec<u8>)]) -> Result<(), CommandError> {
+    platform::restore_clipboard_snapshot(snapshot)
+}
+
 pub fn paste_last_transcript(app: &AppHandle) -> Result<OutputResult, CommandError> {
     let state = app.state::<BackendState>();
     let (transcript, paste_method) = {

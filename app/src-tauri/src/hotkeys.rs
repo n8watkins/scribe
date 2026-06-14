@@ -26,6 +26,7 @@ pub enum HotkeyAction {
     PasteLastTranscript,
     OpenDashboard,
     DiscardDictation,
+    TransformSelection,
 }
 
 impl HotkeyAction {
@@ -42,6 +43,9 @@ impl HotkeyAction {
             "discardDictation" | "discard_dictation" | "discard-dictation" => {
                 Ok(Self::DiscardDictation)
             }
+            "transformSelection" | "transform_selection" | "transform-selection" => {
+                Ok(Self::TransformSelection)
+            }
             _ => Err(CommandError::new(
                 "invalid_hotkey_action",
                 format!("Unknown hotkey action '{}'.", value),
@@ -56,6 +60,7 @@ impl HotkeyAction {
             Self::PasteLastTranscript => "paste_last_transcript",
             Self::OpenDashboard => "open_dashboard",
             Self::DiscardDictation => "discard_dictation",
+            Self::TransformSelection => "transform_selection",
         }
     }
 
@@ -66,6 +71,7 @@ impl HotkeyAction {
             Self::PasteLastTranscript => &hotkeys.paste_last_transcript,
             Self::OpenDashboard => &hotkeys.open_dashboard,
             Self::DiscardDictation => &hotkeys.discard_dictation,
+            Self::TransformSelection => &hotkeys.transform_selection,
         }
     }
 
@@ -76,6 +82,7 @@ impl HotkeyAction {
             Self::PasteLastTranscript => hotkeys.paste_last_transcript = shortcut,
             Self::OpenDashboard => hotkeys.open_dashboard = shortcut,
             Self::DiscardDictation => hotkeys.discard_dictation = shortcut,
+            Self::TransformSelection => hotkeys.transform_selection = shortcut,
         }
     }
 
@@ -89,6 +96,7 @@ impl HotkeyAction {
             Self::PasteLastTranscript => Some(hotkeys.paste_last_transcript_trigger),
             Self::OpenDashboard => Some(hotkeys.open_dashboard_trigger),
             Self::DiscardDictation => Some(hotkeys.discard_dictation_trigger),
+            Self::TransformSelection => Some(hotkeys.transform_selection_trigger),
         }
     }
 
@@ -113,16 +121,21 @@ impl HotkeyAction {
                 hotkeys.discard_dictation_trigger = edge;
                 true
             }
+            Self::TransformSelection => {
+                hotkeys.transform_selection_trigger = edge;
+                true
+            }
         }
     }
 }
 
-const HOTKEY_ACTIONS: [HotkeyAction; 5] = [
+const HOTKEY_ACTIONS: [HotkeyAction; 6] = [
     HotkeyAction::HoldToTalk,
     HotkeyAction::ToggleDictation,
     HotkeyAction::PasteLastTranscript,
     HotkeyAction::OpenDashboard,
     HotkeyAction::DiscardDictation,
+    HotkeyAction::TransformSelection,
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -977,6 +990,11 @@ fn run_action(app: &AppHandle, action: HotkeyAction) {
         // Discards the in-progress recording without transcribing. A no-op when
         // nothing is recording, so a stray press is harmless.
         HotkeyAction::DiscardDictation => audio::cancel_recording_for_app(app),
+        // v1 (typed-instruction): bring up the dashboard's transform panel,
+        // where the user types the instruction for the highlighted text. The
+        // voice path (record the spoken instruction and route it straight into
+        // the transform engine) is the planned next step — see report.
+        HotkeyAction::TransformSelection => tray::open_dashboard(app, Some("dashboard")),
         HotkeyAction::HoldToTalk => return,
     };
 
@@ -1508,5 +1526,6 @@ mod tests {
         assert_ne!(prod.paste_last_transcript, dev.paste_last_transcript);
         assert_ne!(prod.open_dashboard, dev.open_dashboard);
         assert_ne!(prod.discard_dictation, dev.discard_dictation);
+        assert_ne!(prod.transform_selection, dev.transform_selection);
     }
 }

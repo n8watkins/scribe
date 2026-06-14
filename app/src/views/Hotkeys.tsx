@@ -23,6 +23,7 @@ const hotkeyActionLabels: Record<string, string> = {
   pasteLastTranscript: "Paste Last Transcript",
   openDashboard: "Open Dashboard",
   discardDictation: "Discard / Cancel",
+  transformSelection: "Transform Selection",
 };
 
 const hotkeyActionHints: Record<string, string> = {
@@ -31,6 +32,7 @@ const hotkeyActionHints: Record<string, string> = {
   pasteLastTranscript: "Insert the Last Transcript Buffer",
   openDashboard: "Bring up this dashboard",
   discardDictation: "Cancel the current recording without transcribing",
+  transformSelection: "Open the transform panel for your highlighted text",
 };
 
 const triggerLabels: Record<TriggerEdge, string> = {
@@ -303,6 +305,8 @@ export function HotkeysView({
         return settings.hotkeys.openDashboardTrigger;
       case "discardDictation":
         return settings.hotkeys.discardDictationTrigger;
+      case "transformSelection":
+        return settings.hotkeys.transformSelectionTrigger;
       default:
         return null;
     }

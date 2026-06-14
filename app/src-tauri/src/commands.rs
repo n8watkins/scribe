@@ -924,6 +924,69 @@ pub fn copy_transcript(app: tauri::AppHandle, id: String) -> Result<OutputResult
     output::copy_transcript(&app, &id)
 }
 
+/// Selected-text transform: copy the text the user highlighted in the focused
+/// app, rewrite it with the local LLM per `instruction`, and paste the result
+/// back over the selection. The instruction is typed here (the v1 path); the
+/// voice path will route a spoken instruction into the same engine.
+///
+/// Runs on a blocking worker because the local inference (and the capture
+/// settle) can be slow; settings are read up front so no lock is held across
+/// the HTTP call. Reuses `notes_analysis_endpoint` / `notes_analysis_model` as
+/// the LLM server — no new settings.
+#[tauri::command]
+pub async fn transform_selection(
+    app: tauri::AppHandle,
+    instruction: String,
+) -> Result<OutputResult, CommandError> {
+    tauri::async_runtime::spawn_blocking(move || transform_selection_blocking(&app, &instruction))
+        .await
+        .map_err(|error| CommandError::new("selection_transform_failed", error.to_string()))?
+}
+
+#[cfg(windows)]
+fn transform_selection_blocking(
+    app: &tauri::AppHandle,
+    instruction: &str,
+) -> Result<OutputResult, CommandError> {
+    use crate::selection_transform;
+
+    if instruction.trim().is_empty() {
+        return Err(CommandError::new(
+            "instruction_empty",
+            "No instruction was given. Type what to do with the selected text.",
+        ));
+    }
+
+    let (endpoint, model) = {
+        let state = app.state::<BackendState>();
+        let settings = state.db()?.get_settings()?;
+        (settings.notes_analysis_endpoint, settings.notes_analysis_model)
+    };
+
+    // 1. Copy the current selection out of the focused app, remembering the
+    //    user's prior clipboard so it can be restored.
+    let captured = selection_transform::capture_selection()?;
+
+    // 2. Rewrite it with the local LLM.
+    let transformed =
+        selection_transform::transform(&captured.selection, instruction, &endpoint, &model)?;
+
+    // 3. Paste the result back over the still-selected original, then restore
+    //    the pre-capture clipboard.
+    selection_transform::apply_result(app, &transformed, &captured, true)
+}
+
+#[cfg(not(windows))]
+fn transform_selection_blocking(
+    _app: &tauri::AppHandle,
+    _instruction: &str,
+) -> Result<OutputResult, CommandError> {
+    Err(CommandError::new(
+        "selection_transform_unsupported",
+        "Selected-text transform is currently implemented for Windows only.",
+    ))
+}
+
 #[tauri::command]
 pub fn list_models(
     app: tauri::AppHandle,

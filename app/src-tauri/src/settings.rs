@@ -280,6 +280,10 @@ fn default_discard_dictation() -> String {
     "Ctrl+Alt+X".to_string()
 }
 
+fn default_transform_selection() -> String {
+    "Ctrl+Alt+R".to_string()
+}
+
 fn default_toggle_trigger() -> TriggerEdge {
     // Toggle fires on release by default so the note chord (hold the toggle
     // key, tap Q) keeps working, matching the shipped Backquote behavior.
@@ -298,6 +302,12 @@ pub struct HotkeySettings {
     /// fills the shipped Ctrl+Alt+X.
     #[serde(default = "default_discard_dictation")]
     pub discard_dictation: String,
+    /// Selected-text transform: copy the highlighted text, rewrite it with the
+    /// local LLM per a typed/spoken instruction, and paste the result back over
+    /// the selection. Single-shot; absent from pre-transform settings JSON, so
+    /// #[serde(default)] fills the shipped Ctrl+Alt+R.
+    #[serde(default = "default_transform_selection")]
+    pub transform_selection: String,
     /// Which edge Toggle Dictation acts on. Release (default) keeps the
     /// hold-and-tap-Q note chord; Press fires immediately and disables it.
     #[serde(default = "default_toggle_trigger")]
@@ -311,6 +321,9 @@ pub struct HotkeySettings {
     /// Which edge Discard / Cancel acts on (default Press).
     #[serde(default)]
     pub discard_dictation_trigger: TriggerEdge,
+    /// Which edge Transform Selection acts on (default Press).
+    #[serde(default)]
+    pub transform_selection_trigger: TriggerEdge,
 }
 
 impl Default for HotkeySettings {
@@ -321,10 +334,12 @@ impl Default for HotkeySettings {
             paste_last_transcript: "Ctrl+Alt+V".to_string(),
             open_dashboard: "Ctrl+Alt+F".to_string(),
             discard_dictation: default_discard_dictation(),
+            transform_selection: default_transform_selection(),
             toggle_dictation_trigger: TriggerEdge::Release,
             paste_last_transcript_trigger: TriggerEdge::Press,
             open_dashboard_trigger: TriggerEdge::Press,
             discard_dictation_trigger: TriggerEdge::Press,
+            transform_selection_trigger: TriggerEdge::Press,
         }
     }
 }
@@ -363,10 +378,12 @@ impl HotkeySettings {
             paste_last_transcript: "Ctrl+Alt+Shift+V".to_string(),
             open_dashboard: "Ctrl+Alt+Shift+F".to_string(),
             discard_dictation: "Ctrl+Alt+Shift+X".to_string(),
+            transform_selection: "Ctrl+Alt+Shift+R".to_string(),
             toggle_dictation_trigger: TriggerEdge::Release,
             paste_last_transcript_trigger: TriggerEdge::Press,
             open_dashboard_trigger: TriggerEdge::Press,
             discard_dictation_trigger: TriggerEdge::Press,
+            transform_selection_trigger: TriggerEdge::Press,
         }
     }
 }
