@@ -4,6 +4,34 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.4 — 2026-06-13
+
+UI declutter / redesign pass (run partly via parallel agents) plus a few new
+controls:
+
+- **Chrome declutter:** every page now shows just its name (the long per-page
+  subtitles are gone); the "Scribe" wordmark is on-brand blue; removed the
+  "Offline ready" sidebar panel; section-panel header icons sit left of titles.
+- **Dashboard tiles** are horizontal now — bigger icon, label + value, and a
+  redirect arrow; the status tile shows a single status (no duplicate pill); the
+  mic name is stripped of the Windows "Microphone (…)" wrapper.
+- **Reactive visualizer:** the Transcribe/Audio bars now move with your mic
+  level (same `audio://level` stream the pill uses) instead of being static.
+- **Settings inputs:** durations are typed millisecond fields with a live
+  "≈ Ns" read-out and no spinners; narrower control column; Models "In use" →
+  "Active" and its folder button sits next to Refresh.
+- **Transcribe** split into "Record" / "Transcribe a file" tabs; the last-buffer
+  and file-result areas are height-capped and scroll inside.
+- **History/Notes:** entry actions in a 2×2 grid; "see more" sits under the
+  snippet; expanded items cap-and-scroll; Notes icon moved left of its heading.
+- **New "Discard / Cancel" hotkey** (default `Ctrl+Alt+X`) that cancels the
+  current recording.
+- **Window:** default size is now `960×680`, with a "Save current size as
+  default" button (Data & Privacy) that persists and restores on launch.
+- Data & Privacy shows the on-disk data folder path. (Assigning a *custom* data
+  folder is groundwork-only for now — the picker is held back until the
+  database/models/clips can be safely relocated and Windows-tested.)
+
 ## 0.5.3 — 2026-06-13
 
 - **Per-bind press/release trigger.** Toggle Dictation, Paste Last Transcript,
