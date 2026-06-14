@@ -4,6 +4,17 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.0 — 2026-06-13
+
+- **Audio view reorganized** into Input / Audio processing / Device health
+  sections (compact, no scrolling at the default window).
+- **Settings deep-links** — a gear button in Notes and History jumps straight to
+  the relevant Settings tab (`openSettings(tab)`); the "Notes analysis" tab is
+  now just **Notes**.
+- Marks completion of the full UX/architecture rework plan — all 8 workstreams
+  (insertion, archive, models, pill, LM-Studio status, dictionary, audio,
+  dashboard/refactor).
+
 ## 0.4.8 — 2026-06-13
 
 - **Dictionary redesign.** The old "Custom vocabulary" tab is now **Dictionary**,
