@@ -6,6 +6,7 @@ import {
   Check,
   Clock,
   Download,
+  ExternalLink,
   FolderOpen,
   History,
   Keyboard,
@@ -227,7 +228,7 @@ export function AboutView() {
             {updateResult?.updateAvailable ? (
               <>
                 <button
-                  className="primary-button"
+                  className="primary-button about-update-button"
                   disabled={installing}
                   onClick={() => void handleInstallUpdate()}
                   type="button"
@@ -236,11 +237,12 @@ export function AboutView() {
                   {installing ? "Installing..." : "Install update"}
                 </button>
                 <button
-                  className="ghost-button"
+                  className="secondary-button about-update-button"
                   disabled={installing}
                   onClick={() => void openReleasePage(updateResult.releaseUrl)}
                   type="button"
                 >
+                  <ExternalLink aria-hidden="true" size={15} />
                   View release
                 </button>
               </>

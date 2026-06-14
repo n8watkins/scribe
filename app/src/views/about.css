@@ -52,7 +52,13 @@
 .about-block-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
+  gap: 12px;
+}
+
+/* Install update + View release: same footprint so they read as a matched
+   pair rather than two differently-sized buttons. */
+.about-update-button {
+  min-width: 140px;
 }
 
 /* Local data path: monospace path on its own line with a folder icon button

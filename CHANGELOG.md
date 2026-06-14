@@ -4,6 +4,16 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.7 — 2026-06-14
+
+- **Fixes the "Error opening file for writing … ggml-base.dll" update failure.**
+  A whisper-server child process orphaned by a non-graceful exit could keep the
+  bundled whisper DLLs locked, so the next install/update failed. The NSIS
+  installer now kills any leftover `whisper-server.exe` before writing files
+  (pre-install hook), so updates no longer get stuck on a locked file.
+- **About:** "Install update" and "View release" are now a matched pair — both
+  have icons, the same footprint, and more breathing room between them.
+
 ## 0.5.6 — 2026-06-14
 
 UI feedback wave (built by three parallel agents in isolated worktrees):
