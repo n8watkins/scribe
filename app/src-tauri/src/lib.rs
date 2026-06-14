@@ -305,6 +305,19 @@ pub fn run() {
             ));
             hotkeys::setup(app.handle(), &settings.hotkeys)?;
             tray::setup(app.handle())?;
+            // Restore the user's saved default window size (physical pixels),
+            // mirroring how the pill restores its saved position. Absent values
+            // leave the tauri.conf.json default in place.
+            if let (Some(width), Some(height)) = (settings.window_width, settings.window_height) {
+                if width > 0 && height > 0 {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.set_size(tauri::PhysicalSize::new(
+                            width as u32,
+                            height as u32,
+                        ));
+                    }
+                }
+            }
             // The dev flavor must be tellable from stable at a glance: the
             // window title (and taskbar entry) carries the flavored name.
             if is_dev_flavor(app.handle()) {
@@ -376,6 +389,9 @@ pub fn run() {
             commands::get_test_clip_audio,
             commands::open_data_folder,
             commands::open_models_folder,
+            commands::get_data_dir,
+            commands::pick_data_dir,
+            commands::save_window_size,
             commands::transcribe_recording,
             commands::transcribe_file,
             commands::analyze_note,

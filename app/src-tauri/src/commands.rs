@@ -547,19 +547,101 @@ pub fn get_test_clip_audio(app: tauri::AppHandle) -> Result<String, CommandError
 
 #[tauri::command]
 pub fn open_data_folder(app: tauri::AppHandle) -> Result<(), CommandError> {
-    let dir = app.path().app_data_dir().map_err(|error| {
+    open_folder(&app, effective_data_dir(&app)?)
+}
+
+/// The directory Scribe treats as its data root: the user-chosen `data_dir`
+/// when set, otherwise the OS app-data directory. Existing data is never moved
+/// when this changes; only future data lands in the new location.
+fn effective_data_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandError> {
+    if let Some(custom) = app
+        .state::<BackendState>()
+        .db()
+        .ok()
+        .and_then(|db| db.get_settings().ok())
+        .and_then(|settings| settings.data_dir)
+    {
+        let trimmed = custom.trim();
+        if !trimmed.is_empty() {
+            return Ok(std::path::PathBuf::from(trimmed));
+        }
+    }
+
+    app.path().app_data_dir().map_err(|error| {
         CommandError::new(
             "app_data_dir_unavailable",
             format!("Could not locate Scribe app data directory. {}", error),
         )
-    })?;
-    open_folder(&app, dir)
+    })
+}
+
+/// Returns the current effective data directory as a display string, so the
+/// Data & Privacy view can show the path prominently.
+#[tauri::command]
+pub fn get_data_dir(app: tauri::AppHandle) -> Result<String, CommandError> {
+    Ok(effective_data_dir(&app)?.to_string_lossy().into_owned())
+}
+
+/// Opens a native folder picker so the user can choose a new data directory.
+/// Returns the chosen absolute path, or None when the user cancels. Saving the
+/// choice is the frontend's job (it writes `dataDir` via update_settings),
+/// matching how the pill persists its position.
+#[tauri::command]
+pub fn pick_data_dir(app: tauri::AppHandle) -> Result<Option<String>, CommandError> {
+    #[cfg(windows)]
+    {
+        let start = effective_data_dir(&app).unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let picked = rfd::FileDialog::new()
+            .set_title("Choose Scribe data folder")
+            .set_directory(&start)
+            .pick_folder();
+        Ok(picked.map(|path| path.to_string_lossy().into_owned()))
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        Err(CommandError::new(
+            "folder_picker_unsupported",
+            "The folder picker is only available in the Windows build.",
+        ))
+    }
 }
 
 #[tauri::command]
 pub fn open_models_folder(app: tauri::AppHandle) -> Result<(), CommandError> {
     let dir = model_manager::models_dir(&app)?;
     open_folder(&app, dir)
+}
+
+/// Reads the main window's current inner size and persists it as the default
+/// window size, mirroring how the pill stores its position. The saved size is
+/// restored on the next launch (see lib.rs setup).
+#[tauri::command]
+pub fn save_window_size(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, BackendState>,
+) -> Result<AppSettings, CommandError> {
+    let window = app.get_webview_window("main").ok_or_else(|| {
+        CommandError::new("window_unavailable", "The main window is not available.")
+    })?;
+    let size = window.inner_size().map_err(|error| {
+        CommandError::new(
+            "window_size_unavailable",
+            format!("Could not read the window size. {}", error),
+        )
+    })?;
+
+    let mut settings = state.db()?.get_settings()?;
+    settings.window_width = Some(size.width as i32);
+    settings.window_height = Some(size.height as i32);
+    state.db()?.save_settings(&settings)?;
+    log::info!(
+        "Saved default window size {}x{}",
+        size.width,
+        size.height
+    );
+    Ok(settings)
 }
 
 /// Runs the user's notes-analysis prompt over a saved transcript via the

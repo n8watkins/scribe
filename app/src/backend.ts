@@ -48,9 +48,11 @@ export type HotkeySettings = {
   toggleDictation: string;
   pasteLastTranscript: string;
   openDashboard: string;
+  discardDictation: string;
   toggleDictationTrigger: TriggerEdge;
   pasteLastTranscriptTrigger: TriggerEdge;
   openDashboardTrigger: TriggerEdge;
+  discardDictationTrigger: TriggerEdge;
 };
 
 /** Deterministic post-transcription replacement: whenever `from` is spoken,
@@ -101,6 +103,11 @@ export type AppSettings = {
   pillY: number | null;
   pillColorNormal: string;
   pillColorNote: string;
+  /** Custom data directory for FUTURE data; null uses the OS app-data dir. */
+  dataDir: string | null;
+  /** Saved default main-window size (physical pixels); null uses the config default. */
+  windowWidth: number | null;
+  windowHeight: number | null;
 };
 
 export type Transcript = {
@@ -306,7 +313,8 @@ export type HotkeyAction =
   | "holdToTalk"
   | "toggleDictation"
   | "pasteLastTranscript"
-  | "openDashboard";
+  | "openDashboard"
+  | "discardDictation";
 
 export type HotkeyBinding = {
   action: string;
@@ -536,6 +544,25 @@ export function openDataFolder(): Promise<void> {
 
 export function openModelsFolder(): Promise<void> {
   return invoke("open_models_folder");
+}
+
+/** The current effective data directory (custom when set, else the OS app-data
+ * dir) as a display string. */
+export function getDataDir(): Promise<string> {
+  return invoke("get_data_dir");
+}
+
+/** Opens a native folder picker for the data directory; resolves to the chosen
+ * absolute path, or null when the user cancels. Persist the choice with
+ * updateSettings({ dataDir }). */
+export function pickDataDir(): Promise<string | null> {
+  return invoke("pick_data_dir");
+}
+
+/** Reads the main window's current size and saves it as the default; returns
+ * the updated settings. */
+export function saveWindowSize(): Promise<AppSettings> {
+  return invoke("save_window_size");
 }
 
 export function transcribeRecording(

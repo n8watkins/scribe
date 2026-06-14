@@ -1,10 +1,18 @@
-import { useCallback, useState } from "react";
-import { Eraser, FolderOpen, ShieldCheck, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import {
+  Eraser,
+  FolderOpen,
+  Maximize2,
+  ShieldCheck,
+  Trash2,
+} from "lucide-react";
 import {
   clearTranscriptHistory,
   commandErrorMessage,
+  getDataDir,
   openDataFolder,
   openModelsFolder,
+  saveWindowSize,
   type AppSettings,
 } from "../backend";
 import type { ViewActions } from "../types";
@@ -22,6 +30,21 @@ export function DataPrivacyView({
 }) {
   const [clearingHistory, setClearingHistory] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
+  const [dataDir, setDataDir] = useState<string | null>(null);
+  const [savingWindowSize, setSavingWindowSize] = useState(false);
+  const [windowSizeSaved, setWindowSizeSaved] = useState(false);
+
+  const loadDataDir = useCallback(async () => {
+    try {
+      setDataDir(await getDataDir());
+    } catch (error) {
+      setDataError(commandErrorMessage(error));
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadDataDir();
+  }, [loadDataDir]);
 
   const handleClearHistory = useCallback(async () => {
     if (!window.confirm("Clear all saved transcript history?")) {
@@ -50,6 +73,23 @@ export function DataPrivacyView({
       setDataError(commandErrorMessage(error));
     }
   }, []);
+
+  const handleSaveWindowSize = useCallback(async () => {
+    setDataError(null);
+    setSavingWindowSize(true);
+    setWindowSizeSaved(false);
+
+    try {
+      await saveWindowSize();
+      await actions.refresh();
+      setWindowSizeSaved(true);
+      window.setTimeout(() => setWindowSizeSaved(false), 2500);
+    } catch (error) {
+      setDataError(commandErrorMessage(error));
+    } finally {
+      setSavingWindowSize(false);
+    }
+  }, [actions]);
 
   return (
     <section className="view-grid">
@@ -110,6 +150,16 @@ export function DataPrivacyView({
         {dataError ? (
           <InlineError message={dataError} onRetry={actions.refresh} />
         ) : null}
+        <div className="data-dir-field">
+          <span className="data-dir-label">Data folder</span>
+          <code className="data-dir-path" title={dataDir ?? undefined}>
+            {dataDir ?? "Loading..."}
+          </code>
+          <p className="muted data-dir-note">
+            Where Scribe keeps your database, audio clips, and models on this
+            device.
+          </p>
+        </div>
         <div className="button-column">
           <button
             className="secondary-button"
@@ -148,6 +198,30 @@ export function DataPrivacyView({
             {clearingHistory ? "Clearing..." : "Clear transcript history"}
           </button>
         </div>
+      </SectionPanel>
+
+      <SectionPanel
+        icon={<Maximize2 aria-hidden="true" size={16} />}
+        title="Window"
+      >
+        <SettingRow
+          description="Reopen Scribe at the window's current size."
+          label="Default window size"
+        >
+          <button
+            className="secondary-button"
+            disabled={savingWindowSize}
+            onClick={() => void handleSaveWindowSize()}
+            type="button"
+          >
+            <Maximize2 aria-hidden="true" size={15} />
+            {savingWindowSize
+              ? "Saving..."
+              : windowSizeSaved
+                ? "Saved"
+                : "Save current size as default"}
+          </button>
+        </SettingRow>
       </SectionPanel>
     </section>
   );

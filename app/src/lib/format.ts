@@ -342,6 +342,11 @@ export function hotkeyRows(settings: AppSettings) {
       label: "Open Dashboard",
       value: settings.hotkeys.openDashboard,
     },
+    {
+      action: "discardDictation",
+      label: "Discard / Cancel",
+      value: settings.hotkeys.discardDictation,
+    },
   ];
 }
 

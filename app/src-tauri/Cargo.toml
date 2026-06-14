@@ -43,6 +43,10 @@ keyring = { version = "3", features = ["windows-native"] }
 
 [target.'cfg(windows)'.dependencies]
 cpal = "0.15"
+# Native folder picker for choosing the data directory. Windows-only (the app
+# ships for Windows); the picker command errors elsewhere. xdg-portal feature
+# disabled so no GTK/portal system libs are pulled in.
+rfd = { version = "0.15", default-features = false }
 windows = { version = "0.58", features = [
     "Win32_Devices_FunctionDiscovery",
     "Win32_Foundation",

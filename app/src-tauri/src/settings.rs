@@ -129,6 +129,18 @@ pub struct AppSettings {
     /// color string). Defaults to the shipped cyan.
     #[serde(default = "default_pill_color_note")]
     pub pill_color_note: String,
+    /// Where Scribe stores FUTURE data (DB, clips, models) when the user picks
+    /// a custom folder. None means the OS app-data directory. Changing it does
+    /// not migrate existing data.
+    #[serde(default)]
+    pub data_dir: Option<String>,
+    /// Saved main-window size (physical pixels). None means the shipped default
+    /// from tauri.conf.json. Stored like pill_x/pill_y so the window reopens at
+    /// the size the user last saved.
+    #[serde(default)]
+    pub window_width: Option<i32>,
+    #[serde(default)]
+    pub window_height: Option<i32>,
     pub hotkeys: HotkeySettings,
 }
 
@@ -249,6 +261,10 @@ pub enum TriggerEdge {
     Release,
 }
 
+fn default_discard_dictation() -> String {
+    "Ctrl+Alt+X".to_string()
+}
+
 fn default_toggle_trigger() -> TriggerEdge {
     // Toggle fires on release by default so the note chord (hold the toggle
     // key, tap Q) keeps working, matching the shipped Backquote behavior.
@@ -262,6 +278,11 @@ pub struct HotkeySettings {
     pub toggle_dictation: String,
     pub paste_last_transcript: String,
     pub open_dashboard: String,
+    /// Cancels (discards) the in-progress recording without transcribing.
+    /// Single-shot; absent from pre-discard settings JSON, so #[serde(default)]
+    /// fills the shipped Ctrl+Alt+X.
+    #[serde(default = "default_discard_dictation")]
+    pub discard_dictation: String,
     /// Which edge Toggle Dictation acts on. Release (default) keeps the
     /// hold-and-tap-Q note chord; Press fires immediately and disables it.
     #[serde(default = "default_toggle_trigger")]
@@ -272,6 +293,9 @@ pub struct HotkeySettings {
     /// Which edge Open Dashboard acts on (default Press).
     #[serde(default)]
     pub open_dashboard_trigger: TriggerEdge,
+    /// Which edge Discard / Cancel acts on (default Press).
+    #[serde(default)]
+    pub discard_dictation_trigger: TriggerEdge,
 }
 
 impl Default for HotkeySettings {
@@ -281,9 +305,11 @@ impl Default for HotkeySettings {
             toggle_dictation: "Backquote".to_string(),
             paste_last_transcript: "Ctrl+Alt+V".to_string(),
             open_dashboard: "Ctrl+Alt+F".to_string(),
+            discard_dictation: default_discard_dictation(),
             toggle_dictation_trigger: TriggerEdge::Release,
             paste_last_transcript_trigger: TriggerEdge::Press,
             open_dashboard_trigger: TriggerEdge::Press,
+            discard_dictation_trigger: TriggerEdge::Press,
         }
     }
 }
@@ -321,9 +347,11 @@ impl HotkeySettings {
             toggle_dictation: "Ctrl+Shift+Backquote".to_string(),
             paste_last_transcript: "Ctrl+Alt+Shift+V".to_string(),
             open_dashboard: "Ctrl+Alt+Shift+F".to_string(),
+            discard_dictation: "Ctrl+Alt+Shift+X".to_string(),
             toggle_dictation_trigger: TriggerEdge::Release,
             paste_last_transcript_trigger: TriggerEdge::Press,
             open_dashboard_trigger: TriggerEdge::Press,
+            discard_dictation_trigger: TriggerEdge::Press,
         }
     }
 }
@@ -373,6 +401,9 @@ impl Default for AppSettings {
             pill_y: None,
             pill_color_normal: default_pill_color_normal(),
             pill_color_note: default_pill_color_note(),
+            data_dir: None,
+            window_width: None,
+            window_height: None,
             hotkeys: HotkeySettings::default(),
         }
     }

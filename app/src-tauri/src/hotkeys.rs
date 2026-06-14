@@ -25,6 +25,7 @@ pub enum HotkeyAction {
     ToggleDictation,
     PasteLastTranscript,
     OpenDashboard,
+    DiscardDictation,
 }
 
 impl HotkeyAction {
@@ -38,6 +39,9 @@ impl HotkeyAction {
                 Ok(Self::PasteLastTranscript)
             }
             "openDashboard" | "open_dashboard" | "open-dashboard" => Ok(Self::OpenDashboard),
+            "discardDictation" | "discard_dictation" | "discard-dictation" => {
+                Ok(Self::DiscardDictation)
+            }
             _ => Err(CommandError::new(
                 "invalid_hotkey_action",
                 format!("Unknown hotkey action '{}'.", value),
@@ -51,6 +55,7 @@ impl HotkeyAction {
             Self::ToggleDictation => "toggle_dictation",
             Self::PasteLastTranscript => "paste_last_transcript",
             Self::OpenDashboard => "open_dashboard",
+            Self::DiscardDictation => "discard_dictation",
         }
     }
 
@@ -60,6 +65,7 @@ impl HotkeyAction {
             Self::ToggleDictation => &hotkeys.toggle_dictation,
             Self::PasteLastTranscript => &hotkeys.paste_last_transcript,
             Self::OpenDashboard => &hotkeys.open_dashboard,
+            Self::DiscardDictation => &hotkeys.discard_dictation,
         }
     }
 
@@ -69,6 +75,7 @@ impl HotkeyAction {
             Self::ToggleDictation => hotkeys.toggle_dictation = shortcut,
             Self::PasteLastTranscript => hotkeys.paste_last_transcript = shortcut,
             Self::OpenDashboard => hotkeys.open_dashboard = shortcut,
+            Self::DiscardDictation => hotkeys.discard_dictation = shortcut,
         }
     }
 
@@ -81,6 +88,7 @@ impl HotkeyAction {
             Self::ToggleDictation => Some(hotkeys.toggle_dictation_trigger),
             Self::PasteLastTranscript => Some(hotkeys.paste_last_transcript_trigger),
             Self::OpenDashboard => Some(hotkeys.open_dashboard_trigger),
+            Self::DiscardDictation => Some(hotkeys.discard_dictation_trigger),
         }
     }
 
@@ -101,15 +109,20 @@ impl HotkeyAction {
                 hotkeys.open_dashboard_trigger = edge;
                 true
             }
+            Self::DiscardDictation => {
+                hotkeys.discard_dictation_trigger = edge;
+                true
+            }
         }
     }
 }
 
-const HOTKEY_ACTIONS: [HotkeyAction; 4] = [
+const HOTKEY_ACTIONS: [HotkeyAction; 5] = [
     HotkeyAction::HoldToTalk,
     HotkeyAction::ToggleDictation,
     HotkeyAction::PasteLastTranscript,
     HotkeyAction::OpenDashboard,
+    HotkeyAction::DiscardDictation,
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -961,6 +974,9 @@ fn run_action(app: &AppHandle, action: HotkeyAction) {
                 tray::open_dashboard(app, None)
             }
         }
+        // Discards the in-progress recording without transcribing. A no-op when
+        // nothing is recording, so a stray press is harmless.
+        HotkeyAction::DiscardDictation => audio::cancel_recording_for_app(app),
         HotkeyAction::HoldToTalk => return,
     };
 
@@ -1491,5 +1507,6 @@ mod tests {
         assert_ne!(prod.toggle_dictation, dev.toggle_dictation);
         assert_ne!(prod.paste_last_transcript, dev.paste_last_transcript);
         assert_ne!(prod.open_dashboard, dev.open_dashboard);
+        assert_ne!(prod.discard_dictation, dev.discard_dictation);
     }
 }
