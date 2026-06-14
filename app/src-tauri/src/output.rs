@@ -871,11 +871,13 @@ mod platform {
     }
 
     pub fn send_paste_shortcut() -> Result<(), CommandError> {
-        wait_for_modifier_release();
-        // Backstop (same as `direct_insert_text`): force-release any modifier
-        // still physically held so a lingering Ctrl/Alt/Win can't combine with
-        // the synthetic Ctrl+V below and scramble the target (e.g. Windows
-        // Terminal). Clipboard paste is the default path, so this guard matters.
+        // Paste fires on key-PRESS, not on release: rather than blocking until
+        // the user lets go of the whole paste chord (which made Ctrl+Alt+Shift+V
+        // feel like it only worked once every key was released), synthesize
+        // key-ups for any physically-held modifier so a held Ctrl/Alt/Shift/Win
+        // can't combine with the synthetic Ctrl+V below and scramble the target
+        // (e.g. Windows Terminal). The OS treats the modifiers as up until the
+        // held key's next auto-repeat (~250 ms away), so the Ctrl+V lands clean.
         release_held_modifiers()?;
 
         let inputs = [

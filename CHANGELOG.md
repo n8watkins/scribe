@@ -4,6 +4,14 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.2 — 2026-06-13
+
+- **Paste-last fires on key-press, not on release.** The clipboard paste no
+  longer blocks waiting for you to let go of the whole chord (e.g.
+  `Ctrl+Alt+Shift+V`) — it synthesizes the held-modifier release itself and
+  pastes immediately, so you don't have to release every key. The toggle/tilde
+  stays on release by design (it doubles as the hold-`~`+Q note trigger).
+
 ## 0.5.1 — 2026-06-13
 
 Multi-agent code-review fixes:
