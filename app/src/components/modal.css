@@ -1,0 +1,77 @@
+/* Reusable on-brand confirmation dialog. Mirrors the combine-overlay/panel
+   pattern (dark, cyan-accented) so it sits naturally inside the app. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(2, 6, 14, 0.66);
+  backdrop-filter: blur(2px);
+}
+
+.modal-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(420px, 100%);
+  padding: 16px;
+  border: 1px solid rgba(34, 211, 238, 0.28);
+  border-radius: 9px;
+  background:
+    linear-gradient(180deg, rgba(23, 32, 51, 0.92), rgba(13, 19, 32, 0.97)),
+    #0d1320;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+
+.modal-panel.danger {
+  border-color: rgba(248, 113, 113, 0.38);
+}
+
+.modal-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.modal-heading h2 {
+  margin: 0;
+  color: #f8fafc;
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.modal-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  color: #67e8f9;
+  background: rgba(34, 211, 238, 0.12);
+  border: 1px solid rgba(34, 211, 238, 0.22);
+}
+
+.modal-icon.danger {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.26);
+}
+
+.modal-message {
+  margin: 0;
+  color: #cbd5e1;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}

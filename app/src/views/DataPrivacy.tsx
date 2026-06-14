@@ -20,6 +20,7 @@ import { retentionFromValue, retentionToValue } from "../lib/format";
 import { SectionPanel, SettingRow } from "../components/layout";
 import { Toggle } from "../components/primitives";
 import { InlineError } from "../components/feedback";
+import { ConfirmDialog } from "../components/modal";
 
 export function DataPrivacyView({
   actions,
@@ -29,6 +30,7 @@ export function DataPrivacyView({
   settings: AppSettings;
 }) {
   const [clearingHistory, setClearingHistory] = useState(false);
+  const [confirmClearHistory, setConfirmClearHistory] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [savingWindowSize, setSavingWindowSize] = useState(false);
@@ -47,16 +49,13 @@ export function DataPrivacyView({
   }, [loadDataDir]);
 
   const handleClearHistory = useCallback(async () => {
-    if (!window.confirm("Clear all saved transcript history?")) {
-      return;
-    }
-
     setClearingHistory(true);
     setDataError(null);
 
     try {
       await clearTranscriptHistory();
       await actions.refresh();
+      setConfirmClearHistory(false);
     } catch (error) {
       setDataError(commandErrorMessage(error));
     } finally {
@@ -191,7 +190,7 @@ export function DataPrivacyView({
           <button
             className="ghost-button danger"
             disabled={clearingHistory}
-            onClick={() => void handleClearHistory()}
+            onClick={() => setConfirmClearHistory(true)}
             type="button"
           >
             <Trash2 aria-hidden="true" size={15} />
@@ -199,6 +198,17 @@ export function DataPrivacyView({
           </button>
         </div>
       </SectionPanel>
+
+      <ConfirmDialog
+        busy={clearingHistory}
+        confirmLabel="Clear history"
+        danger
+        message="This permanently deletes every saved transcript record on this device. Your Last Transcript Buffer and saved notes are not affected. This cannot be undone."
+        onCancel={() => setConfirmClearHistory(false)}
+        onConfirm={() => void handleClearHistory()}
+        open={confirmClearHistory}
+        title="Clear transcript history?"
+      />
 
       <SectionPanel
         icon={<Maximize2 aria-hidden="true" size={16} />}
