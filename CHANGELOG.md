@@ -4,6 +4,22 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.9 — 2026-06-14
+
+- **Google Drive sync works in released builds again.** Releases were shipping
+  placeholder OAuth credentials (the real ones are gitignored); the release
+  build now injects them from repo secrets, so Drive sync is configured.
+- **In-app visualizer now matches the floating pill** — it uses the pill's exact
+  rolling-history engine (each bar is a moment in time scrolling left) instead of
+  a flat pulse, with a real **vertical** gradient on the bars (cyan→purple).
+- **About:** "What Scribe does" is now a grid of feature cards (not a bullet
+  list); removed the headings that repeated each tab's name.
+- **Brand:** the sidebar shows the real Scribe icon (bigger) instead of an "S".
+- **Updates** are re-checked every 2 hours (not just at launch), so a
+  long-running session still surfaces a new release.
+- Removed the giant native hover tooltip that popped the full transcript text on
+  History/Notes items.
+
 ## 0.5.8 — 2026-06-14
 
 Another UI wave (three parallel agents) + perf fixes:
