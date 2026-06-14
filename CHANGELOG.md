@@ -4,6 +4,27 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.1 — 2026-06-13
+
+Multi-agent code-review fixes:
+
+- **Crash fix:** `text_replace` no longer panics on non-ASCII input — the
+  matcher was mixing byte offsets from a lowercased copy with the original
+  string (e.g. Turkish `İ`); rewritten char-safe.
+- **Terminal-safe default paste:** the clipboard-paste path now force-releases
+  held modifiers before the synthetic `Ctrl+V` (same backstop the keystroke path
+  had), so a held `Ctrl+Alt+V` can't re-fire into terminals; longer post-paste
+  settle.
+- **Date search:** local-day bounds with an exclusive upper bound (`created_at <
+  to`) — fixes UTC-vs-local day shift and a sub-millisecond edge.
+- **Dashboard** "Auto-insert" tile now correct for the paste-and-leave mode.
+- **Models** row reverts to "not downloaded" correctly after delete (stale
+  progress no longer shadows it).
+- **History** search no longer double-loads (undebounced) per keystroke.
+- Stable Tauri listeners across the Notifications toggle; audio meter resets on
+  stop + object-URL leak fixed; History playback error handling; Settings
+  deep-link tab resets on exit; removed dead exports.
+
 ## 0.5.0 — 2026-06-13
 
 - **Audio view reorganized** into Input / Audio processing / Device health
