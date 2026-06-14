@@ -4,6 +4,16 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.4.5 — 2026-06-13
+
+- **Models view rework.** Summary header (active model + storage used + open
+  folder), a "Browse models" accordion that scrolls internally, and **select
+  (downloaded-only radio) cleanly separated from download state** — no more
+  duplicated "Selected".
+- **Cleaner archive rows.** Dropped the duplicated bold first-line "title" — a
+  History/Notes row is now just the transcript text (regular weight) with the
+  timestamp/meta underneath, reclaiming the line for actual content.
+
 ## 0.4.4 — 2026-06-13
 
 - **Phase 2 — transcript archive.** History/Notes rows now **lead with the

@@ -16,7 +16,6 @@ import {
   formatDateTime,
   formatDuration,
   transcriptMeta,
-  transcriptSnippet,
 } from "../lib/format";
 import { EmptyState } from "./feedback";
 import { IconButton } from "./primitives";
@@ -149,7 +148,6 @@ export function TranscriptRow({
         />
       ) : null}
       <div>
-        <strong>{transcriptSnippet(item)}</strong>
         {expanded && canExpand ? (
           <p className="transcript-full">{item.text}</p>
         ) : (
