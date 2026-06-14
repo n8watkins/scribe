@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Keyboard, RefreshCw, RotateCcw } from "lucide-react";
+import { AlertTriangle, RefreshCw, RotateCcw } from "lucide-react";
 import {
   commandErrorMessage,
   getHotkeyStatus,
@@ -15,6 +15,7 @@ import {
 import type { ViewActions } from "../types";
 import { formatHotkey, hotkeyRows } from "../lib/format";
 import { InlineError } from "../components/feedback";
+import "./hotkeys.css";
 
 const hotkeyActionLabels: Record<string, string> = {
   holdToTalk: "Hold-to-Talk",
@@ -323,28 +324,26 @@ export function HotkeysView({
   return (
     <section className="view-grid">
       <article className="panel-card span-2">
-        <div className="section-heading compact">
-          <h2>Global hotkeys</h2>
-          <div className="row-actions">
-            <button
-              className="ghost-button"
-              disabled={statusLoading}
-              onClick={() => void loadStatus()}
-              type="button"
-            >
-              <RefreshCw aria-hidden="true" size={13} />
-              Refresh
-            </button>
-            <button
-              className="secondary-button"
-              disabled={hotkeyBusy || captureAction !== null}
-              onClick={() => void handleResetDefaults()}
-              type="button"
-            >
-              <RotateCcw aria-hidden="true" size={13} />
-              Reset to defaults
-            </button>
-          </div>
+        <div className="hotkeys-toolbar">
+          <button
+            className="secondary-button"
+            disabled={hotkeyBusy || captureAction !== null}
+            onClick={() => void handleResetDefaults()}
+            type="button"
+          >
+            <RotateCcw aria-hidden="true" size={13} />
+            Reset to defaults
+          </button>
+          <button
+            className="ghost-button"
+            disabled={statusLoading}
+            onClick={() => void loadStatus()}
+            type="button"
+          >
+            <RefreshCw aria-hidden="true" size={13} />
+            Refresh
+          </button>
+          <p className="hotkeys-toolbar-note">Global Windows shortcuts</p>
         </div>
         {statusError ? (
           <InlineError message={statusError} onRetry={loadStatus} />
@@ -355,26 +354,44 @@ export function HotkeysView({
             <span>Loading hotkey registration status...</span>
           </div>
         ) : (
-          <div className="hotkey-editor-list">
+          <div className="hotkeys-list">
             {bindings.map((binding) => {
               const isCapturing = captureAction === binding.action;
               const rowError = rowErrors[binding.action] ?? binding.error;
+              // A registered bind needs no status; only failures surface. We
+              // treat "not registered" as a failure once a real status load has
+              // happened (before that we don't know, so don't flag it).
+              const failed = Boolean(status) && !binding.registered;
+              const bindLabel = hotkeyActionLabels[binding.action] ?? binding.action;
+              const bindDisabled = hotkeyBusy || (captureAction !== null && !isCapturing);
               return (
-                <div className="hotkey-editor-row" key={binding.action}>
-                  <div>
-                    <strong>
-                      {hotkeyActionLabels[binding.action] ?? binding.action}
-                    </strong>
+                <div
+                  className={`hotkeys-row${failed ? " hotkeys-row-failed" : ""}`}
+                  key={binding.action}
+                >
+                  <div className="hotkeys-row-info">
+                    <strong className="hotkeys-row-label">{bindLabel}</strong>
                     {rowError ? (
-                      <span className="hotkey-error">{rowError}</span>
+                      <span className="hotkeys-row-error">
+                        <AlertTriangle aria-hidden="true" size={13} />
+                        {rowError}
+                      </span>
+                    ) : failed ? (
+                      <span className="hotkeys-row-error">
+                        <AlertTriangle aria-hidden="true" size={13} />
+                        Not registered — another app may already use this
+                        shortcut.
+                      </span>
                     ) : (
-                      <span>
+                      <span className="hotkeys-row-desc">
                         {binding.action === "toggleDictation"
                           ? toggleHint(binding.trigger, noteChordActive)
                           : (hotkeyActionHints[binding.action] ??
                             "Global shortcut")}
                       </span>
                     )}
+                  </div>
+                  <div className="hotkeys-row-controls">
                     {binding.trigger ? (
                       <div
                         className="trigger-segments segmented-control"
@@ -401,58 +418,52 @@ export function HotkeysView({
                         ))}
                       </div>
                     ) : null}
-                  </div>
-                  <kbd>
-                    {isCapturing
-                      ? capturePreview
-                        ? `${formatHotkey(capturePreview)} ...`
-                        : "Press keys..."
-                      : formatHotkey(binding.shortcut)}
-                  </kbd>
-                  {status ? (
-                    binding.registered ? (
-                      <span className="pill ready">Registered</span>
-                    ) : (
-                      <span className="pill error">
-                        {binding.error ? "Failed" : "Inactive"}
+                    <div className="hotkeys-bind-cell">
+                      <button
+                        type="button"
+                        className={`hotkeys-bind${
+                          isCapturing ? " hotkeys-bind-capturing" : ""
+                        }${failed && !isCapturing ? " hotkeys-bind-failed" : ""}`}
+                        disabled={bindDisabled}
+                        aria-label={
+                          isCapturing
+                            ? `Capturing new keys for ${bindLabel} — press Escape to cancel`
+                            : `${bindLabel}: ${formatHotkey(binding.shortcut)}. Click to change.`
+                        }
+                        title={isCapturing ? "Press Esc to cancel" : "Click to change"}
+                        onClick={() =>
+                          isCapturing
+                            ? cancelCapture()
+                            : startCapture(binding.action as HotkeyAction)
+                        }
+                      >
+                        {isCapturing
+                          ? capturePreview
+                            ? `${formatHotkey(capturePreview)} ...`
+                            : "Press keys..."
+                          : formatHotkey(binding.shortcut)}
+                      </button>
+                      <span className="hotkeys-bind-hint" aria-hidden="true">
+                        {isCapturing ? "Esc to cancel" : "click to change"}
                       </span>
-                    )
-                  ) : (
-                    <span className="pill idle">Unknown</span>
-                  )}
-                  {isCapturing ? (
-                    <button
-                      className="secondary-button"
-                      onClick={cancelCapture}
-                      type="button"
-                    >
-                      Press keys... (Esc to cancel)
-                    </button>
-                  ) : (
-                    <button
-                      className="secondary-button"
-                      disabled={hotkeyBusy || captureAction !== null}
-                      onClick={() => startCapture(binding.action as HotkeyAction)}
-                      type="button"
-                    >
-                      <Keyboard aria-hidden="true" size={13} />
-                      Rebind
-                    </button>
-                  )}
+                    </div>
+                  </div>
                 </div>
               );
             })}
           </div>
         )}
-        {status?.windowsFallbackNote ? (
-          <p className="muted hotkey-note">{status.windowsFallbackNote}</p>
-        ) : null}
-        {status?.holdReleaseVerificationRequired ? (
-          <p className="muted hotkey-note">
-            Hold-to-talk release is tracked by a native key watcher, so
-            modifier-only chords like Ctrl+Shift work for holding.
-          </p>
-        ) : null}
+        <div className="hotkeys-notes">
+          {status?.windowsFallbackNote ? (
+            <p className="hotkey-note">{status.windowsFallbackNote}</p>
+          ) : null}
+          {status?.holdReleaseVerificationRequired ? (
+            <p className="hotkey-note">
+              Hold-to-talk release is tracked by a native key watcher, so
+              modifier-only chords like Ctrl+Shift work for holding.
+            </p>
+          ) : null}
+        </div>
       </article>
     </section>
   );

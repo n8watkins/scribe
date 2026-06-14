@@ -1,0 +1,263 @@
+/* Wave 2 — Hotkeys view redesign.
+ *
+ * Scoped to the Hotkeys panel only: every rule is qualified by `.hotkeys-*`
+ * (the new markup in `views/Hotkeys.tsx`), so nothing here leaks into other
+ * views. The legacy `.hotkey-editor-*` rules in App.css are no longer used by
+ * this view — the row markup was rebuilt with the classes below.
+ *
+ * Goals (dictated): the <kbd> bind IS the rebind target (click to capture),
+ * no "Registered" pill / no separate Rebind button, only FAILURES surface,
+ * bigger/readable bind + description text, press/release sits to the RIGHT of
+ * the bind, one heading, and Refresh / Reset moved left + made subtle.
+ *
+ * On-brand accents: cyan #22d3ee, blue #38bdf8, #67e8f9. */
+
+/* ---------------------------------------------------------------------------
+ * Header — single heading is the sidebar ("Hotkeys"), so the panel drops its
+ * own <h2>. The toolbar leads with Refresh + Reset on the LEFT and a quiet
+ * caption noting these are global Windows shortcuts.
+ * ------------------------------------------------------------------------- */
+.hotkeys-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  margin-bottom: 12px;
+}
+
+.hotkeys-toolbar .secondary-button,
+.hotkeys-toolbar .ghost-button {
+  min-height: 26px;
+  padding: 0 9px;
+  font-size: 11.5px;
+}
+
+/* The caption sits after the buttons and pushes to the far right on wide
+   layouts; it wraps under them when the panel narrows. */
+.hotkeys-toolbar-note {
+  margin: 0 0 0 auto;
+  color: #64748b;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+ * Rows — vertically compact, but with larger, readable text. Three columns:
+ * the label + description on the left, then the press/release switch and the
+ * clickable bind hugging the right edge.
+ * ------------------------------------------------------------------------- */
+.hotkeys-list {
+  display: grid;
+  gap: 7px;
+}
+
+.hotkeys-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 14px;
+  row-gap: 6px;
+  padding: 9px 11px;
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 8px;
+  background: rgba(7, 11, 20, 0.32);
+}
+
+/* A failed/unregistered bind tints the whole row so it is obvious at a glance,
+   not just via the inline reason text. */
+.hotkeys-row.hotkeys-row-failed {
+  border-color: rgba(239, 68, 68, 0.28);
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.hotkeys-row-info {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.hotkeys-row-label {
+  color: #f8fafc;
+  font-size: 13.5px;
+  font-weight: 720;
+  line-height: 1.25;
+}
+
+/* Bumped up from the old 11px caption — the per-row description is now clearly
+   readable. */
+.hotkeys-row-desc {
+  color: #94a3b8;
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
+/* Only shown when a bind fails to register: the reason, in error red, in place
+   of the normal description. */
+.hotkeys-row-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #fca5a5;
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
+.hotkeys-row-error svg {
+  flex: 0 0 auto;
+}
+
+/* The right cluster: press/release switch (when present) then the bind. */
+.hotkeys-row-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* Compact two-segment press/release, sitting to the LEFT of the bind. */
+.hotkeys-row-controls .trigger-segments {
+  margin: 0;
+  width: 168px;
+  flex: 0 0 auto;
+}
+
+/* ---------------------------------------------------------------------------
+ * The bind — a large, clickable <kbd>. Clicking it starts capture (the same
+ * flow the old Rebind button triggered). It carries the rebind affordance:
+ * a hover lift, cyan focus ring, and a "click to change" tooltip.
+ * ------------------------------------------------------------------------- */
+.hotkeys-bind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 132px;
+  min-height: 38px;
+  padding: 7px 14px;
+  color: #f8fafc;
+  background: #070b14;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-bottom-color: rgba(148, 163, 184, 0.4);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease,
+    background 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.hotkeys-bind:hover {
+  transform: translateY(-1px);
+  border-color: rgba(34, 211, 238, 0.5);
+  box-shadow: 0 6px 18px rgba(34, 211, 238, 0.12);
+}
+
+.hotkeys-bind:focus-visible {
+  outline: none;
+  border-color: rgba(34, 211, 238, 0.7);
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.22);
+}
+
+.hotkeys-bind:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.hotkeys-bind:disabled:hover {
+  transform: none;
+  border-color: rgba(148, 163, 184, 0.24);
+  box-shadow: none;
+}
+
+/* While capturing, the bind reads as an active cyan target prompting keys. */
+.hotkeys-bind.hotkeys-bind-capturing {
+  color: #a5f3fc;
+  border-color: rgba(34, 211, 238, 0.7);
+  background: rgba(34, 211, 238, 0.08);
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.18);
+}
+
+/* A bind that is NOT registered is styled as an error so the failure is
+   unmistakable even before reading the reason. */
+.hotkeys-bind.hotkeys-bind-failed {
+  color: #fecaca;
+  border-color: rgba(239, 68, 68, 0.5);
+  border-bottom-color: rgba(239, 68, 68, 0.6);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.hotkeys-bind.hotkeys-bind-failed:hover {
+  border-color: rgba(248, 113, 113, 0.7);
+  box-shadow: 0 6px 18px rgba(239, 68, 68, 0.14);
+}
+
+/* "click to change" hint under the bind, revealed on row hover. Keeps the row
+   compact (zero-height, just the line) while still teaching the interaction. */
+.hotkeys-bind-hint {
+  margin-top: 3px;
+  color: #475569;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-align: center;
+  letter-spacing: 0.02em;
+  opacity: 0;
+  transition: opacity 140ms ease, color 140ms ease;
+}
+
+.hotkeys-row:hover .hotkeys-bind-hint {
+  opacity: 1;
+  color: #67e8f9;
+}
+
+/* Wrap the bind + its hint so the hint stays centered under the kbd. */
+.hotkeys-bind-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  flex: 0 0 auto;
+}
+
+/* ---------------------------------------------------------------------------
+ * Bottom notes — slightly larger so they are comfortably readable.
+ * ------------------------------------------------------------------------- */
+.hotkeys-notes {
+  margin-top: 12px;
+  display: grid;
+  gap: 6px;
+}
+
+.hotkeys-notes .hotkey-note {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* ---------------------------------------------------------------------------
+ * Narrow layout (app breakpoint): stack the controls under the info so the
+ * bind never gets crushed, and let the toolbar note drop to its own line.
+ * ------------------------------------------------------------------------- */
+@media (max-width: 760px) {
+  .hotkeys-row {
+    grid-template-columns: 1fr;
+  }
+
+  .hotkeys-row-controls {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .hotkeys-bind {
+    min-width: 0;
+  }
+
+  .hotkeys-toolbar-note {
+    margin-left: 0;
+    white-space: normal;
+  }
+}
