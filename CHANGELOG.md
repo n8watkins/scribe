@@ -4,6 +4,13 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.4.7 — 2026-06-13
+
+- **Local-LLM status.** The Notes-analysis settings tab gets a connection card
+  with a **Test connection** button — shows Connected + the server's available
+  models, or "Not running" with setup guidance, for the LM Studio / Ollama
+  endpoint that powers notes analysis.
+
 ## 0.4.6 — 2026-06-13
 
 - **Pill polish.** The floating pill is now a true rounded pill and a bit
