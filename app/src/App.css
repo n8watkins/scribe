@@ -37,6 +37,18 @@
   /* Borders. */
   --scribe-border: rgba(148, 163, 184, 0.18);
 
+  /* Inset "island" surfaces (rows, tiles, code, kbd, sunken panels). The base
+     tone is given as raw RGB channels so each call can pick its own alpha via
+     rgba(var(--scribe-surface-rgb), …) and stay a translucent inset; the solid
+     variants are for opaque chips/controls. On dark themes these are deep navy;
+     Daylight flips them to a soft off-white so rows never read as dark boxes. */
+  --scribe-surface-rgb: 7, 11, 20;
+  --scribe-surface-solid: #111827; /* secondary button face */
+  --scribe-surface-strong: #1e293b; /* toggle track (off) */
+  --scribe-surface-sunken: #0b1220; /* modal/combine panel */
+  --scribe-surface-raised: #0b1322; /* floating tooltip */
+  --scribe-surface-kbd: #070b14; /* kbd key face */
+
   /* Primary accent family (cyan/blue) + the dark text that sits on it. */
   --scribe-accent: #22d3ee;
   --scribe-accent-strong: #38bdf8;
@@ -46,6 +58,9 @@
   --scribe-accent-soft: rgba(34, 211, 238, 0.24);
   --scribe-accent-glow: rgba(34, 211, 238, 0.08);
   --scribe-accent-ring: rgba(34, 211, 238, 0.12);
+  /* Scrollbar thumb (idle + hover) — accent-tinted, recolored per theme. */
+  --scribe-scrollbar-thumb: rgba(34, 211, 238, 0.28);
+  --scribe-scrollbar-thumb-hover: rgba(34, 211, 238, 0.5);
 
   /* Text. */
   --scribe-text: #f8fafc;
@@ -53,6 +68,7 @@
   --scribe-text-muted: #94a3b8;
   --scribe-text-faint: #64748b;
 
+  color-scheme: dark;
   color: var(--scribe-text);
   background: var(--scribe-bg);
   font-synthesis: none;
@@ -78,6 +94,12 @@
   --scribe-glow-1: rgba(34, 211, 238, 0.11);
   --scribe-glow-2: rgba(139, 92, 246, 0.1);
   --scribe-border: rgba(148, 163, 184, 0.18);
+  --scribe-surface-rgb: 7, 11, 20;
+  --scribe-surface-solid: #111827;
+  --scribe-surface-strong: #1e293b;
+  --scribe-surface-sunken: #0b1220;
+  --scribe-surface-raised: #0b1322;
+  --scribe-surface-kbd: #070b14;
   --scribe-accent: #22d3ee;
   --scribe-accent-strong: #38bdf8;
   --scribe-accent-bright: #67e8f9;
@@ -85,6 +107,8 @@
   --scribe-accent-soft: rgba(34, 211, 238, 0.24);
   --scribe-accent-glow: rgba(34, 211, 238, 0.08);
   --scribe-accent-ring: rgba(34, 211, 238, 0.12);
+  --scribe-scrollbar-thumb: rgba(34, 211, 238, 0.28);
+  --scribe-scrollbar-thumb-hover: rgba(34, 211, 238, 0.5);
   --scribe-text: #f8fafc;
   --scribe-text-secondary: #cbd5e1;
   --scribe-text-muted: #94a3b8;
@@ -101,6 +125,12 @@
   --scribe-glow-1: rgba(45, 212, 191, 0.14);
   --scribe-glow-2: rgba(56, 189, 248, 0.12);
   --scribe-border: rgba(125, 211, 252, 0.2);
+  --scribe-surface-rgb: 7, 11, 20;
+  --scribe-surface-solid: #111827;
+  --scribe-surface-strong: #1e293b;
+  --scribe-surface-sunken: #0b1220;
+  --scribe-surface-raised: #0b1322;
+  --scribe-surface-kbd: #070b14;
   --scribe-accent: #2dd4bf;
   --scribe-accent-strong: #38bdf8;
   --scribe-accent-bright: #5eead4;
@@ -108,6 +138,8 @@
   --scribe-accent-soft: rgba(45, 212, 191, 0.26);
   --scribe-accent-glow: rgba(45, 212, 191, 0.1);
   --scribe-accent-ring: rgba(45, 212, 191, 0.14);
+  --scribe-scrollbar-thumb: rgba(34, 211, 238, 0.28);
+  --scribe-scrollbar-thumb-hover: rgba(34, 211, 238, 0.5);
   --scribe-text: #ecfeff;
   --scribe-text-secondary: #bae6fd;
   --scribe-text-muted: #7dd3fc;
@@ -124,6 +156,12 @@
   --scribe-glow-1: rgba(129, 140, 248, 0.1);
   --scribe-glow-2: rgba(148, 163, 184, 0.08);
   --scribe-border: rgba(148, 163, 184, 0.2);
+  --scribe-surface-rgb: 7, 11, 20;
+  --scribe-surface-solid: #111827;
+  --scribe-surface-strong: #1e293b;
+  --scribe-surface-sunken: #0b1220;
+  --scribe-surface-raised: #0b1322;
+  --scribe-surface-kbd: #070b14;
   --scribe-accent: #818cf8;
   --scribe-accent-strong: #a5b4fc;
   --scribe-accent-bright: #c7d2fe;
@@ -131,6 +169,8 @@
   --scribe-accent-soft: rgba(129, 140, 248, 0.26);
   --scribe-accent-glow: rgba(129, 140, 248, 0.1);
   --scribe-accent-ring: rgba(129, 140, 248, 0.14);
+  --scribe-scrollbar-thumb: rgba(34, 211, 238, 0.28);
+  --scribe-scrollbar-thumb-hover: rgba(34, 211, 238, 0.5);
   --scribe-text: #f1f5f9;
   --scribe-text-secondary: #cbd5e1;
   --scribe-text-muted: #94a3b8;
@@ -147,6 +187,12 @@
   --scribe-glow-1: rgba(52, 211, 153, 0.14);
   --scribe-glow-2: rgba(16, 185, 129, 0.1);
   --scribe-border: rgba(110, 231, 183, 0.2);
+  --scribe-surface-rgb: 7, 11, 20;
+  --scribe-surface-solid: #111827;
+  --scribe-surface-strong: #1e293b;
+  --scribe-surface-sunken: #0b1220;
+  --scribe-surface-raised: #0b1322;
+  --scribe-surface-kbd: #070b14;
   --scribe-accent: #10b981;
   --scribe-accent-strong: #34d399;
   --scribe-accent-bright: #6ee7b7;
@@ -154,6 +200,8 @@
   --scribe-accent-soft: rgba(16, 185, 129, 0.26);
   --scribe-accent-glow: rgba(16, 185, 129, 0.1);
   --scribe-accent-ring: rgba(16, 185, 129, 0.14);
+  --scribe-scrollbar-thumb: rgba(34, 211, 238, 0.28);
+  --scribe-scrollbar-thumb-hover: rgba(34, 211, 238, 0.5);
   --scribe-text: #ecfdf5;
   --scribe-text-secondary: #bbf7d0;
   --scribe-text-muted: #86c5a3;
@@ -170,6 +218,12 @@
   --scribe-glow-1: rgba(167, 139, 250, 0.14);
   --scribe-glow-2: rgba(217, 70, 239, 0.1);
   --scribe-border: rgba(196, 181, 253, 0.2);
+  --scribe-surface-rgb: 7, 11, 20;
+  --scribe-surface-solid: #111827;
+  --scribe-surface-strong: #1e293b;
+  --scribe-surface-sunken: #0b1220;
+  --scribe-surface-raised: #0b1322;
+  --scribe-surface-kbd: #070b14;
   --scribe-accent: #a78bfa;
   --scribe-accent-strong: #c084fc;
   --scribe-accent-bright: #d8b4fe;
@@ -177,14 +231,27 @@
   --scribe-accent-soft: rgba(167, 139, 250, 0.26);
   --scribe-accent-glow: rgba(167, 139, 250, 0.1);
   --scribe-accent-ring: rgba(167, 139, 250, 0.14);
+  --scribe-scrollbar-thumb: rgba(34, 211, 238, 0.28);
+  --scribe-scrollbar-thumb-hover: rgba(34, 211, 238, 0.5);
   --scribe-text: #f5f3ff;
   --scribe-text-secondary: #ddd6fe;
   --scribe-text-muted: #a99fce;
   --scribe-text-faint: #786e9e;
 }
 
-/* Daylight — a light theme: near-white surfaces, dark text, blue accent.
-   Contrast tuned so the dark-on-accent buttons stay legible. */
+/* Daylight — a light theme: off-white surfaces, dark text, a blue accent.
+ *
+ * Contrast verified against the surface each tone actually sits on (ratios are
+ * WCAG; body/label text targets ≥ 4.5:1, large headings ≥ 3:1):
+ *   - text #0f172a            on white / page / rows : 14.6–17.9 : 1
+ *   - text-secondary #334155  on white                : 10.4 : 1
+ *   - text-muted #475569      on white / rows         :  6.2–7.6 : 1
+ *   - text-faint #576473      on white / page / rows  :  5.0–6.0 : 1
+ *   - accent #0369a1 (button bg) with on-accent white :  5.67 : 1
+ *   - accent #0369a1 as a text/icon tint on white     :  5.93 : 1
+ * Islands stay light so no row reads as a dark box; the floating tooltip is the
+ * one deliberate exception — its face stays dark (surface-raised) with the
+ * existing light label, which pops cleanly over the light page. */
 :root[data-theme="daylight"] {
   --scribe-bg: #eef2f7;
   --scribe-bg-elevated: #ffffff;
@@ -194,17 +261,33 @@
   --scribe-glow-1: rgba(14, 165, 233, 0.08);
   --scribe-glow-2: rgba(139, 92, 246, 0.06);
   --scribe-border: rgba(15, 23, 42, 0.14);
-  --scribe-accent: #0284c7;
-  --scribe-accent-strong: #0369a1;
+  /* Light inset surfaces (slate-200 tint over the card) + a few solid faces. */
+  --scribe-surface-rgb: 226, 232, 240;
+  --scribe-surface-solid: #e2e8f0; /* secondary button face */
+  --scribe-surface-strong: #94a3b8; /* toggle track (off) — keeps the white knob visible */
+  --scribe-surface-sunken: #f1f5f9; /* modal/combine panel */
+  --scribe-surface-raised: #1e293b; /* tooltip stays dark for pop */
+  --scribe-surface-kbd: #f1f5f9; /* kbd key face */
+  --scribe-accent: #0369a1;
+  --scribe-accent-strong: #075985;
   --scribe-accent-bright: #0ea5e9;
   --scribe-accent-on: #f8fafc;
-  --scribe-accent-soft: rgba(2, 132, 199, 0.22);
-  --scribe-accent-glow: rgba(2, 132, 199, 0.1);
-  --scribe-accent-ring: rgba(2, 132, 199, 0.18);
+  --scribe-accent-soft: rgba(3, 105, 161, 0.2);
+  --scribe-accent-glow: rgba(3, 105, 161, 0.08);
+  --scribe-accent-ring: rgba(3, 105, 161, 0.16);
+  --scribe-scrollbar-thumb: rgba(3, 105, 161, 0.34);
+  --scribe-scrollbar-thumb-hover: rgba(3, 105, 161, 0.55);
   --scribe-text: #0f172a;
   --scribe-text-secondary: #334155;
   --scribe-text-muted: #475569;
-  --scribe-text-faint: #64748b;
+  --scribe-text-faint: #576473;
+}
+
+/* Flip native controls (the <select> popup, the date picker, scrollbars) to
+   their light variants under Daylight; every other theme inherits the dark
+   color-scheme set on :root. */
+:root[data-theme="daylight"] {
+  color-scheme: light;
 }
 
 * {
@@ -466,8 +549,8 @@ button {
 }
 
 .secondary-button {
-  color: #e2e8f0;
-  background: #111827;
+  color: var(--scribe-text-secondary);
+  background: var(--scribe-surface-solid);
   border: 1px solid rgba(148, 163, 184, 0.2);
 }
 
@@ -480,7 +563,7 @@ button {
 .compact-action {
   min-height: 23px;
   padding: 0 7px;
-  color: #cbd5e1;
+  color: var(--scribe-text-secondary);
   background: rgba(15, 23, 42, 0.78);
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 5px;
@@ -536,7 +619,7 @@ button {
   padding-top: 10px;
   border-top: 1px solid rgba(148, 163, 184, 0.12);
   font-size: 13px;
-  color: #cbd5e1;
+  color: var(--scribe-text-secondary);
 }
 
 /* The second toggle ("Install updates automatically") sits directly under the
@@ -596,7 +679,7 @@ button:disabled {
   display: block;
   overflow: hidden;
   min-width: 0;
-  color: #f8fafc;
+  color: var(--scribe-text);
   font-size: 12.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -631,7 +714,7 @@ button:disabled {
 }
 
 .status-card-label {
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   font-size: 10px;
   font-weight: 800;
   text-transform: uppercase;
@@ -646,7 +729,7 @@ button:disabled {
   width: 26px;
   height: 26px;
   border-radius: 6px;
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   background: transparent;
   border: 1px solid rgba(148, 163, 184, 0.18);
 }
@@ -667,7 +750,7 @@ button:disabled {
 }
 
 .card-header {
-  color: #cbd5e1;
+  color: var(--scribe-text-secondary);
   font-size: 11.5px;
   font-weight: 760;
 }
@@ -680,7 +763,7 @@ button:disabled {
 }
 
 .muted {
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   font-size: 13px;
 }
 
@@ -719,7 +802,7 @@ button:disabled {
 }
 
 .pill.idle {
-  color: #cbd5e1;
+  color: var(--scribe-text-secondary);
   background: rgba(100, 116, 139, 0.12);
   border: 1px solid rgba(148, 163, 184, 0.18);
 }
@@ -791,7 +874,7 @@ button:disabled {
 
 .section-heading h2 {
   margin: 0;
-  color: #f8fafc;
+  color: var(--scribe-text);
   font-size: 13.5px;
   line-height: 1.25;
 }
@@ -811,7 +894,7 @@ button:disabled {
   margin: 0;
   padding: 10px;
   color: #e2e8f0;
-  background: rgba(7, 11, 20, 0.48);
+  background: rgba(var(--scribe-surface-rgb),0.48);
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 6px;
   font-size: 13px;
@@ -840,7 +923,7 @@ button:disabled {
   justify-content: flex-start;
   flex-wrap: wrap;
   margin: 8px 0;
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   font-size: 11px;
 }
 
@@ -888,7 +971,7 @@ button:disabled {
   min-height: 28px;
   padding: 0 11px;
   border-radius: 6px;
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   background: transparent;
   border: 1px solid transparent;
   font-size: 12px;
@@ -947,7 +1030,7 @@ button:disabled {
   padding: 0 9px;
   border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 6px;
-  background: rgba(7, 11, 20, 0.4);
+  background: rgba(var(--scribe-surface-rgb),0.4);
 }
 
 .search-field svg {
@@ -989,13 +1072,14 @@ select:focus {
 select {
   max-width: 190px;
   padding-right: 26px;
-  color-scheme: dark;
+  /* color-scheme is set per theme on :root (dark) / Daylight (light) so the
+     native popup + scrollbars follow the active theme. */
   appearance: none;
   background:
-    linear-gradient(45deg, transparent 50%, #94a3b8 50%) calc(100% - 14px)
-      50% / 5px 5px no-repeat,
-    linear-gradient(135deg, #94a3b8 50%, transparent 50%) calc(100% - 10px)
-      50% / 5px 5px no-repeat,
+    linear-gradient(45deg, transparent 50%, var(--scribe-text-muted) 50%)
+      calc(100% - 14px) 50% / 5px 5px no-repeat,
+    linear-gradient(135deg, var(--scribe-text-muted) 50%, transparent 50%)
+      calc(100% - 10px) 50% / 5px 5px no-repeat,
     var(--scribe-bg-elevated);
 }
 
@@ -1010,10 +1094,10 @@ select option {
 select option:hover,
 select option:focus,
 select option:checked {
-  color: #04121d;
-  background: #38bdf8;
+  color: var(--scribe-accent-on);
+  background: var(--scribe-accent-strong);
   /* Some Chromium builds only honor the highlight via box-shadow inset. */
-  box-shadow: 0 0 0 100px #38bdf8 inset;
+  box-shadow: 0 0 0 100px var(--scribe-accent-strong) inset;
 }
 
 /* Secondary toolbar row: From/To date filters, sort, and Combine. */
@@ -1039,7 +1123,7 @@ select option:checked {
 .filter-field input[type="date"] {
   width: auto;
   min-width: 132px;
-  color-scheme: dark;
+  /* Native date-picker chrome follows the theme color-scheme set on :root. */
 }
 
 .filter-field select {
@@ -1067,13 +1151,13 @@ textarea {
   padding: 10px 12px;
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 6px;
-  background: rgba(7, 11, 20, 0.36);
+  background: rgba(var(--scribe-surface-rgb),0.36);
 }
 
 .recording-stage strong,
 .standout {
   display: block;
-  color: #f8fafc;
+  color: var(--scribe-text);
   font-size: 13px;
 }
 
@@ -1089,7 +1173,7 @@ textarea {
   padding: 7px 9px;
   border: 1px solid rgba(34, 211, 238, 0.2);
   border-radius: 6px;
-  background: rgba(7, 11, 20, 0.55);
+  background: rgba(var(--scribe-surface-rgb),0.55);
 }
 
 .live-transcript-dot {
@@ -1135,12 +1219,12 @@ textarea {
   padding: 3px;
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 6px;
-  background: rgba(7, 11, 20, 0.42);
+  background: rgba(var(--scribe-surface-rgb),0.42);
 }
 
 .segmented-control button {
   min-height: 24px;
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   background: transparent;
   border: 1px solid transparent;
   border-radius: 5px;
@@ -1149,7 +1233,7 @@ textarea {
 }
 
 .segmented-control button.active-segment {
-  color: #f8fafc;
+  color: var(--scribe-text);
   background: rgba(17, 24, 39, 0.95);
   border-color: rgba(34, 211, 238, 0.24);
   box-shadow: inset 0 0 0 1px rgba(34, 211, 238, 0.08);
@@ -1171,7 +1255,7 @@ textarea {
   padding: 8px;
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 6px;
-  background: rgba(7, 11, 20, 0.3);
+  background: rgba(var(--scribe-surface-rgb),0.3);
 }
 
 .choice-row input {
@@ -1184,14 +1268,14 @@ textarea {
 .settings-row strong,
 .hotkey-editor-row strong,
 .model-row strong {
-  color: #f8fafc;
+  color: var(--scribe-text);
   font-size: 13px;
 }
 
 .choice-row small {
   display: block;
   margin-top: 2px;
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   font-size: 12.5px;
 }
 
@@ -1208,7 +1292,7 @@ textarea {
   padding: 8px 9px;
   border: 1px solid rgba(148, 163, 184, 0.13);
   border-radius: 6px;
-  background: rgba(7, 11, 20, 0.32);
+  background: rgba(var(--scribe-surface-rgb),0.32);
 }
 
 .history-row {
@@ -1234,7 +1318,7 @@ textarea {
   overflow: hidden;
   overflow-wrap: anywhere;
   margin: 3px 0 4px;
-  color: #cbd5e1;
+  color: var(--scribe-text-secondary);
   font-size: 12px;
 }
 
@@ -1364,7 +1448,7 @@ textarea {
   padding: 14px;
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 10px;
-  background: #0b1220;
+  background: var(--scribe-surface-sunken);
   box-shadow: 0 24px 60px rgba(2, 6, 14, 0.55);
 }
 
@@ -1423,12 +1507,12 @@ textarea {
 .settings-row > span {
   display: grid;
   gap: 1px;
-  color: #f8fafc;
+  color: var(--scribe-text);
   font-size: 13px;
 }
 
 .settings-row > span small {
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   font-size: 12.5px;
   line-height: 1.35;
 }
@@ -1440,7 +1524,7 @@ textarea {
 }
 
 .setting-control > strong {
-  color: #f8fafc;
+  color: var(--scribe-text);
   font-size: 12px;
 }
 
@@ -1504,12 +1588,12 @@ textarea {
 }
 
 .setup-banner strong {
-  color: #f8fafc;
+  color: var(--scribe-text);
   font-size: 12.5px;
 }
 
 .setup-banner span {
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   font-size: 11px;
 }
 
@@ -1555,7 +1639,7 @@ textarea {
 
 .settings-subhead {
   margin: 0 0 2px;
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
@@ -1598,7 +1682,7 @@ textarea {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   background: transparent;
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 6px;
@@ -1668,7 +1752,7 @@ textarea {
 .control-grid label {
   display: grid;
   gap: 4px;
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   font-size: 11px;
   font-weight: 760;
 }
@@ -1721,11 +1805,11 @@ textarea {
   padding: 8px 10px;
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 6px;
-  background: rgba(7, 11, 20, 0.36);
+  background: rgba(var(--scribe-surface-rgb),0.36);
 }
 
 .models-summary-label {
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   font-size: 10px;
   font-weight: 800;
   text-transform: uppercase;
@@ -1735,7 +1819,7 @@ textarea {
   display: block;
   overflow: hidden;
   min-width: 0;
-  color: #f8fafc;
+  color: var(--scribe-text);
   font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1753,7 +1837,7 @@ textarea {
   gap: 10px;
   width: 100%;
   padding: 2px 0;
-  color: #f8fafc;
+  color: var(--scribe-text);
   background: transparent;
   border: 0;
   font-size: 13px;
@@ -1773,7 +1857,7 @@ textarea {
 }
 
 .accordion-chevron {
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   transition: transform 160ms ease;
 }
 
@@ -1790,7 +1874,7 @@ textarea {
   overflow-x: hidden;
   border: 1px solid rgba(148, 163, 184, 0.13);
   border-radius: 6px;
-  background: rgba(7, 11, 20, 0.28);
+  background: rgba(var(--scribe-surface-rgb),0.28);
 }
 
 .model-scroll .model-table {
@@ -1804,7 +1888,7 @@ textarea {
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.13);
   border-radius: 6px;
-  background: rgba(7, 11, 20, 0.28);
+  background: rgba(var(--scribe-surface-rgb),0.28);
 }
 
 /* Row layout: [select radio] [name + meta + progress] [download status]
@@ -1893,7 +1977,7 @@ textarea {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   background: transparent;
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 6px;
@@ -1904,7 +1988,7 @@ textarea {
 }
 
 .icon-button:hover {
-  color: #f8fafc;
+  color: var(--scribe-text);
   transform: translateY(-1px);
   border-color: rgba(34, 211, 238, 0.42);
 }
@@ -1923,7 +2007,7 @@ textarea {
   z-index: 50;
   padding: 3px 8px;
   color: #e2e8f0;
-  background: #0b1322;
+  background: var(--scribe-surface-raised);
   border: 1px solid rgba(148, 163, 184, 0.28);
   border-radius: 5px;
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
@@ -1953,7 +2037,7 @@ textarea {
   padding: 2px;
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 999px;
-  background: #1e293b;
+  background: var(--scribe-surface-strong);
   transition:
     background 140ms ease,
     border-color 140ms ease;
@@ -1964,7 +2048,7 @@ textarea {
   width: 14px;
   height: 14px;
   border-radius: 999px;
-  background: #cbd5e1;
+  background: var(--scribe-text-secondary);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.32);
   transition:
     transform 140ms ease,
@@ -1989,10 +2073,10 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #cbd5e1;
+  color: var(--scribe-text-secondary);
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 6px;
-  background: rgba(7, 11, 20, 0.32);
+  background: rgba(var(--scribe-surface-rgb),0.32);
   font-size: 12px;
 }
 
@@ -2073,6 +2157,9 @@ textarea {
   color: #dbeafe;
   border: 1px solid rgba(59, 130, 246, 0.25);
   border-radius: 6px;
+  /* Stays a dark glass pill in every theme (incl. Daylight): its pastel
+     success/error text only reads on a dark face. Out of the palette swap by
+     design, like the status pills. */
   background: rgba(7, 11, 20, 0.94);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34);
   font-size: 12px;
@@ -2101,7 +2188,7 @@ code {
   color: #a5f3fc;
   border: 1px solid rgba(34, 211, 238, 0.18);
   border-radius: 6px;
-  background: rgba(7, 11, 20, 0.45);
+  background: rgba(var(--scribe-surface-rgb),0.45);
   font-size: 12px;
 }
 
@@ -2143,12 +2230,12 @@ code {
   padding: 8px 9px;
   border: 1px solid rgba(148, 163, 184, 0.13);
   border-radius: 6px;
-  background: rgba(7, 11, 20, 0.32);
+  background: rgba(var(--scribe-surface-rgb),0.32);
 }
 
 .device-row strong {
   display: block;
-  color: #f8fafc;
+  color: var(--scribe-text);
   font-size: 12px;
 }
 
@@ -2168,14 +2255,14 @@ code {
 
 .hotkey-row {
   min-height: 26px;
-  color: #cbd5e1;
+  color: var(--scribe-text-secondary);
   font-size: 12px;
 }
 
 kbd {
   padding: 3px 6px;
-  color: #f8fafc;
-  background: #070b14;
+  color: var(--scribe-text);
+  background: var(--scribe-surface-kbd);
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-bottom-color: rgba(148, 163, 184, 0.36);
   border-radius: 5px;
@@ -2220,19 +2307,19 @@ kbd {
   padding: 7px 9px;
   border: 1px solid rgba(148, 163, 184, 0.13);
   border-radius: 6px;
-  background: rgba(7, 11, 20, 0.32);
+  background: rgba(var(--scribe-surface-rgb),0.32);
 }
 
 .stat-tile span {
   display: block;
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   font-size: 11px;
 }
 
 .stat-tile strong {
   display: block;
   margin-top: 4px;
-  color: #f8fafc;
+  color: var(--scribe-text);
   font-size: 16px;
   line-height: 1;
 }
@@ -2257,7 +2344,7 @@ kbd {
   color: var(--scribe-text);
   border: 1px solid var(--scribe-border);
   border-radius: 8px;
-  background: rgba(7, 11, 20, 0.32);
+  background: rgba(var(--scribe-surface-rgb),0.32);
   transition:
     transform 140ms ease,
     border-color 140ms ease,
@@ -2463,7 +2550,8 @@ kbd {
   min-height: 110px;
 }
 
-/* On-brand scrollbars: thin, dark track, cyan thumb. */
+/* On-brand scrollbars: thin, transparent track, accent-tinted thumb (recolored
+   per theme; the OS draws native scrollbars to match color-scheme too). */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -2474,15 +2562,15 @@ kbd {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(34, 211, 238, 0.28);
+  background: var(--scribe-scrollbar-thumb);
   border-radius: 999px;
-  border: 2px solid rgba(7, 11, 20, 0.9);
+  border: 2px solid rgba(var(--scribe-surface-rgb),0.9);
   background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(34, 211, 238, 0.5);
-  border: 2px solid rgba(7, 11, 20, 0.9);
+  background: var(--scribe-scrollbar-thumb-hover);
+  border: 2px solid rgba(var(--scribe-surface-rgb),0.9);
   background-clip: padding-box;
 }
 

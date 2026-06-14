@@ -45,11 +45,12 @@ const THEMES: ThemeOption[] = [
     description: "Deep plum with a luminous purple accent.",
     swatches: ["#0c0a1a", "#181233", "#a78bfa", "#c084fc", "#f5f3ff"],
   },
-  // NOTE: a light "daylight" theme is intentionally not offered yet — the
-  // palette indirection is partial, so many surfaces/text stay dark and read
-  // poorly on a light background. Bring it back once the remaining colors are
-  // variable-ized (and per-theme color-scheme is set). The [data-theme="daylight"]
-  // CSS is kept for that follow-up but isn't selectable here.
+  {
+    key: "daylight",
+    name: "Daylight",
+    description: "A clean light theme: white surfaces and a deep-blue accent.",
+    swatches: ["#eef2f7", "#ffffff", "#0369a1", "#075985", "#0f172a"],
+  },
 ];
 
 export function ThemesView({
