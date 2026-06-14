@@ -69,6 +69,7 @@ import { ModelsView } from "./views/Models";
 import { AudioView } from "./views/Audio";
 import { AboutView } from "./views/About";
 import { DeveloperView } from "./views/Developer";
+import scribeIcon from "./assets/scribe-icon.png";
 
 const navItems: { label: ViewName; Icon: LucideIcon }[] = [
   { label: "Dashboard", Icon: Gauge },
@@ -199,24 +200,33 @@ function App() {
     void refresh();
   }, [refresh]);
 
-  // One quiet update check shortly after launch; network failures (offline,
-  // private repo) are ignored.
+  // Quiet update check ~5s after launch, then every 2 hours so a long-running
+  // session still notices a new release without a restart. The topbar "Update
+  // available" button (driven by updateInfo) persists across views; the toast
+  // only fires on the first detection so periodic checks don't nag. Network
+  // failures (offline, rate limit) are ignored.
   useEffect(() => {
-    const timer = window.setTimeout(() => {
+    const runCheck = (notify: boolean) =>
       void checkForUpdate()
         .then((result) => {
           if (result.updateAvailable) {
             setUpdateInfo(result);
-            setToast({
-              id: Date.now(),
-              tone: "info",
-              message: `Scribe v${result.latestVersion} is available — see About to view the release.`,
-            });
+            if (notify) {
+              setToast({
+                id: Date.now(),
+                tone: "info",
+                message: `Scribe v${result.latestVersion} is available — open About to install it.`,
+              });
+            }
           }
         })
         .catch(() => {});
-    }, 5000);
-    return () => window.clearTimeout(timer);
+    const timer = window.setTimeout(() => runCheck(true), 5000);
+    const interval = window.setInterval(() => runCheck(false), 2 * 60 * 60 * 1000);
+    return () => {
+      window.clearTimeout(timer);
+      window.clearInterval(interval);
+    };
   }, []);
 
   useEffect(() => {
@@ -529,7 +539,7 @@ function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">S</div>
+          <img className="brand-mark" src={scribeIcon} alt="" aria-hidden="true" />
           <div>
             <div className="brand-name">
               Scribe
