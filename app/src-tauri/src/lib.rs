@@ -267,6 +267,7 @@ pub fn run() {
                 settings.selected_model_id
             );
             db.enforce_history_retention(settings.history_retention_days)?;
+            db.enforce_notes_retention(settings.notes_retention_days)?;
             // Reconcile the OS launch-at-startup registration with the stored
             // setting (they can drift when the registry entry is removed by
             // hand or the setting was saved while registration failed).

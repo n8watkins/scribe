@@ -129,6 +129,12 @@ pub fn update_settings(
             .enforce_history_retention(settings.history_retention_days)?;
     }
 
+    if previous.notes_retention_days != settings.notes_retention_days {
+        state
+            .db()?
+            .enforce_notes_retention(settings.notes_retention_days)?;
+    }
+
     Ok(settings)
 }
 

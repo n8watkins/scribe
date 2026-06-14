@@ -298,6 +298,7 @@ impl Database {
             self.insert_transcript(transcript)?;
             let settings = self.get_settings()?;
             self.enforce_history_retention(settings.history_retention_days)?;
+            self.enforce_notes_retention(settings.notes_retention_days)?;
         }
         self.upsert_setting(LAST_TRANSCRIPT_ID_KEY, &transcript.id)?;
         Ok(())
@@ -620,6 +621,34 @@ impl Database {
         Ok(())
     }
 
+    /// Auto-prunes saved notes (`is_note = 1`) older than `retention_days`,
+    /// the notes counterpart to `enforce_history_retention`. Notes default to
+    /// no retention (kept forever); this is a no-op unless the user opted into
+    /// a notes window. The two retentions never touch each other's rows.
+    pub fn enforce_notes_retention(
+        &self,
+        retention_days: Option<u16>,
+    ) -> Result<(), CommandError> {
+        let Some(retention_days) = retention_days else {
+            return Ok(());
+        };
+
+        let cutoff = (Utc::now() - chrono::Duration::days(i64::from(retention_days))).to_rfc3339();
+        let clips = self.clip_paths(
+            "SELECT audio_path FROM transcripts \
+             WHERE created_at < ?1 AND audio_path IS NOT NULL AND is_note = 1",
+            [&cutoff],
+        )?;
+        self.conn
+            .execute(
+                "DELETE FROM transcripts WHERE created_at < ?1 AND is_note = 1",
+                [&cutoff],
+            )
+            .map_err(CommandError::database)?;
+        remove_clip_files(clips);
+        Ok(())
+    }
+
     /// Audio-clip paths matched by `sql` (which must select exactly the
     /// audio_path column), collected before their rows are deleted.
     fn clip_paths<P: rusqlite::Params>(
@@ -859,6 +888,50 @@ mod tests {
             .search_transcripts(None, false, None, None, TranscriptSort::default(), 10, 0)
             .unwrap();
         assert_eq!(after.total, 0);
+    }
+
+    #[test]
+    fn notes_retention_prunes_old_notes_and_spares_transcripts() {
+        let db = Database::in_memory().unwrap();
+
+        // An old note, an old dictation transcript, and a fresh note. Save all
+        // three first, then back-date the two "old" rows directly — back-dating
+        // before the last save would let that save's transcript-retention sweep
+        // (default 30 days) purge the aged transcript prematurely.
+        let mut old_note = transcript_with_text("old note");
+        old_note.is_note = true;
+        db.save_last_transcript(&old_note).unwrap();
+        let old_tx = transcript_with_text("old transcript");
+        db.save_last_transcript(&old_tx).unwrap();
+        let mut fresh_note = transcript_with_text("fresh note");
+        fresh_note.is_note = true;
+        db.save_last_transcript(&fresh_note).unwrap();
+        for id in [&old_note.id, &old_tx.id] {
+            db.conn
+                .execute(
+                    "UPDATE transcripts SET created_at = ?2 WHERE id = ?1",
+                    params![id, (Utc::now() - Duration::days(45)).to_rfc3339()],
+                )
+                .unwrap();
+        }
+
+        // Notes retention removes only the aged note; the aged transcript stays.
+        db.enforce_notes_retention(Some(30)).unwrap();
+        let notes = db
+            .search_transcripts(None, true, None, None, TranscriptSort::default(), 10, 0)
+            .unwrap();
+        assert_eq!(notes.total, 1, "only the fresh note should remain");
+        assert_eq!(notes.transcripts[0].id, fresh_note.id);
+        assert!(
+            db.get_transcript_by_id(&old_tx.id).unwrap().is_some(),
+            "notes retention must not touch dictation transcripts"
+        );
+
+        // Transcript retention is the mirror: it removes the aged transcript and
+        // leaves notes (even ones older than its window) intact.
+        db.enforce_history_retention(Some(30)).unwrap();
+        assert!(db.get_transcript_by_id(&old_tx.id).unwrap().is_none());
+        assert!(db.get_transcript_by_id(&fresh_note.id).unwrap().is_some());
     }
 
     #[test]

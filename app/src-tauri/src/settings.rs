@@ -70,6 +70,13 @@ pub struct AppSettings {
     pub history_enabled: bool,
     pub save_audio_clips: bool,
     pub history_retention_days: Option<u16>,
+    /// Auto-prune saved notes (`is_note = 1`) older than N days. Unlike
+    /// dictation transcripts, notes are deliberate saves, so this defaults to
+    /// `None` (keep forever) and the user opts in. Same allowed values as
+    /// `history_retention_days`; tracked separately so the two never share a
+    /// window.
+    #[serde(default)]
+    pub notes_retention_days: Option<u16>,
     /// Local-LLM analysis of notes (on demand from the Notes view). Off by
     /// default; talks to an OpenAI-compatible server (LM Studio, Ollama, ...).
     #[serde(default)]
@@ -394,6 +401,7 @@ impl Default for AppSettings {
             history_enabled: true,
             save_audio_clips: true,
             history_retention_days: Some(30),
+            notes_retention_days: None,
             notes_analysis_enabled: false,
             notes_analysis_prompt: default_notes_analysis_prompt(),
             notes_analysis_endpoint: default_notes_analysis_endpoint(),
@@ -517,6 +525,12 @@ impl AppSettings {
             ));
         }
 
+        if !matches!(self.notes_retention_days, Some(7 | 30 | 90 | 365) | None) {
+            return Err(SettingsValidationError::new(
+                "notesRetentionDays must be 7, 30, 90, 365, or null.",
+            ));
+        }
+
         if self.notes_analysis_enabled {
             let endpoint = self.notes_analysis_endpoint.trim();
             if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
@@ -577,6 +591,9 @@ mod tests {
         assert!(settings.text_replacements.is_empty());
         assert!(settings.history_enabled);
         assert!(settings.save_audio_clips);
+        assert_eq!(settings.history_retention_days, Some(30));
+        // Notes are deliberate saves: kept forever unless the user opts in.
+        assert_eq!(settings.notes_retention_days, None);
         assert_eq!(
             settings.pill_display_mode,
             PillDisplayMode::VisualizerWithText
@@ -613,6 +630,19 @@ mod tests {
         settings.history_retention_days = Some(14);
 
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn validates_notes_retention_options() {
+        let mut settings = AppSettings::default();
+        // Same allowed set as transcripts; an off-list value is rejected.
+        settings.notes_retention_days = Some(14);
+        assert!(settings.validate().is_err());
+
+        for ok in [None, Some(7), Some(30), Some(90), Some(365)] {
+            settings.notes_retention_days = ok;
+            assert!(settings.validate().is_ok());
+        }
     }
 
     #[test]

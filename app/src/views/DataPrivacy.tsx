@@ -107,7 +107,7 @@ export function DataPrivacyView({
     <section className="view-grid">
       <SectionPanel
         icon={<ShieldCheck aria-hidden="true" size={16} />}
-        title="History"
+        title="History & retention"
       >
         <SettingRow
           description="Keep searchable local transcript records."
@@ -121,8 +121,8 @@ export function DataPrivacyView({
           />
         </SettingRow>
         <SettingRow
-          description="Automatically delete old history."
-          label="Retention"
+          description="Auto-delete dictation transcripts older than this."
+          label="Transcript retention"
         >
           <select
             disabled={actions.savingSettings}
@@ -134,6 +134,28 @@ export function DataPrivacyView({
               })
             }
             value={retentionToValue(settings.historyRetentionDays)}
+          >
+            <option value="7">7 days</option>
+            <option value="30">30 days</option>
+            <option value="90">90 days</option>
+            <option value="365">365 days</option>
+            <option value="forever">Forever</option>
+          </select>
+        </SettingRow>
+        <SettingRow
+          description="Auto-delete saved notes older than this. Tracked separately from transcripts — notes are kept forever by default."
+          label="Notes retention"
+        >
+          <select
+            disabled={actions.savingSettings}
+            onChange={(event) =>
+              actions.updateSettings({
+                notesRetentionDays: retentionFromValue(
+                  event.currentTarget.value,
+                ),
+              })
+            }
+            value={retentionToValue(settings.notesRetentionDays)}
           >
             <option value="7">7 days</option>
             <option value="30">30 days</option>

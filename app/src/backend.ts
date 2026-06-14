@@ -87,6 +87,7 @@ export type AppSettings = {
   historyEnabled: boolean;
   saveAudioClips: boolean;
   historyRetentionDays: HistoryRetentionDays;
+  notesRetentionDays: HistoryRetentionDays;
   notesAnalysisEnabled: boolean;
   notesAnalysisPrompt: string;
   notesAnalysisEndpoint: string;
