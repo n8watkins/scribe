@@ -4,6 +4,21 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.20 — 2026-06-14
+
+Code-review fixes for the 0.5.19 auto-update + themes:
+- **Auto-update isn't skipped on a slow startup anymore.** The on-launch
+  auto-install now waits for settings to load instead of racing a fixed 5s timer
+  (it could be silently skipped if the DB read was slow). Still **launch-only** —
+  never installs or closes the app mid-session.
+- **No alarming error screen on launch** when the updater package isn't published
+  yet — the silent auto path just dismisses and keeps the normal chip.
+- **Download watchdog** so the update overlay can't hang forever on a stalled
+  download (falls back to a dismissible error).
+- **Themes:** pulled the half-broken **Daylight** light theme for now (the 5 dark
+  themes are solid; a proper light theme is a follow-up), and added a pre-paint
+  theme bootstrap so a non-default theme doesn't flash midnight on launch.
+
 ## 0.5.19 — 2026-06-14
 
 - **Seamless, branded auto-update.** New versions now download and install **on

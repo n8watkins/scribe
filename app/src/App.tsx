@@ -216,6 +216,10 @@ function App() {
   if (dashboardData) {
     settingsLoadedRef.current = true;
   }
+  // Version found by the on-LAUNCH check that's awaiting a silent auto-install.
+  // Set ONLY by the launch check (never mid-session), so auto-install stays
+  // launch-only even though it may actually fire from the settings-loaded effect.
+  const launchInstallVersionRef = useRef<string | null>(null);
 
   // The dev flavor labels itself so two running instances are tellable apart.
   useEffect(() => {
@@ -257,6 +261,13 @@ function App() {
   useEffect(() => {
     const theme = dashboardData?.settings.theme || "midnight";
     document.documentElement.setAttribute("data-theme", theme);
+    // Cache it so the inline bootstrap in index.html can set the theme before
+    // first paint on the next launch (no midnight flash for non-default themes).
+    try {
+      localStorage.setItem("scribe.theme", theme);
+    } catch {
+      // localStorage may be unavailable; the bootstrap just falls back to midnight.
+    }
   }, [dashboardData?.settings.theme]);
 
   // If the Developer panel is turned off while it is the active view, fall back
@@ -332,39 +343,65 @@ function App() {
   // when BOTH autoUpdateCheckEnabled AND autoInstallUpdates are on.
   const runAutoInstall = useCallback(async (version: string) => {
     setAutoUpdateState({ phase: "preparing", version });
+    // Inactivity watchdog: if the download produces no event for STALL_MS, treat
+    // it as stalled so the overlay can't hang forever with no escape (review m2).
+    const STALL_MS = 90_000;
+    let lastActivity = Date.now();
+    let stallTimer: number | undefined;
     try {
-      // The updater's own check() resolves the *signed* package (null if the
-      // latest release ships no updater artifact); this is the same call the
-      // manual About → Install path uses, so behavior matches exactly.
+      // The updater's own check() resolves the *signed* package — the same call
+      // the manual About → Install path uses. null means no updater artifact is
+      // published for the latest release yet (e.g. the GitHub tag exists but
+      // latest.json hasn't landed) OR the updater considers us current. On the
+      // silent launch path that's NOT an error: just dismiss and keep the chip —
+      // don't pop a scary error screen on launch (review m1).
       const update = await checkUpdaterPackage();
       if (!update) {
-        throw new Error("No signed update package for the latest release.");
+        console.warn("Auto-install: no signed update package yet; skipping silently.");
+        setAutoUpdateState(null);
+        return;
       }
       let downloaded = 0;
       let total: number | null = null;
-      await update.downloadAndInstall((event) => {
-        switch (event.event) {
-          case "Started":
-            total = event.data.contentLength ?? null;
-            setAutoUpdateState({
-              phase: "downloading",
-              version,
-              percent: total ? 0 : null,
-            });
-            break;
-          case "Progress":
-            downloaded += event.data.chunkLength;
-            setAutoUpdateState({
-              phase: "downloading",
-              version,
-              percent: total ? (downloaded / total) * 100 : null,
-            });
-            break;
-          case "Finished":
-            setAutoUpdateState({ phase: "restarting", version });
-            break;
-        }
+      const stalled = new Promise<never>((_, reject) => {
+        const tick = () => {
+          if (Date.now() - lastActivity > STALL_MS) {
+            reject(
+              new Error("The update download stalled — check your connection."),
+            );
+          } else {
+            stallTimer = window.setTimeout(tick, 5000);
+          }
+        };
+        stallTimer = window.setTimeout(tick, 5000);
       });
+      await Promise.race([
+        update.downloadAndInstall((event) => {
+          lastActivity = Date.now();
+          switch (event.event) {
+            case "Started":
+              total = event.data.contentLength ?? null;
+              setAutoUpdateState({
+                phase: "downloading",
+                version,
+                percent: total ? 0 : null,
+              });
+              break;
+            case "Progress":
+              downloaded += event.data.chunkLength;
+              setAutoUpdateState({
+                phase: "downloading",
+                version,
+                percent: total ? (downloaded / total) * 100 : null,
+              });
+              break;
+            case "Finished":
+              setAutoUpdateState({ phase: "restarting", version });
+              break;
+          }
+        }),
+        stalled,
+      ]);
       // On Windows the installer typically restarts the app itself, so we rarely
       // get here; relaunch covers the paths/platforms where execution continues.
       await relaunch();
@@ -379,8 +416,38 @@ function App() {
         version,
         message: `${message} You can still install it from About → Updates.`,
       });
+    } finally {
+      if (stallTimer) {
+        window.clearTimeout(stallTimer);
+      }
     }
   }, []);
+
+  // Fire the on-launch auto-install once everything required is true: a LAUNCH
+  // check found an update, the user's settings have actually loaded (so a saved
+  // opt-out is honored, not raced), both update toggles are on, and we haven't
+  // attempted it. Called right after the launch check AND from the
+  // settings-loaded effect below — whichever resolves last triggers it, so a slow
+  // startup DB read no longer silently skips the install (review M1).
+  const maybeRunLaunchInstall = useCallback(() => {
+    if (
+      launchInstallVersionRef.current &&
+      settingsLoadedRef.current &&
+      autoUpdateCheckRef.current &&
+      autoInstallUpdatesRef.current &&
+      !autoInstallAttemptedRef.current
+    ) {
+      autoInstallAttemptedRef.current = true;
+      void runAutoInstall(launchInstallVersionRef.current);
+    }
+  }, [runAutoInstall]);
+
+  // If the launch check found an update before settings finished loading, install
+  // once they do. No-op after the one-shot guard trips, so re-running on every
+  // dashboardData change is harmless (review M1).
+  useEffect(() => {
+    maybeRunLaunchInstall();
+  }, [maybeRunLaunchInstall, dashboardData]);
 
   // Update check: ~5s after launch, every minute (iteration cadence), and
   // whenever the window regains focus. The first time a given version is seen we
@@ -419,16 +486,12 @@ function App() {
           }
           // Seamless install only on the launch check (never mid-session — we
           // don't interrupt active work; mid-session detection keeps just the
-          // chip). Guarded to fire once, and only when auto-install is on. If
-          // it can't run, the chip/manual path above already covers the user.
-          if (
-            launch &&
-            settingsLoadedRef.current &&
-            autoInstallUpdatesRef.current &&
-            !autoInstallAttemptedRef.current
-          ) {
-            autoInstallAttemptedRef.current = true;
-            void runAutoInstall(result.latestVersion);
+          // chip). Record the launch-detected version and try; if settings
+          // haven't loaded yet, the settings-loaded effect fires it once they do,
+          // so it isn't silently skipped on a slow startup (review M1).
+          if (launch) {
+            launchInstallVersionRef.current = result.latestVersion;
+            maybeRunLaunchInstall();
           }
         })
         .catch(() => {});
@@ -448,7 +511,7 @@ function App() {
       window.clearInterval(interval);
       window.removeEventListener("focus", onFocus);
     };
-  }, [runAutoInstall]);
+  }, [maybeRunLaunchInstall]);
 
   useEffect(() => {
     if (!toast) {

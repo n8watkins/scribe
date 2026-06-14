@@ -5,6 +5,15 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Tauri + React + Typescript</title>
+    <script>
+      // Apply the cached theme before first paint so non-default themes don't
+      // flash midnight on launch. The app re-applies the authoritative theme
+      // from backend settings once loaded.
+      try {
+        var t = localStorage.getItem("scribe.theme");
+        if (t) document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    </script>
   </head>
 
   <body>

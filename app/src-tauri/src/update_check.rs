@@ -1,7 +1,9 @@
-//! Lightweight update check against GitHub releases. It only compares the
-//! running version with the latest release tag and points the user at the
-//! release page — no download or install. The full signed auto-updater
-//! (tauri-plugin-updater) is a known follow-up.
+//! Lightweight update *detection* against GitHub releases: compares the running
+//! version with the latest release tag so the UI can surface "update available"
+//! and point at the release page. This module never downloads or installs — the
+//! actual signed download + install is handled by tauri-plugin-updater (driven
+//! from the frontend: auto-install on launch in App.tsx and About → Install).
+//! Kept separate so this check stays cheap and side-effect-free.
 
 use serde::Serialize;
 use std::time::Duration;
