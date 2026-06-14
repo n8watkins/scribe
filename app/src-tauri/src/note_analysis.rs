@@ -23,6 +23,106 @@ pub struct AnalysisOutcome {
     pub model: String,
 }
 
+/// Health snapshot of the local LLM server for the Settings connection card.
+/// `reachable: false` is a normal result (server not running), not a hard
+/// error — `check_status` never returns `Err`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmStatus {
+    pub reachable: bool,
+    pub endpoint: String,
+    pub models: Vec<String>,
+    pub error: Option<String>,
+}
+
+/// Probes the local LLM server with a short-timeout `GET {endpoint}/models`
+/// and reports whether it is reachable plus the model ids it advertises.
+/// Unreachable / bad-response cases come back as `reachable: false` with a
+/// friendly `error`, never as `Err`.
+pub fn check_status(endpoint: &str) -> LlmStatus {
+    let endpoint = endpoint.trim().trim_end_matches('/').to_string();
+
+    if endpoint.is_empty() {
+        return LlmStatus {
+            reachable: false,
+            endpoint,
+            models: Vec::new(),
+            error: Some("No server endpoint is set.".to_string()),
+        };
+    }
+
+    let unreachable = |error: String| LlmStatus {
+        reachable: false,
+        endpoint: endpoint.clone(),
+        models: Vec::new(),
+        error: Some(error),
+    };
+
+    let client = match reqwest::blocking::Client::builder()
+        .user_agent(concat!("Scribe/", env!("CARGO_PKG_VERSION")))
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => return unreachable(format!("Could not build the HTTP client. {}", error)),
+    };
+
+    let response = match client
+        .get(format!("{}/models", endpoint))
+        .timeout(MODELS_TIMEOUT)
+        .send()
+    {
+        Ok(response) => response,
+        Err(_) => {
+            return unreachable(format!(
+                "Could not reach a local LLM server at {}. Is it running?",
+                endpoint
+            ))
+        }
+    };
+
+    let status = response.status();
+    let text = match response.text() {
+        Ok(text) => text,
+        Err(error) => return unreachable(format!("Could not read the model list. {}", error)),
+    };
+
+    if !status.is_success() {
+        return unreachable(format!(
+            "The server at {} returned HTTP {}.",
+            endpoint, status
+        ));
+    }
+
+    let body: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(body) => body,
+        Err(_) => {
+            return unreachable(format!(
+                "The server at {} did not return an OpenAI-compatible model list.",
+                endpoint
+            ))
+        }
+    };
+
+    let models = body
+        .get("data")
+        .and_then(|data| data.as_array())
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| entry.get("id").and_then(|id| id.as_str()))
+                .map(ToOwned::to_owned)
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+
+    LlmStatus {
+        reachable: true,
+        endpoint,
+        models,
+        error: None,
+    }
+}
+
 pub fn analyze_text(
     endpoint: &str,
     model: &str,
@@ -276,5 +376,59 @@ mod tests {
         // A port from the dynamic range with nothing listening.
         let error = analyze_text("http://127.0.0.1:59997/v1", "m", "p", "n").unwrap_err();
         assert!(error.to_string().contains("127.0.0.1:59997"));
+    }
+
+    #[test]
+    fn check_status_lists_models_when_reachable() {
+        let models = serde_json::json!({
+            "data": [{ "id": "loaded-model" }, { "id": "other" }],
+        })
+        .to_string();
+        let (endpoint, handle) = mock_server(vec![models]);
+
+        // Trailing slash must be tolerated like analyze_text does.
+        let status = check_status(&format!("{}/", endpoint));
+        assert!(status.reachable);
+        assert!(status.error.is_none());
+        assert_eq!(status.models, vec!["loaded-model", "other"]);
+        // The endpoint is normalized (no trailing slash).
+        assert_eq!(status.endpoint, endpoint);
+
+        let requests = handle.join().unwrap();
+        assert!(requests[0].starts_with("GET /v1/models"));
+    }
+
+    #[test]
+    fn check_status_reachable_with_empty_model_list() {
+        let (endpoint, handle) =
+            mock_server(vec![serde_json::json!({ "data": [] }).to_string()]);
+
+        let status = check_status(&endpoint);
+        assert!(status.reachable);
+        assert!(status.models.is_empty());
+        assert!(status.error.is_none());
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn check_status_unreachable_is_not_an_error() {
+        // A port from the dynamic range with nothing listening.
+        let status = check_status("http://127.0.0.1:59997/v1");
+        assert!(!status.reachable);
+        assert!(status.models.is_empty());
+        assert_eq!(status.endpoint, "http://127.0.0.1:59997/v1");
+        assert!(status
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("127.0.0.1:59997"));
+    }
+
+    #[test]
+    fn check_status_empty_endpoint_is_unreachable() {
+        let status = check_status("   ");
+        assert!(!status.reachable);
+        assert!(status.error.is_some());
+        assert!(status.endpoint.is_empty());
     }
 }

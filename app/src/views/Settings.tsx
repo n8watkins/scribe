@@ -13,9 +13,11 @@ import {
   googleSignIn,
   googleSignOut,
   googleStatus,
+  llmStatus,
   type AppSettings,
   type DriveSyncReport,
   type GoogleStatus,
+  type LlmStatus,
 } from "../backend";
 import type { ViewActions } from "../types";
 import {
@@ -344,6 +346,10 @@ export function SettingsView({
           rows={4}
           value={settings.notesAnalysisPrompt}
         />
+        <LlmConnectionCard
+          endpoint={settings.notesAnalysisEndpoint}
+          model={settings.notesAnalysisModel}
+        />
       </SectionPanel>
       ),
     },
@@ -386,6 +392,114 @@ export function SettingsView({
         {active.render()}
       </div>
     </section>
+  );
+}
+
+/** "Test connection" card for the local LLM server: probes the configured
+ * endpoint and reports reachable + model ids, or "Not running" with setup
+ * guidance. Tests the endpoint as currently saved in settings (typed values
+ * are saved on blur), so users see the same endpoint the analysis will use. */
+function LlmConnectionCard({
+  endpoint,
+  model,
+}: {
+  endpoint: string;
+  model: string;
+}) {
+  const [checking, setChecking] = useState(false);
+  const [status, setStatus] = useState<LlmStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleTest = useCallback(async () => {
+    setChecking(true);
+    setError(null);
+    setStatus(null);
+    try {
+      // Pass the configured endpoint explicitly so a value typed and saved on
+      // blur is what's tested, even before any other settings round-trip.
+      const next = await llmStatus(endpoint);
+      setStatus(next);
+    } catch (cause) {
+      setError(commandErrorMessage(cause));
+    } finally {
+      setChecking(false);
+    }
+  }, [endpoint]);
+
+  const reachable = status?.reachable ?? false;
+
+  return (
+    <div className="llm-status-card">
+      <div className="llm-status-head">
+        <div className="llm-status-state">
+          {status ? (
+            <>
+              <span
+                className={`status-dot${reachable ? " success" : ""}`}
+                aria-hidden="true"
+              />
+              <span className={`pill ${reachable ? "ready" : "error"}`}>
+                {reachable ? "Connected" : "Not running"}
+              </span>
+            </>
+          ) : (
+            <span className="muted">Local LLM server connection</span>
+          )}
+        </div>
+        <button
+          className="secondary-button"
+          disabled={checking}
+          onClick={() => void handleTest()}
+          type="button"
+        >
+          {checking ? "Checking…" : "Test connection"}
+        </button>
+      </div>
+
+      {status && reachable ? (
+        status.models.length > 0 ? (
+          <div className="llm-status-models">
+            <p className="muted vocab-hint">
+              {model.trim()
+                ? `Available models (set to "${model.trim()}"):`
+                : "Available models (empty Model field uses the first/loaded one):"}
+            </p>
+            <div className="llm-model-pills">
+              {status.models.map((id) => (
+                <span
+                  key={id}
+                  className={`pill ${id === model.trim() ? "selected" : "preserve"}`}
+                >
+                  {id}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <p className="muted vocab-hint">
+            The server is reachable but has no models loaded. Load a model (e.g.
+            in LM Studio) so analysis has something to run.
+          </p>
+        )
+      ) : null}
+
+      {status && !reachable ? (
+        <p className="muted vocab-hint">
+          No local LLM server answered at{" "}
+          <code>{status.endpoint || endpoint || "the configured endpoint"}</code>
+          . Start LM Studio (or Ollama), load a model, and make sure its local
+          server is running at the endpoint above (LM Studio's default is{" "}
+          <code>http://127.0.0.1:1234/v1</code>).
+          {status.error ? ` ${status.error}` : ""}
+        </p>
+      ) : null}
+
+      {error ? (
+        <p className="muted vocab-hint" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </div>
   );
 }
 

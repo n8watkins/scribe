@@ -377,6 +377,7 @@ pub fn run() {
             commands::transcribe_recording,
             commands::transcribe_file,
             commands::analyze_note,
+            commands::llm_status,
             commands::save_text_file,
             commands::paste_last_transcript,
             commands::copy_last_transcript,

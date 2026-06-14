@@ -579,6 +579,23 @@ pub async fn analyze_note(
     .map_err(|error| CommandError::new("note_analysis_failed", error.to_string()))?
 }
 
+/// Health check for the local LLM (notes analysis) server. Uses the supplied
+/// `endpoint` when given — so the Settings card can test a typed-but-unsaved
+/// value — otherwise the saved `notes_analysis_endpoint`. Returns
+/// `reachable: false` for a down server rather than erroring; only an
+/// inaccessible settings store produces an `Err`.
+#[tauri::command]
+pub fn llm_status(
+    state: tauri::State<'_, BackendState>,
+    endpoint: Option<String>,
+) -> Result<crate::note_analysis::LlmStatus, CommandError> {
+    let endpoint = match endpoint {
+        Some(endpoint) => endpoint,
+        None => state.db()?.get_settings()?.notes_analysis_endpoint,
+    };
+    Ok(crate::note_analysis::check_status(&endpoint))
+}
+
 #[tauri::command]
 pub async fn check_for_update() -> Result<crate::update_check::UpdateCheckResult, CommandError> {
     tauri::async_runtime::spawn_blocking(crate::update_check::check_for_update)

@@ -555,6 +555,20 @@ export function analyzeNote(transcriptId: string): Promise<Transcript> {
   return invoke("analyze_note", { transcriptId });
 }
 
+export type LlmStatus = {
+  reachable: boolean;
+  endpoint: string;
+  models: string[];
+  error: string | null;
+};
+
+/** Probes the local LLM (notes analysis) server. Pass an endpoint to test a
+ * typed-but-unsaved value; omit it to use the saved one. A down server comes
+ * back as `reachable: false`, not a rejection. */
+export function llmStatus(endpoint?: string): Promise<LlmStatus> {
+  return invoke("llm_status", { endpoint });
+}
+
 export type GoogleStatus = {
   configured: boolean;
   signedIn: boolean;
