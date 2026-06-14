@@ -29,6 +29,13 @@ pub struct AppSettings {
     /// window resolution). Off by default; opt-in from Settings.
     #[serde(default)]
     pub developer_settings_enabled: bool,
+    /// Selectable color theme for the MAIN window. The value is a theme key
+    /// (e.g. "midnight", "ocean") that the frontend maps to a CSS palette via
+    /// `data-theme`. Defaults to "midnight", which equals the historical look,
+    /// so existing installs are visually unchanged. The floating pill keeps its
+    /// own separate color settings and is not affected.
+    #[serde(default = "default_theme")]
+    pub theme: String,
     /// Poll GitHub for new releases in the background (on launch, on window
     /// focus, and on a timer). On by default; turn it off in About. Manual
     /// "Check for updates" still works when off.
@@ -195,6 +202,12 @@ fn default_dashboard_hotkey_toggles() -> bool {
 
 fn default_auto_update_check_enabled() -> bool {
     true
+}
+
+fn default_theme() -> String {
+    // "midnight" maps to the historical default palette, so the app looks
+    // identical when no theme has been chosen.
+    "midnight".to_string()
 }
 
 fn default_pill_color_normal() -> String {
@@ -445,6 +458,7 @@ impl Default for AppSettings {
             sounds_enabled: true,
             developer_settings_enabled: false,
             auto_update_check_enabled: true,
+            theme: default_theme(),
             dev_hotkeys_seeded: false,
             recording_mode: RecordingMode::Both,
             min_recording_ms: 300,
@@ -676,6 +690,8 @@ mod tests {
         assert_eq!(settings.dictation_cleanup_prompt, "");
         assert!(!settings.developer_settings_enabled);
         assert!(!settings.dev_hotkeys_seeded);
+        // The default theme equals the historical look so installs are unchanged.
+        assert_eq!(settings.theme, "midnight");
         assert_eq!(settings.pill_color_normal, "#fbbf24");
         assert_eq!(settings.pill_color_note, "#38bdf8");
     }
@@ -912,6 +928,9 @@ mod tests {
         // The new field is absent from this legacy JSON, so #[serde(default)]
         // must fill it in as false rather than failing to deserialize.
         assert!(!settings.developer_settings_enabled);
+        // `theme` is absent from this legacy JSON; the serde default fills it
+        // with "midnight" so existing installs keep the historical look.
+        assert_eq!(settings.theme, "midnight");
         assert!(!settings.dev_hotkeys_seeded);
         // Absent from this legacy JSON, so the serde defaults fill them in.
         assert_eq!(settings.pill_color_normal, "#fbbf24");

@@ -12,6 +12,7 @@ export type ViewName =
   | "Hotkeys"
   | "Models"
   | "Audio"
+  | "Themes"
   | "Developer"
   | "About";
 
