@@ -4,6 +4,15 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.4.8 — 2026-06-13
+
+- **Dictionary redesign.** The old "Custom vocabulary" tab is now **Dictionary**,
+  with two clearly-separated layers: a **Context hint** (the Whisper priming
+  prompt — improves recognition, not find-and-replace) and **Replacements**, a
+  deterministic word-boundary, case-insensitive "say X → get Y" table applied to
+  every transcript after recognition (e.g. "my email" → your address, fix
+  "clawed" → "Claude").
+
 ## 0.4.7 — 2026-06-13
 
 - **Local-LLM status.** The Notes-analysis settings tab gets a connection card
