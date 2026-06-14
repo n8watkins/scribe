@@ -858,44 +858,11 @@ textarea {
 
 .choice-list,
 .settings-list,
-.button-column,
 .hotkey-editor-list,
 .model-list,
 .model-table {
   display: grid;
   gap: 6px;
-}
-
-/* Prominent display of the current data directory above the folder actions. */
-.data-dir-field {
-  display: grid;
-  gap: 4px;
-  margin-bottom: 8px;
-}
-
-.data-dir-label {
-  color: #64748b;
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.data-dir-path {
-  display: block;
-  padding: 7px 9px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 6px;
-  background: #0d1320;
-  color: #e2e8f0;
-  font-family: ui-monospace, "Cascadia Code", "Fira Code", monospace;
-  font-size: 12px;
-  word-break: break-all;
-}
-
-.data-dir-note {
-  margin: 0;
-  font-size: 11px;
 }
 
 .choice-row {
@@ -1273,6 +1240,29 @@ textarea {
   color: #e2e8f0;
 }
 
+/* Generic grouped subsections inside a settings tab panel (e.g. the merged
+   "App & output" tab). A small label heads each group; consecutive groups are
+   separated by a hairline rule. */
+.settings-subsection {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-subsection + .settings-subsection {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.settings-subhead {
+  margin: 0 0 2px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .replacements-editor {
   display: grid;
   gap: 10px;
@@ -1382,11 +1372,6 @@ textarea {
   color: #94a3b8;
   font-size: 11px;
   font-weight: 760;
-}
-
-.button-column .secondary-button,
-.button-column .ghost-button {
-  justify-content: flex-start;
 }
 
 .danger {

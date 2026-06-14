@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
   BookOpen,
   Cloud,
-  MonitorCog,
   Plus,
   SlidersHorizontal,
   Sparkles,
@@ -29,7 +28,7 @@ import {
   isKeepClipboard,
   outputModeFromToggles,
 } from "../lib/format";
-import { SectionPanel, SettingRow } from "../components/layout";
+import { SettingRow } from "../components/layout";
 import { Toggle } from "../components/primitives";
 
 export function SettingsView({
@@ -48,237 +47,235 @@ export function SettingsView({
     render: () => ReactNode;
   }[] = [
     {
-      id: "app-behavior",
-      title: "App behavior",
-      icon: <MonitorCog aria-hidden="true" size={16} />,
-      render: () => (
-      <SectionPanel
-        icon={<MonitorCog aria-hidden="true" size={16} />}
-        title="App behavior"
-      >
-        <SettingRow
-          description="Start Scribe when Windows starts."
-          label="Launch at startup"
-        >
-          <Toggle
-            checked={settings.launchAtStartup}
-            disabled={actions.savingSettings}
-            label="Launch at startup"
-            onChange={(launchAtStartup) =>
-              actions.updateSettings({ launchAtStartup })
-            }
-          />
-        </SettingRow>
-        <SettingRow
-          description="Keep the app available from the system tray."
-          label="Minimize to tray"
-        >
-          <Toggle
-            checked={settings.minimizeToTray}
-            disabled={actions.savingSettings}
-            label="Minimize to tray"
-            onChange={(minimizeToTray) =>
-              actions.updateSettings({ minimizeToTray })
-            }
-          />
-        </SettingRow>
-        <SettingRow
-          description="The dashboard hotkey minimizes the window again when it is already focused."
-          label="Dashboard hotkey toggles"
-        >
-          <Toggle
-            checked={settings.dashboardHotkeyToggles}
-            disabled={actions.savingSettings}
-            label="Dashboard hotkey toggles"
-            onChange={(dashboardHotkeyToggles) =>
-              actions.updateSettings({ dashboardHotkeyToggles })
-            }
-          />
-        </SettingRow>
-        <SettingRow
-          description="Always-on-top capture status overlay."
-          label="Show floating status pill"
-        >
-          <Toggle
-            checked={settings.showFloatingPill}
-            disabled={actions.savingSettings}
-            label="Show floating status pill"
-            onChange={(showFloatingPill) =>
-              actions.updateSettings({ showFloatingPill })
-            }
-          />
-        </SettingRow>
-        <SettingRow
-          description="What the pill shows while you dictate."
-          label="Pill display mode"
-        >
-          <select
-            disabled={actions.savingSettings}
-            onChange={(event) =>
-              actions.updateSettings({
-                pillDisplayMode:
-                  event.currentTarget.value === "dot"
-                    ? "dot"
-                    : event.currentTarget.value === "visualizer"
-                      ? "visualizer"
-                      : "visualizer_with_text",
-              })
-            }
-            value={settings.pillDisplayMode}
-          >
-            <option value="dot">Dot</option>
-            <option value="visualizer">Visualizer</option>
-            <option value="visualizer_with_text">Visualizer + text</option>
-          </select>
-        </SettingRow>
-        <SettingRow
-          description="Waveform and dot color for normal dictation on the pill."
-          label="Pill color"
-        >
-          <input
-            aria-label="Pill color"
-            disabled={actions.savingSettings}
-            onChange={(event) =>
-              actions.updateSettings({
-                pillColorNormal: event.currentTarget.value,
-              })
-            }
-            type="color"
-            value={settings.pillColorNormal}
-          />
-        </SettingRow>
-        <SettingRow
-          description="Waveform and dot color while taking a note (tilde+Q)."
-          label="Note pill color"
-        >
-          <input
-            aria-label="Note pill color"
-            disabled={actions.savingSettings}
-            onChange={(event) =>
-              actions.updateSettings({
-                pillColorNote: event.currentTarget.value,
-              })
-            }
-            type="color"
-            value={settings.pillColorNote}
-          />
-        </SettingRow>
-        <SettingRow
-          description="Background color of the floating pill."
-          label="Pill background"
-        >
-          <input
-            aria-label="Pill background color"
-            disabled={actions.savingSettings}
-            onChange={(event) =>
-              actions.updateSettings({
-                pillColorBackground: event.currentTarget.value,
-              })
-            }
-            type="color"
-            value={settings.pillColorBackground}
-          />
-        </SettingRow>
-        <SettingRow
-          description="Display completion and failure notices."
-          label="Notifications"
-        >
-          <Toggle
-            checked={settings.notificationsEnabled}
-            disabled={actions.savingSettings}
-            label="Notifications"
-            onChange={(notificationsEnabled) =>
-              actions.updateSettings({ notificationsEnabled })
-            }
-          />
-        </SettingRow>
-        <SettingRow description="Play start and stop capture tones." label="Sounds">
-          <Toggle
-            checked={settings.soundsEnabled}
-            disabled={actions.savingSettings}
-            label="Sounds"
-            onChange={(soundsEnabled) => actions.updateSettings({ soundsEnabled })}
-          />
-        </SettingRow>
-        <SettingRow
-          description="Show a Developer panel in the sidebar with diagnostics like the live window resolution."
-          label="Enable developer settings"
-        >
-          <Toggle
-            checked={settings.developerSettingsEnabled}
-            disabled={actions.savingSettings}
-            label="Enable developer settings"
-            onChange={(developerSettingsEnabled) =>
-              actions.updateSettings({ developerSettingsEnabled })
-            }
-          />
-        </SettingRow>
-      </SectionPanel>
-      ),
-    },
-    {
       id: "output",
-      title: "Output",
+      title: "App & output",
       icon: <SlidersHorizontal aria-hidden="true" size={16} />,
       render: () => (
-      <SectionPanel
-        icon={<SlidersHorizontal aria-hidden="true" size={16} />}
-        title="Output"
-      >
-        <SettingRow
-          description={`On: your transcript is pasted automatically when you stop talking. Off: it's saved to the buffer — paste it anywhere with ${formatHotkey(settings.hotkeys.pasteLastTranscript)}.`}
-          label="Auto-insert after dictation"
-        >
-          <Toggle
-            checked={isAutoInsert(settings.outputMode)}
-            disabled={actions.savingSettings}
-            label="Auto-insert after dictation"
-            onChange={(on) =>
-              actions.updateSettings({
-                outputMode: outputModeFromToggles(
-                  on,
-                  isKeepClipboard(settings.outputMode),
-                ),
-              })
-            }
-          />
-        </SettingRow>
-        <SettingRow
-          description="On: Scribe borrows your clipboard for the paste, then restores what you had — Ctrl+V keeps working with your stuff. Off: it leaves the transcript on your clipboard so you paste it yourself with any bind (Ctrl+V / Shift+Insert), replacing your previous clipboard."
-          label="Keep my clipboard"
-        >
-          <Toggle
-            checked={isKeepClipboard(settings.outputMode)}
-            disabled={actions.savingSettings}
-            label="Keep my clipboard"
-            onChange={(on) =>
-              actions.updateSettings({
-                outputMode: outputModeFromToggles(
-                  isAutoInsert(settings.outputMode),
-                  on,
-                ),
-              })
-            }
-          />
-        </SettingRow>
-        <SettingRow
-          description="Speech recognition language preference."
-          label="Language"
-        >
-          <select
-            disabled={actions.savingSettings}
-            onChange={(event) =>
-              actions.updateSettings({
-                language: event.currentTarget.value === "auto" ? "auto" : "en",
-              })
-            }
-            value={settings.language}
-          >
-            <option value="auto">Auto detect</option>
-            <option value="en">English</option>
-          </select>
-        </SettingRow>
-      </SectionPanel>
+      <article className="panel-card">
+        <div className="settings-list">
+          <div className="settings-subsection">
+            <h3 className="settings-subhead">Output</h3>
+            <SettingRow
+              description={`On: your transcript is pasted automatically when you stop talking. Off: it's saved to the buffer — paste it anywhere with ${formatHotkey(settings.hotkeys.pasteLastTranscript)}.`}
+              label="Auto-insert after dictation"
+            >
+              <Toggle
+                checked={isAutoInsert(settings.outputMode)}
+                disabled={actions.savingSettings}
+                label="Auto-insert after dictation"
+                onChange={(on) =>
+                  actions.updateSettings({
+                    outputMode: outputModeFromToggles(
+                      on,
+                      isKeepClipboard(settings.outputMode),
+                    ),
+                  })
+                }
+              />
+            </SettingRow>
+            <SettingRow
+              description="On: Scribe borrows your clipboard for the paste, then restores what you had — Ctrl+V keeps working with your stuff. Off: it leaves the transcript on your clipboard so you paste it yourself with any bind (Ctrl+V / Shift+Insert), replacing your previous clipboard."
+              label="Keep my clipboard"
+            >
+              <Toggle
+                checked={isKeepClipboard(settings.outputMode)}
+                disabled={actions.savingSettings}
+                label="Keep my clipboard"
+                onChange={(on) =>
+                  actions.updateSettings({
+                    outputMode: outputModeFromToggles(
+                      isAutoInsert(settings.outputMode),
+                      on,
+                    ),
+                  })
+                }
+              />
+            </SettingRow>
+            <SettingRow
+              description="Speech recognition language preference."
+              label="Language"
+            >
+              <select
+                disabled={actions.savingSettings}
+                onChange={(event) =>
+                  actions.updateSettings({
+                    language: event.currentTarget.value === "auto" ? "auto" : "en",
+                  })
+                }
+                value={settings.language}
+              >
+                <option value="auto">Auto detect</option>
+                <option value="en">English</option>
+              </select>
+            </SettingRow>
+          </div>
+
+          <div className="settings-subsection">
+            <h3 className="settings-subhead">Floating pill</h3>
+            <SettingRow
+              description="Always-on-top capture status overlay."
+              label="Show floating status pill"
+            >
+              <Toggle
+                checked={settings.showFloatingPill}
+                disabled={actions.savingSettings}
+                label="Show floating status pill"
+                onChange={(showFloatingPill) =>
+                  actions.updateSettings({ showFloatingPill })
+                }
+              />
+            </SettingRow>
+            <SettingRow
+              description="What the pill shows while you dictate."
+              label="Pill display mode"
+            >
+              <select
+                disabled={actions.savingSettings}
+                onChange={(event) =>
+                  actions.updateSettings({
+                    pillDisplayMode:
+                      event.currentTarget.value === "dot"
+                        ? "dot"
+                        : event.currentTarget.value === "visualizer"
+                          ? "visualizer"
+                          : "visualizer_with_text",
+                  })
+                }
+                value={settings.pillDisplayMode}
+              >
+                <option value="dot">Dot</option>
+                <option value="visualizer">Visualizer</option>
+                <option value="visualizer_with_text">Visualizer + text</option>
+              </select>
+            </SettingRow>
+            <SettingRow
+              description="Waveform and dot color for normal dictation on the pill."
+              label="Pill color"
+            >
+              <input
+                aria-label="Pill color"
+                disabled={actions.savingSettings}
+                onChange={(event) =>
+                  actions.updateSettings({
+                    pillColorNormal: event.currentTarget.value,
+                  })
+                }
+                type="color"
+                value={settings.pillColorNormal}
+              />
+            </SettingRow>
+            <SettingRow
+              description="Waveform and dot color while taking a note (tilde+Q)."
+              label="Note pill color"
+            >
+              <input
+                aria-label="Note pill color"
+                disabled={actions.savingSettings}
+                onChange={(event) =>
+                  actions.updateSettings({
+                    pillColorNote: event.currentTarget.value,
+                  })
+                }
+                type="color"
+                value={settings.pillColorNote}
+              />
+            </SettingRow>
+            <SettingRow
+              description="Background color of the floating pill."
+              label="Pill background"
+            >
+              <input
+                aria-label="Pill background color"
+                disabled={actions.savingSettings}
+                onChange={(event) =>
+                  actions.updateSettings({
+                    pillColorBackground: event.currentTarget.value,
+                  })
+                }
+                type="color"
+                value={settings.pillColorBackground}
+              />
+            </SettingRow>
+          </div>
+
+          <div className="settings-subsection">
+            <h3 className="settings-subhead">App</h3>
+            <SettingRow
+              description="Start Scribe when Windows starts."
+              label="Launch at startup"
+            >
+              <Toggle
+                checked={settings.launchAtStartup}
+                disabled={actions.savingSettings}
+                label="Launch at startup"
+                onChange={(launchAtStartup) =>
+                  actions.updateSettings({ launchAtStartup })
+                }
+              />
+            </SettingRow>
+            <SettingRow
+              description="Keep the app available from the system tray."
+              label="Minimize to tray"
+            >
+              <Toggle
+                checked={settings.minimizeToTray}
+                disabled={actions.savingSettings}
+                label="Minimize to tray"
+                onChange={(minimizeToTray) =>
+                  actions.updateSettings({ minimizeToTray })
+                }
+              />
+            </SettingRow>
+            <SettingRow
+              description="The dashboard hotkey minimizes the window again when it is already focused."
+              label="Dashboard hotkey toggles"
+            >
+              <Toggle
+                checked={settings.dashboardHotkeyToggles}
+                disabled={actions.savingSettings}
+                label="Dashboard hotkey toggles"
+                onChange={(dashboardHotkeyToggles) =>
+                  actions.updateSettings({ dashboardHotkeyToggles })
+                }
+              />
+            </SettingRow>
+            <SettingRow
+              description="Display completion and failure notices."
+              label="Notifications"
+            >
+              <Toggle
+                checked={settings.notificationsEnabled}
+                disabled={actions.savingSettings}
+                label="Notifications"
+                onChange={(notificationsEnabled) =>
+                  actions.updateSettings({ notificationsEnabled })
+                }
+              />
+            </SettingRow>
+            <SettingRow description="Play start and stop capture tones." label="Sounds">
+              <Toggle
+                checked={settings.soundsEnabled}
+                disabled={actions.savingSettings}
+                label="Sounds"
+                onChange={(soundsEnabled) => actions.updateSettings({ soundsEnabled })}
+              />
+            </SettingRow>
+            <SettingRow
+              description="Show a Developer panel in the sidebar with diagnostics like the live window resolution."
+              label="Enable developer settings"
+            >
+              <Toggle
+                checked={settings.developerSettingsEnabled}
+                disabled={actions.savingSettings}
+                label="Enable developer settings"
+                onChange={(developerSettingsEnabled) =>
+                  actions.updateSettings({ developerSettingsEnabled })
+                }
+              />
+            </SettingRow>
+          </div>
+        </div>
+      </article>
       ),
     },
     {
@@ -286,10 +283,8 @@ export function SettingsView({
       title: "Dictionary",
       icon: <BookOpen aria-hidden="true" size={16} />,
       render: () => (
-      <SectionPanel
-        icon={<BookOpen aria-hidden="true" size={16} />}
-        title="Dictionary"
-      >
+      <article className="panel-card">
+        <div className="settings-list">
         <div className="dictionary-subsection">
           <h3 className="dictionary-subhead">Context hint</h3>
           <p className="muted vocab-hint">
@@ -324,7 +319,8 @@ export function SettingsView({
             value={settings.textReplacements}
           />
         </div>
-      </SectionPanel>
+        </div>
+      </article>
       ),
     },
     {
@@ -332,10 +328,8 @@ export function SettingsView({
       title: "Notes",
       icon: <Sparkles aria-hidden="true" size={16} />,
       render: () => (
-      <SectionPanel
-        icon={<Sparkles aria-hidden="true" size={16} />}
-        title="Notes analysis"
-      >
+      <article className="panel-card">
+        <div className="settings-list">
         <SettingRow
           description="Analyze notes on demand from the Notes view using a local LLM server (LM Studio, Ollama, or any OpenAI-compatible API). Nothing leaves this machine."
           label="Analyze notes with a local LLM"
@@ -393,7 +387,8 @@ export function SettingsView({
           endpoint={settings.notesAnalysisEndpoint}
           model={settings.notesAnalysisModel}
         />
-      </SectionPanel>
+        </div>
+      </article>
       ),
     },
     {
@@ -661,10 +656,8 @@ function GoogleDrivePanel({
   }, []);
 
   return (
-    <SectionPanel
-      icon={<Cloud aria-hidden="true" size={16} />}
-      title="Google Drive"
-    >
+    <article className="panel-card">
+      <div className="settings-list">
       {status && !status.configured ? (
         <p className="muted vocab-hint">
           This build isn't configured for Google Drive sync.
@@ -787,7 +780,8 @@ function GoogleDrivePanel({
           {error}
         </p>
       ) : null}
-    </SectionPanel>
+      </div>
+    </article>
   );
 }
 

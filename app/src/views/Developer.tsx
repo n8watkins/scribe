@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { getName as getAppName } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { FlaskConical, Gauge, Keyboard } from "lucide-react";
+import { Gauge, Keyboard } from "lucide-react";
 import {
   commandErrorMessage,
   loadProductionHotkeyDefaults,
@@ -9,12 +9,9 @@ import {
 } from "../backend";
 import type { ViewActions } from "../types";
 import { SectionPanel, SettingRow } from "../components/layout";
-import { Toggle } from "../components/primitives";
 
 export function DeveloperView({
-  actions,
   refresh,
-  settings,
 }: {
   actions: ViewActions;
   refresh: () => Promise<void>;
@@ -132,27 +129,6 @@ export function DeveloperView({
           Resize the window to watch these update live. More developer
           diagnostics will land in this panel.
         </p>
-      </SectionPanel>
-
-      <SectionPanel
-        icon={<FlaskConical aria-hidden="true" size={16} />}
-        title="Experimental insert"
-      >
-        <SettingRow
-          description="Bypass the clipboard and type the transcript out as keystrokes. Slower and visibly 'streams' in some apps; useful only for apps that block synthetic paste. Default off — paste-with-restore is recommended."
-          label="Type it out instead of paste (experimental)"
-        >
-          <Toggle
-            checked={settings.pasteMethod === "direct_insert"}
-            disabled={actions.savingSettings}
-            label="Type it out instead of paste (experimental)"
-            onChange={(on) =>
-              actions.updateSettings({
-                pasteMethod: on ? "direct_insert" : "clipboard_paste",
-              })
-            }
-          />
-        </SettingRow>
       </SectionPanel>
 
       {isDevFlavor ? (

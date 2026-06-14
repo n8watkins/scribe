@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  Check,
+  ChevronDown,
+  Copy,
   Eraser,
   FolderOpen,
+  HardDrive,
   Maximize2,
   ShieldCheck,
   Trash2,
@@ -21,6 +25,7 @@ import { SectionPanel, SettingRow } from "../components/layout";
 import { Toggle } from "../components/primitives";
 import { InlineError } from "../components/feedback";
 import { ConfirmDialog } from "../components/modal";
+import "./dataprivacy.css";
 
 export function DataPrivacyView({
   actions,
@@ -35,6 +40,14 @@ export function DataPrivacyView({
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [savingWindowSize, setSavingWindowSize] = useState(false);
   const [windowSizeSaved, setWindowSizeSaved] = useState(false);
+  const [foldersOpen, setFoldersOpen] = useState(true);
+
+  // The models folder is the data dir's "models" subfolder (see the Rust
+  // model_manager::models_dir). Derive it for display/copy using whichever
+  // separator the platform path already uses.
+  const modelsDir = dataDir
+    ? `${dataDir.replace(/[\\/]+$/, "")}${dataDir.includes("\\") ? "\\" : "/"}models`
+    : null;
 
   const loadDataDir = useCallback(async () => {
     try {
@@ -143,39 +156,51 @@ export function DataPrivacyView({
       </SectionPanel>
 
       <SectionPanel
-        icon={<FolderOpen aria-hidden="true" size={16} />}
+        icon={<HardDrive aria-hidden="true" size={16} />}
         title="Local data"
       >
         {dataError ? (
           <InlineError message={dataError} onRetry={actions.refresh} />
         ) : null}
-        <div className="data-dir-field">
-          <span className="data-dir-label">Data folder</span>
-          <code className="data-dir-path" title={dataDir ?? undefined}>
-            {dataDir ?? "Loading..."}
-          </code>
-          <p className="muted data-dir-note">
-            Where Scribe keeps your database, audio clips, and models on this
-            device.
-          </p>
-        </div>
-        <div className="button-column">
-          <button
-            className="secondary-button"
-            onClick={() => void handleOpenFolder(openDataFolder)}
-            type="button"
-          >
+        <button
+          aria-expanded={foldersOpen}
+          className="accordion-toggle"
+          onClick={() => setFoldersOpen((open) => !open)}
+          type="button"
+        >
+          <span className="accordion-toggle-label">
             <FolderOpen aria-hidden="true" size={15} />
-            Open data folder
-          </button>
-          <button
-            className="secondary-button"
-            onClick={() => void handleOpenFolder(openModelsFolder)}
-            type="button"
-          >
-            <FolderOpen aria-hidden="true" size={15} />
-            Open models folder
-          </button>
+            Folders on this device
+          </span>
+          <span className="accordion-toggle-meta">
+            <span className="muted">where Scribe keeps your data</span>
+            <ChevronDown
+              aria-hidden="true"
+              className={foldersOpen ? "accordion-chevron is-open" : "accordion-chevron"}
+              size={16}
+            />
+          </span>
+        </button>
+
+        {foldersOpen ? (
+          <div className="local-data-accordion">
+            <FolderRow
+              label="Local data folder"
+              note="Database and audio clips."
+              onOpen={() => void handleOpenFolder(openDataFolder)}
+              path={dataDir}
+            />
+            <hr className="local-data-divider" />
+            <FolderRow
+              label="Local models folder"
+              note="Downloaded Whisper models."
+              onOpen={() => void handleOpenFolder(openModelsFolder)}
+              path={modelsDir}
+            />
+          </div>
+        ) : null}
+
+        <div className="setting-control">
           <button
             className="secondary-button"
             disabled={actions.clearingLastTranscript}
@@ -185,7 +210,7 @@ export function DataPrivacyView({
             <Eraser aria-hidden="true" size={15} />
             {actions.clearingLastTranscript
               ? "Clearing..."
-              : "Clear Last Transcript Buffer"}
+              : "Clear last transcript buffer"}
           </button>
           <button
             className="ghost-button danger"
@@ -203,7 +228,7 @@ export function DataPrivacyView({
         busy={clearingHistory}
         confirmLabel="Clear history"
         danger
-        message="This permanently deletes every saved transcript record on this device. Your Last Transcript Buffer and saved notes are not affected. This cannot be undone."
+        message="This permanently deletes every saved transcript record on this device. Your last transcript buffer and saved notes are untouched. This can't be undone."
         onCancel={() => setConfirmClearHistory(false)}
         onConfirm={() => void handleClearHistory()}
         open={confirmClearHistory}
@@ -234,5 +259,70 @@ export function DataPrivacyView({
         </SettingRow>
       </SectionPanel>
     </section>
+  );
+}
+
+/** One folder entry in the "Local data" accordion: a label + note, the
+ * monospace path, and a pair of small icon-buttons to open the folder and copy
+ * its path. The copy button shows a brief check after a successful copy. */
+function FolderRow({
+  label,
+  note,
+  onOpen,
+  path,
+}: {
+  label: string;
+  note: string;
+  onOpen: () => void;
+  path: string | null;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    if (!path) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(path);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // Clipboard can be unavailable (e.g. denied permission); fail quietly.
+    }
+  }, [path]);
+
+  return (
+    <div className="local-data-row">
+      <span className="local-data-meta">
+        <span className="local-data-label">{label}</span>
+        <span className="local-data-note">{note}</span>
+      </span>
+      <code className="local-data-path" title={path ?? undefined}>
+        {path ?? "Loading..."}
+      </code>
+      <span className="local-data-actions">
+        <button
+          aria-label={`Open ${label.toLowerCase()}`}
+          className="icon-button"
+          onClick={onOpen}
+          type="button"
+        >
+          <FolderOpen aria-hidden="true" size={15} />
+        </button>
+        <button
+          aria-label={copied ? "Path copied" : "Copy path"}
+          className={copied ? "icon-button is-copied" : "icon-button"}
+          disabled={!path}
+          onClick={() => void handleCopy()}
+          type="button"
+        >
+          {copied ? (
+            <Check aria-hidden="true" size={15} />
+          ) : (
+            <Copy aria-hidden="true" size={15} />
+          )}
+        </button>
+      </span>
+    </div>
   );
 }
