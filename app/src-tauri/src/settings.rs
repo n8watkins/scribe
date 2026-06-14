@@ -60,6 +60,11 @@ pub struct AppSettings {
     /// `--prompt` when non-empty.
     #[serde(default)]
     pub vocabulary_prompt: String,
+    /// Deterministic post-transcription "say X -> get Y" replacements, applied
+    /// to the final Whisper text. Distinct from `vocabulary_prompt`, which only
+    /// biases recognition. Empty by default.
+    #[serde(default)]
+    pub text_replacements: Vec<crate::text_replace::TextReplacement>,
     pub output_mode: OutputMode,
     pub paste_method: PasteMethod,
     pub history_enabled: bool,
@@ -312,6 +317,7 @@ impl Default for AppSettings {
             selected_model_id: Some("small.en-q5_1".to_string()),
             language: Language::En,
             vocabulary_prompt: String::new(),
+            text_replacements: Vec::new(),
             output_mode: OutputMode::AutoPaste,
             paste_method: PasteMethod::ClipboardPaste,
             history_enabled: true,
@@ -493,6 +499,7 @@ mod tests {
         assert_eq!(settings.silence_auto_stop_ms, 60_000);
         assert!(settings.incremental_transcription_enabled);
         assert_eq!(settings.vocabulary_prompt, "");
+        assert!(settings.text_replacements.is_empty());
         assert!(settings.history_enabled);
         assert!(settings.save_audio_clips);
         assert_eq!(
@@ -721,6 +728,8 @@ mod tests {
         assert_eq!(settings.silence_auto_stop_ms, 60_000);
         assert!(settings.incremental_transcription_enabled);
         assert_eq!(settings.vocabulary_prompt, "");
+        // Absent from this legacy JSON; #[serde(default)] fills it as empty.
+        assert!(settings.text_replacements.is_empty());
         // The new field is absent from this legacy JSON, so #[serde(default)]
         // must fill it in as false rather than failing to deserialize.
         assert!(!settings.developer_settings_enabled);

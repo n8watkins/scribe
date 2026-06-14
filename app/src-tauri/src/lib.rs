@@ -17,6 +17,7 @@ pub mod note_sync;
 pub mod output;
 pub mod settings;
 pub mod stats;
+pub mod text_replace;
 pub mod transcript;
 pub mod tray;
 pub mod update_check;

@@ -1235,6 +1235,86 @@ textarea {
   min-height: 0;
 }
 
+.dictionary-subsection {
+  display: grid;
+  gap: 10px;
+}
+
+.dictionary-subsection + .dictionary-subsection {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.dictionary-subhead {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 760;
+  color: #e2e8f0;
+}
+
+.replacements-editor {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+
+.replacement-rows {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.replacement-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.replacement-row input {
+  width: 100%;
+  min-width: 0;
+}
+
+.replacement-arrow {
+  color: #64748b;
+  font-size: 14px;
+}
+
+.replacement-remove {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  background: transparent;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 6px;
+  transition:
+    border-color 140ms ease,
+    color 140ms ease,
+    background 140ms ease;
+}
+
+.replacement-remove:hover:not(:disabled) {
+  color: #fecaca;
+  border-color: rgba(239, 68, 68, 0.55);
+  background: rgba(127, 29, 29, 0.22);
+}
+
+.replacement-remove:disabled {
+  opacity: 0.5;
+}
+
+.replacements-editor .secondary-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .llm-status-card {
   display: grid;
   gap: 10px;

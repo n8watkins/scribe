@@ -3,8 +3,10 @@ import {
   BookOpen,
   Cloud,
   MonitorCog,
+  Plus,
   SlidersHorizontal,
   Sparkles,
+  X,
 } from "lucide-react";
 import {
   commandErrorMessage,
@@ -18,6 +20,7 @@ import {
   type DriveSyncReport,
   type GoogleStatus,
   type LlmStatus,
+  type TextReplacement,
 } from "../backend";
 import type { ViewActions } from "../types";
 import {
@@ -261,26 +264,48 @@ export function SettingsView({
       ),
     },
     {
-      id: "vocabulary",
-      title: "Custom vocabulary",
+      id: "dictionary",
+      title: "Dictionary",
       icon: <BookOpen aria-hidden="true" size={16} />,
       render: () => (
       <SectionPanel
         icon={<BookOpen aria-hidden="true" size={16} />}
-        title="Custom vocabulary"
+        title="Dictionary"
       >
-        <p className="muted vocab-hint">
-          Names and jargon Whisper should expect, e.g. "Tauri, natkins,
-          whisper.cpp". Improves recognition of unusual words.
-        </p>
-        <BlurSavedTextArea
-          ariaLabel="Custom vocabulary"
-          onSave={(vocabularyPrompt) =>
-            actions.updateSettings({ vocabularyPrompt })
-          }
-          placeholder="Tauri, natkins, whisper.cpp"
-          value={settings.vocabularyPrompt}
-        />
+        <div className="dictionary-subsection">
+          <h3 className="dictionary-subhead">Context hint</h3>
+          <p className="muted vocab-hint">
+            A short, natural-language note that <em>primes</em> Whisper toward
+            your names, jargon, and spellings, e.g. "Tauri, natkins,
+            whisper.cpp". It nudges recognition toward these words — it is not
+            find-and-replace, so it can't guarantee an exact output. For
+            guaranteed swaps, use Replacements below.
+          </p>
+          <BlurSavedTextArea
+            ariaLabel="Context hint"
+            onSave={(vocabularyPrompt) =>
+              actions.updateSettings({ vocabularyPrompt })
+            }
+            placeholder="Tauri, natkins, whisper.cpp"
+            value={settings.vocabularyPrompt}
+          />
+        </div>
+        <div className="dictionary-subsection">
+          <h3 className="dictionary-subhead">Replacements</h3>
+          <p className="muted vocab-hint">
+            Deterministic: whenever you say the phrase on the left, Scribe writes
+            the text on the right — applied after transcription. E.g. "my email"
+            → your address, or fix "clawed" → "Claude". Matching is
+            case-insensitive and on whole words.
+          </p>
+          <ReplacementsEditor
+            disabled={actions.savingSettings}
+            onChange={(textReplacements) =>
+              actions.updateSettings({ textReplacements })
+            }
+            value={settings.textReplacements}
+          />
+        </div>
       </SectionPanel>
       ),
     },
@@ -828,5 +853,138 @@ function BlurSavedTextArea({
       rows={rows}
       value={draft}
     />
+  );
+}
+
+/** Editable list of deterministic text replacements. Like the BlurSaved*
+ * fields, edits live in a local draft and are flushed to settings on blur (and
+ * on unmount), so typing never loses focus or hits the settings command per
+ * keystroke. Add/remove persist immediately since there is nothing to debounce. */
+function ReplacementsEditor({
+  disabled,
+  onChange,
+  value,
+}: {
+  disabled?: boolean;
+  onChange: (next: TextReplacement[]) => void;
+  value: TextReplacement[];
+}) {
+  const [draft, setDraft] = useState<TextReplacement[]>(value);
+  const latestRef = useRef({ draft, onChange, value });
+  latestRef.current = { draft, onChange, value };
+
+  // Adopt upstream changes (e.g. a settings reload) without clobbering an
+  // in-progress edit: only resync when the saved value actually differs from
+  // what we last pushed.
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  // Flush a pending row edit if the view unmounts before blur fires.
+  useEffect(
+    () => () => {
+      const latest = latestRef.current;
+      if (!replacementsEqual(latest.draft, latest.value)) {
+        latest.onChange(latest.draft);
+      }
+    },
+    [],
+  );
+
+  const flush = useCallback(() => {
+    if (!replacementsEqual(latestRef.current.draft, latestRef.current.value)) {
+      onChange(latestRef.current.draft);
+    }
+  }, [onChange]);
+
+  const editRow = (index: number, patch: Partial<TextReplacement>) => {
+    setDraft((rows) =>
+      rows.map((row, i) => (i === index ? { ...row, ...patch } : row)),
+    );
+  };
+
+  const addRow = () => {
+    // Persist immediately so the new empty row is backed by saved state; an
+    // empty `from` is ignored by the backend until the user fills it in.
+    const next = [...latestRef.current.draft, { from: "", to: "" }];
+    setDraft(next);
+    onChange(next);
+  };
+
+  const removeRow = (index: number) => {
+    const next = latestRef.current.draft.filter((_, i) => i !== index);
+    setDraft(next);
+    onChange(next);
+  };
+
+  return (
+    <div className="replacements-editor">
+      {draft.length === 0 ? (
+        <p className="muted vocab-hint">No replacements yet.</p>
+      ) : (
+        <div className="replacement-rows">
+          {draft.map((row, index) => (
+            // Index key is intentional: rows are positional and reorder-free,
+            // so this keeps each input mounted (and focused) across keystrokes.
+            <div className="replacement-row" key={index}>
+              <input
+                aria-label={`When I say (row ${index + 1})`}
+                disabled={disabled}
+                onBlur={flush}
+                onChange={(event) =>
+                  editRow(index, { from: event.currentTarget.value })
+                }
+                placeholder="When I say…"
+                type="text"
+                value={row.from}
+              />
+              <span aria-hidden="true" className="replacement-arrow">
+                →
+              </span>
+              <input
+                aria-label={`Replace with (row ${index + 1})`}
+                disabled={disabled}
+                onBlur={flush}
+                onChange={(event) =>
+                  editRow(index, { to: event.currentTarget.value })
+                }
+                placeholder="Replace with…"
+                type="text"
+                value={row.to}
+              />
+              <button
+                aria-label={`Remove replacement (row ${index + 1})`}
+                className="replacement-remove"
+                disabled={disabled}
+                onClick={() => removeRow(index)}
+                type="button"
+              >
+                <X aria-hidden="true" size={15} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <button
+        className="secondary-button"
+        disabled={disabled}
+        onClick={addRow}
+        type="button"
+      >
+        <Plus aria-hidden="true" size={15} />
+        Add replacement
+      </button>
+    </div>
+  );
+}
+
+/** Shallow value-equality for two replacement lists, so we only push to
+ * settings when something actually changed. */
+function replacementsEqual(a: TextReplacement[], b: TextReplacement[]): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  return a.every(
+    (row, i) => row.from === b[i].from && row.to === b[i].to,
   );
 }

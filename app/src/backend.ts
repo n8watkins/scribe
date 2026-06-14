@@ -46,6 +46,10 @@ export type HotkeySettings = {
   openDashboard: string;
 };
 
+/** Deterministic post-transcription replacement: whenever `from` is spoken,
+ * Scribe writes `to`. Matched case-insensitively on word boundaries. */
+export type TextReplacement = { from: string; to: string };
+
 export type AppSettings = {
   defaultsVersion: number;
   launchAtStartup: boolean;
@@ -68,6 +72,7 @@ export type AppSettings = {
   selectedModelId: string | null;
   language: Language;
   vocabularyPrompt: string;
+  textReplacements: TextReplacement[];
   outputMode: OutputMode;
   pasteMethod: PasteMethod;
   historyEnabled: boolean;

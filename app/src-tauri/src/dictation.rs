@@ -157,6 +157,13 @@ fn transcribe_recording_inner(
         whisper_result.latency_ms
     );
 
+    // Apply the user's deterministic "say X -> get Y" replacements to the final
+    // Whisper text. Both the incremental and full-clip paths land in
+    // `whisper_result.text`, so doing it here covers both. (The file-transcribe
+    // path is intentionally left untouched.) An empty replacements list returns
+    // the text unchanged.
+    let final_text = crate::text_replace::apply(&whisper_result.text, &settings.text_replacements);
+
     // Empty or whitespace-only text is a benign outcome, not an error (e.g.
     // the user tapped the toggle hotkey on and immediately off). Both the
     // incremental path (whose assembled text lands in `whisper_result`, or
@@ -164,7 +171,7 @@ fn transcribe_recording_inner(
     // this single check. Nothing is saved; the previous Last Transcript
     // Buffer is preserved.
     let Some(mut transcript) = Transcript::new_last_buffer(
-        whisper_result.text,
+        final_text,
         Some(recording.duration_ms.min(u32::MAX as u64) as u32),
         Some(model_id.clone()),
         Some(language),
