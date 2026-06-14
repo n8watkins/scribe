@@ -385,6 +385,24 @@ export function transcriptTitle(transcript: Transcript) {
   return `Transcript from ${formatDateTime(transcript.createdAt)}`;
 }
 
+// A short, single-line preview used as the lead of a transcript row: the first
+// non-empty line, whitespace-collapsed and capped with an ellipsis.
+export function transcriptSnippet(transcript: Transcript, maxChars = 140) {
+  const firstLine =
+    transcript.text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0) ?? "";
+
+  const collapsed = firstLine.replace(/\s+/g, " ");
+  if (collapsed.length === 0) {
+    return "Empty transcript";
+  }
+  return collapsed.length > maxChars
+    ? `${collapsed.slice(0, maxChars).trimEnd()}…`
+    : collapsed;
+}
+
 export function transcriptMeta(transcript: Transcript) {
   const parts = [
     formatCount(transcript.wordCount, "word"),

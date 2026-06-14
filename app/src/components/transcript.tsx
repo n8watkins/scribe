@@ -1,8 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ClipboardPaste,
   Copy,
   Eraser,
+  ExternalLink,
   Play,
   Sparkles,
   Square,
@@ -15,7 +16,7 @@ import {
   formatDateTime,
   formatDuration,
   transcriptMeta,
-  transcriptTitle,
+  transcriptSnippet,
 } from "../lib/format";
 import { EmptyState } from "./feedback";
 import { IconButton } from "./primitives";
@@ -112,24 +113,50 @@ export function TranscriptRow({
   onAnalyze,
   onCopy,
   onDelete,
+  onOpenExternally,
   onPaste,
   onPlay,
+  onToggleSelect,
   playing = false,
+  selected = false,
 }: {
   busy?: boolean;
   item: Transcript;
   onAnalyze?: (id: string) => Promise<void>;
   onCopy?: (id: string) => Promise<void>;
   onDelete?: (id: string) => Promise<void>;
+  onOpenExternally?: (id: string) => Promise<void>;
   onPaste?: (id: string) => Promise<void>;
   onPlay?: (id: string) => Promise<void>;
+  onToggleSelect?: (id: string) => void;
   playing?: boolean;
+  selected?: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  // Only offer the toggle when there is genuinely more to reveal than the
+  // single-line snippet already shows (multi-line, or longer than the cap).
+  const canExpand = item.text.includes("\n") || item.text.trim().length > 140;
+
   return (
-    <div className="history-row">
+    <div className={selected ? "history-row is-selected" : "history-row"}>
+      {onToggleSelect ? (
+        <input
+          aria-label="Select transcript for combine"
+          checked={selected}
+          className="history-row-select"
+          onChange={() => onToggleSelect(item.id)}
+          type="checkbox"
+        />
+      ) : null}
       <div>
-        <strong>{transcriptTitle(item)}</strong>
-        <p title={item.text}>{item.text}</p>
+        <strong>{transcriptSnippet(item)}</strong>
+        {expanded && canExpand ? (
+          <p className="transcript-full">{item.text}</p>
+        ) : (
+          <p className="transcript-clamp" title={item.text}>
+            {item.text}
+          </p>
+        )}
         {item.analysis ? (
           <div className="note-analysis">
             <span className="note-analysis-label">
@@ -139,7 +166,18 @@ export function TranscriptRow({
             <p>{item.analysis}</p>
           </div>
         ) : null}
-        <span>{transcriptMeta(item)}</span>
+        <span className="history-row-meta">
+          {formatDateTime(item.createdAt)} · {transcriptMeta(item)}
+        </span>
+        {canExpand ? (
+          <button
+            className="text-button see-more-button"
+            onClick={() => setExpanded((value) => !value)}
+            type="button"
+          >
+            {expanded ? "See less" : "See more"}
+          </button>
+        ) : null}
       </div>
       <div className="row-actions">
         {onAnalyze ? (
@@ -177,6 +215,15 @@ export function TranscriptRow({
         >
           <Copy aria-hidden="true" size={15} />
         </IconButton>
+        {onOpenExternally ? (
+          <IconButton
+            disabled={busy}
+            label="Open in external editor"
+            onClick={() => void onOpenExternally(item.id)}
+          >
+            <ExternalLink aria-hidden="true" size={15} />
+          </IconButton>
+        ) : null}
         <IconButton
           disabled={busy || !onPaste}
           label={busy ? "Working..." : "Insert into focused app"}

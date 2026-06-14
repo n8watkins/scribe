@@ -1,17 +1,28 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Archive, Cloud, RefreshCw, Search, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Archive,
+  Cloud,
+  Layers,
+  RefreshCw,
+  Search,
+  Trash2,
+} from "lucide-react";
 import {
   analyzeNote,
   clearTranscriptHistory,
+  combineTranscripts,
   commandErrorMessage,
   copyTranscript,
   deleteTranscript,
   driveSyncNow,
   getTranscriptAudio,
+  openTranscriptExternally,
   pasteTranscript,
+  saveCombinedTranscript,
   searchTranscripts,
   type DashboardData,
   type Transcript,
+  type TranscriptSort,
 } from "../backend";
 import type { ViewActions } from "../types";
 import { EmptyState, InlineError } from "../components/feedback";
@@ -27,6 +38,9 @@ export function HistoryView({
   notesOnly?: boolean;
 }) {
   const [query, setQuery] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [sort, setSort] = useState<TranscriptSort>("newest");
   const [offset, setOffset] = useState(0);
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [total, setTotal] = useState(0);
@@ -37,9 +51,19 @@ export function HistoryView({
   const [syncingToDrive, setSyncingToDrive] = useState(false);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [combinedText, setCombinedText] = useState<string | null>(null);
+  const [combining, setCombining] = useState(false);
+  const [savingCombined, setSavingCombined] = useState(false);
+  const [combineCopied, setCombineCopied] = useState(false);
   const playbackRef = useRef<HTMLAudioElement | null>(null);
   const { settings } = data;
   const pageSize = 25;
+
+  // Convert the inclusive From/To date inputs into the RFC3339 bounds the
+  // backend compares against `created_at` (chrono `to_rfc3339()`, +00:00).
+  const fromBound = fromDate ? `${fromDate}T00:00:00+00:00` : undefined;
+  const toBound = toDate ? `${toDate}T23:59:59.999+00:00` : undefined;
 
   const loadHistory = useCallback(
     async (nextOffset: number) => {
@@ -50,6 +74,9 @@ export function HistoryView({
         let result = await searchTranscripts({
           query: query.trim() || undefined,
           notesOnly: notesOnly || undefined,
+          from: fromBound,
+          to: toBound,
+          sort,
           limit: pageSize,
           offset: nextOffset,
         });
@@ -61,6 +88,9 @@ export function HistoryView({
           result = await searchTranscripts({
             query: query.trim() || undefined,
             notesOnly: notesOnly || undefined,
+            from: fromBound,
+            to: toBound,
+            sort,
             limit: pageSize,
             offset: Math.max(0, nextOffset - pageSize),
           });
@@ -75,7 +105,7 @@ export function HistoryView({
         setHistoryLoading(false);
       }
     },
-    [query, notesOnly],
+    [query, notesOnly, fromBound, toBound, sort],
   );
 
   useEffect(() => {
@@ -85,6 +115,12 @@ export function HistoryView({
 
     return () => window.clearTimeout(timer);
   }, [loadHistory]);
+
+  // A changed filter reshuffles the result set, so any pending selection (and
+  // its combine count) would be stale; clear it whenever a filter moves.
+  useEffect(() => {
+    setSelectedIds([]);
+  }, [query, fromDate, toDate, sort, notesOnly]);
 
   useEffect(() => {
     void loadHistory(offset);
@@ -185,6 +221,80 @@ export function HistoryView({
     }
   }, []);
 
+  const handleOpenExternally = useCallback(async (id: string) => {
+    setHistoryError(null);
+    try {
+      await openTranscriptExternally(id);
+    } catch (error) {
+      setHistoryError(commandErrorMessage(error));
+    }
+  }, []);
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((previous) =>
+      previous.includes(id)
+        ? previous.filter((value) => value !== id)
+        : [...previous, id],
+    );
+  }, []);
+
+  const closeCombine = useCallback(() => {
+    setCombinedText(null);
+    setCombineCopied(false);
+  }, []);
+
+  const handleCombine = useCallback(async () => {
+    if (selectedIds.length < 2) {
+      return;
+    }
+
+    setCombining(true);
+    setHistoryError(null);
+    setCombineCopied(false);
+
+    try {
+      const text = await combineTranscripts(selectedIds);
+      setCombinedText(text);
+    } catch (error) {
+      setHistoryError(commandErrorMessage(error));
+    } finally {
+      setCombining(false);
+    }
+  }, [selectedIds]);
+
+  const handleCopyCombined = useCallback(async () => {
+    if (combinedText === null) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(combinedText);
+      setCombineCopied(true);
+    } catch (error) {
+      setHistoryError(commandErrorMessage(error));
+    }
+  }, [combinedText]);
+
+  const handleSaveCombined = useCallback(async () => {
+    if (combinedText === null) {
+      return;
+    }
+
+    setSavingCombined(true);
+    setHistoryError(null);
+
+    try {
+      await saveCombinedTranscript(combinedText);
+      setSelectedIds([]);
+      closeCombine();
+      await actions.refresh();
+      await loadHistory(0);
+    } catch (error) {
+      setHistoryError(commandErrorMessage(error));
+    } finally {
+      setSavingCombined(false);
+    }
+  }, [actions, closeCombine, combinedText, loadHistory]);
+
   const handleDeleteTranscript = useCallback(
     async (id: string) => {
       if (!window.confirm("Delete this transcript from local history?")) {
@@ -196,6 +306,7 @@ export function HistoryView({
 
       try {
         await deleteTranscript(id);
+        setSelectedIds((previous) => previous.filter((value) => value !== id));
         await refreshAfterMutation();
       } catch (error) {
         setHistoryError(commandErrorMessage(error));
@@ -217,6 +328,7 @@ export function HistoryView({
     try {
       await clearTranscriptHistory();
       setOffset(0);
+      setSelectedIds([]);
       await refreshAfterMutation();
     } catch (error) {
       setHistoryError(commandErrorMessage(error));
@@ -229,6 +341,7 @@ export function HistoryView({
   const pageEnd = Math.min(offset + pageSize, total);
   const hasPrevious = offset > 0;
   const hasNext = offset + pageSize < total;
+  const selectedCount = useMemo(() => selectedIds.length, [selectedIds]);
 
   return (
     <section className="view-grid">
@@ -278,6 +391,51 @@ export function HistoryView({
               {clearingHistory ? "Clearing..." : "Clear all"}
             </button>
           )}
+        </div>
+        <div className="toolbar-row filter-row">
+          <label className="filter-field">
+            <span className="filter-label">From</span>
+            <input
+              aria-label="Filter from date"
+              max={toDate || undefined}
+              onChange={(event) => setFromDate(event.currentTarget.value)}
+              type="date"
+              value={fromDate}
+            />
+          </label>
+          <label className="filter-field">
+            <span className="filter-label">To</span>
+            <input
+              aria-label="Filter to date"
+              min={fromDate || undefined}
+              onChange={(event) => setToDate(event.currentTarget.value)}
+              type="date"
+              value={toDate}
+            />
+          </label>
+          <label className="filter-field">
+            <span className="filter-label">Sort</span>
+            <select
+              aria-label="Sort transcripts"
+              onChange={(event) =>
+                setSort(event.currentTarget.value as TranscriptSort)
+              }
+              value={sort}
+            >
+              <option value="newest">Newest</option>
+              <option value="oldest">Oldest</option>
+              <option value="longest">Longest</option>
+            </select>
+          </label>
+          <button
+            className="secondary-button combine-button"
+            disabled={selectedCount < 2 || combining}
+            onClick={() => void handleCombine()}
+            type="button"
+          >
+            <Layers aria-hidden="true" size={15} />
+            {combining ? "Combining…" : `Combine (${selectedCount})`}
+          </button>
         </div>
         {syncNotice ? (
           <p className="muted" style={{ margin: "8px 2px 0" }}>
@@ -329,9 +487,12 @@ export function HistoryView({
                 }
                 onCopy={handleCopyTranscript}
                 onDelete={handleDeleteTranscript}
+                onOpenExternally={handleOpenExternally}
                 onPaste={handlePasteTranscript}
                 onPlay={handlePlayTranscript}
+                onToggleSelect={toggleSelect}
                 playing={playingId === item.id}
+                selected={selectedIds.includes(item.id)}
               />
             ))}
           </div>
@@ -355,6 +516,61 @@ export function HistoryView({
           </button>
         </div>
       </article>
+
+      {combinedText !== null ? (
+        <div
+          className="combine-overlay"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              closeCombine();
+            }
+          }}
+          role="presentation"
+        >
+          <div
+            aria-label="Combined transcript preview"
+            aria-modal="true"
+            className="combine-panel"
+            role="dialog"
+          >
+            <div className="section-heading compact">
+              <h2>Combined transcript</h2>
+              <span className="muted">{selectedCount} selected, oldest first</span>
+            </div>
+            <textarea
+              className="combine-preview"
+              readOnly
+              value={combinedText}
+            />
+            <div className="button-row combine-actions">
+              <button
+                className="primary-button"
+                disabled={savingCombined}
+                onClick={() => void handleSaveCombined()}
+                type="button"
+              >
+                {savingCombined ? "Saving…" : "Save as new entry"}
+              </button>
+              <button
+                className="secondary-button"
+                disabled={savingCombined}
+                onClick={() => void handleCopyCombined()}
+                type="button"
+              >
+                {combineCopied ? "Copied" : "Copy"}
+              </button>
+              <button
+                className="ghost-button"
+                disabled={savingCombined}
+                onClick={closeCombine}
+                type="button"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

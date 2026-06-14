@@ -729,6 +729,40 @@ select option {
   background: #0d1320;
 }
 
+/* Secondary toolbar row: From/To date filters, sort, and Combine. */
+.filter-row {
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.filter-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.filter-label {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.filter-field input[type="date"] {
+  width: auto;
+  min-width: 132px;
+  color-scheme: dark;
+}
+
+.filter-field select {
+  min-width: 110px;
+}
+
+.combine-button {
+  margin-left: auto;
+}
+
 textarea {
   min-height: 78px;
   padding: 7px 8px;
@@ -956,6 +990,114 @@ textarea {
   overflow-y: auto;
   overflow-x: hidden;
   padding-right: 2px;
+}
+
+/* A selection checkbox in front of a row promotes it to three columns. */
+.history-row:has(.history-row-select) {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.history-row.is-selected {
+  border-color: rgba(34, 211, 238, 0.45);
+  background: rgba(34, 211, 238, 0.06);
+}
+
+.history-row-select {
+  width: 15px;
+  min-height: 0;
+  height: 15px;
+  margin: 0;
+  padding: 0;
+  align-self: center;
+  accent-color: #22d3ee;
+  cursor: pointer;
+}
+
+/* The muted second line: timestamp + meta beneath the snippet lead. */
+.history-row .history-row-meta {
+  display: block;
+  margin-top: 3px;
+}
+
+/* Collapsed snippet body: clamp the full text to ~3 lines. */
+.history-row p.transcript-clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* Expanded body: the whole transcript, line breaks preserved, scrollable. */
+.history-row p.transcript-full {
+  display: block;
+  max-height: 240px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.text-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #67e8f9;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.text-button:hover {
+  text-decoration: underline;
+}
+
+.see-more-button {
+  display: inline-block;
+  margin-top: 4px;
+}
+
+/* Combine preview: a lightweight modal over the archive. */
+.combine-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(2, 6, 14, 0.62);
+  backdrop-filter: blur(2px);
+}
+
+.combine-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(640px, 100%);
+  max-height: min(70vh, 560px);
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 10px;
+  background: #0b1220;
+  box-shadow: 0 24px 60px rgba(2, 6, 14, 0.55);
+}
+
+.combine-panel .section-heading {
+  margin: 0;
+}
+
+.combine-preview {
+  flex: 1;
+  min-height: 200px;
+  resize: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.combine-actions {
+  justify-content: flex-end;
 }
 
 .model-row > div,
@@ -1578,12 +1720,27 @@ kbd {
   .toolbar-row,
   .device-row,
   .history-row,
+  .history-row:has(.history-row-select),
   .hotkey-editor-row,
   .model-row,
   .model-table-header,
   .settings-row,
   .recording-stage {
     grid-template-columns: 1fr;
+  }
+
+  .combine-button {
+    margin-left: 0;
+  }
+
+  .filter-field {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .filter-field input[type="date"],
+  .filter-field select {
+    width: 100%;
   }
 
   .toolbar-row,
