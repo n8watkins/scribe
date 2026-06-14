@@ -116,6 +116,14 @@ pub struct AppSettings {
     pub pill_x: Option<i32>,
     #[serde(default)]
     pub pill_y: Option<i32>,
+    /// Waveform / dot color for normal dictation on the floating pill (CSS
+    /// color string). Defaults to the shipped amber.
+    #[serde(default = "default_pill_color_normal")]
+    pub pill_color_normal: String,
+    /// Waveform / dot color while a note-taking session is recording (CSS
+    /// color string). Defaults to the shipped cyan.
+    #[serde(default = "default_pill_color_note")]
+    pub pill_color_note: String,
     pub hotkeys: HotkeySettings,
 }
 
@@ -137,6 +145,14 @@ fn default_pill_display_mode() -> PillDisplayMode {
 
 fn default_dashboard_hotkey_toggles() -> bool {
     true
+}
+
+fn default_pill_color_normal() -> String {
+    "#fbbf24".to_string()
+}
+
+fn default_pill_color_note() -> String {
+    "#38bdf8".to_string()
 }
 
 fn default_notes_analysis_prompt() -> String {
@@ -314,6 +330,8 @@ impl Default for AppSettings {
             drive_account_email: String::new(),
             pill_x: None,
             pill_y: None,
+            pill_color_normal: default_pill_color_normal(),
+            pill_color_note: default_pill_color_note(),
             hotkeys: HotkeySettings::default(),
         }
     }
@@ -487,6 +505,8 @@ mod tests {
         assert_eq!(settings.notes_analysis_model, "");
         assert!(!settings.developer_settings_enabled);
         assert!(!settings.dev_hotkeys_seeded);
+        assert_eq!(settings.pill_color_normal, "#fbbf24");
+        assert_eq!(settings.pill_color_note, "#38bdf8");
     }
 
     #[test]
@@ -705,6 +725,9 @@ mod tests {
         // must fill it in as false rather than failing to deserialize.
         assert!(!settings.developer_settings_enabled);
         assert!(!settings.dev_hotkeys_seeded);
+        // Absent from this legacy JSON, so the serde defaults fill them in.
+        assert_eq!(settings.pill_color_normal, "#fbbf24");
+        assert_eq!(settings.pill_color_note, "#38bdf8");
         assert_eq!(settings.output_mode, OutputMode::SaveOnly);
         assert_eq!(
             settings.pill_display_mode,

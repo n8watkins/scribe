@@ -125,6 +125,38 @@ export function SettingsView({
           </select>
         </SettingRow>
         <SettingRow
+          description="Waveform and dot color for normal dictation on the pill."
+          label="Pill color"
+        >
+          <input
+            aria-label="Pill color"
+            disabled={actions.savingSettings}
+            onChange={(event) =>
+              actions.updateSettings({
+                pillColorNormal: event.currentTarget.value,
+              })
+            }
+            type="color"
+            value={settings.pillColorNormal}
+          />
+        </SettingRow>
+        <SettingRow
+          description="Waveform and dot color while taking a note (tilde+Q)."
+          label="Note pill color"
+        >
+          <input
+            aria-label="Note pill color"
+            disabled={actions.savingSettings}
+            onChange={(event) =>
+              actions.updateSettings({
+                pillColorNote: event.currentTarget.value,
+              })
+            }
+            type="color"
+            value={settings.pillColorNote}
+          />
+        </SettingRow>
+        <SettingRow
           description="Display completion and failure notices."
           label="Notifications"
         >

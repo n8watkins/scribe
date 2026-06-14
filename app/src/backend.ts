@@ -87,6 +87,8 @@ export type AppSettings = {
   hotkeys: HotkeySettings;
   pillX: number | null;
   pillY: number | null;
+  pillColorNormal: string;
+  pillColorNote: string;
 };
 
 export type Transcript = {

@@ -45,6 +45,25 @@ const BAR_COUNT = 15;
 const BAR_MIN_SCALE = 0.14;
 const BAR_ATTACK = 0.45;
 const BAR_DECAY = 0.16;
+// The waveform tapers toward both ends so the edges stay quieter than the
+// center. Ends of the envelope reach this fraction of the center's height.
+const BAR_EDGE_GAIN = 0.3;
+
+/**
+ * Raised-cosine (Hann-style) envelope over the bar index: ~1.0 at the center,
+ * falling smoothly to BAR_EDGE_GAIN at both ends. Computed once from the bar
+ * count and applied to each bar's dynamic height so the waveform fades out at
+ * its edges. A single bar (or no bars) degrades to a flat 1.0.
+ */
+const BAR_ENVELOPE: number[] = Array.from({ length: BAR_COUNT }, (_, i) => {
+  if (BAR_COUNT <= 1) {
+    return 1;
+  }
+  // Hann window: 0 at the ends, 1 at the center. Rescale its [0,1] range into
+  // [BAR_EDGE_GAIN, 1] so the edges keep BAR_EDGE_GAIN of the center height.
+  const hann = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (BAR_COUNT - 1));
+  return BAR_EDGE_GAIN + (1 - BAR_EDGE_GAIN) * hann;
+});
 // Normal speech RMS sits around 0.03-0.15, so raw values barely move the
 // bars. Normalize against this ceiling before the perceptual curve.
 const RMS_CEILING = 0.07;
@@ -58,7 +77,7 @@ type PillLayout = "dot" | "bar" | "text";
 
 const LAYOUT_SIZES: Record<PillLayout, { width: number; height: number }> = {
   dot: { width: 58, height: 56 },
-  bar: { width: 230, height: 56 },
+  bar: { width: 200, height: 56 },
   text: { width: 320, height: 80 },
 };
 
@@ -163,7 +182,11 @@ function Visualizer() {
       const history = historyRef.current;
       const display = displayRef.current;
       for (let i = 0; i < BAR_COUNT; i += 1) {
-        const target = BAR_MIN_SCALE + (history[i] ?? 0) * (1 - BAR_MIN_SCALE);
+        // The edge taper scales only the moving part, so the resting line
+        // (BAR_MIN_SCALE) stays flat across every bar.
+        const target =
+          BAR_MIN_SCALE +
+          (history[i] ?? 0) * BAR_ENVELOPE[i] * (1 - BAR_MIN_SCALE);
         const current = display[i];
         const rate = target > current ? BAR_ATTACK : BAR_DECAY;
         display[i] = current + (target - current) * rate;
@@ -392,6 +415,8 @@ function PillApp() {
   const status = appState?.status ?? null;
   const showPill = settings?.showFloatingPill ?? false;
   const displayMode = settings?.pillDisplayMode ?? "visualizer_with_text";
+  const pillColorNormal = settings?.pillColorNormal ?? "#fbbf24";
+  const pillColorNote = settings?.pillColorNote ?? "#38bdf8";
   const pillX = settings?.pillX ?? null;
   const pillY = settings?.pillY ?? null;
   const updatedAt = appState?.updatedAt ?? null;
@@ -623,6 +648,12 @@ function PillApp() {
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      style={
+        {
+          "--pill-bar": pillColorNormal,
+          "--pill-bar-note": pillColorNote,
+        } as React.CSSProperties
+      }
       title={
         isRecording
           ? "Click to stop - drag to move"
