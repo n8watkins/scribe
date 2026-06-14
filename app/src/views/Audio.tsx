@@ -147,8 +147,12 @@ export function AudioView({
 
   return (
     <section className="split-grid">
-      <SectionPanel
-        icon={
+      {/* Inlined (not <SectionPanel>) so the status badge can sit to the RIGHT
+          of the "Input" title: the `.section-heading` is space-between, so the
+          <h2> anchors left and the pill is pushed to the right edge. */}
+      <article className="panel-card">
+        <div className="section-heading compact">
+          <h2>Input</h2>
           <span
             className={
               microphonesError
@@ -164,80 +168,80 @@ export function AudioView({
                 ? "Scanning"
                 : "Ready"}
           </span>
-        }
-        title="Input"
-      >
-        <p className="muted audio-input-name" title={selectedMicrophone}>
-          {selectedMicrophone}
-        </p>
-
-        {microphonesError ? (
-          <InlineError message={microphonesError} onRetry={loadMicrophones} />
-        ) : null}
-        <Waveform />
-        <div className="meter">
-          <div style={{ width: `${Math.max(4, audioLevel)}%` }} />
         </div>
+        <div className="settings-list">
+          <p className="muted audio-input-name" title={selectedMicrophone}>
+            {selectedMicrophone}
+          </p>
 
-        <div className="control-grid single">
-          <label>
-            Microphone
-            <select
-              disabled={actions.savingSettings}
-              onChange={(event) =>
-                actions.updateSettings({
-                  selectedMicId:
-                    event.currentTarget.value === "default"
-                      ? null
-                      : event.currentTarget.value,
-                })
+          {microphonesError ? (
+            <InlineError message={microphonesError} onRetry={loadMicrophones} />
+          ) : null}
+          <Waveform />
+          <div className="meter">
+            <div style={{ width: `${Math.max(4, audioLevel)}%` }} />
+          </div>
+
+          <div className="control-grid single">
+            <label>
+              Microphone
+              <select
+                disabled={actions.savingSettings}
+                onChange={(event) =>
+                  actions.updateSettings({
+                    selectedMicId:
+                      event.currentTarget.value === "default"
+                        ? null
+                        : event.currentTarget.value,
+                  })
+                }
+                value={settings.selectedMicId ?? "default"}
+              >
+                <option value="default">{defaultMicLabel}</option>
+                {microphones.map((microphone) => (
+                  <option
+                    disabled={!microphone.isAvailable}
+                    key={microphone.id}
+                    value={microphone.id}
+                  >
+                    {microphone.name}
+                    {microphone.isDefault ? " (default)" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="button-row">
+            <button
+              className="primary-button"
+              disabled={
+                testingMic ||
+                actions.recordingBusy ||
+                microphonesLoading ||
+                Boolean(microphonesError)
               }
-              value={settings.selectedMicId ?? "default"}
+              onClick={() => void handleRecordTestClip()}
+              type="button"
             >
-              <option value="default">{defaultMicLabel}</option>
-              {microphones.map((microphone) => (
-                <option
-                  disabled={!microphone.isAvailable}
-                  key={microphone.id}
-                  value={microphone.id}
-                >
-                  {microphone.name}
-                  {microphone.isDefault ? " (default)" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
+              <Mic aria-hidden="true" size={16} />
+              {testingMic ? "Testing..." : "Record test"}
+            </button>
+            <button
+              className="secondary-button"
+              disabled={!hasTestClip || playingTestClip || testingMic}
+              onClick={() => void handlePlayTestClip()}
+              type="button"
+            >
+              <Play aria-hidden="true" size={15} />
+              {playingTestClip ? "Playing..." : "Play test"}
+            </button>
+          </div>
+          {testClipError ? (
+            <p className="field-error">{testClipError}</p>
+          ) : null}
         </div>
-
-        <div className="button-row">
-          <button
-            className="primary-button"
-            disabled={
-              testingMic ||
-              actions.recordingBusy ||
-              microphonesLoading ||
-              Boolean(microphonesError)
-            }
-            onClick={() => void handleRecordTestClip()}
-            type="button"
-          >
-            <Mic aria-hidden="true" size={16} />
-            {testingMic ? "Testing..." : "Record test"}
-          </button>
-          <button
-            className="secondary-button"
-            disabled={!hasTestClip || playingTestClip || testingMic}
-            onClick={() => void handlePlayTestClip()}
-            type="button"
-          >
-            <Play aria-hidden="true" size={15} />
-            {playingTestClip ? "Playing..." : "Play test"}
-          </button>
-        </div>
-        {testClipError ? (
-          <p className="field-error">{testClipError}</p>
-        ) : null}
-      </SectionPanel>
+      </article>
 
       <div className="stack">
         <SectionPanel title="Audio processing">

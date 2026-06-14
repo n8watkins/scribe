@@ -34,77 +34,107 @@
 }
 
 /* ---------------------------------------------------------------------------
- * #2 — "See more" INLINE at the end of the snippet, the whole collapsed snippet
- * clickable, and "See less" resetting the scroll (the JS half of that reset
- * lives in `TranscriptRow`).
+ * BUG: the FIRST row's action tooltips get clipped by the scroll container.
  *
- * The collapsed snippet is `<p class="transcript-clamp is-expandable">` holding
- * the text plus a trailing `<span class="see-more-inline"> …see more</span>`.
- * The <p> stays a 3-line `-webkit-box` clamp; we anchor the "…see more" tail to
- * the bottom-right corner with a short fade so it's always legible at the end of
- * the visible text (a tail inside the clamped flow would get truncated away).
- * The entire <p> is the expand affordance — hover makes that obvious.
+ * `.icon-button::after` pops the tooltip ABOVE the button (`bottom: 100% + 7px`).
+ * For the first row that sits flush at the top of `.history-scroll`, whose
+ * `overflow-y: auto` clips anything above its top edge — so the tooltip is cut
+ * off / hidden behind the container. Flip ONLY the first row's tooltips to sit
+ * BELOW their buttons, where there's room inside the scroll viewport, and lift
+ * the z-index so they stack above neighbouring rows.
  * ------------------------------------------------------------------------- */
-.history-row p.transcript-clamp.is-expandable {
-  position: relative;
-  cursor: pointer;
-  /* Reserve room on the last line so the absolutely-positioned tail never sits
-   * on top of the final words. */
-  padding-right: 4px;
+.history-scroll .history-row:first-child .icon-button::after {
+  top: calc(100% + 7px);
+  bottom: auto;
+  z-index: 60;
 }
 
-.history-row p.transcript-clamp.is-expandable:hover {
-  color: #e2e8f0;
+/* ---------------------------------------------------------------------------
+ * #2 — See more / See less in a FIXED spot on the meta line.
+ *
+ * The row body stacks: a muted DATE lead, the transcript text, then the meta
+ * line (details + toggle). Expanding only grows the text area between the date
+ * and meta — the meta line itself never moves or reflows, because the toggle is
+ * pinned to its right edge with `margin-left: auto`, separate from the details.
+ *
+ * Collapsed: `<p class="transcript-clamp">` clamps to 3 lines.
+ * Expanded:  `<p class="transcript-full">` shows up to ~6 lines, then scrolls.
+ * ------------------------------------------------------------------------- */
+
+/* The text/meta column must be allowed to shrink so the snippet clamp and meta
+ * ellipsis work inside the row's grid track (mirrors the shared sheet's
+ * `min-width: 0` on the first child, which the checkbox can displace). */
+.history-row .history-row-body {
+  min-width: 0;
 }
 
-/* The trailing "…see more": light (NOT washed-out) and smaller than the body.
- * Pinned to the bottom-right with a gradient fade behind it so it reads as the
- * end of the text even when the snippet is clamped. */
-.history-row .see-more-inline {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  padding-left: 22px;
-  color: #cbd5e1;
+/* The date lead: muted/secondary, above the transcript text. */
+.history-row .history-row-date {
+  display: block;
+  margin-bottom: 2px;
+  color: #64748b;
   font-size: 11px;
-  font-weight: 600;
+}
+
+/* Meta line lays the details out on the left and pins the See more/less toggle
+ * to the right so it stays put regardless of expansion. The `span.` qualifier
+ * beats the shared sheet's `.history-row .history-row-meta { display:block }`. */
+.history-row span.history-row-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 3px;
+}
+
+.history-row .history-row-meta-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
-  pointer-events: none;
-  background: linear-gradient(
-    90deg,
-    rgba(7, 11, 20, 0) 0%,
-    rgba(7, 11, 20, 0.92) 42%,
-    rgba(7, 11, 20, 0.98) 100%
-  );
 }
 
-.history-row p.transcript-clamp.is-expandable:hover .see-more-inline {
-  color: #67e8f9;
-}
-
-/* "See less" renders inline as the trailing child of the expanded paragraph;
- * keep it on its own from the body text with a small leading gap. */
-.history-row .transcript-full .see-more-button {
-  display: inline;
-  margin: 0 0 0 4px;
+/* The fixed toggle: anchored to the right of the details, never moves. */
+.history-row .history-row-meta .see-toggle {
+  margin-left: auto;
+  flex: 0 0 auto;
   font-size: 11px;
   white-space: nowrap;
 }
 
 /* ---------------------------------------------------------------------------
- * #3 — Expanded items can get very tall: cap the height and scroll inside.
+ * #3 — Expanded body: up to ~6 lines, then scroll inside.
  *
  * The shared sheet already caps `.transcript-full`; we reinforce it here so the
- * behavior is owned by this view and easy to tune, and so it still holds if the
- * base rule changes. A slightly smaller cap keeps a long expanded note from
- * dominating the list while the surrounding `.history-scroll` still scrolls.
+ * behavior is owned by this view and easy to tune. The body runs at the root's
+ * 1.45 line-height, so six lines is 6 × 1.45em; past that it scrolls inside
+ * while the surrounding `.history-scroll` still scrolls the list.
  * ------------------------------------------------------------------------- */
 .history-row p.transcript-full {
-  max-height: 220px;
+  line-height: 1.45;
+  max-height: calc(1.45em * 6); /* ~6 lines before it scrolls */
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
   padding-right: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+ * "Clear all" reads as a DANGER (red) action, matching the
+ * `clear-transcript-history` button in Data & Privacy. The base `.danger` only
+ * tints the text/border faintly; here we give the History toolbar's
+ * `.secondary-button.danger` a full red fill + red hover (overriding the shared
+ * cyan `.secondary-button:hover`). Scoped to `.toolbar-row` so it can't touch
+ * Transcribe's toolbar, whose buttons never carry `.danger`.
+ * ------------------------------------------------------------------------- */
+.toolbar-row .secondary-button.danger {
+  color: #fee2e2;
+  background: rgba(220, 38, 38, 0.16);
+  border-color: rgba(248, 113, 113, 0.5);
+}
+
+.toolbar-row .secondary-button.danger:hover:not(:disabled) {
+  background: rgba(220, 38, 38, 0.28);
+  border-color: rgba(248, 113, 113, 0.85);
 }
 
 /* ---------------------------------------------------------------------------
@@ -151,10 +181,10 @@
 /* ---------------------------------------------------------------------------
  * #5 — Select-all / deselect-all control on the LEFT of the archive.
  *
- * Rendered as the FIRST child of the archive `.section-heading.compact` only
- * while a selection is active. `margin-right: auto` claims the left edge and
- * pushes the title + records group to the right, so it reads as a leading
- * control. Styled as a quiet on-brand chip that brightens on hover. */
+ * ALWAYS rendered (archive + notes) as the leading child of the
+ * `.section-heading.compact`, disabled when the page is empty. `order: -1`
+ * claims the left edge ahead of the title, so it reads as a leading control.
+ * Styled as a quiet on-brand chip that brightens on hover. */
 .select-all-button {
   order: -1;
   display: inline-flex;
@@ -174,9 +204,15 @@
     border-color 140ms ease;
 }
 
-.select-all-button:hover {
+.select-all-button:hover:not(:disabled) {
   background: rgba(34, 211, 238, 0.16);
   border-color: rgba(34, 211, 238, 0.45);
+}
+
+/* Always rendered now, so dim it when the page has nothing to select. */
+.select-all-button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 /* At the app's narrow breakpoint (760px) the section heading stacks and the

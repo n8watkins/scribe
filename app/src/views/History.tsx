@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   Cloud,
+  Copy,
   Layers,
   ListChecks,
   NotebookPen,
   RefreshCw,
+  Save,
   Search,
   Settings as SettingsIcon,
   SquareCheckBig,
@@ -200,6 +202,9 @@ export function HistoryView({
 
       try {
         await copyTranscript(id);
+        // After a successful copy, drop this item from the selection (if it was
+        // selected) so the checkbox state reflects that it's been handled.
+        setSelectedIds((previous) => previous.filter((value) => value !== id));
         await refreshAfterMutation();
       } catch (error) {
         setHistoryError(commandErrorMessage(error));
@@ -341,6 +346,9 @@ export function HistoryView({
     try {
       await navigator.clipboard.writeText(combinedText);
       setCombineCopied(true);
+      // The combined text is now on the clipboard, so deselect the items that
+      // fed it — the selection has served its purpose for this copy.
+      setSelectedIds([]);
     } catch (error) {
       setHistoryError(commandErrorMessage(error));
     }
@@ -454,7 +462,7 @@ export function HistoryView({
             ) : null
           ) : (
             <button
-              className="secondary-button"
+              className="secondary-button danger"
               disabled={clearingHistory || total === 0}
               onClick={() => void handleClearHistory()}
               type="button"
@@ -526,30 +534,31 @@ export function HistoryView({
 
       <article className="panel-card span-2">
         <div className="section-heading compact">
-          {selectedCount > 0 ? (
-            <button
-              className="select-all-button"
-              onClick={toggleSelectAll}
-              type="button"
-            >
-              {allVisibleSelected ? (
-                <SquareCheckBig aria-hidden="true" size={14} />
-              ) : (
-                <ListChecks aria-hidden="true" size={14} />
-              )}
-              {allVisibleSelected ? "Deselect all" : "Select all"}
-            </button>
-          ) : null}
+          {/* Select-all/deselect-all is ALWAYS visible (archive + notes), not
+              only during an active selection. Disabled when the page is empty. */}
+          <button
+            className="select-all-button"
+            disabled={transcripts.length === 0}
+            onClick={toggleSelectAll}
+            type="button"
+          >
+            {allVisibleSelected ? (
+              <SquareCheckBig aria-hidden="true" size={14} />
+            ) : (
+              <ListChecks aria-hidden="true" size={14} />
+            )}
+            {allVisibleSelected ? "Deselect all" : "Select all"}
+          </button>
           {notesOnly ? (
             <h2>
               <NotebookPen aria-hidden="true" size={16} />
               Notes
             </h2>
           ) : (
-            <>
-              <h2>Transcript archive</h2>
+            <h2>
               <Archive aria-hidden="true" size={16} />
-            </>
+              Transcript archive
+            </h2>
           )}
           <span className="notes-records">
             <span className="muted">
@@ -569,7 +578,11 @@ export function HistoryView({
         {!settings.historyEnabled ? (
           <EmptyState message="History is disabled. Existing records remain available until you delete them." />
         ) : null}
-        {historyLoading ? (
+        {/* Only show the full-panel loading swap on the INITIAL load (no rows
+            yet). A reload triggered by copy/insert/delete keeps the existing
+            list mounted below, so the page's scroll position is preserved
+            instead of collapsing to the top when the list briefly unmounts. */}
+        {historyLoading && transcripts.length === 0 ? (
           <div className="pending-panel">
             <RefreshCw aria-hidden="true" size={16} />
             <span>Loading transcript history...</span>
@@ -584,7 +597,7 @@ export function HistoryView({
             }
           />
         ) : null}
-        {!historyLoading && transcripts.length > 0 ? (
+        {transcripts.length > 0 ? (
           <div className="transcript-list history-scroll">
             {transcripts.map((item) => (
               <TranscriptRow
@@ -660,6 +673,7 @@ export function HistoryView({
                 onClick={() => void handleSaveCombined()}
                 type="button"
               >
+                <Save aria-hidden="true" size={15} />
                 {savingCombined ? "Saving…" : "Save as new entry"}
               </button>
               <button
@@ -668,6 +682,7 @@ export function HistoryView({
                 onClick={() => void handleCopyCombined()}
                 type="button"
               >
+                <Copy aria-hidden="true" size={15} />
                 {combineCopied ? "Copied" : "Copy"}
               </button>
               <button

@@ -135,12 +135,12 @@ export function TranscriptRow({
   const [expanded, setExpanded] = useState(false);
   const fullRef = useRef<HTMLParagraphElement | null>(null);
   // Only offer the toggle when there is genuinely more to reveal than the
-  // single-line snippet already shows (multi-line, or longer than the cap).
-  const canExpand = item.text.includes("\n") || item.text.trim().length > 140;
+  // 3-line clamp already shows (multi-line, or longer than the cap).
+  const canExpand = item.text.includes("\n") || item.text.trim().length > 200;
 
   const collapse = () => {
-    // BUG fix: the expanded body scrolls internally, so reset it to the top
-    // before collapsing — otherwise a later re-expand would start mid-transcript
+    // The expanded body scrolls internally, so reset it to the top before
+    // collapsing — otherwise a later re-expand would start mid-transcript
     // instead of at the beginning.
     if (fullRef.current) {
       fullRef.current.scrollTop = 0;
@@ -159,49 +159,16 @@ export function TranscriptRow({
           type="checkbox"
         />
       ) : null}
-      <div>
+      <div className="history-row-body">
+        {/* Date leads the row, muted/secondary, above the transcript text. */}
+        <span className="history-row-date">{formatDateTime(item.createdAt)}</span>
         {expanded && canExpand ? (
           <p className="transcript-full" ref={fullRef}>
-            {item.text}{" "}
-            <button
-              className="text-button see-more-button"
-              onClick={collapse}
-              type="button"
-            >
-              See less
-            </button>
+            {item.text}
           </p>
         ) : (
-          // The whole collapsed snippet is the expand affordance: clicking
-          // anywhere in the clamped text (or the trailing "…see more") opens it.
-          <p
-            className={
-              canExpand
-                ? "transcript-clamp is-expandable"
-                : "transcript-clamp"
-            }
-            onClick={canExpand ? () => setExpanded(true) : undefined}
-            role={canExpand ? "button" : undefined}
-            tabIndex={canExpand ? 0 : undefined}
-            title={item.text}
-            onKeyDown={
-              canExpand
-                ? (event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      setExpanded(true);
-                    }
-                  }
-                : undefined
-            }
-          >
+          <p className="transcript-clamp" title={item.text}>
             {item.text}
-            {canExpand ? (
-              <span aria-hidden="true" className="see-more-inline">
-                {" "}
-                …see more
-              </span>
-            ) : null}
           </p>
         )}
         {item.analysis ? (
@@ -213,8 +180,20 @@ export function TranscriptRow({
             <p>{item.analysis}</p>
           </div>
         ) : null}
+        {/* Meta line: existing details (words · model · duration) with the
+            See more/less toggle pinned to the RIGHT. This row never moves or
+            mutates when the text expands — only the text area above grows. */}
         <span className="history-row-meta">
-          {formatDateTime(item.createdAt)} · {transcriptMeta(item)}
+          <span className="history-row-meta-text">{transcriptMeta(item)}</span>
+          {canExpand ? (
+            <button
+              className="text-button see-toggle"
+              onClick={() => (expanded ? collapse() : setExpanded(true))}
+              type="button"
+            >
+              {expanded ? "See less" : "See more"}
+            </button>
+          ) : null}
         </span>
       </div>
       <div className="row-actions">
@@ -304,38 +283,46 @@ export function LiveTranscript({ text }: { text: string }) {
 }
 
 const WAVEFORM_BARS = 13;
+const WAVEFORM_CENTER = (WAVEFORM_BARS - 1) / 2;
 // Center bars react more than the edges, so the shape reads as a waveform.
-// A smooth bell across all bars keeps the wider strip from looking blocky.
+// A smooth bell across all bars keeps the strip from looking blocky.
 const WAVEFORM_ENVELOPE = Array.from({ length: WAVEFORM_BARS }, (_, i) => {
   const t = i / (WAVEFORM_BARS - 1); // 0..1 across the strip
   // Raised-cosine bell: 0.5 at the edges, 1 at the center.
   return 0.5 + 0.5 * Math.sin(Math.PI * t);
 });
-const WAVEFORM_REST = 0.16;
-// Snappier than the old single 0.32 ease: jump UP fast on louder input so the
-// strip tracks speech onsets, fall a touch slower so it doesn't strobe.
-const WAVEFORM_ATTACK = 0.6;
-const WAVEFORM_DECAY = 0.4;
-// Horizontal hue progression so the whole strip reads as one multi-color
-// gradient (cyan → blue → purple) rather than every bar an identical gradient.
-const WAVEFORM_STOPS = ["#22d3ee", "#38bdf8", "#8b5cf6"] as const;
+const WAVEFORM_REST = 0.14;
+// Mirror the floating pill's perceptual response (see PillApp `perceptualLevel`,
+// BAR_ATTACK/BAR_DECAY): raw mic RMS sits low, so normalize against this ceiling
+// and take a sqrt so the bars pop on speech instead of barely moving.
+const WAVEFORM_RMS_CEILING = 0.07;
+const WAVEFORM_ATTACK = 0.45;
+const WAVEFORM_DECAY = 0.16;
+// Symmetric center-vs-edges palette: the CENTER bars are cyan and both the LEFT
+// and RIGHT edges fade to purple, interpolated by distance from the middle (NOT
+// left→right) so the strip mirrors around its center.
+const WAVEFORM_CENTER_COLOR = [0x22, 0xd3, 0xee]; // #22d3ee cyan
+const WAVEFORM_EDGE_COLOR = [0x8b, 0x5c, 0xf6]; // #8b5cf6 purple
 
-/** Interpolated bar color across the strip: cyan at the left edge, blue in the
- * middle, purple at the right, so the bars together form a horizontal gradient. */
-function waveformColor(index: number): string {
-  const t = WAVEFORM_BARS > 1 ? index / (WAVEFORM_BARS - 1) : 0;
-  const scaled = t * (WAVEFORM_STOPS.length - 1);
-  const lo = Math.min(Math.floor(scaled), WAVEFORM_STOPS.length - 2);
-  const frac = scaled - lo;
-  const mix = (a: number, b: number) => Math.round(a + (b - a) * frac);
-  const parse = (hex: string) => [
-    parseInt(hex.slice(1, 3), 16),
-    parseInt(hex.slice(3, 5), 16),
-    parseInt(hex.slice(5, 7), 16),
-  ];
-  const [r1, g1, b1] = parse(WAVEFORM_STOPS[lo]);
-  const [r2, g2, b2] = parse(WAVEFORM_STOPS[lo + 1]);
-  return `rgb(${mix(r1, r2)}, ${mix(g1, g2)}, ${mix(b1, b2)})`;
+/** Maps raw mic RMS to a 0..1 perceptual level (matches the pill's curve). */
+function waveformLevel(rms: number): number {
+  return Math.sqrt(Math.min(1, Math.max(0, rms) / WAVEFORM_RMS_CEILING));
+}
+
+/** Per-bar base color interpolated by DISTANCE FROM CENTER: cyan in the middle,
+ * purple at either edge, identical on both sides so the strip is symmetric. The
+ * bar element then layers a vertical (top→bottom) gradient on top for depth. */
+function waveformBarColor(index: number): string {
+  const distance = Math.abs(index - WAVEFORM_CENTER) / WAVEFORM_CENTER; // 0..1
+  const mix = (a: number, b: number) => Math.round(a + (b - a) * distance);
+  const r = mix(WAVEFORM_CENTER_COLOR[0], WAVEFORM_EDGE_COLOR[0]);
+  const g = mix(WAVEFORM_CENTER_COLOR[1], WAVEFORM_EDGE_COLOR[1]);
+  const b = mix(WAVEFORM_CENTER_COLOR[2], WAVEFORM_EDGE_COLOR[2]);
+  const top = `rgb(${r}, ${g}, ${b})`;
+  // Vertical gradient: the bar's own hue at the top, a darker shade of it at the
+  // bottom, giving each bar depth rather than a flat fill.
+  const bottom = `rgb(${Math.round(r * 0.62)}, ${Math.round(g * 0.62)}, ${Math.round(b * 0.62)})`;
+  return `linear-gradient(180deg, ${top}, ${bottom})`;
 }
 
 /** Live input visualizer: the bars react to the same `audio://level` stream the
@@ -356,7 +343,7 @@ export function Waveform() {
     const track = async () => {
       const stops = await Promise.all([
         listen<AudioLevelEvent>("audio://level", (event) => {
-          levelRef.current = Math.max(0, Math.min(1, event.payload.rms));
+          levelRef.current = waveformLevel(event.payload.rms);
         }),
         // Level events stop arriving when recording ends; zero the target so
         // the bars ease back to rest instead of freezing at the last value.
@@ -383,8 +370,8 @@ export function Waveform() {
           1,
           WAVEFORM_REST + level * WAVEFORM_ENVELOPE[i] * jitter,
         );
-        // Asymmetric ease: rise fast toward a louder target, settle a bit
-        // slower, so the strip feels responsive without flickering.
+        // Asymmetric ease (matches the pill): rise fast toward a louder target,
+        // settle slower, so the strip feels responsive without flickering.
         const ease =
           target > display[i] ? WAVEFORM_ATTACK : WAVEFORM_DECAY;
         display[i] += (target - display[i]) * ease;
@@ -414,7 +401,7 @@ export function Waveform() {
           ref={(element) => {
             barsRef.current[i] = element;
           }}
-          style={{ background: waveformColor(i) }}
+          style={{ background: waveformBarColor(i) }}
         />
       ))}
     </div>
