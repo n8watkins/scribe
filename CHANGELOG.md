@@ -4,6 +4,20 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.13 — 2026-06-14
+
+- **Update notifications you won't miss.** Scribe now re-checks for a new release
+  ~5s after launch, **every 30 minutes** (was 2 hours), **and whenever you
+  refocus the window** — and the first time it sees a new version it fires a real
+  **OS notification** (even while minimized to the tray), not just the in-app
+  topbar button. (A release can only be notified about once CI has finished
+  publishing it, so a brand-new version shows up shortly after, not instantly.)
+  If the in-app installer ever fails to apply, grab the installer from the latest
+  GitHub release directly.
+- **Added FAQ.md** — starting with "Can I install custom Whisper models?" (not
+  yet — the Models list is a fixed catalog) and "Why didn't I get an update
+  notification?".
+
 ## 0.5.12 — 2026-06-14
 
 - **AI dictation cleanup.** Optional local-LLM polish of each dictation before

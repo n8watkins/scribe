@@ -2,6 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getName as getAppName } from "@tauri-apps/api/app";
 import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
+import {
   BarChart3,
   Cloud,
   Database,
@@ -87,6 +92,27 @@ const navItems: { label: ViewName; Icon: LucideIcon }[] = [
   { label: "Audio", Icon: Radio },
   { label: "About", Icon: Info },
 ];
+
+/** Fires an OS notification that an update is available, so the user sees it
+ * even when Scribe is minimized to the tray (the in-app topbar button can't
+ * reach a backgrounded window). Best-effort: requests notification permission
+ * once if needed and silently no-ops if denied or unavailable. */
+async function notifyUpdateAvailable(version: string) {
+  try {
+    let granted = await isPermissionGranted();
+    if (!granted) {
+      granted = (await requestPermission()) === "granted";
+    }
+    if (granted) {
+      sendNotification({
+        title: "Scribe update available",
+        body: `Version ${version} is ready to install. Open Scribe → About to update.`,
+      });
+    }
+  } catch {
+    // Notifications can be unavailable (permissions, platform); fail quietly.
+  }
+}
 
 function App() {
   const [activeView, setActiveView] = useState<ViewName>("Dashboard");
@@ -203,32 +229,48 @@ function App() {
     void refresh();
   }, [refresh]);
 
-  // Quiet update check ~5s after launch, then every 2 hours so a long-running
-  // session still notices a new release without a restart. The topbar "Update
-  // available" button (driven by updateInfo) persists across views; the toast
-  // only fires on the first detection so periodic checks don't nag. Network
-  // failures (offline, rate limit) are ignored.
+  // Update check: ~5s after launch, every 30 min, and whenever the window
+  // regains focus (so reopening it surfaces a new release immediately instead of
+  // waiting out a long interval). On the FIRST time a given version is seen we
+  // fire both an in-app toast AND an OS notification — the latter reaches the
+  // user even when Scribe is minimized to the tray ("like Discord"), which the
+  // in-app topbar button alone can't. The topbar "Update available" button
+  // (driven by updateInfo) persists across views. Network failures (offline,
+  // rate limit) are ignored.
   useEffect(() => {
-    const runCheck = (notify: boolean) =>
+    let lastNotifiedVersion: string | null = null;
+
+    const runCheck = () =>
       void checkForUpdate()
         .then((result) => {
-          if (result.updateAvailable) {
-            setUpdateInfo(result);
-            if (notify) {
-              setToast({
-                id: Date.now(),
-                tone: "info",
-                message: `Scribe v${result.latestVersion} is available — open About to install it.`,
-              });
-            }
+          if (!result.updateAvailable) {
+            return;
+          }
+          setUpdateInfo(result);
+          // Notify once per newly-detected version (deduped) so repeated checks
+          // don't nag, but a brand-new release always alerts.
+          if (lastNotifiedVersion !== result.latestVersion) {
+            lastNotifiedVersion = result.latestVersion;
+            // Update availability is high-signal and user-relevant, so it shows
+            // regardless of the in-app notifications setting.
+            setToast({
+              id: Date.now(),
+              tone: "info",
+              message: `Scribe ${result.latestVersion} is available — open About to install it.`,
+            });
+            void notifyUpdateAvailable(result.latestVersion);
           }
         })
         .catch(() => {});
-    const timer = window.setTimeout(() => runCheck(true), 5000);
-    const interval = window.setInterval(() => runCheck(false), 2 * 60 * 60 * 1000);
+
+    const timer = window.setTimeout(runCheck, 5000);
+    const interval = window.setInterval(runCheck, 30 * 60 * 1000);
+    const onFocus = () => runCheck();
+    window.addEventListener("focus", onFocus);
     return () => {
       window.clearTimeout(timer);
       window.clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
     };
   }, []);
 
