@@ -1,15 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { getVersion as getAppVersion } from "@tauri-apps/api/app";
 import { check as checkUpdaterPackage } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
+  ArrowUpRight,
   Check,
   Clock,
   Download,
   ExternalLink,
   FolderOpen,
   History,
+  Info,
   Keyboard,
+  ListChecks,
   Mic,
   Replace,
   StickyNote,
@@ -22,6 +25,7 @@ import {
   openReleasePage,
   type UpdateCheckResult,
 } from "../backend";
+import type { ViewName } from "../types";
 import { SectionPanel } from "../components/layout";
 import "./about.css";
 
@@ -58,22 +62,37 @@ const FEATURES = [
   },
 ];
 
-const SETUP_STEPS = [
+const SETUP_STEPS: {
+  title: string;
+  text: string;
+  action: string;
+  target: ViewName;
+}[] = [
   {
     title: "Download a model",
-    text: "Open Models and download a Whisper model so Scribe can transcribe locally.",
+    text: "Scribe transcribes with a local Whisper model. Open Models and download one — a smaller model is faster, a larger one is more accurate.",
+    action: "Download a model",
+    target: "Models",
   },
   {
-    title: "Pick a microphone",
-    text: "Choose your input device under Audio so recordings capture the right source.",
+    title: "Choose a microphone",
+    text: "Pick the input device Scribe records from under Audio, then run the level test so you know your voice is coming through.",
+    action: "Choose a microphone",
+    target: "Audio",
   },
   {
     title: "Set your hotkeys",
-    text: "Confirm hold-to-talk, toggle, and paste-last shortcuts in Hotkeys, then start dictating.",
+    text: "Confirm your hold-to-talk, toggle, and paste-last shortcuts in Hotkeys. Then press your hold-to-talk key anywhere and start dictating.",
+    action: "Set your hotkeys",
+    target: "Hotkeys",
   },
 ];
 
-export function AboutView() {
+export function AboutView({
+  setActiveView,
+}: {
+  setActiveView?: (view: ViewName) => void;
+}) {
   const [version, setVersion] = useState("...");
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
@@ -163,134 +182,200 @@ export function AboutView() {
         : `You are on the latest version (${updateResult.currentVersion}).`
       : "Compare this install against the latest GitHub release.");
 
-  return (
-    <section className="view-grid">
-      <article className="buffer-card span-2">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Scribe</p>
-            <h2>Dictate locally without consuming your clipboard</h2>
+  const tabs: {
+    id: string;
+    title: string;
+    icon: ReactNode;
+    render: () => ReactNode;
+  }[] = [
+    {
+      id: "app-details",
+      title: "App details",
+      icon: <Info aria-hidden="true" size={16} />,
+      render: () => (
+        <SectionPanel
+          icon={<Info aria-hidden="true" size={16} />}
+          title="App details"
+        >
+          <p className="about-lead">
+            Scribe is a Windows tray utility for private speech-to-text.
+          </p>
+
+          <div className="about-block">
+            <div className="about-block-head">
+              <strong>Version</strong>
+              <span className="about-version">v{version}</span>
+            </div>
+            <small>
+              The packaged application version running on this device.
+            </small>
           </div>
-          <span className="pill preserve">Local-first</span>
-        </div>
-        <p className="transcript-text">
-          Scribe is a Windows tray utility for private speech-to-text. It
-          records when you press a global hotkey, transcribes locally with
-          Whisper, stores the result in a Last Transcript Buffer, and lets you
-          insert it later without permanently overwriting the system clipboard.
-        </p>
-      </article>
 
-      <SectionPanel title="What Scribe does">
-        <ul className="about-features">
-          {FEATURES.map(({ Icon, title, text }) => (
-            <li key={title}>
-              <Icon aria-hidden="true" size={15} />
-              <span>
-                <strong>{title}</strong> — {text}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </SectionPanel>
-
-      <SectionPanel
-        icon={<Check aria-hidden="true" size={16} />}
-        title="Setup"
-      >
-        <ol className="about-steps">
-          {SETUP_STEPS.map(({ title, text }) => (
-            <li key={title}>
-              <span className="about-step-body">
-                <strong>{title}</strong>
-                <small>{text}</small>
-              </span>
-            </li>
-          ))}
-        </ol>
-      </SectionPanel>
-
-      <SectionPanel title="App details">
-        <div className="about-block">
-          <div className="about-block-head">
-            <strong>Version</strong>
-            <span className="about-version">v{version}</span>
-          </div>
-          <small>The packaged application version running on this device.</small>
-        </div>
-
-        <div className="about-block">
-          <div className="about-block-head">
-            <strong>Updates</strong>
-          </div>
-          <small>{updateStatus}</small>
-          <div className="about-block-actions">
-            {updateResult?.updateAvailable ? (
-              <>
+          <div className="about-block">
+            <div className="about-block-head">
+              <strong>Updates</strong>
+            </div>
+            <small>{updateStatus}</small>
+            <div className="about-block-actions">
+              {updateResult?.updateAvailable ? (
+                <>
+                  <button
+                    className="primary-button about-update-button"
+                    disabled={installing}
+                    onClick={() => void handleInstallUpdate()}
+                    type="button"
+                  >
+                    <Download aria-hidden="true" size={15} />
+                    {installing ? "Installing..." : "Install update"}
+                  </button>
+                  <button
+                    className="secondary-button about-update-button"
+                    disabled={installing}
+                    onClick={() => void openReleasePage(updateResult.releaseUrl)}
+                    type="button"
+                  >
+                    <ExternalLink aria-hidden="true" size={15} />
+                    View release
+                  </button>
+                </>
+              ) : (
                 <button
-                  className="primary-button about-update-button"
-                  disabled={installing}
-                  onClick={() => void handleInstallUpdate()}
+                  className="ghost-button"
+                  disabled={checking}
+                  onClick={() => void handleCheckForUpdate()}
                   type="button"
                 >
-                  <Download aria-hidden="true" size={15} />
-                  {installing ? "Installing..." : "Install update"}
+                  {checking ? "Checking..." : "Check for updates"}
                 </button>
-                <button
-                  className="secondary-button about-update-button"
-                  disabled={installing}
-                  onClick={() => void openReleasePage(updateResult.releaseUrl)}
-                  type="button"
-                >
-                  <ExternalLink aria-hidden="true" size={15} />
-                  View release
-                </button>
-              </>
-            ) : (
+              )}
+            </div>
+          </div>
+
+          <div className="about-block">
+            <div className="about-block-head">
+              <strong>Privacy</strong>
+              <span className="pill preserve">Local-first</span>
+            </div>
+            <small>
+              Audio is recorded and transcribed entirely on your device. Once a
+              model is downloaded, dictation works offline and nothing is sent
+              to any server.
+            </small>
+          </div>
+
+          <div className="about-block">
+            <div className="about-block-head">
+              <strong>Local data path</strong>
+            </div>
+            <small>
+              Where Scribe keeps your database, audio clips, and models.
+            </small>
+            <div className="about-path-row">
+              <code className="about-path" title={dataDir ?? undefined}>
+                {dataDir ?? "Loading..."}
+              </code>
               <button
-                className="ghost-button"
-                disabled={checking}
-                onClick={() => void handleCheckForUpdate()}
+                aria-label="Open data folder"
+                className="icon-button"
+                onClick={() => void openDataFolder()}
                 type="button"
               >
-                {checking ? "Checking..." : "Check for updates"}
+                <FolderOpen aria-hidden="true" size={15} />
               </button>
-            )}
+            </div>
           </div>
-        </div>
+        </SectionPanel>
+      ),
+    },
+    {
+      id: "features",
+      title: "What Scribe does",
+      icon: <ListChecks aria-hidden="true" size={16} />,
+      render: () => (
+        <SectionPanel
+          icon={<ListChecks aria-hidden="true" size={16} />}
+          title="What Scribe does"
+        >
+          <ul className="about-features">
+            {FEATURES.map(({ Icon, title, text }) => (
+              <li key={title}>
+                <Icon aria-hidden="true" size={15} />
+                <span>
+                  <strong>{title}</strong> — {text}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </SectionPanel>
+      ),
+    },
+    {
+      id: "setup",
+      title: "Setup",
+      icon: <Check aria-hidden="true" size={16} />,
+      render: () => (
+        <SectionPanel
+          icon={<Check aria-hidden="true" size={16} />}
+          title="Setup"
+        >
+          <p className="about-lead">
+            Three steps get you dictating. Each one jumps to the page where you
+            set it up.
+          </p>
+          <ol className="about-steps">
+            {SETUP_STEPS.map(({ title, text, action, target }) => (
+              <li key={title}>
+                <span className="about-step-body">
+                  <strong>{title}</strong>
+                  <small>{text}</small>
+                  <button
+                    className="secondary-button about-step-button"
+                    disabled={!setActiveView}
+                    onClick={() => setActiveView?.(target)}
+                    type="button"
+                  >
+                    {action}
+                    <ArrowUpRight aria-hidden="true" size={15} />
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ol>
+        </SectionPanel>
+      ),
+    },
+  ];
 
-        <div className="about-block">
-          <div className="about-block-head">
-            <strong>Privacy</strong>
-            <span className="pill preserve">Local-first</span>
-          </div>
-          <small>
-            Audio is recorded and transcribed entirely on your device. Once a
-            model is downloaded, dictation works offline and nothing is sent to
-            any server.
-          </small>
-        </div>
+  const [activeTab, setActiveTab] = useState(tabs[0].id);
+  const active = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
 
-        <div className="about-block">
-          <div className="about-block-head">
-            <strong>Local data path</strong>
-          </div>
-          <small>Where Scribe keeps your database, audio clips, and models.</small>
-          <div className="about-path-row">
-            <code className="about-path" title={dataDir ?? undefined}>
-              {dataDir ?? "Loading..."}
-            </code>
-            <button
-              aria-label="Open data folder"
-              className="icon-button"
-              onClick={() => void openDataFolder()}
-              type="button"
-            >
-              <FolderOpen aria-hidden="true" size={15} />
-            </button>
-          </div>
-        </div>
-      </SectionPanel>
+  return (
+    <section className="view-grid">
+      <div className="settings-tabs" role="tablist" aria-label="About sections">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            id={`about-tab-${tab.id}`}
+            aria-controls={`about-panel-${tab.id}`}
+            aria-selected={tab.id === active.id}
+            className={`settings-tab${tab.id === active.id ? " is-active" : ""}`}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            {tab.icon}
+            <span>{tab.title}</span>
+          </button>
+        ))}
+      </div>
+      <div
+        className="settings-tabpanel"
+        role="tabpanel"
+        id={`about-panel-${active.id}`}
+        aria-labelledby={`about-tab-${active.id}`}
+      >
+        {active.render()}
+      </div>
     </section>
   );
 }
