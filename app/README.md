@@ -1,12 +1,15 @@
 # Scribe
 
-Scribe is a private, local-first Windows speech-to-text tray app built with Tauri, React, TypeScript, Rust, SQLite, and whisper.cpp.
+Scribe is a private, local-first Windows dictation app built with Tauri, React, TypeScript, Rust, SQLite, and whisper.cpp. Beyond push-to-talk transcription it adds quick notes, an optional local-LLM layer (dictation cleanup, note analysis, selected-text transform), a dictionary, searchable history with export, Google Drive sync, and a signed auto-updater.
+
+This is the app subproject. For the full user-facing overview and install/build instructions, see the [root README](../README.md).
 
 Reference docs:
 
-- [Product requirements](../docs/PRD.md)
-- [Implementation plan](../docs/IMPLEMENTATION_PLAN.md)
-- [Agent orchestration](../docs/AGENT_ORCHESTRATION.md)
+- [Full feature list & changelog](../CHANGELOG.md)
+- [Competitive analysis & gap review](../docs/COMPETITIVE-ANALYSIS.md)
+- [Product requirements (original)](../docs/PRD.md)
+- [Implementation plan (original)](../docs/IMPLEMENTATION_PLAN.md)
 
 ## Development
 

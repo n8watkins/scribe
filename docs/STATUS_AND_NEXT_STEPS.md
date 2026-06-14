@@ -1,19 +1,37 @@
 # Scribe - Status and Next Steps
 
-> **Current handoff: see [`docs/HANDOFF.md`](HANDOFF.md)** — it carries the
-> 2026-06-11 evening session (timeout-freeze fix, defaults v4, saved audio
-> clips + playback, pill display modes, paste focus guard, tail-clipping fix,
-> file transcription) and the up-to-date next steps. This doc keeps the longer
-> project history.
+> This doc keeps the longer project history. The sections below the "Where
+> things stand" summary are a historical record of the early V1 push
+> (2026-06-10 → 06-11) and are intentionally left as-shipped; for the
+> day-to-day feature record see [`CHANGELOG.md`](../CHANGELOG.md), and for a
+> competitive review + prioritized gap list see
+> [`docs/COMPETITIVE-ANALYSIS.md`](COMPETITIVE-ANALYSIS.md).
 
-Status: V1 shipped — working Windows installer, hotkey dictation verified on real hardware by the owner  
-Last updated: 2026-06-11 (see HANDOFF.md for the latest session)  
-Repository: `https://github.com/n8watkins/scribe` (private; ready to flip public)  
-Release: [v0.1.0](https://github.com/n8watkins/scribe/releases/tag/v0.1.0) with the NSIS installer attached
+Status: Shipping (public, source-available) — current version **0.5.18**  
+Last updated: 2026-06-14  
+Repository: `https://github.com/n8watkins/scribe` (public)  
+Releases: signed installers published per tag via CI (see the GitHub Releases page)
 
 ## Where things stand
 
-Scribe is a working product: hold `Ctrl+Shift` (or tap `~`), talk, and text is typed at your cursor by a locally running whisper.cpp model. The owner uses it daily on Windows 11. 54 backend tests pass on both Linux and Windows; the frontend builds clean.
+Scribe is a mature local dictation app the owner uses daily on Windows 11. Core
+loop: hold `Ctrl+Win` (or tap `` ` ``), talk, and text is inserted at your
+cursor by a locally running whisper.cpp model (warm `whisper-server` with a
+`whisper-cli` fallback), with live/incremental transcription so stop-to-text is
+near-instant. On top of dictation it now ships **quick notes** (`~`+Q) with
+on-demand local-LLM analysis, **AI dictation cleanup**, **selected-text
+transform** (an inline AI editor), a **dictionary** (context hint +
+replacements), **searchable history** with date-range search and combine,
+**separate transcript/notes retention**, **Google Drive sync + Markdown/CSV/JSON
+export**, a configurable **floating pill**, fully **rebindable hotkeys** with
+per-bind press/release triggers, a **model manager**, and a **signed
+auto-updater** with OS notifications. The backend test suite (~160 tests) and
+the frontend both build clean; the audio/hotkey/paste paths are Windows-gated
+and verified on the Windows toolchain.
+
+The "What was done" sections below are the original V1 launch log (2026-06-10 →
+06-11) and predate almost all of the above — read them as history, not current
+state.
 
 ## What was done (2026-06-10 → 06-11)
 
@@ -42,17 +60,30 @@ Scribe is a working product: hold `Ctrl+Shift` (or tap `~`), talk, and text is t
 
 ## What to do next (priority order)
 
-Done since this list was written: incremental transcription (shipped),
-tag-triggered CI release workflow + manual dispatch (shipped), launch at
-startup (wired). Current priorities live in [`docs/HANDOFF.md`](HANDOFF.md) —
-short version: visual QA of the 06-11 evening session, the Notes feature
-(needs owner sign-off on details), removing the OpenWhispr cache fallback.
+Shipped since the original V1 list: incremental/live transcription, tag-triggered
+CI release workflow, launch at startup, Notes (`~`+Q) + on-demand analysis,
+**signed auto-updater** with OS notifications, AI dictation cleanup, selected-text
+transform, the dictionary (context hint + replacements), history date-range
+search + combine, separate transcript/notes retention, Google Drive sync +
+Markdown/CSV/JSON export, configurable pill, repo flipped public. The
+auto-updater carry-over is done; the items below remain.
 
-Still-open carry-overs:
-1. **Flip the repo public** (owner action — Settings → Change visibility). Everything is in place.
-2. **Auto-updater** — `tauri-plugin-updater` (needs updater signing keys; unrelated to code signing).
-3. **Code signing** — kills the SmartScreen warning; costs money; matters once strangers install it.
-4. Smaller: GPU whisper builds as optional download, tray icon state variants, FTS5 search if histories grow, pill shutdown when main window closes with tray-minimize off (known edge case, currently moot).
+For a researched, prioritized "build next to be competitive" list (with rough
+effort), see [`docs/COMPETITIVE-ANALYSIS.md`](COMPETITIVE-ANALYSIS.md). Short
+version of the open gaps:
+
+1. **Authenticode code signing** — kills the SmartScreen first-run warning; costs
+   money (EV/OV cert) but is the single biggest friction for new installers.
+   (Distinct from the updater's minisign artifact signing, which already ships.)
+2. **Multilingual transcription + Whisper translate** — today the catalog is
+   English-only (`.en` models) and the language picker resolves to English;
+   adding multilingual `ggml` models + a `--translate` path is high-impact and
+   leans on plumbing that mostly exists.
+3. **Custom / arbitrary local model selection** — let users point Scribe at any
+   whisper.cpp-compatible `ggml` `.bin` instead of only the curated catalog.
+4. Smaller: GPU whisper builds as optional download, tray icon state variants,
+   FTS5 search if histories grow, pill shutdown when main window closes with
+   tray-minimize off (known edge case, currently moot).
 
 ## Working notes for the next session
 

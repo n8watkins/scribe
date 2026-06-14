@@ -1,5 +1,17 @@
 # Scribe — Session Handoff
 
+> **⚠️ Historical (superseded).** This handoff captures the **2026-06-12** state
+> (just after the LocalDictate→Scribe rebrand and the first Google Drive notes
+> sync). Many features described below as "new" or "next" have since shipped —
+> Notes + analysis, AI dictation cleanup, selected-text transform, the
+> dictionary, history search/combine, export, a signed auto-updater, and more.
+> For **current state** read [`CHANGELOG.md`](../CHANGELOG.md) (the live feature
+> record, now at **0.5.18**) and the refreshed
+> [`docs/STATUS_AND_NEXT_STEPS.md`](STATUS_AND_NEXT_STEPS.md); for a competitive
+> review + prioritized gaps see
+> [`docs/COMPETITIVE-ANALYSIS.md`](COMPETITIVE-ANALYSIS.md). The notes below are
+> kept as a point-in-time record.
+
 Last updated: 2026-06-12 (rebrand LocalDictate→Scribe shipped as the daily app;
 Google Drive notes sync Phases 1–3 built + verified).
 Read this first, then **`docs/GOOGLE_INTEGRATION_PLAN.md`** (the Drive epic, all

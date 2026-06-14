@@ -1,27 +1,58 @@
 # Scribe
 
-Private, local-first dictation for Windows. Hold a hotkey, talk, release — your words are transcribed on your own machine by [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and inserted wherever your cursor is. No cloud, no account, no audio ever leaving your PC.
+Private, local-first dictation for Windows. Hold a hotkey, talk, release — your words are transcribed on your own machine by [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and inserted wherever your cursor is. No cloud, no account, no audio ever leaving your PC. Free and source-available.
 
-- **Push-to-talk:** hold `Ctrl+Win`, speak, release.
+## What it does
+
+**Dictate anywhere**
+
+- **Push-to-talk:** hold `Ctrl+Win`, speak, release — text appears at your cursor.
 - **Toggle mode:** tap `` ` `` (tilde) to start/stop hands-free.
-- **Paste last transcript:** `Ctrl+Alt+V` re-inserts your most recent dictation anywhere.
-- **Floating pill:** a small always-on-top status pill shows recording/transcribing state even while the app is hidden in the tray. Drag it anywhere; it remembers its spot. Click it to stop recording.
-- **History & stats:** searchable transcript history with retention controls, kept in a local SQLite database.
 - **Live transcription:** phrases are transcribed in the background while you're still talking, so text is ready the moment you stop — watch it accumulate on the pill.
-- **All hotkeys rebindable** from the Hotkeys tab.
+- **Floating pill:** a small always-on-top status pill shows recording/transcribing state even while the app is hidden in the tray, with a live waveform. Drag it anywhere; it remembers its spot. Click it to stop recording. Colors and background are configurable.
+- **Paste last transcript:** a hotkey re-inserts your most recent dictation anywhere, instantly.
+- **Instant clipboard paste with restore:** insertion borrows the clipboard for a single paste and restores it exactly as it was — text, images, and files — so dictating never clobbers what you had copied. (A keystroke "type it out" fallback is available for apps that block paste.)
+
+**Make the text better**
+
+- **AI dictation cleanup (optional):** polish each dictation with a local LLM before it's saved/pasted — strips filler ("um/uh/like"), fixes punctuation and casing, light formatting. Built-in modes (Standard / Email / Chat / Code) or a custom prompt. Off by default; non-blocking with a raw-text fallback so a slow or offline LLM never stalls your dictation.
+- **Selected-text transform:** highlight text in any app, tap a hotkey, and speak (or type) an instruction — "make this concise", "translate to Spanish", "fix grammar" — and Scribe rewrites the selection in place. An inline AI editor driven by your local LLM.
+- **Dictionary:** a **context hint** that primes Whisper toward your jargon/names (better recognition), plus a deterministic **replacements** table ("say X → get Y", e.g. "my email" → your address, fix "clawed" → "Claude") applied to every transcript.
+
+**Quick notes**
+
+- **Notes:** hold the toggle key and tap `Q` to dictate a **note** (blue pill) that's saved to your Notes list instead of pasted — capture a thought without disturbing the focused app.
+- **On-demand analysis:** run a local LLM over a note (summarize, extract action items, or your own prompt).
+
+**Keep and find your words**
+
+- **History & stats:** searchable transcript history in a local SQLite database — search by text and **date range**, sort newest / oldest / longest, expand entries inline, open in an external editor, and **multi-select → combine** into one merged entry.
+- **Separate retention for transcripts and notes:** transcripts auto-prune on a window you choose; notes default to **keep forever** (they're deliberate saves) and are never auto-deleted.
+
+**Sync, back up, export**
+
+- **Google Drive sync (optional, your account):** push dictated notes to your own Drive as dated Markdown, and optionally back up every transcript. An end-of-day pass can have your local LLM reorganize the day's notes. Text-only, comfortably inside the free Drive tier.
+- **Export:** export transcripts to **Markdown / CSV / JSON** locally — no account needed.
+
+**Stays out of your way**
+
+- **All hotkeys rebindable** from the Hotkeys tab, with per-bind **press / release** triggers and inline conflict reporting.
+- **Model manager:** download and switch between curated Whisper models (tiny → large-v3-turbo) from the Models tab; they run entirely offline after the one-time download.
+- **Auto-updates:** Scribe checks GitHub for new releases (on launch, on refocus, and on a timer), fires an OS notification when one is found, and installs it in-app. The updater artifact is cryptographically signed. Can be turned off.
+- **Tray app:** closing the window minimizes to the tray; dictation hotkeys keep working. Quit from the tray icon.
 
 Windows 10/11 x64 only, by design. There are no plans to over-build this for other platforms.
 
 ## Install (for users)
 
 1. Download `Scribe_x64-setup.exe` from the [latest release](../../releases/latest) and run it.
-   - The binary is not code-signed, so Windows SmartScreen will warn you. Click **More info → Run anyway**.
+   - The binary is not code-signed (no Authenticode certificate), so Windows SmartScreen will warn you. Click **More info → Run anyway**.
    - The installer bootstraps Microsoft WebView2 automatically if you don't have it.
-2. Launch Scribe. Open the **Models** tab and download a model — `base.en` (~140 MB) is a good start; `small.en` is more accurate and still fast on modern CPUs. Models download once from [Hugging Face](https://huggingface.co/ggerganov/whisper.cpp) and run entirely offline afterward.
+2. Launch Scribe. Open the **Models** tab and download a model — `base.en` (~140 MB) is a good start; `small.en` is more accurate and still fast on modern CPUs (the default is `small.en-q5_1`, a quantized balance). Models download once from [Hugging Face](https://huggingface.co/ggerganov/whisper.cpp) and run entirely offline afterward.
 3. Open the **Audio** tab, pick your microphone, and use **Record test** / **Play test** to confirm it hears you.
 4. Put your cursor in any app, hold `Ctrl+Win`, and talk.
 
-Closing the window minimizes to the tray; dictation hotkeys keep working. Quit from the tray icon.
+To use AI cleanup, selected-text transform, or note analysis, run a local OpenAI-compatible LLM server ([LM Studio](https://lmstudio.ai/) or [Ollama](https://ollama.com/)) and point Scribe at it in Settings (default `http://127.0.0.1:1234/v1`). These features are optional and off by default — core dictation needs no LLM.
 
 ### Default hotkeys
 
@@ -29,14 +60,17 @@ Closing the window minimizes to the tray; dictation hotkeys keep working. Quit f
 | --- | --- |
 | Hold to talk | `Ctrl+Win` (hold) |
 | Toggle dictation | `` ` `` (tilde) |
-| Paste last transcript | `Ctrl+Shift+V` |
-| Open dashboard | `Ctrl+Alt+V` |
+| Dictate a note | hold the toggle key + tap `Q` |
+| Paste last transcript | `Ctrl+Alt+V` |
+| Transform selection | `Ctrl+Alt+R` |
+| Discard / cancel recording | `Ctrl+Alt+X` |
+| Open dashboard | `Ctrl+Alt+F` |
 
-If a hotkey conflicts with another app, rebind it in the **Hotkeys** tab — conflicts are reported inline.
+If a hotkey conflicts with another app, rebind it in the **Hotkeys** tab — conflicts are reported inline. Each non-hold bind can fire on key **press** or **release**.
 
 ### Privacy
 
-Audio is captured to a temp folder, transcribed locally, and the temp audio is deleted. Transcripts live in a local SQLite database under `%APPDATA%\com.natkins.scribe\` (the **Data & Privacy** tab can open the folder, clear history, or disable history entirely). Nothing is uploaded anywhere; the only network access is the one-time model download you trigger yourself.
+Audio is captured to a temp folder, transcribed locally, and the temp audio is deleted. Transcripts live in a local SQLite database under `%APPDATA%\com.natkins.scribe\` (the **Data & Privacy** tab can open the folder, clear history, or disable history entirely). Nothing is uploaded anywhere unless you turn on Google Drive sync (to your own account). The only built-in network access is the one-time model download you trigger yourself and the update check against GitHub. The optional LLM features talk only to the local server you configure.
 
 ## Building from source
 
@@ -69,12 +103,13 @@ Prerequisites: Windows 10/11 x64, [Rust](https://rustup.rs/) (stable, MSVC toolc
 
 For development, `npm run tauri dev` gives hot reload. `cargo test` in `app/src-tauri/` runs the backend tests. Note that most of the audio/hotkey/paste code is `#[cfg(windows)]`-gated — compiling on non-Windows hosts proves little about the Windows build.
 
-Design and architecture docs live in [`docs/`](docs/), including the [PRD](docs/PRD.md) and the [Windows QA checklist](docs/V1_WINDOWS_QA_CHECKLIST.md).
+Design and architecture docs live in [`docs/`](docs/), including the [PRD](docs/PRD.md) and the [Windows QA checklist](docs/V1_WINDOWS_QA_CHECKLIST.md). A competitive review and gap analysis is in [`docs/COMPETITIVE-ANALYSIS.md`](docs/COMPETITIVE-ANALYSIS.md).
 
 ## Roadmap / known gaps
 
-- No code signing yet (SmartScreen warning on install).
-- No auto-updates yet; grab new versions from Releases.
+- **No Authenticode code signing yet** — Windows SmartScreen warns on first install (the in-app updater artifact *is* cryptographically signed; that's separate from an OS code-signing certificate).
+- **English only today** — the model catalog ships English (`.en`) Whisper models and the language picker resolves to English, so non-English transcription and Whisper translate-to-English aren't available yet (selected-text transform can still translate via the LLM).
+- **Fixed model catalog** — you download from a curated list; pointing Scribe at an arbitrary local `ggml` `.bin` isn't supported in the UI yet.
 - Transcript search uses SQL `LIKE`; fine for thousands of entries, not millions.
 
 Contributions and issue reports are welcome.
