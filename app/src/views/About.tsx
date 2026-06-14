@@ -26,39 +26,38 @@ import {
   type UpdateCheckResult,
 } from "../backend";
 import type { ViewName } from "../types";
-import { SectionPanel } from "../components/layout";
 import "./about.css";
 
 const FEATURES = [
   {
     Icon: Keyboard,
-    title: "Global hotkeys",
-    text: "Hold-to-talk or toggle dictation from anywhere with system-wide shortcuts.",
+    title: "Dictate anywhere",
+    text: "Hold-to-talk or toggle with a global hotkey — your voice lands as text in any app, no window switching.",
   },
   {
     Icon: Mic,
-    title: "Local Whisper transcription",
-    text: "Speech is transcribed on-device with Whisper — no audio leaves your machine.",
+    title: "Private, on-device Whisper",
+    text: "Speech is transcribed locally with Whisper. Your audio never leaves the machine and dictation keeps working offline.",
   },
   {
     Icon: Clock,
     title: "Last Transcript Buffer",
-    text: "Your most recent dictation is held ready to paste, without overwriting the clipboard.",
+    text: "Your latest dictation stays parked and ready to paste on demand — without ever clobbering your clipboard.",
   },
   {
     Icon: StickyNote,
-    title: "Quick notes",
-    text: "Capture a dictated note with ~ + Q and have it analysed by a local model.",
+    title: "Quick notes, smart recap",
+    text: "Capture a spoken note with ~ + Q, then let a local model summarise and pull out the action items.",
   },
   {
     Icon: History,
     title: "Searchable history",
-    text: "Keep a local, searchable record of past transcripts with optional retention limits.",
+    text: "Every transcript is kept in a fast, local, searchable log — with retention limits you control.",
   },
   {
     Icon: Replace,
     title: "Text replacements",
-    text: "Auto-fix names, jargon, and shorthand with custom find-and-replace rules.",
+    text: "Names, jargon, and shorthand get fixed automatically with your own find-and-replace rules.",
   },
 ];
 
@@ -193,10 +192,8 @@ export function AboutView({
       title: "App details",
       icon: <Info aria-hidden="true" size={16} />,
       render: () => (
-        <SectionPanel
-          icon={<Info aria-hidden="true" size={16} />}
-          title="App details"
-        >
+        <article className="panel-card">
+          <div className="settings-list">
           <p className="about-lead">
             Scribe is a Windows tray utility for private speech-to-text.
           </p>
@@ -284,7 +281,8 @@ export function AboutView({
               </button>
             </div>
           </div>
-        </SectionPanel>
+          </div>
+        </article>
       ),
     },
     {
@@ -292,21 +290,23 @@ export function AboutView({
       title: "What Scribe does",
       icon: <ListChecks aria-hidden="true" size={16} />,
       render: () => (
-        <SectionPanel
-          icon={<ListChecks aria-hidden="true" size={16} />}
-          title="What Scribe does"
-        >
-          <ul className="about-features">
+        <article className="panel-card about-features-card">
+          <p className="about-lead">
+            Fast, private voice-to-text that lives in your tray and works in
+            every app — here's what you get.
+          </p>
+          <ul className="feature-grid">
             {FEATURES.map(({ Icon, title, text }) => (
-              <li key={title}>
-                <Icon aria-hidden="true" size={15} />
-                <span>
-                  <strong>{title}</strong> — {text}
+              <li className="feature-card" key={title}>
+                <span className="feature-card-icon" aria-hidden="true">
+                  <Icon size={18} />
                 </span>
+                <strong className="feature-card-title">{title}</strong>
+                <span className="feature-card-text">{text}</span>
               </li>
             ))}
           </ul>
-        </SectionPanel>
+        </article>
       ),
     },
     {
@@ -314,10 +314,8 @@ export function AboutView({
       title: "Setup",
       icon: <Check aria-hidden="true" size={16} />,
       render: () => (
-        <SectionPanel
-          icon={<Check aria-hidden="true" size={16} />}
-          title="Setup"
-        >
+        <article className="panel-card">
+          <div className="settings-list">
           <p className="about-lead">
             Three steps get you dictating. Each one jumps to the page where you
             set it up.
@@ -341,7 +339,8 @@ export function AboutView({
               </li>
             ))}
           </ol>
-        </SectionPanel>
+          </div>
+        </article>
       ),
     },
   ];

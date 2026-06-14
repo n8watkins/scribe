@@ -91,33 +91,95 @@
   word-break: break-all;
 }
 
-/* Feature bullets describing what Scribe does. */
-.about-features {
+/* "What Scribe does" hero panel: a lead-in sentence above a grid of feature
+   cards. The card lays its children out with a small gap (it doesn't use the
+   shared .settings-list wrapper). */
+.about-features-card {
   display: grid;
-  gap: 6px;
+  gap: 10px;
+}
+
+/* Responsive feature-card grid: two columns at the app's default width,
+   collapsing to one when the panel gets narrow. */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.about-features li {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  color: #cbd5e1;
-  font-size: 12px;
-  line-height: 1.45;
+@media (max-width: 560px) {
+  .feature-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
-.about-features li svg {
-  flex: 0 0 auto;
-  margin-top: 1px;
+/* Each feature is a small bordered, gently gradient-lit card: a tinted icon
+   badge, a bold title, then the description. A cyan top-edge glow on hover
+   keeps it on-brand and a touch interactive. */
+.feature-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas:
+    "icon title"
+    "text text";
+  align-items: center;
+  gap: 3px 10px;
+  padding: 11px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 9px;
+  background:
+    radial-gradient(
+      120% 100% at 0% 0%,
+      rgba(34, 211, 238, 0.07),
+      transparent 60%
+    ),
+    linear-gradient(180deg, rgba(23, 32, 51, 0.7), rgba(13, 19, 32, 0.85));
+  transition:
+    border-color 150ms ease,
+    transform 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.feature-card:hover {
+  border-color: rgba(34, 211, 238, 0.4);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 26px rgba(2, 6, 14, 0.4);
+}
+
+.feature-card-icon {
+  grid-area: icon;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
   color: #67e8f9;
+  background: linear-gradient(
+    150deg,
+    rgba(34, 211, 238, 0.18),
+    rgba(139, 92, 246, 0.16)
+  );
+  border: 1px solid rgba(34, 211, 238, 0.22);
 }
 
-.about-features strong {
-  color: #f1f5f9;
-  font-weight: 750;
+.feature-card-title {
+  grid-area: title;
+  color: #f8fafc;
+  font-size: 12.5px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.feature-card-text {
+  grid-area: text;
+  margin-top: 5px;
+  color: #cbd5e1;
+  font-size: 11.5px;
+  line-height: 1.45;
 }
 
 /* Setup checklist: numbered steps, each a small card. */
