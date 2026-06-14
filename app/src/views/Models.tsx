@@ -219,7 +219,6 @@ export function ModelsView({
     <section className="view-grid">
       <article className="panel-card span-2">
         <div className="section-heading compact">
-          <h2>Models</h2>
           <div className="row-actions">
             <button
               className="secondary-button"

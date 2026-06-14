@@ -4,6 +4,32 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.8 — 2026-06-14
+
+Another UI wave (three parallel agents) + perf fixes:
+
+- **Settings no longer re-render the whole app on every toggle.** Saving a
+  setting was triggering a full dashboard refetch that re-rendered every view
+  and jumped the scroll; it now updates optimistically in place.
+- **Visualizer** reworked the way you asked: a symmetric **center→edge** color
+  (cyan center, purple edges) with a vertical gradient per bar, smaller, and as
+  reactive as the floating pill.
+- **History/transcripts:** "See more / See less" now sit in a fixed spot on the
+  meta line (no more overlaying the text); 3 lines collapsed, 6 + scroll
+  expanded; date on top. Select-all/deselect-all is always visible; "Transcript
+  archive" with its icon on the left; **"Clear all" is red**; copy/save icons;
+  copying deselects. Fixed the copy scroll-jump and the first-row tooltip
+  hiding behind the list.
+- **About** is now tabbed (App details / What Scribe does / Setup) with redirect
+  buttons; the "Local-first" pill is gone.
+- **Settings:** removed the duplicate first-line headings and the "App behavior"
+  tab (folded into "App & output"); dropped the experimental type-it-out insert.
+- **Data & Privacy:** folder paths with small open + copy-path buttons in an
+  accordion.
+- **Audio:** "Ready" badge moved to the right of "Input".
+- **Models:** Refresh + Open-models-folder moved to the left toolbar.
+- **Bigger app brand** (icon + "Scribe") in the sidebar.
+
 ## 0.5.7 — 2026-06-14
 
 - **Fixes the "Error opening file for writing … ggml-base.dll" update failure.**

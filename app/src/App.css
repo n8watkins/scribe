@@ -71,27 +71,29 @@ button {
 .brand {
   display: flex;
   align-items: center;
-  gap: 9px;
-  min-height: 34px;
+  gap: 11px;
+  min-height: 42px;
+  margin-bottom: 2px;
 }
 
 .brand-mark {
-  width: 30px;
-  height: 30px;
-  border-radius: 6px;
+  width: 40px;
+  height: 40px;
+  border-radius: 9px;
   display: flex;
   align-items: center;
   justify-content: center;
   color: #06111f;
-  font-size: 12px;
+  font-size: 18px;
   font-weight: 800;
   background: linear-gradient(135deg, #22d3ee, #8b5cf6);
-  box-shadow: 0 0 22px rgba(34, 211, 238, 0.22);
+  box-shadow: 0 0 26px rgba(34, 211, 238, 0.26);
 }
 
 .brand-name {
-  font-size: 13px;
-  font-weight: 750;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
   color: #38bdf8;
 }
 

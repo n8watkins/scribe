@@ -370,11 +370,15 @@ function App() {
       );
 
       try {
+        // Persist and reconcile with the backend's canonical settings only —
+        // do NOT refetch the whole dashboard here. A blanket refresh() re-renders
+        // every view (and resets scroll) on each toggle; the optimistic update
+        // above plus this reconcile already reflect the change. Dashboard-derived
+        // data (app state, last transcript) doesn't depend on a settings toggle.
         const savedSettings = await updateSettings(nextSettings);
         setDashboardData((current) =>
           current ? { ...current, settings: savedSettings } : current,
         );
-        await refresh();
       } catch (error) {
         setDashboardData((current) =>
           current ? { ...current, settings: previousSettings } : current,
@@ -384,7 +388,7 @@ function App() {
         setSavingSettings(false);
       }
     },
-    [dashboardData, refresh],
+    [dashboardData],
   );
 
   const handleClearLastTranscript = useCallback(async () => {
@@ -691,7 +695,7 @@ function renderView(
         />
       );
     case "About":
-      return <AboutView />;
+      return <AboutView setActiveView={setActiveView} />;
     case "Dashboard":
     default:
       return (
