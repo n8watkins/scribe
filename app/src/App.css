@@ -77,12 +77,11 @@ button {
 }
 
 .brand-mark {
-  width: 46px;
-  height: 46px;
-  border-radius: 11px;
-  object-fit: cover;
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
   flex: 0 0 auto;
-  box-shadow: 0 0 26px rgba(34, 211, 238, 0.26);
+  filter: drop-shadow(0 0 14px rgba(34, 211, 238, 0.3));
 }
 
 .brand-name {
