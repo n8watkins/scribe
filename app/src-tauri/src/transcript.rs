@@ -47,6 +47,32 @@ pub struct TranscriptSearchResult {
     pub offset: u32,
 }
 
+/// Ordering for transcript searches. The wire values match the frontend
+/// `TranscriptSort` union ("newest" | "oldest" | "longest").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptSort {
+    #[default]
+    #[serde(rename = "newest")]
+    NewestFirst,
+    #[serde(rename = "oldest")]
+    OldestFirst,
+    Longest,
+}
+
+impl TranscriptSort {
+    /// The `ORDER BY` clause (column list only) for this sort. Constant text,
+    /// never user input, so it is safe to interpolate into the query.
+    pub fn order_by_clause(self) -> &'static str {
+        match self {
+            TranscriptSort::NewestFirst => "created_at DESC",
+            TranscriptSort::OldestFirst => "created_at ASC",
+            // Ties broken by recency so equal-length rows have a stable order.
+            TranscriptSort::Longest => "character_count DESC, created_at DESC",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TranscriptMetadata {
     pub word_count: u32,

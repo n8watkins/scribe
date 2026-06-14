@@ -8,7 +8,7 @@ use crate::{
     models::{ModelRecord, ModelStatus},
     settings::AppSettings,
     stats::BasicStats,
-    transcript::{metadata_for_text, Transcript, TranscriptSearchResult},
+    transcript::{metadata_for_text, Transcript, TranscriptSearchResult, TranscriptSort},
 };
 
 const INITIAL_MIGRATION: &str = include_str!("../migrations/001_initial.sql");
@@ -88,90 +88,92 @@ impl Database {
             .map_err(CommandError::database)
     }
 
+    /// Searches the history with optional full-text (`LIKE`), notes-only,
+    /// created_at date-range (RFC3339, inclusive), and sort, paginated by
+    /// `limit`/`offset`. All user-supplied values are passed as bound params;
+    /// only the fixed WHERE fragments and the constant ORDER BY column list are
+    /// interpolated, so user text can never reach the SQL string.
     pub fn search_transcripts(
         &self,
         query: Option<&str>,
         notes_only: bool,
+        from: Option<&str>,
+        to: Option<&str>,
+        sort: TranscriptSort,
         limit: u32,
         offset: u32,
     ) -> Result<TranscriptSearchResult, CommandError> {
+        use rusqlite::types::ToSql;
+
         let normalized_query = query.map(str::trim).filter(|query| !query.is_empty());
-        let note_filter = if notes_only { " AND is_note = 1" } else { "" };
+        let normalized_from = from.map(str::trim).filter(|value| !value.is_empty());
+        let normalized_to = to.map(str::trim).filter(|value| !value.is_empty());
 
-        let (transcripts, total) = if let Some(query) = normalized_query {
-            let pattern = format!("%{}%", escape_like_query(query));
-            let total: i64 = self
-                .conn
-                .query_row(
-                    &format!(
-                        "SELECT COUNT(*)
-                         FROM transcripts
-                         WHERE text LIKE ?1 ESCAPE '\\'{}",
-                        note_filter
-                    ),
-                    [&pattern],
-                    |row| row.get(0),
-                )
-                .map_err(CommandError::database)?;
+        // Build the shared WHERE clause and its bound params in lockstep so the
+        // COUNT and the page query agree on the filter (the page query then
+        // appends LIMIT/OFFSET params after these).
+        let mut conditions: Vec<String> = Vec::new();
+        let mut filter_params: Vec<Box<dyn ToSql>> = Vec::new();
 
-            let mut stmt = self
-                .conn
-                .prepare(&format!(
-                    "SELECT id, text, created_at, duration_ms, word_count, character_count,
-                            model_id, language, output_mode, paste_method, transcription_latency_ms,
-                            audio_path, is_note, analysis, analysis_model, analysis_created_at
-                     FROM transcripts
-                     WHERE text LIKE ?1 ESCAPE '\\'{}
-                     ORDER BY created_at DESC
-                     LIMIT ?2 OFFSET ?3",
-                    note_filter
-                ))
-                .map_err(CommandError::database)?;
+        if let Some(query) = normalized_query {
+            conditions.push("text LIKE ? ESCAPE '\\'".to_string());
+            filter_params.push(Box::new(format!("%{}%", escape_like_query(query))));
+        }
+        if notes_only {
+            conditions.push("is_note = 1".to_string());
+        }
+        // created_at is an RFC3339 UTC string; lexicographic compares match
+        // chronological order for that format, so plain >= / <= bounds work.
+        if let Some(from) = normalized_from {
+            conditions.push("created_at >= ?".to_string());
+            filter_params.push(Box::new(from.to_string()));
+        }
+        if let Some(to) = normalized_to {
+            conditions.push("created_at <= ?".to_string());
+            filter_params.push(Box::new(to.to_string()));
+        }
 
-            let rows = stmt
-                .query_map(params![pattern, limit, offset], transcript_from_row)
-                .map_err(CommandError::database)?;
-
-            (
-                rows.collect::<Result<Vec<_>, _>>()
-                    .map_err(CommandError::database)?,
-                total,
-            )
+        let where_clause = if conditions.is_empty() {
+            String::new()
         } else {
-            let where_clause = if notes_only { "WHERE is_note = 1" } else { "" };
-            let total: i64 = self
-                .conn
-                .query_row(
-                    &format!("SELECT COUNT(*) FROM transcripts {}", where_clause),
-                    [],
-                    |row| row.get(0),
-                )
-                .map_err(CommandError::database)?;
-
-            let mut stmt = self
-                .conn
-                .prepare(&format!(
-                    "SELECT id, text, created_at, duration_ms, word_count, character_count,
-                            model_id, language, output_mode, paste_method, transcription_latency_ms,
-                            audio_path, is_note, analysis, analysis_model, analysis_created_at
-                     FROM transcripts
-                     {}
-                     ORDER BY created_at DESC
-                     LIMIT ?1 OFFSET ?2",
-                    where_clause
-                ))
-                .map_err(CommandError::database)?;
-
-            let rows = stmt
-                .query_map(params![limit, offset], transcript_from_row)
-                .map_err(CommandError::database)?;
-
-            (
-                rows.collect::<Result<Vec<_>, _>>()
-                    .map_err(CommandError::database)?,
-                total,
-            )
+            format!("WHERE {}", conditions.join(" AND "))
         };
+
+        let count_sql = format!("SELECT COUNT(*) FROM transcripts {}", where_clause);
+        let filter_refs: Vec<&dyn ToSql> = filter_params.iter().map(|p| p.as_ref()).collect();
+        let total: i64 = self
+            .conn
+            .query_row(&count_sql, filter_refs.as_slice(), |row| row.get(0))
+            .map_err(CommandError::database)?;
+
+        let page_sql = format!(
+            "SELECT id, text, created_at, duration_ms, word_count, character_count,
+                    model_id, language, output_mode, paste_method, transcription_latency_ms,
+                    audio_path, is_note, analysis, analysis_model, analysis_created_at
+             FROM transcripts
+             {}
+             ORDER BY {}
+             LIMIT ? OFFSET ?",
+            where_clause,
+            sort.order_by_clause()
+        );
+
+        // The page query reuses the filter params, then limit + offset.
+        let mut page_params = filter_params;
+        page_params.push(Box::new(limit));
+        page_params.push(Box::new(offset));
+        let page_refs: Vec<&dyn ToSql> = page_params.iter().map(|p| p.as_ref()).collect();
+
+        let mut stmt = self
+            .conn
+            .prepare(&page_sql)
+            .map_err(CommandError::database)?;
+        let rows = stmt
+            .query_map(page_refs.as_slice(), transcript_from_row)
+            .map_err(CommandError::database)?;
+        let transcripts = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(CommandError::database)?;
 
         Ok(TranscriptSearchResult {
             transcripts,
@@ -179,6 +181,37 @@ impl Database {
             limit,
             offset,
         })
+    }
+
+    /// Loads the given transcripts, orders them oldest-first by `created_at`,
+    /// and joins their text with `separator`. Ids that don't resolve are
+    /// skipped; an empty result (no id resolved) is an error.
+    pub fn combine_transcripts(
+        &self,
+        ids: &[String],
+        separator: &str,
+    ) -> Result<String, CommandError> {
+        let mut found: Vec<Transcript> = Vec::new();
+        for id in ids {
+            if let Some(transcript) = self.get_transcript_by_id(id)? {
+                found.push(transcript);
+            }
+        }
+
+        if found.is_empty() {
+            return Err(CommandError::new(
+                "transcript_not_found",
+                "None of the selected transcripts could be found in local history.",
+            ));
+        }
+
+        found.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        let merged = found
+            .iter()
+            .map(|transcript| transcript.text.as_str())
+            .collect::<Vec<_>>()
+            .join(separator);
+        Ok(merged)
     }
 
     pub fn get_last_transcript(&self) -> Result<Option<Transcript>, CommandError> {
@@ -749,15 +782,29 @@ mod tests {
         note.is_note = true;
         db.save_last_transcript(&note).unwrap();
 
-        let notes = db.search_transcripts(None, true, 10, 0).unwrap();
+        let notes = db
+            .search_transcripts(None, true, None, None, TranscriptSort::default(), 10, 0)
+            .unwrap();
         assert_eq!(notes.total, 1);
         assert_eq!(notes.transcripts[0].text, "note to self");
         assert!(notes.transcripts[0].is_note);
 
-        let all = db.search_transcripts(None, false, 10, 0).unwrap();
+        let all = db
+            .search_transcripts(None, false, None, None, TranscriptSort::default(), 10, 0)
+            .unwrap();
         assert_eq!(all.total, 2);
 
-        let queried = db.search_transcripts(Some("note"), true, 10, 0).unwrap();
+        let queried = db
+            .search_transcripts(
+                Some("note"),
+                true,
+                None,
+                None,
+                TranscriptSort::default(),
+                10,
+                0,
+            )
+            .unwrap();
         assert_eq!(queried.total, 1);
     }
 
@@ -783,7 +830,9 @@ mod tests {
         assert_eq!(replaced.analysis_model.as_deref(), Some("llama-3.1-8b"));
 
         // The analysis comes back through the search path too.
-        let result = db.search_transcripts(None, true, 10, 0).unwrap();
+        let result = db
+            .search_transcripts(None, true, None, None, TranscriptSort::default(), 10, 0)
+            .unwrap();
         assert_eq!(
             result.transcripts[0].analysis.as_deref(),
             Some("New summary.")
@@ -886,7 +935,15 @@ mod tests {
         db.save_last_transcript(&third).unwrap();
 
         let result = db
-            .search_transcripts(Some("alpha"), false, 1, 0)
+            .search_transcripts(
+                Some("alpha"),
+                false,
+                None,
+                None,
+                TranscriptSort::default(),
+                1,
+                0,
+            )
             .expect("search should work");
 
         assert_eq!(result.total, 2);
@@ -894,7 +951,17 @@ mod tests {
         assert_eq!(result.offset, 0);
         assert_eq!(result.transcripts.len(), 1);
 
-        let second_page = db.search_transcripts(Some("alpha"), false, 1, 1).unwrap();
+        let second_page = db
+            .search_transcripts(
+                Some("alpha"),
+                false,
+                None,
+                None,
+                TranscriptSort::default(),
+                1,
+                1,
+            )
+            .unwrap();
         assert_eq!(second_page.total, 2);
         assert_eq!(second_page.transcripts.len(), 1);
     }
@@ -937,7 +1004,9 @@ mod tests {
         db.save_last_transcript(&recent).unwrap();
         db.enforce_history_retention(Some(30)).unwrap();
 
-        let result = db.search_transcripts(None, false, 10, 0).unwrap();
+        let result = db
+            .search_transcripts(None, false, None, None, TranscriptSort::default(), 10, 0)
+            .unwrap();
         assert_eq!(result.total, 1);
         assert_eq!(result.transcripts[0].id, recent.id);
         assert_eq!(db.get_last_transcript().unwrap().unwrap().id, recent.id);
@@ -1065,7 +1134,169 @@ mod tests {
 
         db.enforce_history_retention(None).unwrap();
 
-        assert_eq!(db.search_transcripts(None, false, 10, 0).unwrap().total, 1);
+        assert_eq!(
+            db.search_transcripts(None, false, None, None, TranscriptSort::default(), 10, 0)
+                .unwrap()
+                .total,
+            1
+        );
         assert_eq!(db.get_last_transcript().unwrap().unwrap().id, old.id);
+    }
+
+    /// Saves a transcript and forces its stored `created_at`, so date-range and
+    /// sort tests can pin rows to known instants regardless of save time.
+    fn save_with_created_at(db: &Database, text: &str, created_at: DateTime<Utc>) -> Transcript {
+        let mut transcript = transcript_with_text(text);
+        transcript.created_at = created_at;
+        db.save_last_transcript(&transcript).unwrap();
+        db.conn
+            .execute(
+                "UPDATE transcripts SET created_at = ?2 WHERE id = ?1",
+                params![transcript.id, created_at.to_rfc3339()],
+            )
+            .unwrap();
+        transcript
+    }
+
+    #[test]
+    fn search_filters_by_created_at_date_range() {
+        let db = Database::in_memory().unwrap();
+        // Anchor inside the default 30-day retention window (and not in the
+        // future) so the save path's retention sweep keeps every row.
+        let base = Utc::now() - Duration::days(20);
+        let early = save_with_created_at(&db, "early one", base);
+        let middle = save_with_created_at(&db, "middle one", base + Duration::days(5));
+        let late = save_with_created_at(&db, "late one", base + Duration::days(10));
+
+        // Inclusive lower bound only.
+        let from_only = db
+            .search_transcripts(
+                None,
+                false,
+                Some(&(base + Duration::days(5)).to_rfc3339()),
+                None,
+                TranscriptSort::OldestFirst,
+                10,
+                0,
+            )
+            .unwrap();
+        assert_eq!(from_only.total, 2);
+        assert_eq!(from_only.transcripts[0].id, middle.id);
+        assert_eq!(from_only.transcripts[1].id, late.id);
+
+        // Inclusive upper bound only.
+        let to_only = db
+            .search_transcripts(
+                None,
+                false,
+                None,
+                Some(&(base + Duration::days(5)).to_rfc3339()),
+                TranscriptSort::OldestFirst,
+                10,
+                0,
+            )
+            .unwrap();
+        assert_eq!(to_only.total, 2);
+        assert_eq!(to_only.transcripts[0].id, early.id);
+        assert_eq!(to_only.transcripts[1].id, middle.id);
+
+        // Both bounds: a window that captures only the middle row.
+        let windowed = db
+            .search_transcripts(
+                None,
+                false,
+                Some(&(base + Duration::days(1)).to_rfc3339()),
+                Some(&(base + Duration::days(9)).to_rfc3339()),
+                TranscriptSort::default(),
+                10,
+                0,
+            )
+            .unwrap();
+        assert_eq!(windowed.total, 1);
+        assert_eq!(windowed.transcripts[0].id, middle.id);
+    }
+
+    #[test]
+    fn search_honors_each_sort_order() {
+        let db = Database::in_memory().unwrap();
+        // Inside the default 30-day retention window so saves don't purge rows.
+        let base = Utc::now() - Duration::days(10);
+        // oldest + shortest
+        let first = save_with_created_at(&db, "short", base);
+        // newest, medium length
+        let second = save_with_created_at(&db, "medium length text", base + Duration::days(2));
+        // middle date, longest text
+        let third = save_with_created_at(
+            &db,
+            "the longest text of the three by far",
+            base + Duration::days(1),
+        );
+
+        let newest = db
+            .search_transcripts(None, false, None, None, TranscriptSort::NewestFirst, 10, 0)
+            .unwrap();
+        assert_eq!(
+            newest
+                .transcripts
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![second.id.as_str(), third.id.as_str(), first.id.as_str()]
+        );
+
+        let oldest = db
+            .search_transcripts(None, false, None, None, TranscriptSort::OldestFirst, 10, 0)
+            .unwrap();
+        assert_eq!(
+            oldest
+                .transcripts
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![first.id.as_str(), third.id.as_str(), second.id.as_str()]
+        );
+
+        let longest = db
+            .search_transcripts(None, false, None, None, TranscriptSort::Longest, 10, 0)
+            .unwrap();
+        assert_eq!(longest.transcripts[0].id, third.id);
+        // The shortest text sorts last under Longest.
+        assert_eq!(longest.transcripts[2].id, first.id);
+    }
+
+    #[test]
+    fn combine_transcripts_orders_oldest_first_and_joins() {
+        let db = Database::in_memory().unwrap();
+        // Inside the default 30-day retention window so saves don't purge rows.
+        let base = Utc::now() - Duration::days(10);
+        let newest = save_with_created_at(&db, "third", base + Duration::days(2));
+        let oldest = save_with_created_at(&db, "first", base);
+        let middle = save_with_created_at(&db, "second", base + Duration::days(1));
+
+        // Ids passed out of chronological order; result is oldest-first.
+        let combined = db
+            .combine_transcripts(
+                &[newest.id.clone(), oldest.id.clone(), middle.id.clone()],
+                "\n\n",
+            )
+            .unwrap();
+        assert_eq!(combined, "first\n\nsecond\n\nthird");
+
+        // A custom separator is honored.
+        let with_sep = db
+            .combine_transcripts(&[oldest.id.clone(), middle.id.clone()], " | ")
+            .unwrap();
+        assert_eq!(with_sep, "first | second");
+
+        // Unresolved ids are skipped; resolved ones still combine.
+        let with_missing = db
+            .combine_transcripts(&["tx_missing".to_string(), oldest.id.clone()], "\n\n")
+            .unwrap();
+        assert_eq!(with_missing, "first");
+
+        // No id resolving is an error.
+        assert!(db
+            .combine_transcripts(&["tx_a".to_string(), "tx_b".to_string()], "\n\n")
+            .is_err());
     }
 }

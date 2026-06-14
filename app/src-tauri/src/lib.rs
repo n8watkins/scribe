@@ -57,10 +57,7 @@ pub fn display_name(app: &tauri::AppHandle) -> &'static str {
 fn migrate_pre_rebrand_data(app: &tauri::AppHandle, new_data_dir: &std::path::Path) {
     // Derive the old identifier from the current one. If they match, this build
     // wasn't renamed (or is the old flavor) and there's nothing to migrate.
-    let old_identifier = app
-        .config()
-        .identifier
-        .replace(".scribe", ".localdictate");
+    let old_identifier = app.config().identifier.replace(".scribe", ".localdictate");
     if old_identifier == app.config().identifier {
         return;
     }
@@ -124,7 +121,10 @@ fn migrate_pre_rebrand_data(app: &tauri::AppHandle, new_data_dir: &std::path::Pa
                     }
                 }
                 Err(error) => {
-                    log::warn!("Could not copy database during rebrand migration: {}", error);
+                    log::warn!(
+                        "Could not copy database during rebrand migration: {}",
+                        error
+                    );
                     let _ = std::fs::remove_file(&staging);
                     complete = false;
                 }
@@ -355,6 +355,9 @@ pub fn run() {
             commands::update_transcript,
             commands::delete_transcript,
             commands::clear_transcript_history,
+            commands::combine_transcripts,
+            commands::save_combined_transcript,
+            commands::open_transcript_externally,
             commands::get_transcript_audio,
             commands::get_basic_stats,
             commands::refresh_basic_stats,
@@ -405,7 +408,6 @@ pub fn run() {
             }
         });
 }
-
 
 /// Colors the native Windows title bar to match the app background so the
 /// window top blends into the dashboard instead of sitting as a gray strip.

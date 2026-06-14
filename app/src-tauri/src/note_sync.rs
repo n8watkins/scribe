@@ -39,7 +39,16 @@ pub fn collect_and_sync(app: &AppHandle, service: &str) -> Result<SyncReport, Co
             ));
         }
         // The daily Drive file is a clean notes-only log (Phase 1/2).
-        db.search_transcripts(None, true, 100_000, 0)?.transcripts
+        db.search_transcripts(
+            None,
+            true,
+            None,
+            None,
+            crate::transcript::TranscriptSort::default(),
+            100_000,
+            0,
+        )?
+        .transcripts
     };
 
     if notes.is_empty() {
@@ -125,7 +134,17 @@ pub fn organize_day(app: &AppHandle, service: &str, day: &str) -> Result<bool, C
             ));
         }
         // Pull all notes, then filter to the requested local calendar day.
-        let mut notes = db.search_transcripts(None, true, 100_000, 0)?.transcripts;
+        let mut notes = db
+            .search_transcripts(
+                None,
+                true,
+                None,
+                None,
+                crate::transcript::TranscriptSort::default(),
+                100_000,
+                0,
+            )?
+            .transcripts;
         notes.retain(|note| {
             note.created_at
                 .with_timezone(&Local)

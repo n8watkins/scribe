@@ -16,7 +16,7 @@ use crate::{
     output::{self, OutputResult},
     settings::AppSettings,
     stats::BasicStats,
-    transcript::{Transcript, TranscriptSearchResult},
+    transcript::{Transcript, TranscriptSearchResult, TranscriptSort},
 };
 
 pub struct BackendState {
@@ -182,14 +182,23 @@ pub fn search_transcripts(
     state: tauri::State<'_, BackendState>,
     query: Option<String>,
     notes_only: Option<bool>,
+    from: Option<String>,
+    to: Option<String>,
+    sort: Option<TranscriptSort>,
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<TranscriptSearchResult, CommandError> {
     let limit = limit.unwrap_or(20).clamp(1, 100);
     let offset = offset.unwrap_or_default();
-    state
-        .db()?
-        .search_transcripts(query.as_deref(), notes_only.unwrap_or(false), limit, offset)
+    state.db()?.search_transcripts(
+        query.as_deref(),
+        notes_only.unwrap_or(false),
+        from.as_deref(),
+        to.as_deref(),
+        sort.unwrap_or_default(),
+        limit,
+        offset,
+    )
 }
 
 #[tauri::command]
@@ -220,6 +229,98 @@ pub fn delete_transcript(
 #[tauri::command]
 pub fn clear_transcript_history(state: tauri::State<'_, BackendState>) -> Result<(), CommandError> {
     state.db()?.clear_transcript_history()
+}
+
+/// Loads the given transcripts, orders them oldest-first, and joins their text
+/// with `separator` (default "\n\n"). Ids that don't resolve are skipped.
+#[tauri::command]
+pub fn combine_transcripts(
+    state: tauri::State<'_, BackendState>,
+    ids: Vec<String>,
+    separator: Option<String>,
+) -> Result<String, CommandError> {
+    let separator = separator.unwrap_or_else(|| "\n\n".to_string());
+    state.db()?.combine_transcripts(&ids, &separator)
+}
+
+/// Persists `text` as a new (non-note) history entry and makes it the Last
+/// Transcript Buffer, mirroring how a dictation is saved. Returns the saved
+/// transcript.
+#[tauri::command]
+pub fn save_combined_transcript(
+    state: tauri::State<'_, BackendState>,
+    text: String,
+) -> Result<Transcript, CommandError> {
+    let transcript = Transcript::new_last_buffer(text, None, None, None).ok_or_else(|| {
+        CommandError::new(
+            "empty_transcript",
+            "Cannot save an empty combined transcript.",
+        )
+    })?;
+    let db = state.db()?;
+    let history_enabled = db.get_settings()?.history_enabled;
+    db.save_last_transcript_with_history(&transcript, history_enabled)?;
+    Ok(transcript)
+}
+
+/// Writes a transcript's text to a temp `.txt` file under the app cache dir and
+/// opens it with the OS default text app.
+#[tauri::command]
+pub fn open_transcript_externally(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, BackendState>,
+    id: String,
+) -> Result<(), CommandError> {
+    let transcript = state
+        .db()?
+        .get_transcript_by_id(&id)?
+        .ok_or_else(|| CommandError::new("transcript_not_found", "Transcript was not found."))?;
+
+    let export_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| {
+            CommandError::new(
+                "app_cache_dir_unavailable",
+                format!("Could not locate Scribe cache directory. {}", error),
+            )
+        })?
+        .join("scribe-export");
+    std::fs::create_dir_all(&export_dir).map_err(|error| {
+        CommandError::new(
+            "transcript_export_failed",
+            format!(
+                "Could not create export folder {}. {}",
+                export_dir.display(),
+                error
+            ),
+        )
+    })?;
+
+    let path = export_dir.join(format!("{}.txt", id));
+    std::fs::write(&path, transcript.text.as_bytes()).map_err(|error| {
+        CommandError::new(
+            "transcript_export_failed",
+            format!(
+                "Could not write transcript file {}. {}",
+                path.display(),
+                error
+            ),
+        )
+    })?;
+
+    app.opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(|error| {
+            CommandError::new(
+                "transcript_open_failed",
+                format!(
+                    "Could not open transcript file {}. {}",
+                    path.display(),
+                    error
+                ),
+            )
+        })
 }
 
 /// Returns a transcript's saved audio clip as a base64 WAV string for
@@ -414,10 +515,7 @@ pub fn open_data_folder(app: tauri::AppHandle) -> Result<(), CommandError> {
     let dir = app.path().app_data_dir().map_err(|error| {
         CommandError::new(
             "app_data_dir_unavailable",
-            format!(
-                "Could not locate Scribe app data directory. {}",
-                error
-            ),
+            format!("Could not locate Scribe app data directory. {}", error),
         )
     })?;
     open_folder(&app, dir)
@@ -471,9 +569,10 @@ pub async fn analyze_note(
             &transcript.text,
         )?;
 
-        let saved = state
-            .db()?
-            .save_note_analysis(&transcript_id, &outcome.analysis, &outcome.model);
+        let saved =
+            state
+                .db()?
+                .save_note_analysis(&transcript_id, &outcome.analysis, &outcome.model);
         saved
     })
     .await
@@ -582,11 +681,9 @@ pub async fn drive_sync_now(
     app: tauri::AppHandle,
 ) -> Result<crate::google_drive::SyncReport, CommandError> {
     let service = app.config().identifier.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::note_sync::collect_and_sync(&app, &service)
-    })
-    .await
-    .map_err(|error| CommandError::new("drive_sync_failed", error.to_string()))?
+    tauri::async_runtime::spawn_blocking(move || crate::note_sync::collect_and_sync(&app, &service))
+        .await
+        .map_err(|error| CommandError::new("drive_sync_failed", error.to_string()))?
 }
 
 /// Runs the end-of-day organize pass now for the given local calendar day (or

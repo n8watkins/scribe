@@ -115,6 +115,8 @@ export type TranscriptSearchResult = {
   offset: number;
 };
 
+export type TranscriptSort = "newest" | "oldest" | "longest";
+
 export type OutputAction =
   | "save_only"
   | "copy_clipboard"
@@ -384,15 +386,31 @@ export function listRecentTranscripts({
 export function searchTranscripts({
   query,
   notesOnly,
+  from,
+  to,
+  sort,
   limit,
   offset,
 }: {
   query?: string;
   notesOnly?: boolean;
+  /** Inclusive RFC3339 lower bound on createdAt. */
+  from?: string;
+  /** Inclusive RFC3339 upper bound on createdAt. */
+  to?: string;
+  sort?: TranscriptSort;
   limit?: number;
   offset?: number;
 } = {}): Promise<TranscriptSearchResult> {
-  return invoke("search_transcripts", { query, notesOnly, limit, offset });
+  return invoke("search_transcripts", {
+    query,
+    notesOnly,
+    from,
+    to,
+    sort,
+    limit,
+    offset,
+  });
 }
 
 export function getTranscript(id: string): Promise<Transcript | null> {
@@ -414,6 +432,26 @@ export function deleteTranscript(id: string): Promise<void> {
 
 export function clearTranscriptHistory(): Promise<void> {
   return invoke("clear_transcript_history");
+}
+
+/** Loads the given transcripts (oldest-first) and joins their text with
+ * `separator` (default "\n\n"). Ids that don't resolve are skipped. */
+export function combineTranscripts(
+  ids: string[],
+  separator?: string,
+): Promise<string> {
+  return invoke("combine_transcripts", { ids, separator });
+}
+
+/** Saves `text` as a new history entry and the Last Transcript Buffer;
+ * returns the saved transcript. */
+export function saveCombinedTranscript(text: string): Promise<Transcript> {
+  return invoke("save_combined_transcript", { text });
+}
+
+/** Writes a transcript to a temp .txt file and opens it in the OS default app. */
+export function openTranscriptExternally(id: string): Promise<void> {
+  return invoke("open_transcript_externally", { id });
 }
 
 export function getBasicStats(): Promise<BasicStats> {
