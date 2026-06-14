@@ -220,15 +220,25 @@ export function ModelsView({
       <article className="panel-card span-2">
         <div className="section-heading compact">
           <h2>Models</h2>
-          <button
-            className="secondary-button"
-            disabled={modelsLoading}
-            onClick={() => void loadModels()}
-            type="button"
-          >
-            <RefreshCw aria-hidden="true" size={15} />
-            Refresh
-          </button>
+          <div className="row-actions">
+            <button
+              className="secondary-button"
+              disabled={modelsLoading}
+              onClick={() => void loadModels()}
+              type="button"
+            >
+              <RefreshCw aria-hidden="true" size={15} />
+              Refresh
+            </button>
+            <button
+              className="secondary-button"
+              onClick={openFolder}
+              type="button"
+            >
+              <FolderOpen aria-hidden="true" size={15} />
+              Open models folder
+            </button>
+          </div>
         </div>
         {modelsError ? (
           <InlineError message={modelsError} onRetry={loadModels} />
@@ -260,16 +270,6 @@ export function ModelsView({
                 ? "1 model downloaded"
                 : `${downloadedCount} models downloaded`}
             </span>
-          </div>
-          <div className="models-summary-action">
-            <button
-              className="secondary-button"
-              onClick={openFolder}
-              type="button"
-            >
-              <FolderOpen aria-hidden="true" size={15} />
-              Open models folder
-            </button>
           </div>
         </div>
 
@@ -375,11 +375,11 @@ export function ModelsView({
                           {selected ? (
                             <span className="pill selected">
                               <Check aria-hidden="true" size={11} />
-                              In use
+                              Active
                             </span>
                           ) : null}
-                          {/* Download-state pill. When the model is in use, a
-                              plain "Downloaded"/"Loaded" is implied by "In use",
+                          {/* Download-state pill. When the model is active, a
+                              plain "Downloaded"/"Loaded" is implied by "Active",
                               so the pill only appears for actionable states. */}
                           {showStatusPill ? (
                             <span className={statusClass}>{statusLabel}</span>

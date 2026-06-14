@@ -80,7 +80,7 @@ button {
 .brand-name {
   font-size: 13px;
   font-weight: 750;
-  color: #f8fafc;
+  color: #38bdf8;
 }
 
 .brand-badge {
@@ -145,34 +145,6 @@ button {
   box-shadow: 0 0 18px rgba(34, 211, 238, 0.08);
 }
 
-.privacy-panel {
-  margin-top: auto;
-  padding: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 6px;
-  background: rgba(7, 11, 20, 0.58);
-}
-
-.privacy-panel p {
-  margin: 5px 0 0;
-  color: #94a3b8;
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.privacy-status {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: #e2e8f0;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.privacy-status svg {
-  color: #22c55e;
-}
-
 .dashboard {
   flex: 1;
   min-width: 0;
@@ -193,15 +165,6 @@ button {
   font-size: 15.5px;
   line-height: 1.2;
   font-weight: 780;
-}
-
-.eyebrow {
-  margin: 0 0 3px;
-  color: #22d3ee;
-  font-size: 10px;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0;
 }
 
 .topbar-actions,
@@ -1435,12 +1398,6 @@ textarea {
   font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.models-summary-action {
-  display: flex;
-  align-items: center;
-  flex: 0 0 auto;
 }
 
 .models-summary-note {

@@ -82,57 +82,6 @@ const navItems: { label: ViewName; Icon: LucideIcon }[] = [
   { label: "About", Icon: Info },
 ];
 
-const viewTitles: Record<ViewName, { eyebrow: string; title: string }> = {
-  Dashboard: {
-    eyebrow: "Dashboard",
-    title: "Local speech-to-text control center",
-  },
-  Transcribe: {
-    eyebrow: "Transcribe",
-    title: "Record, review, and route the next transcript",
-  },
-  History: {
-    eyebrow: "History",
-    title: "Search and reuse local transcripts",
-  },
-  Notes: {
-    eyebrow: "Notes",
-    title: "Dictated notes (hold ~ and tap Q)",
-  },
-  Stats: {
-    eyebrow: "Stats",
-    title: "Local dictation usage at a glance",
-  },
-  Settings: {
-    eyebrow: "Settings",
-    title: "Output and app behavior",
-  },
-  "Data & Privacy": {
-    eyebrow: "Data & Privacy",
-    title: "History retention and local data",
-  },
-  Hotkeys: {
-    eyebrow: "Hotkeys",
-    title: "Global shortcuts and recording controls",
-  },
-  Models: {
-    eyebrow: "Models",
-    title: "Local Whisper model manager",
-  },
-  Audio: {
-    eyebrow: "Audio",
-    title: "Microphone input and recording quality",
-  },
-  Developer: {
-    eyebrow: "Developer",
-    title: "Diagnostics and developer tools",
-  },
-  About: {
-    eyebrow: "About",
-    title: "Private local dictation for Windows",
-  },
-};
-
 function App() {
   const [activeView, setActiveView] = useState<ViewName>("Dashboard");
   const [settingsTabId, setSettingsTabId] = useState<string | null>(null);
@@ -162,7 +111,6 @@ function App() {
     useState<PartialTranscriptEvent | null>(null);
   const soundsEnabledRef = useRef(false);
   const notificationsEnabledRef = useRef(false);
-  const heading = viewTitles[activeView];
 
   // The Developer panel is opt-in (Settings -> App behavior). Insert it just
   // before About when enabled so the diagnostics sit at the end of the list.
@@ -601,21 +549,12 @@ function App() {
             );
           })}
         </nav>
-
-        <div className="privacy-panel">
-          <div className="privacy-status">
-            <ShieldCheck aria-hidden="true" size={14} />
-            Offline ready
-          </div>
-          <p>Audio and transcripts stay on this device.</p>
-        </div>
       </aside>
 
       <main className="dashboard">
         <header className="topbar">
           <div>
-            <p className="eyebrow">{heading.eyebrow}</p>
-            <h1>{heading.title}</h1>
+            <h1>{activeView}</h1>
           </div>
           <div className="topbar-actions">
             <button

@@ -112,8 +112,10 @@ export function SectionPanel({
   return (
     <article className="panel-card">
       <div className="section-heading compact">
-        <h2>{title}</h2>
-        {icon}
+        <h2>
+          {icon}
+          {title}
+        </h2>
       </div>
       <div className="settings-list">{children}</div>
     </article>
