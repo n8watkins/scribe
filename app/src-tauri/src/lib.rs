@@ -4,6 +4,7 @@ pub mod commands;
 pub mod db;
 pub mod dictation;
 pub mod error;
+pub mod export;
 pub mod file_transcribe;
 pub mod google_drive;
 pub mod google_oauth;
@@ -415,7 +416,8 @@ pub fn run() {
             commands::google_sign_in,
             commands::google_sign_out,
             commands::drive_sync_now,
-            commands::drive_organize_now
+            commands::drive_organize_now,
+            commands::export_transcripts
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

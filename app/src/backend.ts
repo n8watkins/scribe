@@ -660,6 +660,21 @@ export function driveOrganizeNow(day?: string): Promise<boolean> {
   return invoke("drive_organize_now", { day });
 }
 
+/** Which transcripts a local export includes. */
+export type ExportScope = "all" | "notes" | "dictation";
+/** The file format a local export renders to. */
+export type ExportFormat = "markdown" | "csv" | "json";
+
+/** Exports transcripts (by scope) to a local file (in the chosen format) the
+ * user picks via a native save dialog. Resolves to the saved absolute path, or
+ * null when the user cancels. Purely local — no Google account required. */
+export function exportTranscripts(
+  scope: ExportScope,
+  format: ExportFormat,
+): Promise<string | null> {
+  return invoke("export_transcripts", { scope, format });
+}
+
 export function openReleasePage(url?: string): Promise<void> {
   return invoke("open_release_page", { url });
 }
