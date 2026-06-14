@@ -4,6 +4,17 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.10 — 2026-06-14
+
+- **Real app icon everywhere.** Regenerated all icons from the Scribe mic logo,
+  so the installed app's window/taskbar icon is the logo (releases had stale
+  icons), and the sidebar brand shows it (no more "S").
+- **Google Drive promoted to a first-class "Sync" area.** It's now its own
+  sidebar view (out of the Settings tab) with Connection, What to back up, and
+  Organize & schedule sections, framed as a backup/export hub. ("Back up all
+  transcripts" is marked coming-soon — only note sync is wired up in the backend
+  today.)
+
 ## 0.5.9 — 2026-06-14
 
 - **Google Drive sync works in released builds again.** Releases were shipping

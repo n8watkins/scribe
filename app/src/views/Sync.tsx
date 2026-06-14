@@ -234,23 +234,18 @@ export function SyncView({
               />
             </SettingRow>
             <SettingRow
-              description="Also export every transcript (not just notes) to Drive, so your full dictation history is backed up too."
-              label="Also back up all transcripts"
+              description="Coming soon: export every transcript (not just notes) to Drive for a full-history backup. Note sync is the only Drive backup wired up today."
+              label="Back up all transcripts (coming soon)"
             >
               <Toggle
                 checked={settings.driveSyncAllTranscripts}
-                disabled={actions.savingSettings || busy || !settings.driveSyncEnabled}
-                label="Also back up all transcripts"
+                disabled
+                label="Back up all transcripts (coming soon)"
                 onChange={(driveSyncAllTranscripts) =>
                   actions.updateSettings({ driveSyncAllTranscripts })
                 }
               />
             </SettingRow>
-            {!settings.driveSyncEnabled ? (
-              <p className="muted vocab-hint">
-                Turn on "Sync notes to Drive" to enable transcript backups.
-              </p>
-            ) : null}
           </SectionPanel>
 
           <SectionPanel
