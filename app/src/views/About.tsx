@@ -26,7 +26,12 @@ import {
   type UpdateCheckResult,
 } from "../backend";
 import type { ViewName } from "../types";
+import { Toggle } from "../components/primitives";
 import "./about.css";
+
+/** The GitHub releases list — every release with its notes, i.e. the changelog
+ * the user can always reference. */
+const RELEASES_URL = "https://github.com/n8watkins/scribe/releases";
 
 const FEATURES = [
   {
@@ -91,22 +96,20 @@ export function AboutView({
   setActiveView,
   lastUpdateCheck,
   autoUpdateInfo,
-  dismissedUpdateVersion,
-  onDismissUpdate,
+  autoCheckEnabled,
+  onToggleAutoCheck,
 }: {
   setActiveView?: (view: ViewName) => void;
   /** Timestamp (ms) of the last successful background update poll, so the
    * polling is observable here. */
   lastUpdateCheck?: number | null;
   /** Latest auto-detected update from the app's background poll. Lets About
-   * always reflect an available update (persisting past a topbar dismiss)
-   * without the user manually checking. */
+   * always reflect an available update without the user manually checking. */
   autoUpdateInfo?: UpdateCheckResult | null;
-  /** The version currently dismissed (hides the topbar chip), so About can show
-   * a "dismissed" state instead of the Dismiss button. */
-  dismissedUpdateVersion?: string | null;
-  /** Dismiss the given version (shared with the topbar chip). */
-  onDismissUpdate?: (version: string) => void;
+  /** Whether background update checks are on (the toggle state). */
+  autoCheckEnabled?: boolean;
+  /** Flip the "automatically check for updates" setting. */
+  onToggleAutoCheck?: (enabled: boolean) => void;
 }) {
   const [version, setVersion] = useState("...");
   const [dataDir, setDataDir] = useState<string | null>(null);
@@ -198,8 +201,8 @@ export function AboutView({
     installStatus ??
     (effectiveUpdate
       ? effectiveUpdate.updateAvailable
-        ? `You're on an old version — v${effectiveUpdate.latestVersion} is available (you have v${effectiveUpdate.currentVersion}).`
-        : `You're on the latest version (v${effectiveUpdate.currentVersion}).`
+        ? `You're on an old version — v${effectiveUpdate.latestVersion} is available.`
+        : "You're on the latest version."
       : "Compare this install against the latest GitHub release.");
 
   const tabs: {
@@ -235,60 +238,51 @@ export function AboutView({
             </div>
             <small>{updateStatus}</small>
             <small className="about-update-poll">
-              Checks automatically
+              {autoCheckEnabled === false
+                ? "Automatic checks are off"
+                : "Checks automatically"}
               {lastUpdateCheck
                 ? ` · last checked ${new Date(lastUpdateCheck).toLocaleTimeString()}`
-                : " · waiting for the first check…"}
+                : ""}
             </small>
             <div className="about-block-actions">
               {effectiveUpdate?.updateAvailable ? (
-                <>
-                  <button
-                    className="primary-button about-update-button"
-                    disabled={installing}
-                    onClick={() => void handleInstallUpdate()}
-                    type="button"
-                  >
-                    <Download aria-hidden="true" size={15} />
-                    {installing ? "Installing..." : "Install update"}
-                  </button>
-                  <button
-                    className="secondary-button about-update-button"
-                    disabled={installing}
-                    onClick={() => void openReleasePage(effectiveUpdate.releaseUrl)}
-                    type="button"
-                  >
-                    <ExternalLink aria-hidden="true" size={15} />
-                    View release
-                  </button>
-                  {effectiveUpdate.latestVersion === dismissedUpdateVersion ? (
-                    <span className="muted about-dismissed-note">
-                      Dismissed — you won't be nagged, but you can still install
-                      it here.
-                    </span>
-                  ) : (
-                    <button
-                      className="ghost-button about-update-button"
-                      disabled={installing}
-                      onClick={() =>
-                        onDismissUpdate?.(effectiveUpdate.latestVersion)
-                      }
-                      type="button"
-                    >
-                      Dismiss
-                    </button>
-                  )}
-                </>
-              ) : (
                 <button
-                  className="ghost-button"
-                  disabled={checking}
-                  onClick={() => void handleCheckForUpdate()}
+                  className="primary-button about-update-button"
+                  disabled={installing}
+                  onClick={() => void handleInstallUpdate()}
                   type="button"
                 >
-                  {checking ? "Checking..." : "Check for updates"}
+                  <Download aria-hidden="true" size={15} />
+                  {installing
+                    ? "Installing..."
+                    : `Install v${effectiveUpdate.latestVersion}`}
                 </button>
-              )}
+              ) : null}
+              <button
+                className="secondary-button about-update-button"
+                disabled={checking}
+                onClick={() => void handleCheckForUpdate()}
+                type="button"
+              >
+                {checking ? "Checking..." : "Check for updates"}
+              </button>
+              <button
+                className="ghost-button about-update-button"
+                onClick={() => void openReleasePage(RELEASES_URL)}
+                type="button"
+              >
+                <ExternalLink aria-hidden="true" size={15} />
+                View releases
+              </button>
+            </div>
+            <div className="about-autocheck">
+              <span>Automatically check for updates</span>
+              <Toggle
+                checked={autoCheckEnabled ?? true}
+                label="Automatically check for updates"
+                onChange={(enabled) => onToggleAutoCheck?.(enabled)}
+              />
             </div>
           </div>
 

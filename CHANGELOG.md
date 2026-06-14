@@ -4,6 +4,18 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.18 — 2026-06-14
+
+- **Simplified the update UI.** The topbar indicator is now a single
+  **"Update v0.5.x"** button (dropped the View/dismiss chip). **About → Updates**
+  is the one place to act: **Install v0.5.x**, **Check for updates**, and **View
+  releases** — the last always available (every release's notes = your
+  changelog). Status now reads "You're on an old version — v0.5.x is available"
+  (the installed version is shown just above, so the "you have vX" is gone).
+- **"Automatically check for updates" toggle** in About (on by default). When
+  off, background polling stops but manual "Check for updates" still works.
+- Removed the per-version dismiss (it was over-complicated).
+
 ## 0.5.17 — 2026-06-14
 
 - **Polling back to 1 minute** while we're actively iterating on the updater, so

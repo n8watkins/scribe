@@ -327,32 +327,23 @@ button {
   border-color: rgba(125, 211, 252, 0.9);
 }
 
-/* Topbar update indicator: the install button, a "View" release link, and a
-   dismiss X grouped together so the user can act, peek, or ignore it. */
-.update-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.update-chip-link {
-  padding: 0 8px;
-  font-size: 12px;
-}
-
-.update-chip-dismiss {
-  color: #94a3b8;
-}
-
-.update-chip-dismiss:hover {
-  color: #f8fafc;
-  background: rgba(148, 163, 184, 0.16);
-}
-
 .about-update-poll {
   display: block;
   margin-top: 2px;
   color: #64748b;
+}
+
+/* "Automatically check for updates" toggle row in About → Updates. */
+.about-autocheck {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  font-size: 13px;
+  color: #cbd5e1;
 }
 
 button:disabled {

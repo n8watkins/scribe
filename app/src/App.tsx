@@ -38,7 +38,6 @@ import {
   listModels,
   pasteLastTranscript,
   checkForUpdate,
-  openReleasePage,
   startRecording,
   stopRecording,
   transcribeRecording,
@@ -181,34 +180,12 @@ function App() {
   // Timestamp of the last successful auto poll, surfaced in About so the polling
   // is observable (the "last checked" line ticks each cycle).
   const [lastUpdateCheck, setLastUpdateCheck] = useState<number | null>(null);
-  // A version the user dismissed from the topbar indicator; persisted so the
-  // dismissal sticks across restarts until a newer version appears.
-  const [dismissedUpdateVersion, setDismissedUpdateVersion] = useState<
-    string | null
-  >(() => {
-    try {
-      return localStorage.getItem("scribe.dismissedUpdate");
-    } catch {
-      return null;
-    }
-  });
-  // Mirror into a ref so the long-lived poll effect (deps: []) reads the current
-  // dismissal without re-subscribing.
-  const dismissedUpdateRef = useRef(dismissedUpdateVersion);
-  dismissedUpdateRef.current = dismissedUpdateVersion;
-
-  // Dismiss an available update — shared by the topbar chip and About. Hides the
-  // chip and silences the toast/OS notification for that version; persisted so
-  // it sticks across restarts until a newer version ships. About still shows the
-  // update so installing later stays one stop away.
-  const dismissUpdate = useCallback((version: string) => {
-    setDismissedUpdateVersion(version);
-    try {
-      localStorage.setItem("scribe.dismissedUpdate", version);
-    } catch {
-      // localStorage can be unavailable; the in-memory state still applies.
-    }
-  }, []);
+  // Mirror the auto-update-check setting into a ref so the long-lived poll
+  // effect (deps: []) honors the current value without re-subscribing. Defaults
+  // to on until settings load.
+  const autoUpdateCheckRef = useRef(true);
+  autoUpdateCheckRef.current =
+    dashboardData?.settings.autoUpdateCheckEnabled ?? true;
 
   // The dev flavor labels itself so two running instances are tellable apart.
   useEffect(() => {
@@ -305,18 +282,19 @@ function App() {
     void refresh();
   }, [refresh]);
 
-  // Update check: ~5s after launch, every 30 min, and whenever the window
-  // regains focus (so reopening it surfaces a new release immediately instead of
-  // waiting out a long interval). On the FIRST time a given version is seen we
-  // fire both an in-app toast AND an OS notification — the latter reaches the
-  // user even when Scribe is minimized to the tray ("like Discord"), which the
-  // in-app topbar button alone can't. The topbar "Update available" button
-  // (driven by updateInfo) persists across views. Network failures (offline,
-  // rate limit) are ignored.
+  // Update check: ~5s after launch, every minute (iteration cadence), and
+  // whenever the window regains focus. The first time a given version is seen we
+  // fire an in-app toast AND an OS notification (the latter reaches the user even
+  // when minimized to the tray). Honors the "automatically check for updates"
+  // toggle; manual checks in About still work when it's off. Network failures
+  // (offline, rate limit) are ignored.
   useEffect(() => {
     let lastNotifiedVersion: string | null = null;
 
-    const runCheck = () =>
+    const runCheck = () => {
+      if (!autoUpdateCheckRef.current) {
+        return;
+      }
       void checkForUpdate()
         .then((result) => {
           // Record every successful poll so the "last checked" line in About
@@ -327,16 +305,11 @@ function App() {
             return;
           }
           setUpdateInfo(result);
-          // Notify once per newly-detected version (deduped) so repeated checks
-          // don't nag, but a brand-new release always alerts — unless the user
-          // dismissed that exact version from the topbar indicator.
-          if (
-            lastNotifiedVersion !== result.latestVersion &&
-            dismissedUpdateRef.current !== result.latestVersion
-          ) {
+          // Notify once per newly-detected version so repeated checks don't nag.
+          if (lastNotifiedVersion !== result.latestVersion) {
             lastNotifiedVersion = result.latestVersion;
-            // Update availability is high-signal and user-relevant, so it shows
-            // regardless of the in-app notifications setting.
+            // Update availability is high-signal, so it shows regardless of the
+            // in-app notifications setting.
             setToast({
               id: Date.now(),
               tone: "info",
@@ -346,6 +319,7 @@ function App() {
           }
         })
         .catch(() => {});
+    };
 
     const timer = window.setTimeout(runCheck, 5000);
     // ITERATION CADENCE: poll every 60s while we're actively shipping/testing
@@ -729,36 +703,16 @@ function App() {
             <h1>{activeView}</h1>
           </div>
           <div className="topbar-actions">
-            {updateInfo?.updateAvailable &&
-            updateInfo.latestVersion !== dismissedUpdateVersion ? (
-              <div className="update-chip">
-                <button
-                  className="secondary-button update-available-button"
-                  onClick={() => setActiveView("About")}
-                  title={`Scribe v${updateInfo.latestVersion} is available — install it`}
-                  type="button"
-                >
-                  <Download aria-hidden="true" size={14} />
-                  Update v{updateInfo.latestVersion}
-                </button>
-                <button
-                  className="ghost-button update-chip-link"
-                  onClick={() => void openReleasePage(updateInfo.releaseUrl)}
-                  title="View the release notes"
-                  type="button"
-                >
-                  View
-                </button>
-                <button
-                  aria-label="Dismiss this update"
-                  className="icon-button update-chip-dismiss"
-                  onClick={() => dismissUpdate(updateInfo.latestVersion)}
-                  title="Dismiss (you can still update from About)"
-                  type="button"
-                >
-                  <X aria-hidden="true" size={14} />
-                </button>
-              </div>
+            {updateInfo?.updateAvailable ? (
+              <button
+                className="secondary-button update-available-button"
+                onClick={() => setActiveView("About")}
+                title={`Scribe v${updateInfo.latestVersion} is available — open About to install it`}
+                type="button"
+              >
+                <Download aria-hidden="true" size={14} />
+                Update v{updateInfo.latestVersion}
+              </button>
             ) : null}
             <button
               className="secondary-button"
@@ -824,8 +778,6 @@ function App() {
               showNotice,
               lastUpdateCheck,
               updateInfo,
-              dismissUpdate,
-              dismissedUpdateVersion,
             )
           : null}
         {toast ? <Toast notice={toast} /> : null}
@@ -847,8 +799,6 @@ function renderView(
   showNotice: (message: string, tone?: ToastNotice["tone"]) => void,
   lastUpdateCheck: number | null,
   updateInfo: UpdateCheckResult | null,
-  onDismissUpdate: (version: string) => void,
-  dismissedUpdateVersion: string | null,
 ) {
   switch (activeView) {
     case "Transcribe":
@@ -894,10 +844,12 @@ function renderView(
     case "About":
       return (
         <AboutView
+          autoCheckEnabled={data.settings.autoUpdateCheckEnabled}
           autoUpdateInfo={updateInfo}
-          dismissedUpdateVersion={dismissedUpdateVersion}
           lastUpdateCheck={lastUpdateCheck}
-          onDismissUpdate={onDismissUpdate}
+          onToggleAutoCheck={(enabled) =>
+            actions.updateSettings({ autoUpdateCheckEnabled: enabled })
+          }
           setActiveView={setActiveView}
         />
       );

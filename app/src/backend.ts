@@ -81,6 +81,7 @@ export type AppSettings = {
   notificationsEnabled: boolean;
   soundsEnabled: boolean;
   developerSettingsEnabled: boolean;
+  autoUpdateCheckEnabled: boolean;
   devHotkeysSeeded: boolean;
   recordingMode: RecordingMode;
   minRecordingMs: number;

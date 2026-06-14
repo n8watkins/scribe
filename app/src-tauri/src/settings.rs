@@ -29,6 +29,11 @@ pub struct AppSettings {
     /// window resolution). Off by default; opt-in from Settings.
     #[serde(default)]
     pub developer_settings_enabled: bool,
+    /// Poll GitHub for new releases in the background (on launch, on window
+    /// focus, and on a timer). On by default; turn it off in About. Manual
+    /// "Check for updates" still works when off.
+    #[serde(default = "default_auto_update_check_enabled")]
+    pub auto_update_check_enabled: bool,
     /// True once the Scribe Dev flavor has seeded its non-conflicting hotkey
     /// defaults (or the user loaded production defaults), so the one-shot dev
     /// seeding never overrides the binds again.
@@ -185,6 +190,10 @@ fn default_pill_display_mode() -> PillDisplayMode {
 }
 
 fn default_dashboard_hotkey_toggles() -> bool {
+    true
+}
+
+fn default_auto_update_check_enabled() -> bool {
     true
 }
 
@@ -435,6 +444,7 @@ impl Default for AppSettings {
             notifications_enabled: true,
             sounds_enabled: true,
             developer_settings_enabled: false,
+            auto_update_check_enabled: true,
             dev_hotkeys_seeded: false,
             recording_mode: RecordingMode::Both,
             min_recording_ms: 300,
