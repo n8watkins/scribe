@@ -129,6 +129,7 @@ fn transcribe_recording_inner(
                     model_path,
                     wav_path: wav_path.clone(),
                     language: language.clone(),
+                    translate: settings.translate_to_english,
                     vocabulary_prompt: settings.vocabulary_prompt.clone(),
                 },
             )
@@ -422,9 +423,15 @@ fn validate_recording_result(recording: &RecordingResult) -> Result<(), CommandE
     Ok(())
 }
 
+/// The `--language` argument whisper.cpp expects for the selected language:
+/// the stored ISO-639-1 code, or "auto" for auto-detection. An empty/blank
+/// stored value falls back to "auto" so whisper never receives an empty arg.
 pub(crate) fn whisper_language(language: &Language) -> String {
-    match language {
-        Language::Auto | Language::En => "en".to_string(),
+    let code = language.code().trim();
+    if code.is_empty() {
+        crate::settings::LANGUAGE_AUTO.to_string()
+    } else {
+        code.to_string()
     }
 }
 

@@ -8,10 +8,14 @@ import {
 } from "lucide-react";
 import {
   commandErrorMessage,
+  LANGUAGE_AUTO,
+  listModels,
   llmStatus,
+  SUPPORTED_LANGUAGES,
   type AppSettings,
   type DictationCleanupMode,
   type LlmStatus,
+  type ModelInfo,
   type TextReplacement,
 } from "../backend";
 import type { ViewActions } from "../types";
@@ -33,6 +37,47 @@ export function SettingsView({
   initialTabId?: string | null;
   settings: AppSettings;
 }) {
+  // The selected model's multilingual capability drives the pair-guard notice
+  // shown when a non-English language (or translate) is chosen against an
+  // English-only model. Loaded from the catalog; null while it loads (the
+  // notice stays hidden until we actually know the model is English-only, so it
+  // never flashes for the default English/English-model setup).
+  const [selectedModelMultilingual, setSelectedModelMultilingual] = useState<
+    boolean | null
+  >(null);
+  useEffect(() => {
+    let cancelled = false;
+    void listModels()
+      .then((models: ModelInfo[]) => {
+        if (cancelled) {
+          return;
+        }
+        const active = models.find(
+          (model) =>
+            model.selected || model.id === settings.selectedModelId,
+        );
+        setSelectedModelMultilingual(active ? active.multilingual : null);
+      })
+      .catch(() => {
+        // A catalog load failure shouldn't surface here; just skip the notice.
+        if (!cancelled) {
+          setSelectedModelMultilingual(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.selectedModelId]);
+
+  // The user asked for non-English work (a specific non-English language, or
+  // auto-detect, or translate-to-English) but the active model is English-only.
+  const wantsMultilingual =
+    settings.translateToEnglish ||
+    settings.language === LANGUAGE_AUTO ||
+    (settings.language !== "en" && settings.language.length > 0);
+  const showMultilingualNotice =
+    wantsMultilingual && selectedModelMultilingual === false;
+
   const tabs: {
     id: string;
     title: string;
@@ -85,22 +130,46 @@ export function SettingsView({
               />
             </SettingRow>
             <SettingRow
-              description="Speech recognition language preference."
+              description="Spoken language Scribe transcribes. Auto-detect and any non-English language need a multilingual model (see Models)."
               label="Language"
             >
               <select
                 disabled={actions.savingSettings}
                 onChange={(event) =>
                   actions.updateSettings({
-                    language: event.currentTarget.value === "auto" ? "auto" : "en",
+                    language: event.currentTarget.value,
                   })
                 }
                 value={settings.language}
               >
-                <option value="auto">Auto detect</option>
-                <option value="en">English</option>
+                <option value="auto">Auto-detect</option>
+                {SUPPORTED_LANGUAGES.map(([code, label]) => (
+                  <option key={code} value={code}>
+                    {label}
+                  </option>
+                ))}
               </select>
             </SettingRow>
+            <SettingRow
+              description="Transcribe any spoken language and output English instead (Whisper's translate task). Needs a multilingual model."
+              label="Translate to English"
+            >
+              <Toggle
+                checked={settings.translateToEnglish}
+                disabled={actions.savingSettings}
+                label="Translate to English"
+                onChange={(translateToEnglish) =>
+                  actions.updateSettings({ translateToEnglish })
+                }
+              />
+            </SettingRow>
+            {showMultilingualNotice ? (
+              <p className="muted vocab-hint" role="status">
+                Your selected model is English-only, so this setting won't take
+                effect. Download and select a multilingual model (e.g. Base or
+                Small Multilingual) from the Models tab.
+              </p>
+            ) : null}
           </div>
 
           <div className="settings-subsection">

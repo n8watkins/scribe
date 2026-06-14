@@ -359,6 +359,10 @@ export function ModelsView({
                           <span className="model-row-sub">
                             {model.diskSizeLabel}
                             {" · "}
+                            {model.multilingual
+                              ? "Multilingual"
+                              : "English-only"}
+                            {" · "}
                             {model.filename}
                             {model.source === "external_cache"
                               ? " · external model dir"
