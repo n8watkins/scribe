@@ -38,6 +38,14 @@ export type PasteMethod =
   | "clipboard_restore";
 export type HistoryRetentionDays = 7 | 30 | 90 | 365 | null;
 export type PillDisplayMode = "dot" | "visualizer" | "visualizer_with_text";
+/** Which built-in style the optional dictation cleanup pass applies (or
+ * "custom" to use `dictationCleanupPrompt`). */
+export type DictationCleanupMode =
+  | "standard"
+  | "email"
+  | "chat"
+  | "code"
+  | "custom";
 
 /** Which key edge a single-shot bind acts on. Hold-to-Talk has no trigger —
  * it is push-to-talk and uses both edges (press starts, release stops). */
@@ -92,6 +100,9 @@ export type AppSettings = {
   notesAnalysisPrompt: string;
   notesAnalysisEndpoint: string;
   notesAnalysisModel: string;
+  dictationCleanupEnabled: boolean;
+  dictationCleanupMode: DictationCleanupMode;
+  dictationCleanupPrompt: string;
   driveSyncEnabled: boolean;
   driveSyncAllTranscripts: boolean;
   driveOrganizeHour: number;

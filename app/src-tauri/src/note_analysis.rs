@@ -129,6 +129,19 @@ pub fn analyze_text(
     prompt: &str,
     note_text: &str,
 ) -> Result<AnalysisOutcome, CommandError> {
+    analyze_text_with_timeout(endpoint, model, prompt, note_text, REQUEST_TIMEOUT)
+}
+
+/// Like [`analyze_text`] but with a caller-chosen request timeout. The
+/// dictation cleanup pass uses a short one so a slow/stuck local model never
+/// stalls the user's output; notes analysis keeps the long default.
+pub fn analyze_text_with_timeout(
+    endpoint: &str,
+    model: &str,
+    prompt: &str,
+    note_text: &str,
+    timeout: Duration,
+) -> Result<AnalysisOutcome, CommandError> {
     let endpoint = endpoint.trim().trim_end_matches('/');
 
     let client = reqwest::blocking::Client::builder()
@@ -152,7 +165,7 @@ pub fn analyze_text(
 
     let response = client
         .post(format!("{}/chat/completions", endpoint))
-        .timeout(REQUEST_TIMEOUT)
+        .timeout(timeout)
         .header("Content-Type", "application/json")
         .body(body.to_string())
         .send()

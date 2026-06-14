@@ -3,6 +3,7 @@ pub mod audio;
 pub mod commands;
 pub mod db;
 pub mod dictation;
+pub mod dictation_cleanup;
 pub mod error;
 pub mod file_transcribe;
 pub mod google_drive;

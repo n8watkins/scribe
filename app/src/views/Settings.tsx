@@ -10,6 +10,7 @@ import {
   commandErrorMessage,
   llmStatus,
   type AppSettings,
+  type DictationCleanupMode,
   type LlmStatus,
   type TextReplacement,
 } from "../backend";
@@ -100,6 +101,68 @@ export function SettingsView({
                 <option value="en">English</option>
               </select>
             </SettingRow>
+          </div>
+
+          <div className="settings-subsection">
+            <h3 className="settings-subhead">Dictation cleanup</h3>
+            <SettingRow
+              description="Polish each dictation with a local LLM before it's saved or pasted: strip filler (um, uh, like), fix punctuation and capitalization, and tidy formatting — faithful to your words."
+              label="Clean up dictation with a local LLM"
+            >
+              <Toggle
+                checked={settings.dictationCleanupEnabled}
+                disabled={actions.savingSettings}
+                label="Clean up dictation with a local LLM"
+                onChange={(dictationCleanupEnabled) =>
+                  actions.updateSettings({ dictationCleanupEnabled })
+                }
+              />
+            </SettingRow>
+            <SettingRow
+              description="How to shape the cleaned text. Standard fixes wording only; Email, Chat, and Code also reformat. Custom uses your own prompt below."
+              label="Cleanup style"
+            >
+              <select
+                disabled={
+                  actions.savingSettings || !settings.dictationCleanupEnabled
+                }
+                onChange={(event) =>
+                  actions.updateSettings({
+                    dictationCleanupMode: event.currentTarget
+                      .value as DictationCleanupMode,
+                  })
+                }
+                value={settings.dictationCleanupMode}
+              >
+                <option value="standard">Standard</option>
+                <option value="email">Email</option>
+                <option value="chat">Chat</option>
+                <option value="code">Code</option>
+                <option value="custom">Custom</option>
+              </select>
+            </SettingRow>
+            {settings.dictationCleanupMode === "custom" && (
+              <>
+                <p className="muted vocab-hint">
+                  Custom cleanup prompt — sent as the instruction with your
+                  transcript as the text to clean. Keep it faithful to your
+                  words (clean up, don't answer). Blank falls back to Standard.
+                </p>
+                <BlurSavedTextArea
+                  ariaLabel="Dictation cleanup prompt"
+                  onSave={(dictationCleanupPrompt) =>
+                    actions.updateSettings({ dictationCleanupPrompt })
+                  }
+                  placeholder="Clean up this dictation: fix punctuation and capitalization, remove filler words, keep my wording."
+                  rows={4}
+                  value={settings.dictationCleanupPrompt}
+                />
+              </>
+            )}
+            <p className="muted vocab-hint">
+              Uses the local LLM server from the Notes tab. If it's unavailable,
+              you get the raw transcript.
+            </p>
           </div>
 
           <div className="settings-subsection">
