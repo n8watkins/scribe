@@ -54,6 +54,28 @@ jobs:
         working-directory: app/src-tauri
         run: cargo test
 
+      # Inject the real Google OAuth "Desktop app" credentials so released
+      # builds can do Drive sync. google_secrets.rs is gitignored (build.rs
+      # creates a placeholder when missing), so without this every release ships
+      # "not configured". Desktop OAuth secrets are not truly confidential, but
+      # they live in repo secrets (not the public source) to dodge auto-rotation.
+      - name: Write Google OAuth secrets
+        shell: pwsh
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        run: |
+          if (-not $env:GOOGLE_CLIENT_ID) {
+            Write-Host "GOOGLE_CLIENT_ID not set; Drive sync stays 'not configured'."
+            exit 0
+          }
+          @"
+          //! Generated in CI from repo secrets. Not committed.
+          pub const CLIENT_ID: &str = "$($env:GOOGLE_CLIENT_ID)";
+          pub const CLIENT_SECRET: &str = "$($env:GOOGLE_CLIENT_SECRET)";
+          "@ | Set-Content -Path "app/src-tauri/src/google_secrets.rs" -Encoding utf8
+          Write-Host "Wrote real google_secrets.rs"
+
       - name: Build installers
         working-directory: app
         env:
