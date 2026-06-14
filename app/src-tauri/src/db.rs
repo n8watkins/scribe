@@ -89,10 +89,10 @@ impl Database {
     }
 
     /// Searches the history with optional full-text (`LIKE`), notes-only,
-    /// created_at date-range (RFC3339, inclusive), and sort, paginated by
-    /// `limit`/`offset`. All user-supplied values are passed as bound params;
-    /// only the fixed WHERE fragments and the constant ORDER BY column list are
-    /// interpolated, so user text can never reach the SQL string.
+    /// created_at date-range (RFC3339; `from` inclusive, `to` exclusive), and
+    /// sort, paginated by `limit`/`offset`. All user-supplied values are passed
+    /// as bound params; only the fixed WHERE fragments and the constant ORDER BY
+    /// column list are interpolated, so user text can never reach the SQL string.
     pub fn search_transcripts(
         &self,
         query: Option<&str>,
@@ -123,13 +123,17 @@ impl Database {
             conditions.push("is_note = 1".to_string());
         }
         // created_at is an RFC3339 UTC string; lexicographic compares match
-        // chronological order for that format, so plain >= / <= bounds work.
+        // chronological order for that format, so plain string bounds work.
+        // The lower bound is inclusive (`>=`); the upper bound is EXCLUSIVE
+        // (`<`) so callers pass the next local-day midnight as a clean
+        // half-open end (this also avoids dropping rows whose fractional-second
+        // width differs from the bound's).
         if let Some(from) = normalized_from {
             conditions.push("created_at >= ?".to_string());
             filter_params.push(Box::new(from.to_string()));
         }
         if let Some(to) = normalized_to {
-            conditions.push("created_at <= ?".to_string());
+            conditions.push("created_at < ?".to_string());
             filter_params.push(Box::new(to.to_string()));
         }
 
@@ -1184,7 +1188,9 @@ mod tests {
         assert_eq!(from_only.transcripts[0].id, middle.id);
         assert_eq!(from_only.transcripts[1].id, late.id);
 
-        // Inclusive upper bound only.
+        // Exclusive upper bound only: `to` is half-open, so a row exactly at the
+        // `to` instant (here `middle`, at base + 5 days) is EXCLUDED. Only the
+        // strictly-earlier `early` row remains.
         let to_only = db
             .search_transcripts(
                 None,
@@ -1196,11 +1202,27 @@ mod tests {
                 0,
             )
             .unwrap();
-        assert_eq!(to_only.total, 2);
+        assert_eq!(to_only.total, 1);
         assert_eq!(to_only.transcripts[0].id, early.id);
-        assert_eq!(to_only.transcripts[1].id, middle.id);
 
-        // Both bounds: a window that captures only the middle row.
+        // To include `middle`, the exclusive `to` must sit strictly after it.
+        let to_just_past_middle = db
+            .search_transcripts(
+                None,
+                false,
+                None,
+                Some(&(base + Duration::days(5) + Duration::milliseconds(1)).to_rfc3339()),
+                TranscriptSort::OldestFirst,
+                10,
+                0,
+            )
+            .unwrap();
+        assert_eq!(to_just_past_middle.total, 2);
+        assert_eq!(to_just_past_middle.transcripts[0].id, early.id);
+        assert_eq!(to_just_past_middle.transcripts[1].id, middle.id);
+
+        // Both bounds: a half-open window [from, to) that captures only the
+        // middle row (from inclusive at <= middle, to exclusive past middle).
         let windowed = db
             .search_transcripts(
                 None,

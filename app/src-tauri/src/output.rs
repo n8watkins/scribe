@@ -325,13 +325,15 @@ fn clipboard_paste(
 
     set_clipboard_text(&transcript.text)?;
     // Let the clipboard write settle before the paste reads it.
+    // NOTE: the 60ms (pre-paste settle) and 180ms (post-paste settle below) are
+    // timing knobs; slow targets may need them raised.
     thread::sleep(Duration::from_millis(60));
     // `send_paste_shortcut` waits for held modifiers to release before injecting
     // Ctrl+V, so a still-held paste chord can't scramble the keystroke.
     platform::send_paste_shortcut()?;
     // Give the target app time to read the clipboard before we overwrite it
     // again with the restore, otherwise it may paste the restored data instead.
-    thread::sleep(Duration::from_millis(120));
+    thread::sleep(Duration::from_millis(180));
 
     // Restore: put the user's previous clipboard contents back. When the
     // snapshot was empty (nothing was there, or it couldn't be captured) this
@@ -870,6 +872,11 @@ mod platform {
 
     pub fn send_paste_shortcut() -> Result<(), CommandError> {
         wait_for_modifier_release();
+        // Backstop (same as `direct_insert_text`): force-release any modifier
+        // still physically held so a lingering Ctrl/Alt/Win can't combine with
+        // the synthetic Ctrl+V below and scramble the target (e.g. Windows
+        // Terminal). Clipboard paste is the default path, so this guard matters.
+        release_held_modifiers()?;
 
         let inputs = [
             keyboard_input(VK_CONTROL, 0, Default::default()),
