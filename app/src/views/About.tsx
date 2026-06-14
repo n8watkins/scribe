@@ -89,8 +89,12 @@ const SETUP_STEPS: {
 
 export function AboutView({
   setActiveView,
+  lastUpdateCheck,
 }: {
   setActiveView?: (view: ViewName) => void;
+  /** Timestamp (ms) of the last successful background update poll, so the
+   * polling is observable here. */
+  lastUpdateCheck?: number | null;
 }) {
   const [version, setVersion] = useState("...");
   const [dataDir, setDataDir] = useState<string | null>(null);
@@ -213,6 +217,12 @@ export function AboutView({
               <strong>Updates</strong>
             </div>
             <small>{updateStatus}</small>
+            <small className="about-update-poll">
+              Auto-checks every minute
+              {lastUpdateCheck
+                ? ` · last checked ${new Date(lastUpdateCheck).toLocaleTimeString()}`
+                : " · waiting for the first check…"}
+            </small>
             <div className="about-block-actions">
               {updateResult?.updateAvailable ? (
                 <>

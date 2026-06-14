@@ -2,6 +2,21 @@
 
 Answers to questions that come up while using or building Scribe. Newest at the top.
 
+## The taskbar / Task Manager icon is wrong or old — why?
+
+The app icon **is** the Scribe mic logo in every build. If the **window** icon looks right but the **taskbar** or **Task Manager** icon is old or generic, that's **Windows' icon cache**, not Scribe: Windows caches an app's shell icon and does **not** refresh it when the app updates itself in place. The window icon is read live (so it's correct), while the taskbar/Task Manager pull from the stale cache.
+
+**Fix:** do a clean install of the latest release (download the installer from the [latest release](https://github.com/n8watkins/scribe/releases/latest) and run it), or reboot — both refresh the icon cache.
+
+## How do updates work? Can I install one from the app, or dismiss it?
+
+Yes to both.
+
+- **Notification:** Scribe polls GitHub for new releases shortly after launch, on a timer, and whenever you refocus the window. When one is found you get an **OS notification** (even when minimized) plus an **"Update available"** chip in the top-right.
+- **Install from the app:** **About → "Check for updates"**, then click the **"Install update"** button that appears — *that* one downloads, installs, and restarts. ("Check for updates" alone only checks.)
+- **Don't want it?** The top-right chip has **"View"** (opens the release notes) and a **dismiss "✕"** — dismissing hides it (you can still update later from About) and it stays dismissed for that version until a newer one ships.
+- **If the in-app install ever fails:** grab the installer from the [latest release](https://github.com/n8watkins/scribe/releases/latest) and run it.
+
 ## Can I install other / custom Whisper models?
 
 **Not from the UI today.** The **Models** view offers a fixed, curated catalog of six Whisper models you can download and switch between:

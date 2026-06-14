@@ -38,6 +38,7 @@ import {
   listModels,
   pasteLastTranscript,
   checkForUpdate,
+  openReleasePage,
   startRecording,
   stopRecording,
   transcribeRecording,
@@ -177,6 +178,24 @@ function App() {
   const [toast, setToast] = useState<ToastNotice | null>(null);
   const [isDevFlavor, setIsDevFlavor] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
+  // Timestamp of the last successful auto poll, surfaced in About so the polling
+  // is observable (the "last checked" line ticks each cycle).
+  const [lastUpdateCheck, setLastUpdateCheck] = useState<number | null>(null);
+  // A version the user dismissed from the topbar indicator; persisted so the
+  // dismissal sticks across restarts until a newer version appears.
+  const [dismissedUpdateVersion, setDismissedUpdateVersion] = useState<
+    string | null
+  >(() => {
+    try {
+      return localStorage.getItem("scribe.dismissedUpdate");
+    } catch {
+      return null;
+    }
+  });
+  // Mirror into a ref so the long-lived poll effect (deps: []) reads the current
+  // dismissal without re-subscribing.
+  const dismissedUpdateRef = useRef(dismissedUpdateVersion);
+  dismissedUpdateRef.current = dismissedUpdateVersion;
 
   // The dev flavor labels itself so two running instances are tellable apart.
   useEffect(() => {
@@ -287,13 +306,21 @@ function App() {
     const runCheck = () =>
       void checkForUpdate()
         .then((result) => {
+          // Record every successful poll so the "last checked" line in About
+          // advances — this is how the polling is observable even when you're
+          // already on the latest version.
+          setLastUpdateCheck(Date.now());
           if (!result.updateAvailable) {
             return;
           }
           setUpdateInfo(result);
           // Notify once per newly-detected version (deduped) so repeated checks
-          // don't nag, but a brand-new release always alerts.
-          if (lastNotifiedVersion !== result.latestVersion) {
+          // don't nag, but a brand-new release always alerts — unless the user
+          // dismissed that exact version from the topbar indicator.
+          if (
+            lastNotifiedVersion !== result.latestVersion &&
+            dismissedUpdateRef.current !== result.latestVersion
+          ) {
             lastNotifiedVersion = result.latestVersion;
             // Update availability is high-signal and user-relevant, so it shows
             // regardless of the in-app notifications setting.
@@ -308,7 +335,11 @@ function App() {
         .catch(() => {});
 
     const timer = window.setTimeout(runCheck, 5000);
-    const interval = window.setInterval(runCheck, 30 * 60 * 1000);
+    // TEST CADENCE (0.5.15): poll every 60s so the update polling is easy to
+    // observe. Note: GitHub's unauthenticated API allows ~60 requests/hour, so
+    // checks start failing after roughly an hour at this rate — dial back to a
+    // few minutes once polling is confirmed working.
+    const interval = window.setInterval(runCheck, 60 * 1000);
     const onFocus = () => runCheck();
     window.addEventListener("focus", onFocus);
     return () => {
@@ -684,16 +715,47 @@ function App() {
             <h1>{activeView}</h1>
           </div>
           <div className="topbar-actions">
-            {updateInfo?.updateAvailable ? (
-              <button
-                className="secondary-button update-available-button"
-                onClick={() => setActiveView("About")}
-                title={`Scribe v${updateInfo.latestVersion} is available`}
-                type="button"
-              >
-                <Download aria-hidden="true" size={14} />
-                Update available
-              </button>
+            {updateInfo?.updateAvailable &&
+            updateInfo.latestVersion !== dismissedUpdateVersion ? (
+              <div className="update-chip">
+                <button
+                  className="secondary-button update-available-button"
+                  onClick={() => setActiveView("About")}
+                  title={`Scribe v${updateInfo.latestVersion} is available — install it`}
+                  type="button"
+                >
+                  <Download aria-hidden="true" size={14} />
+                  Update available
+                </button>
+                <button
+                  className="ghost-button update-chip-link"
+                  onClick={() => void openReleasePage(updateInfo.releaseUrl)}
+                  title="View the release notes"
+                  type="button"
+                >
+                  View
+                </button>
+                <button
+                  aria-label="Dismiss this update"
+                  className="icon-button update-chip-dismiss"
+                  onClick={() => {
+                    setDismissedUpdateVersion(updateInfo.latestVersion);
+                    try {
+                      localStorage.setItem(
+                        "scribe.dismissedUpdate",
+                        updateInfo.latestVersion,
+                      );
+                    } catch {
+                      // localStorage can be unavailable; the in-memory state
+                      // still hides it for this session.
+                    }
+                  }}
+                  title="Dismiss (you can still update from About)"
+                  type="button"
+                >
+                  <X aria-hidden="true" size={14} />
+                </button>
+              </div>
             ) : null}
             <button
               className="secondary-button"
@@ -757,6 +819,7 @@ function App() {
               liveTranscript,
               settingsTabId,
               showNotice,
+              lastUpdateCheck,
             )
           : null}
         {toast ? <Toast notice={toast} /> : null}
@@ -776,6 +839,7 @@ function renderView(
   liveTranscript: PartialTranscriptEvent | null,
   settingsTabId: string | null,
   showNotice: (message: string, tone?: ToastNotice["tone"]) => void,
+  lastUpdateCheck: number | null,
 ) {
   switch (activeView) {
     case "Transcribe":
@@ -819,7 +883,12 @@ function renderView(
         />
       );
     case "About":
-      return <AboutView setActiveView={setActiveView} />;
+      return (
+        <AboutView
+          lastUpdateCheck={lastUpdateCheck}
+          setActiveView={setActiveView}
+        />
+      );
     case "Dashboard":
     default:
       return (

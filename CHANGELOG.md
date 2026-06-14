@@ -4,6 +4,21 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.15 — 2026-06-14
+
+- **Update polling you can watch (test cadence).** The app now polls for new
+  releases **every 60 seconds** (was 30 min), and About shows a live
+  "Auto-checks every minute · last checked HH:MM:SS" line so you can confirm the
+  polling is actually happening. Note: GitHub's unauthenticated API caps at ~60
+  checks/hour, so at this rate checks start failing after about an hour — this is
+  a temporary **test** cadence we'll dial back.
+- **Dismissible update indicator.** The top-right "Update available" chip now has
+  a **View** action (opens the release notes) and a **dismiss ✕** — you can
+  ignore an update and still install it later from About. A dismissal sticks for
+  that version (persists across restarts) until a newer one ships.
+- **FAQ:** added entries on the taskbar/Task-Manager **icon cache** and **how
+  updates work** (install / dismiss / view).
+
 ## 0.5.14 — 2026-06-14
 
 - **Custom window title bar.** The main window now runs without native Windows
