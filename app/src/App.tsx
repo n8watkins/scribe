@@ -4,6 +4,7 @@ import { getName as getAppName } from "@tauri-apps/api/app";
 import {
   BarChart3,
   Database,
+  Download,
   Eraser,
   Gauge,
   History as HistoryIcon,
@@ -33,6 +34,7 @@ import {
   transcribeRecording,
   updateSettings,
   type AppStateSnapshot,
+  type UpdateCheckResult,
   type DashboardData,
   type DictationResult,
   type HotkeyRegistrationFailedEvent,
@@ -100,6 +102,7 @@ function App() {
   const [models, setModels] = useState<ModelInfo[] | null>(null);
   const [toast, setToast] = useState<ToastNotice | null>(null);
   const [isDevFlavor, setIsDevFlavor] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
 
   // The dev flavor labels itself so two running instances are tellable apart.
   useEffect(() => {
@@ -203,6 +206,7 @@ function App() {
       void checkForUpdate()
         .then((result) => {
           if (result.updateAvailable) {
+            setUpdateInfo(result);
             setToast({
               id: Date.now(),
               tone: "info",
@@ -557,6 +561,17 @@ function App() {
             <h1>{activeView}</h1>
           </div>
           <div className="topbar-actions">
+            {updateInfo?.updateAvailable ? (
+              <button
+                className="secondary-button update-available-button"
+                onClick={() => setActiveView("About")}
+                title={`Scribe v${updateInfo.latestVersion} is available`}
+                type="button"
+              >
+                <Download aria-hidden="true" size={14} />
+                Update available
+              </button>
+            ) : null}
             <button
               className="secondary-button"
               onClick={() => setActiveView("History")}

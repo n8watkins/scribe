@@ -255,6 +255,19 @@ button {
   border-color: rgba(254, 202, 202, 0.8);
 }
 
+/* Topbar "Update available" pill — on-brand blue so it stands out next to the
+   neutral History button. */
+.update-available-button {
+  color: #082f49;
+  background: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.8);
+}
+
+.update-available-button:hover {
+  background: #7dd3fc;
+  border-color: rgba(125, 211, 252, 0.9);
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.52;

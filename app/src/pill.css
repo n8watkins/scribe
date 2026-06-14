@@ -28,10 +28,12 @@ body,
   gap: 8px;
   height: calc(100% - 8px);
   margin: 4px 5px;
-  padding: 0 12px;
-  border: 1px solid rgba(148, 163, 184, 0.12);
+  padding: 0 7px;
+  border: 1px solid rgba(56, 189, 248, 0.2);
   border-radius: 999px;
-  background: rgba(8, 10, 14, 0.55);
+  /* On-brand blue tint (overridable from settings via --pill-bg) rather than
+     near-black, and slimmer side padding so the visualizer fills the pill. */
+  background: var(--pill-bg, rgba(15, 30, 56, 0.66));
   cursor: grab;
   user-select: none;
   -webkit-user-select: none;
@@ -41,8 +43,8 @@ body,
 }
 
 .pill-shell:hover {
-  background: rgba(14, 18, 26, 0.72);
-  border-color: rgba(148, 163, 184, 0.28);
+  background: var(--pill-bg-hover, rgba(22, 42, 74, 0.78));
+  border-color: rgba(56, 189, 248, 0.38);
 }
 
 .pill-shell:active {
@@ -112,8 +114,11 @@ body,
 .pill-bars {
   display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: space-between;
   height: 28px;
+  /* Fill the pill's content width so the bars span ~85% of the pill instead of
+     floating in the middle with dead space on each side. */
+  width: 100%;
   flex: 0 0 auto;
 }
 

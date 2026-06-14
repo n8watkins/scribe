@@ -77,7 +77,7 @@ type PillLayout = "dot" | "bar" | "text";
 
 const LAYOUT_SIZES: Record<PillLayout, { width: number; height: number }> = {
   dot: { width: 58, height: 56 },
-  bar: { width: 200, height: 56 },
+  bar: { width: 158, height: 56 },
   text: { width: 320, height: 80 },
 };
 
