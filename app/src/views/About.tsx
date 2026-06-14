@@ -98,6 +98,8 @@ export function AboutView({
   autoUpdateInfo,
   autoCheckEnabled,
   onToggleAutoCheck,
+  autoInstallEnabled,
+  onToggleAutoInstall,
 }: {
   setActiveView?: (view: ViewName) => void;
   /** Timestamp (ms) of the last successful background update poll, so the
@@ -110,6 +112,10 @@ export function AboutView({
   autoCheckEnabled?: boolean;
   /** Flip the "automatically check for updates" setting. */
   onToggleAutoCheck?: (enabled: boolean) => void;
+  /** Whether updates install silently on launch (the toggle state). */
+  autoInstallEnabled?: boolean;
+  /** Flip the "install updates automatically" setting. */
+  onToggleAutoInstall?: (enabled: boolean) => void;
 }) {
   const [version, setVersion] = useState("...");
   const [dataDir, setDataDir] = useState<string | null>(null);
@@ -284,6 +290,19 @@ export function AboutView({
                 onChange={(enabled) => onToggleAutoCheck?.(enabled)}
               />
             </div>
+            <div className="about-autocheck about-autoinstall">
+              <span>Install updates automatically</span>
+              <Toggle
+                checked={autoInstallEnabled ?? true}
+                disabled={autoCheckEnabled === false}
+                label="Install updates automatically"
+                onChange={(enabled) => onToggleAutoInstall?.(enabled)}
+              />
+            </div>
+            <small className="about-autoinstall-hint">
+              Downloads and installs new versions on launch, with a Scribe screen
+              — no Windows installer popups.
+            </small>
           </div>
 
           <div className="about-block">

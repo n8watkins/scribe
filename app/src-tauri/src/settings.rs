@@ -34,6 +34,14 @@ pub struct AppSettings {
     /// "Check for updates" still works when off.
     #[serde(default = "default_auto_update_check_enabled")]
     pub auto_update_check_enabled: bool,
+    /// Silently download and install a detected update on launch behind a
+    /// Scribe-branded screen (no native Windows installer popups), then
+    /// relaunch. On by default; opt out in About. Only ever runs on launch
+    /// (never mid-session) and only when `auto_update_check_enabled` is also on.
+    /// Any failure falls back to the manual "Install" path — it never blocks
+    /// the app.
+    #[serde(default = "default_auto_install_updates")]
+    pub auto_install_updates: bool,
     /// True once the Scribe Dev flavor has seeded its non-conflicting hotkey
     /// defaults (or the user loaded production defaults), so the one-shot dev
     /// seeding never overrides the binds again.
@@ -194,6 +202,10 @@ fn default_dashboard_hotkey_toggles() -> bool {
 }
 
 fn default_auto_update_check_enabled() -> bool {
+    true
+}
+
+fn default_auto_install_updates() -> bool {
     true
 }
 
@@ -445,6 +457,7 @@ impl Default for AppSettings {
             sounds_enabled: true,
             developer_settings_enabled: false,
             auto_update_check_enabled: true,
+            auto_install_updates: true,
             dev_hotkeys_seeded: false,
             recording_mode: RecordingMode::Both,
             min_recording_ms: 300,
