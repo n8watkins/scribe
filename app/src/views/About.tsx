@@ -90,11 +90,16 @@ const SETUP_STEPS: {
 export function AboutView({
   setActiveView,
   lastUpdateCheck,
+  autoUpdateInfo,
 }: {
   setActiveView?: (view: ViewName) => void;
   /** Timestamp (ms) of the last successful background update poll, so the
    * polling is observable here. */
   lastUpdateCheck?: number | null;
+  /** Latest auto-detected update from the app's background poll. Lets About
+   * always reflect an available update (persisting past a topbar dismiss)
+   * without the user manually checking. */
+  autoUpdateInfo?: UpdateCheckResult | null;
 }) {
   const [version, setVersion] = useState("...");
   const [dataDir, setDataDir] = useState<string | null>(null);
@@ -176,13 +181,18 @@ export function AboutView({
     }
   };
 
+  // Prefer a manual check result if the user just ran one, otherwise fall back
+  // to the app's background-poll result so an available update always shows here
+  // (even after dismissing the topbar chip).
+  const effectiveUpdate = updateResult ?? autoUpdateInfo ?? null;
+
   const updateStatus =
     updateError ??
     installStatus ??
-    (updateResult
-      ? updateResult.updateAvailable
-        ? `Version ${updateResult.latestVersion} is available (you have ${updateResult.currentVersion}).`
-        : `You are on the latest version (${updateResult.currentVersion}).`
+    (effectiveUpdate
+      ? effectiveUpdate.updateAvailable
+        ? `You're on an old version — v${effectiveUpdate.latestVersion} is available (you have v${effectiveUpdate.currentVersion}).`
+        : `You're on the latest version (v${effectiveUpdate.currentVersion}).`
       : "Compare this install against the latest GitHub release.");
 
   const tabs: {
@@ -218,13 +228,13 @@ export function AboutView({
             </div>
             <small>{updateStatus}</small>
             <small className="about-update-poll">
-              Auto-checks every minute
+              Checks automatically
               {lastUpdateCheck
                 ? ` · last checked ${new Date(lastUpdateCheck).toLocaleTimeString()}`
                 : " · waiting for the first check…"}
             </small>
             <div className="about-block-actions">
-              {updateResult?.updateAvailable ? (
+              {effectiveUpdate?.updateAvailable ? (
                 <>
                   <button
                     className="primary-button about-update-button"
@@ -238,7 +248,7 @@ export function AboutView({
                   <button
                     className="secondary-button about-update-button"
                     disabled={installing}
-                    onClick={() => void openReleasePage(updateResult.releaseUrl)}
+                    onClick={() => void openReleasePage(effectiveUpdate.releaseUrl)}
                     type="button"
                   >
                     <ExternalLink aria-hidden="true" size={15} />

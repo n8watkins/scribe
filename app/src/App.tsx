@@ -335,11 +335,11 @@ function App() {
         .catch(() => {});
 
     const timer = window.setTimeout(runCheck, 5000);
-    // TEST CADENCE (0.5.15): poll every 60s so the update polling is easy to
-    // observe. Note: GitHub's unauthenticated API allows ~60 requests/hour, so
-    // checks start failing after roughly an hour at this rate — dial back to a
-    // few minutes once polling is confirmed working.
-    const interval = window.setInterval(runCheck, 60 * 1000);
+    // Poll every 5 minutes (12/hr — well under GitHub's ~60/hr unauthenticated
+    // limit), plus the on-launch and on-focus checks, so a new release surfaces
+    // quickly without risking rate-limit failures. (0.5.15 briefly polled every
+    // 60s to verify polling works.)
+    const interval = window.setInterval(runCheck, 5 * 60 * 1000);
     const onFocus = () => runCheck();
     window.addEventListener("focus", onFocus);
     return () => {
@@ -725,7 +725,7 @@ function App() {
                   type="button"
                 >
                   <Download aria-hidden="true" size={14} />
-                  Update available
+                  Update v{updateInfo.latestVersion}
                 </button>
                 <button
                   className="ghost-button update-chip-link"
@@ -820,6 +820,7 @@ function App() {
               settingsTabId,
               showNotice,
               lastUpdateCheck,
+              updateInfo,
             )
           : null}
         {toast ? <Toast notice={toast} /> : null}
@@ -840,6 +841,7 @@ function renderView(
   settingsTabId: string | null,
   showNotice: (message: string, tone?: ToastNotice["tone"]) => void,
   lastUpdateCheck: number | null,
+  updateInfo: UpdateCheckResult | null,
 ) {
   switch (activeView) {
     case "Transcribe":
@@ -885,6 +887,7 @@ function renderView(
     case "About":
       return (
         <AboutView
+          autoUpdateInfo={updateInfo}
           lastUpdateCheck={lastUpdateCheck}
           setActiveView={setActiveView}
         />

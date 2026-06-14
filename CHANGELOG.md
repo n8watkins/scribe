@@ -4,6 +4,21 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.16 — 2026-06-14
+
+- **Update polling dialed back to every 5 minutes** (the 0.5.15 1-minute test
+  confirmed polling works) — new releases still surface promptly via the
+  on-launch and on-focus checks, without hitting GitHub's rate limit. About's
+  live "last checked" line stays.
+- **Topbar update chip shows the version** — now reads "Update v0.5.x" (download
+  icon) instead of "Update available", so you can tell exactly which version is
+  waiting, even if you're several behind.
+- **About always reflects an available update.** It shows the
+  background-detected update — "You're on an old version — vX is available" —
+  without clicking Check, and keeps showing the Install/View options even after
+  you dismiss the topbar chip, so installing later is always one stop away.
+- **Larger description text** across settings and views for readability.
+
 ## 0.5.15 — 2026-06-14
 
 - **Update polling you can watch (test cadence).** The app now polls for new
