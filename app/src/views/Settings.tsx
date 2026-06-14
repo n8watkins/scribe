@@ -164,6 +164,22 @@ export function SettingsView({
           />
         </SettingRow>
         <SettingRow
+          description="Background color of the floating pill."
+          label="Pill background"
+        >
+          <input
+            aria-label="Pill background color"
+            disabled={actions.savingSettings}
+            onChange={(event) =>
+              actions.updateSettings({
+                pillColorBackground: event.currentTarget.value,
+              })
+            }
+            type="color"
+            value={settings.pillColorBackground}
+          />
+        </SettingRow>
+        <SettingRow
           description="Display completion and failure notices."
           label="Notifications"
         >

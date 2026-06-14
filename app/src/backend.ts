@@ -103,6 +103,7 @@ export type AppSettings = {
   pillY: number | null;
   pillColorNormal: string;
   pillColorNote: string;
+  pillColorBackground: string;
   /** Custom data directory for FUTURE data; null uses the OS app-data dir. */
   dataDir: string | null;
   /** Saved default main-window size (physical pixels); null uses the config default. */

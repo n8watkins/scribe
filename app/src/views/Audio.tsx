@@ -13,7 +13,7 @@ import {
   type RecordingErrorEvent,
 } from "../backend";
 import type { ViewActions } from "../types";
-import { selectedMicrophoneLabel } from "../lib/format";
+import { cleanMicName, selectedMicrophoneLabel } from "../lib/format";
 import { EmptyState, InlineError } from "../components/feedback";
 import { SectionPanel, SettingRow } from "../components/layout";
 import { MsInput, Toggle } from "../components/primitives";
@@ -87,10 +87,15 @@ export function AudioView({
     };
   }, []);
 
-  const selectedMicrophone = selectedMicrophoneLabel(
-    microphones,
-    settings.selectedMicId,
-  );
+  // Show the resolved default device in parens, e.g. "Default input device
+  // (FIFINE Microphone)", and strip the Windows "Microphone (…)" wrapper.
+  const defaultMic = microphones.find((microphone) => microphone.isDefault);
+  const defaultMicLabel = defaultMic
+    ? `Default input device (${cleanMicName(defaultMic.name)})`
+    : "Default input device";
+  const selectedMicrophone = settings.selectedMicId
+    ? cleanMicName(selectedMicrophoneLabel(microphones, settings.selectedMicId))
+    : defaultMicLabel;
 
   const handleRecordTestClip = useCallback(async () => {
     setTestingMic(true);
@@ -189,7 +194,7 @@ export function AudioView({
               }
               value={settings.selectedMicId ?? "default"}
             >
-              <option value="default">Default input device</option>
+              <option value="default">{defaultMicLabel}</option>
               {microphones.map((microphone) => (
                 <option
                   disabled={!microphone.isAvailable}

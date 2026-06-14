@@ -41,6 +41,18 @@ const BOTTOM_MARGIN_PX = 90;
 const DRAG_THRESHOLD_PX = 4;
 
 const BAR_COUNT = 15;
+
+/** Converts a #rrggbb hex to an rgba() string at the given alpha so the pill
+ * background stays slightly translucent over the desktop. Returns the input
+ * unchanged if it is not a 6-digit hex. */
+function hexWithAlpha(hex: string, alpha: number): string {
+  const match = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
+  if (!match) {
+    return hex;
+  }
+  const value = parseInt(match[1], 16);
+  return `rgba(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}, ${alpha})`;
+}
 // Bars never collapse to nothing; silence reads as a low resting line.
 const BAR_MIN_SCALE = 0.14;
 const BAR_ATTACK = 0.45;
@@ -417,6 +429,7 @@ function PillApp() {
   const displayMode = settings?.pillDisplayMode ?? "visualizer_with_text";
   const pillColorNormal = settings?.pillColorNormal ?? "#fbbf24";
   const pillColorNote = settings?.pillColorNote ?? "#38bdf8";
+  const pillBackgroundHex = settings?.pillColorBackground ?? "#0f1e38";
   const pillX = settings?.pillX ?? null;
   const pillY = settings?.pillY ?? null;
   const updatedAt = appState?.updatedAt ?? null;
@@ -652,6 +665,8 @@ function PillApp() {
         {
           "--pill-bar": pillColorNormal,
           "--pill-bar-note": pillColorNote,
+          "--pill-bg": hexWithAlpha(pillBackgroundHex, 0.84),
+          "--pill-bg-hover": hexWithAlpha(pillBackgroundHex, 0.94),
         } as React.CSSProperties
       }
       title={

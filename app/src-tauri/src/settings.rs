@@ -129,6 +129,10 @@ pub struct AppSettings {
     /// color string). Defaults to the shipped cyan.
     #[serde(default = "default_pill_color_note")]
     pub pill_color_note: String,
+    /// Background color of the floating pill (hex; applied with slight
+    /// translucency by the frontend). Defaults to the shipped dark blue.
+    #[serde(default = "default_pill_color_background")]
+    pub pill_color_background: String,
     /// Where Scribe stores FUTURE data (DB, clips, models) when the user picks
     /// a custom folder. None means the OS app-data directory. Changing it does
     /// not migrate existing data.
@@ -170,6 +174,10 @@ fn default_pill_color_normal() -> String {
 
 fn default_pill_color_note() -> String {
     "#38bdf8".to_string()
+}
+
+fn default_pill_color_background() -> String {
+    "#0f1e38".to_string()
 }
 
 fn default_notes_analysis_prompt() -> String {
@@ -401,6 +409,7 @@ impl Default for AppSettings {
             pill_y: None,
             pill_color_normal: default_pill_color_normal(),
             pill_color_note: default_pill_color_note(),
+            pill_color_background: default_pill_color_background(),
             data_dir: None,
             window_width: None,
             window_height: None,

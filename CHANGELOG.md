@@ -4,6 +4,15 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.5 — 2026-06-14
+
+- **Audio:** the "Default input device" option (and the input label) now shows
+  the *resolved* default device in parens — e.g. "Default input device (FIFINE
+  Microphone)" — with the Windows "Microphone (…)" wrapper stripped.
+- **Configurable pill background:** a new "Pill background" color in Settings
+  controls the floating pill's background (applied with slight translucency over
+  the desktop); defaults to the on-brand dark blue.
+
 ## 0.5.4 — 2026-06-13
 
 UI declutter / redesign pass (run partly via parallel agents) plus a few new
