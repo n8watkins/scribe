@@ -1,3 +1,20 @@
+/*
+ * THEME PALETTE
+ * -------------
+ * The high-impact colors used across the main window are indirected through
+ * `--scribe-*` custom properties so a selectable color theme can transform the
+ * app by overriding them on `[data-theme="…"]` (see the theme blocks below).
+ *
+ * The values in `:root` are the DEFAULT ("midnight") theme and MUST equal the
+ * historical hardcoded colors exactly, so the app looks byte-identical when no
+ * theme (or the "midnight" theme) is selected. Coverage is intentionally the
+ * structural + brand colors (backgrounds, sidebar, cards, borders, the cyan/blue
+ * accent, primary/muted text); many one-off accent tints (status pills, danger
+ * reds, the recording waveform gradient) remain hardcoded for v1.
+ *
+ * The floating pill window has its OWN per-user color settings and is out of
+ * scope here — these variables apply to the main window only.
+ */
 :root {
   font-family:
     Inter, "Segoe UI Variable", "Segoe UI", system-ui, -apple-system,
@@ -5,13 +22,189 @@
   font-size: 13px;
   line-height: 1.45;
   font-weight: 400;
-  color: #f8fafc;
-  background: #070b14;
+
+  /* Backgrounds (deepest page tone, panel/card base tone, sidebar tone). */
+  --scribe-bg: #070b14;
+  --scribe-bg-elevated: #0d1320;
+  --scribe-sidebar-bg: rgba(13, 19, 32, 0.86);
+  /* The lighter top stop of the card gradient, layered over --scribe-bg-elevated. */
+  --scribe-card-gradient-top: rgba(23, 32, 51, 0.82);
+  --scribe-card-gradient-bottom: rgba(13, 19, 32, 0.92);
+  /* The two ambient glows in the page background. */
+  --scribe-glow-1: rgba(34, 211, 238, 0.11);
+  --scribe-glow-2: rgba(139, 92, 246, 0.1);
+
+  /* Borders. */
+  --scribe-border: rgba(148, 163, 184, 0.18);
+
+  /* Primary accent family (cyan/blue) + the dark text that sits on it. */
+  --scribe-accent: #22d3ee;
+  --scribe-accent-strong: #38bdf8;
+  --scribe-accent-bright: #67e8f9;
+  --scribe-accent-on: #06111f;
+  /* Translucent accent tints reused for active states / focus rings. */
+  --scribe-accent-soft: rgba(34, 211, 238, 0.24);
+  --scribe-accent-glow: rgba(34, 211, 238, 0.08);
+  --scribe-accent-ring: rgba(34, 211, 238, 0.12);
+
+  /* Text. */
+  --scribe-text: #f8fafc;
+  --scribe-text-secondary: #cbd5e1;
+  --scribe-text-muted: #94a3b8;
+  --scribe-text-faint: #64748b;
+
+  color: var(--scribe-text);
+  background: var(--scribe-bg);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
+}
+
+/*
+ * THEME PRESETS
+ * Each overrides the palette variables only; structure/layout is shared. The
+ * "midnight" block is the explicit form of the :root defaults (kept in sync so
+ * selecting it is identical to the default). Subsequent themes retune the
+ * backgrounds, accent, and text for a distinct, readable look.
+ */
+:root[data-theme="midnight"] {
+  --scribe-bg: #070b14;
+  --scribe-bg-elevated: #0d1320;
+  --scribe-sidebar-bg: rgba(13, 19, 32, 0.86);
+  --scribe-card-gradient-top: rgba(23, 32, 51, 0.82);
+  --scribe-card-gradient-bottom: rgba(13, 19, 32, 0.92);
+  --scribe-glow-1: rgba(34, 211, 238, 0.11);
+  --scribe-glow-2: rgba(139, 92, 246, 0.1);
+  --scribe-border: rgba(148, 163, 184, 0.18);
+  --scribe-accent: #22d3ee;
+  --scribe-accent-strong: #38bdf8;
+  --scribe-accent-bright: #67e8f9;
+  --scribe-accent-on: #06111f;
+  --scribe-accent-soft: rgba(34, 211, 238, 0.24);
+  --scribe-accent-glow: rgba(34, 211, 238, 0.08);
+  --scribe-accent-ring: rgba(34, 211, 238, 0.12);
+  --scribe-text: #f8fafc;
+  --scribe-text-secondary: #cbd5e1;
+  --scribe-text-muted: #94a3b8;
+  --scribe-text-faint: #64748b;
+}
+
+/* Ocean — deeper teal-leaning navy with a brighter sky-blue accent. */
+:root[data-theme="ocean"] {
+  --scribe-bg: #04141c;
+  --scribe-bg-elevated: #0a2230;
+  --scribe-sidebar-bg: rgba(10, 34, 48, 0.88);
+  --scribe-card-gradient-top: rgba(15, 48, 66, 0.82);
+  --scribe-card-gradient-bottom: rgba(8, 28, 40, 0.92);
+  --scribe-glow-1: rgba(45, 212, 191, 0.14);
+  --scribe-glow-2: rgba(56, 189, 248, 0.12);
+  --scribe-border: rgba(125, 211, 252, 0.2);
+  --scribe-accent: #2dd4bf;
+  --scribe-accent-strong: #38bdf8;
+  --scribe-accent-bright: #5eead4;
+  --scribe-accent-on: #042029;
+  --scribe-accent-soft: rgba(45, 212, 191, 0.26);
+  --scribe-accent-glow: rgba(45, 212, 191, 0.1);
+  --scribe-accent-ring: rgba(45, 212, 191, 0.14);
+  --scribe-text: #ecfeff;
+  --scribe-text-secondary: #bae6fd;
+  --scribe-text-muted: #7dd3fc;
+  --scribe-text-faint: #5b8aa3;
+}
+
+/* Slate — neutral, low-saturation graphite with a soft indigo-blue accent. */
+:root[data-theme="slate"] {
+  --scribe-bg: #0b0e14;
+  --scribe-bg-elevated: #151a23;
+  --scribe-sidebar-bg: rgba(21, 26, 35, 0.9);
+  --scribe-card-gradient-top: rgba(33, 40, 54, 0.82);
+  --scribe-card-gradient-bottom: rgba(18, 23, 31, 0.92);
+  --scribe-glow-1: rgba(129, 140, 248, 0.1);
+  --scribe-glow-2: rgba(148, 163, 184, 0.08);
+  --scribe-border: rgba(148, 163, 184, 0.2);
+  --scribe-accent: #818cf8;
+  --scribe-accent-strong: #a5b4fc;
+  --scribe-accent-bright: #c7d2fe;
+  --scribe-accent-on: #0d1020;
+  --scribe-accent-soft: rgba(129, 140, 248, 0.26);
+  --scribe-accent-glow: rgba(129, 140, 248, 0.1);
+  --scribe-accent-ring: rgba(129, 140, 248, 0.14);
+  --scribe-text: #f1f5f9;
+  --scribe-text-secondary: #cbd5e1;
+  --scribe-text-muted: #94a3b8;
+  --scribe-text-faint: #64748b;
+}
+
+/* Emerald — dark forest green ground with a vivid green accent. */
+:root[data-theme="emerald"] {
+  --scribe-bg: #05140d;
+  --scribe-bg-elevated: #0a2117;
+  --scribe-sidebar-bg: rgba(8, 32, 22, 0.88);
+  --scribe-card-gradient-top: rgba(13, 48, 33, 0.82);
+  --scribe-card-gradient-bottom: rgba(7, 28, 19, 0.92);
+  --scribe-glow-1: rgba(52, 211, 153, 0.14);
+  --scribe-glow-2: rgba(16, 185, 129, 0.1);
+  --scribe-border: rgba(110, 231, 183, 0.2);
+  --scribe-accent: #10b981;
+  --scribe-accent-strong: #34d399;
+  --scribe-accent-bright: #6ee7b7;
+  --scribe-accent-on: #03130c;
+  --scribe-accent-soft: rgba(16, 185, 129, 0.26);
+  --scribe-accent-glow: rgba(16, 185, 129, 0.1);
+  --scribe-accent-ring: rgba(16, 185, 129, 0.14);
+  --scribe-text: #ecfdf5;
+  --scribe-text-secondary: #bbf7d0;
+  --scribe-text-muted: #86c5a3;
+  --scribe-text-faint: #5e8a72;
+}
+
+/* Violet — deep plum/indigo ground with a purple accent. */
+:root[data-theme="violet"] {
+  --scribe-bg: #0c0a1a;
+  --scribe-bg-elevated: #181233;
+  --scribe-sidebar-bg: rgba(24, 18, 51, 0.9);
+  --scribe-card-gradient-top: rgba(40, 30, 74, 0.82);
+  --scribe-card-gradient-bottom: rgba(20, 15, 40, 0.92);
+  --scribe-glow-1: rgba(167, 139, 250, 0.14);
+  --scribe-glow-2: rgba(217, 70, 239, 0.1);
+  --scribe-border: rgba(196, 181, 253, 0.2);
+  --scribe-accent: #a78bfa;
+  --scribe-accent-strong: #c084fc;
+  --scribe-accent-bright: #d8b4fe;
+  --scribe-accent-on: #140f29;
+  --scribe-accent-soft: rgba(167, 139, 250, 0.26);
+  --scribe-accent-glow: rgba(167, 139, 250, 0.1);
+  --scribe-accent-ring: rgba(167, 139, 250, 0.14);
+  --scribe-text: #f5f3ff;
+  --scribe-text-secondary: #ddd6fe;
+  --scribe-text-muted: #a99fce;
+  --scribe-text-faint: #786e9e;
+}
+
+/* Daylight — a light theme: near-white surfaces, dark text, blue accent.
+   Contrast tuned so the dark-on-accent buttons stay legible. */
+:root[data-theme="daylight"] {
+  --scribe-bg: #eef2f7;
+  --scribe-bg-elevated: #ffffff;
+  --scribe-sidebar-bg: rgba(248, 250, 252, 0.92);
+  --scribe-card-gradient-top: rgba(255, 255, 255, 0.96);
+  --scribe-card-gradient-bottom: rgba(241, 245, 249, 0.96);
+  --scribe-glow-1: rgba(14, 165, 233, 0.08);
+  --scribe-glow-2: rgba(139, 92, 246, 0.06);
+  --scribe-border: rgba(15, 23, 42, 0.14);
+  --scribe-accent: #0284c7;
+  --scribe-accent-strong: #0369a1;
+  --scribe-accent-bright: #0ea5e9;
+  --scribe-accent-on: #f8fafc;
+  --scribe-accent-soft: rgba(2, 132, 199, 0.22);
+  --scribe-accent-glow: rgba(2, 132, 199, 0.1);
+  --scribe-accent-ring: rgba(2, 132, 199, 0.18);
+  --scribe-text: #0f172a;
+  --scribe-text-secondary: #334155;
+  --scribe-text-muted: #475569;
+  --scribe-text-faint: #64748b;
 }
 
 * {
@@ -23,9 +216,9 @@ body {
   min-width: 780px;
   min-height: 520px;
   background:
-    radial-gradient(circle at top left, rgba(34, 211, 238, 0.11), transparent 28rem),
-    radial-gradient(circle at top right, rgba(139, 92, 246, 0.1), transparent 24rem),
-    #070b14;
+    radial-gradient(circle at top left, var(--scribe-glow-1), transparent 28rem),
+    radial-gradient(circle at top right, var(--scribe-glow-2), transparent 24rem),
+    var(--scribe-bg);
 }
 
 button,
@@ -77,7 +270,7 @@ button {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
-  color: #64748b;
+  color: var(--scribe-text-faint);
   pointer-events: none;
 }
 
@@ -94,7 +287,7 @@ button {
   justify-content: center;
   background: transparent;
   border: none;
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   cursor: pointer;
   transition:
     background 120ms ease,
@@ -103,7 +296,7 @@ button {
 
 .win-ctl:hover {
   background: rgba(148, 163, 184, 0.16);
-  color: #f8fafc;
+  color: var(--scribe-text);
 }
 
 .win-close:hover {
@@ -124,8 +317,8 @@ button {
   flex-direction: column;
   gap: 14px;
   padding: 14px 11px;
-  border-right: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(13, 19, 32, 0.86);
+  border-right: 1px solid var(--scribe-border);
+  background: var(--scribe-sidebar-bg);
   backdrop-filter: blur(20px);
   overflow-y: auto;
 }
@@ -150,7 +343,7 @@ button {
   font-size: 19px;
   font-weight: 800;
   letter-spacing: -0.01em;
-  color: #38bdf8;
+  color: var(--scribe-accent-strong);
 }
 
 .brand-badge {
@@ -158,7 +351,7 @@ button {
   padding: 1px 5px;
   border: 1px solid rgba(34, 211, 238, 0.5);
   border-radius: 4px;
-  color: #67e8f9;
+  color: var(--scribe-accent-bright);
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.08em;
@@ -167,7 +360,7 @@ button {
 
 .brand-subtitle {
   margin-top: 1px;
-  color: #64748b;
+  color: var(--scribe-text-faint);
   font-size: 11px;
 }
 
@@ -182,7 +375,7 @@ button {
   align-items: center;
   gap: 8px;
   padding: 0 9px;
-  color: #cbd5e1;
+  color: var(--scribe-text-secondary);
   background: transparent;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -195,24 +388,24 @@ button {
 }
 
 .nav-icon {
-  color: #64748b;
+  color: var(--scribe-text-faint);
   flex: 0 0 auto;
 }
 
 .nav-item:hover,
 .nav-item.active {
-  color: #f8fafc;
+  color: var(--scribe-text);
   background: rgba(17, 24, 39, 0.9);
-  border-color: rgba(34, 211, 238, 0.24);
+  border-color: var(--scribe-accent-soft);
 }
 
 .nav-item:hover .nav-icon,
 .nav-item.active .nav-icon {
-  color: #22d3ee;
+  color: var(--scribe-accent);
 }
 
 .nav-item.active {
-  box-shadow: 0 0 18px rgba(34, 211, 238, 0.08);
+  box-shadow: 0 0 18px var(--scribe-accent-glow);
 }
 
 .dashboard {
@@ -232,7 +425,7 @@ button {
 
 .topbar h1 {
   margin: 0;
-  color: #f8fafc;
+  color: var(--scribe-text);
   font-size: 15.5px;
   line-height: 1.2;
   font-weight: 780;
@@ -266,8 +459,8 @@ button {
 }
 
 .primary-button {
-  color: #06111f;
-  background: #22d3ee;
+  color: var(--scribe-accent-on);
+  background: var(--scribe-accent);
   border: 1px solid rgba(34, 211, 238, 0.72);
   box-shadow: 0 8px 20px rgba(34, 211, 238, 0.16);
 }
@@ -279,7 +472,7 @@ button {
 }
 
 .ghost-button {
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   background: transparent;
   border: 1px solid rgba(148, 163, 184, 0.16);
 }
@@ -369,11 +562,15 @@ button:disabled {
 .metric-card,
 .buffer-card,
 .panel-card {
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  border: 1px solid var(--scribe-border);
   border-radius: 7px;
   background:
-    linear-gradient(180deg, rgba(23, 32, 51, 0.82), rgba(13, 19, 32, 0.92)),
-    #0d1320;
+    linear-gradient(
+      180deg,
+      var(--scribe-card-gradient-top),
+      var(--scribe-card-gradient-bottom)
+    ),
+    var(--scribe-bg-elevated);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.2);
 }
 
@@ -659,11 +856,15 @@ button:disabled {
   flex-wrap: wrap;
   gap: 6px;
   padding: 5px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  border: 1px solid var(--scribe-border);
   border-radius: 7px;
   background:
-    linear-gradient(180deg, rgba(23, 32, 51, 0.82), rgba(13, 19, 32, 0.92)),
-    #0d1320;
+    linear-gradient(
+      180deg,
+      var(--scribe-card-gradient-top),
+      var(--scribe-card-gradient-bottom)
+    ),
+    var(--scribe-bg-elevated);
 }
 
 .settings-tab {
@@ -691,8 +892,8 @@ button:disabled {
 }
 
 .settings-tab.is-active {
-  color: #06111f;
-  background: #22d3ee;
+  color: var(--scribe-accent-on);
+  background: var(--scribe-accent);
   border-color: rgba(34, 211, 238, 0.72);
   box-shadow: 0 8px 20px rgba(34, 211, 238, 0.16);
 }
@@ -745,9 +946,9 @@ select,
 textarea {
   min-height: 28px;
   width: 100%;
-  color: #f8fafc;
-  background: #0d1320;
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  color: var(--scribe-text);
+  background: var(--scribe-bg-elevated);
+  border: 1px solid var(--scribe-border);
   border-radius: 6px;
   padding: 0 8px;
   outline: none;
@@ -760,7 +961,7 @@ textarea {
 input:focus,
 select:focus {
   border-color: rgba(34, 211, 238, 0.72);
-  box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.12);
+  box-shadow: 0 0 0 2px var(--scribe-accent-ring);
 }
 
 .search-field input {
@@ -781,12 +982,12 @@ select {
       50% / 5px 5px no-repeat,
     linear-gradient(135deg, #94a3b8 50%, transparent 50%) calc(100% - 10px)
       50% / 5px 5px no-repeat,
-    #0d1320;
+    var(--scribe-bg-elevated);
 }
 
 select option {
-  color: #f8fafc;
-  background: #0d1320;
+  color: var(--scribe-text);
+  background: var(--scribe-bg-elevated);
 }
 
 /* The open dropdown list highlighted/selected option defaults to a
@@ -2020,6 +2221,93 @@ kbd {
   color: #f8fafc;
   font-size: 16px;
   line-height: 1;
+}
+
+/* Themes view: a responsive grid of theme cards. Each card previews a theme's
+   palette with a row of color chips, then its name + description. The active
+   card is outlined with the accent and shows a check. */
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.theme-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 10px;
+  text-align: left;
+  color: var(--scribe-text);
+  border: 1px solid var(--scribe-border);
+  border-radius: 8px;
+  background: rgba(7, 11, 20, 0.32);
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.theme-card:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: var(--scribe-accent-soft);
+}
+
+.theme-card.is-active {
+  border-color: var(--scribe-accent);
+  box-shadow: 0 0 0 1px var(--scribe-accent), 0 0 18px var(--scribe-accent-glow);
+}
+
+.theme-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.theme-swatches {
+  display: flex;
+  gap: 5px;
+}
+
+.theme-chip {
+  width: 28px;
+  height: 28px;
+  flex: 1 1 0;
+  max-width: 40px;
+  border-radius: 6px;
+  /* A hairline so a near-white chip stays visible against a light card. */
+  border: 1px solid rgba(148, 163, 184, 0.28);
+}
+
+.theme-card-body {
+  display: grid;
+  gap: 2px;
+}
+
+.theme-card-body strong {
+  color: var(--scribe-text);
+  font-size: 13px;
+}
+
+.theme-card-body small {
+  color: var(--scribe-text-muted);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.theme-card-check {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  color: var(--scribe-accent-on);
+  background: var(--scribe-accent);
 }
 
 @media (max-width: 880px) {

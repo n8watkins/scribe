@@ -21,6 +21,7 @@ import {
   Minus,
   MonitorCog,
   NotebookPen,
+  Palette,
   Radio,
   Settings as SettingsIcon,
   ShieldCheck,
@@ -76,6 +77,7 @@ import { DataPrivacyView } from "./views/DataPrivacy";
 import { HotkeysView } from "./views/Hotkeys";
 import { ModelsView } from "./views/Models";
 import { AudioView } from "./views/Audio";
+import { ThemesView } from "./views/Themes";
 import { AboutView } from "./views/About";
 import { DeveloperView } from "./views/Developer";
 import { SyncView } from "./views/Sync";
@@ -93,6 +95,7 @@ const navItems: { label: ViewName; Icon: LucideIcon }[] = [
   { label: "Hotkeys", Icon: Keyboard },
   { label: "Models", Icon: Database },
   { label: "Audio", Icon: Radio },
+  { label: "Themes", Icon: Palette },
   { label: "About", Icon: Info },
 ];
 
@@ -219,6 +222,15 @@ function App() {
     notificationsEnabledRef.current =
       dashboardData?.settings.notificationsEnabled ?? false;
   }, [dashboardData?.settings.notificationsEnabled]);
+
+  // Apply the selected color theme to the document root. The CSS palette is keyed
+  // off `[data-theme]` (see App.css). Default to "midnight" — which equals the
+  // historical look — so there's no flash before settings load and an unknown or
+  // blank stored value still renders the standard theme.
+  useEffect(() => {
+    const theme = dashboardData?.settings.theme || "midnight";
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [dashboardData?.settings.theme]);
 
   // If the Developer panel is turned off while it is the active view, fall back
   // to the Dashboard so the user isn't stranded on a now-hidden page.
@@ -833,6 +845,8 @@ function renderView(
       return <ModelsView actions={actions} settings={data.settings} />;
     case "Audio":
       return <AudioView actions={actions} settings={data.settings} />;
+    case "Themes":
+      return <ThemesView actions={actions} settings={data.settings} />;
     case "Developer":
       return (
         <DeveloperView
