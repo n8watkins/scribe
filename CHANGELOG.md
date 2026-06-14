@@ -4,6 +4,28 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.12 — 2026-06-14
+
+- **AI dictation cleanup.** Optional local-LLM polish of each dictation before
+  it's saved/pasted — strips filler ("um/uh/like"), fixes punctuation & casing,
+  light formatting — with modes (Standard / Email / Chat / Code / Custom). Off by
+  default; **non-blocking with a raw-text fallback**, so a slow or offline LLM
+  never stalls or blanks your dictation. Settings → App & output.
+- **Selected-text transform — speak (or type) an instruction to rewrite text in
+  place.** Highlight text in any app, tap the Transform Selection hotkey
+  (Ctrl+Alt+R), say "make this concise" / "translate to Spanish" / "fix grammar"
+  (or tap again / pause to finish), and Scribe rewrites the selection where it
+  sits. A typed-instruction panel on the Dashboard is the alternative. Uses the
+  same local LLM as Notes.
+- **Sync: back up everything + export.** "Back up all transcripts" to Google
+  Drive is now real (a dated "Scribe Transcripts" folder, separate from notes),
+  and you can **export** transcripts to Markdown / CSV / JSON from the Sync view
+  (no account needed).
+- **Separate auto-pruning for notes.** Notes now have their own retention
+  window, independent of transcripts — defaults to **Forever** (notes are
+  deliberate saves; you opt in). Data & Privacy → "History & retention" shows the
+  transcript and note retentions side by side.
+
 ## 0.5.11 — 2026-06-14
 
 - **Fixed: clearing transcript history (and the retention auto-delete) was also
