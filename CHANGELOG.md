@@ -4,6 +4,21 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.21 — 2026-06-14
+
+- **Multilingual transcription.** Added multilingual Whisper models
+  (tiny/base/small/medium) alongside the English-only ones, a **language picker**
+  (~29 languages + Auto-detect), and a **Translate → English** toggle (speak any
+  language, get English out). Models are labeled **Multilingual** vs
+  **English-only**, with a non-blocking nudge if your chosen language needs a
+  multilingual model. English stays the default, so existing setups are
+  unchanged. (New multilingual models download over HTTPS without a checksum —
+  upstream no longer publishes a usable one.)
+- **Light theme.** "Daylight" is back and **properly readable** now — the theme
+  palette was finished (contrast-checked across surfaces and text), so it's a
+  real light mode. 6 themes total in the Themes view; the 5 dark ones are
+  unchanged.
+
 ## 0.5.20 — 2026-06-14
 
 Code-review fixes for the 0.5.19 auto-update + themes:
