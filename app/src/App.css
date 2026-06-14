@@ -1803,9 +1803,19 @@ code {
 .meter {
   height: 8px;
   overflow: hidden;
-  margin: 9px 0 11px;
+  /* The Input panel stacks this in a `settings-list` grid (gap handles
+     vertical rhythm), so only a small top nudge under the waveform is needed. */
+  margin: 2px 0 0;
   border-radius: 999px;
   background: rgba(148, 163, 184, 0.12);
+}
+
+/* Selected-microphone caption under the "Input" panel heading. */
+.audio-input-name {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .meter div {

@@ -27,6 +27,7 @@ export type ViewActions = {
   recordingBusy: boolean;
   pasteLastTranscript: () => Promise<void>;
   pastingLastTranscript: boolean;
+  openSettings: (tabId?: string) => void;
   refresh: () => Promise<void>;
   saveError: string | null;
   savingSettings: boolean;

@@ -135,6 +135,7 @@ const viewTitles: Record<ViewName, { eyebrow: string; title: string }> = {
 
 function App() {
   const [activeView, setActiveView] = useState<ViewName>("Dashboard");
+  const [settingsTabId, setSettingsTabId] = useState<string | null>(null);
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(
     null,
   );
@@ -522,6 +523,11 @@ function App() {
     }
   }, [refresh]);
 
+  const openSettings = useCallback((tabId?: string) => {
+    setSettingsTabId(tabId ?? null);
+    setActiveView("Settings");
+  }, []);
+
   const actions: ViewActions = {
     cancelRecording: handleCancelRecording,
     clearLastTranscript: handleClearLastTranscript,
@@ -529,6 +535,7 @@ function App() {
     copyLastTranscript: handleCopyLastTranscript,
     copyingLastTranscript,
     recordingBusy,
+    openSettings,
     pasteLastTranscript: handlePasteLastTranscript,
     pastingLastTranscript,
     refresh,
@@ -650,6 +657,7 @@ function App() {
               microphones,
               models,
               liveTranscript,
+              settingsTabId,
             )
           : null}
         {toast ? <Toast notice={toast} /> : null}
@@ -666,6 +674,7 @@ function renderView(
   microphones: MicrophoneInfo[] | null,
   models: ModelInfo[] | null,
   liveTranscript: PartialTranscriptEvent | null,
+  settingsTabId: string | null,
 ) {
   switch (activeView) {
     case "Transcribe":
@@ -683,7 +692,13 @@ function renderView(
     case "Stats":
       return <StatsView stats={data.stats} />;
     case "Settings":
-      return <SettingsView actions={actions} settings={data.settings} />;
+      return (
+        <SettingsView
+          actions={actions}
+          initialTabId={settingsTabId}
+          settings={data.settings}
+        />
+      );
     case "Data & Privacy":
       return <DataPrivacyView actions={actions} settings={data.settings} />;
     case "Hotkeys":

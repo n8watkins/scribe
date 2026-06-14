@@ -126,12 +126,8 @@ export function AudioView({
 
   return (
     <section className="split-grid">
-      <article className="buffer-card">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Input</p>
-            <h2>{selectedMicrophone}</h2>
-          </div>
+      <SectionPanel
+        icon={
           <span
             className={
               microphonesError
@@ -147,7 +143,12 @@ export function AudioView({
                 ? "Scanning"
                 : "Ready"}
           </span>
-        </div>
+        }
+        title="Input"
+      >
+        <p className="muted audio-input-name" title={selectedMicrophone}>
+          {selectedMicrophone}
+        </p>
 
         {microphonesError ? (
           <InlineError message={microphonesError} onRetry={loadMicrophones} />
@@ -215,7 +216,7 @@ export function AudioView({
         {testClipError ? (
           <p className="field-error">{testClipError}</p>
         ) : null}
-      </article>
+      </SectionPanel>
 
       <div className="stack">
         <SectionPanel title="Audio processing">
@@ -334,13 +335,14 @@ export function AudioView({
             />
           </SettingRow>
         </SectionPanel>
-        <article className="panel-card">
-          <div className="section-heading compact">
-            <h2>Device health</h2>
+        <SectionPanel
+          icon={
             <span className={microphonesError ? "pill error" : "pill ready"}>
               {microphonesError ? "Unavailable" : "Available"}
             </span>
-          </div>
+          }
+          title="Device health"
+        >
           {microphonesLoading ? (
             <div className="pending-panel">
               <RefreshCw aria-hidden="true" size={16} />
@@ -380,7 +382,7 @@ export function AudioView({
               ))}
             </div>
           ) : null}
-        </article>
+        </SectionPanel>
       </div>
     </section>
   );

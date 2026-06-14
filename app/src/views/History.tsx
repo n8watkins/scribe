@@ -5,6 +5,7 @@ import {
   Layers,
   RefreshCw,
   Search,
+  Settings as SettingsIcon,
   Trash2,
 } from "lucide-react";
 import {
@@ -391,6 +392,14 @@ export function HistoryView({
               {clearingHistory ? "Clearing..." : "Clear all"}
             </button>
           )}
+          <button
+            className="ghost-button"
+            onClick={() => actions.openSettings(notesOnly ? "notes" : "output")}
+            type="button"
+          >
+            <SettingsIcon aria-hidden="true" size={15} />
+            Settings
+          </button>
         </div>
         <div className="toolbar-row filter-row">
           <label className="filter-field">

@@ -34,9 +34,11 @@ import { Toggle } from "../components/primitives";
 
 export function SettingsView({
   actions,
+  initialTabId,
   settings,
 }: {
   actions: ViewActions;
+  initialTabId?: string | null;
   settings: AppSettings;
 }) {
   const tabs: {
@@ -310,8 +312,8 @@ export function SettingsView({
       ),
     },
     {
-      id: "notes-analysis",
-      title: "Notes analysis",
+      id: "notes",
+      title: "Notes",
       icon: <Sparkles aria-hidden="true" size={16} />,
       render: () => (
       <SectionPanel
@@ -386,8 +388,22 @@ export function SettingsView({
     },
   ];
 
-  const [activeTab, setActiveTab] = useState(tabs[0].id);
+  const [activeTab, setActiveTab] = useState(
+    initialTabId && tabs.some((tab) => tab.id === initialTabId)
+      ? initialTabId
+      : tabs[0].id,
+  );
   const active = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
+
+  // Deep-links from other views (e.g. the Notes/History "Settings" buttons)
+  // pass a target tab id; select it whenever it changes to a known tab.
+  useEffect(() => {
+    if (initialTabId && tabs.some((tab) => tab.id === initialTabId)) {
+      setActiveTab(initialTabId);
+    }
+    // `tabs` is rebuilt every render; key the effect on the id alone.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTabId]);
 
   return (
     <section className="view-grid">
