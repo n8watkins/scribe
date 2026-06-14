@@ -1,5 +1,14 @@
-import { useState } from "react";
-import { AlertCircle, Copy, Download, Eraser, Mic, Play, Square } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import {
+  AlertCircle,
+  Copy,
+  Download,
+  Eraser,
+  FileAudio,
+  Mic,
+  Play,
+  Square,
+} from "lucide-react";
 import {
   commandErrorMessage,
   saveTextFile,
@@ -19,14 +28,90 @@ import {
   recordingStageTitle,
 } from "../lib/format";
 import { StatePill, Toggle } from "../components/primitives";
-import { SettingRow } from "../components/layout";
 import {
   LastTranscriptCard,
   LiveTranscript,
   Waveform,
 } from "../components/transcript";
+import "./transcribe.css";
 
 export function TranscribeView({
+  actions,
+  data,
+  liveTranscript,
+}: {
+  actions: ViewActions;
+  data: DashboardData;
+  liveTranscript: PartialTranscriptEvent | null;
+}) {
+  const tabs: {
+    id: string;
+    title: string;
+    icon: ReactNode;
+    render: () => ReactNode;
+  }[] = [
+    {
+      id: "record",
+      title: "Record",
+      icon: <Mic aria-hidden="true" size={16} />,
+      render: () => (
+        <RecordTab
+          actions={actions}
+          data={data}
+          liveTranscript={liveTranscript}
+        />
+      ),
+    },
+    {
+      id: "file",
+      title: "Transcribe a file",
+      icon: <FileAudio aria-hidden="true" size={16} />,
+      render: () => <FileTranscribeCard />,
+    },
+  ];
+
+  const [activeTab, setActiveTab] = useState(tabs[0].id);
+  const active = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
+
+  return (
+    <section className="view-grid">
+      <div
+        className="settings-tabs transcribe-tabs"
+        role="tablist"
+        aria-label="Transcribe sections"
+      >
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            id={`transcribe-tab-${tab.id}`}
+            aria-controls={`transcribe-panel-${tab.id}`}
+            aria-selected={tab.id === active.id}
+            className={`settings-tab${tab.id === active.id ? " is-active" : ""}`}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            {tab.icon}
+            <span>{tab.title}</span>
+          </button>
+        ))}
+      </div>
+      <div
+        className="settings-tabpanel transcribe-tabpanel"
+        role="tabpanel"
+        id={`transcribe-panel-${active.id}`}
+        aria-labelledby={`transcribe-tab-${active.id}`}
+      >
+        {active.render()}
+      </div>
+    </section>
+  );
+}
+
+/** "Record" tab: live push-to-talk capture, output behavior toggles, and the
+ * last-transcript buffer — the original Transcribe content, unchanged in
+ * behavior. */
+function RecordTab({
   actions,
   data,
   liveTranscript,
@@ -44,7 +129,6 @@ export function TranscribeView({
       appState.status === "Transcribing");
 
   return (
-    <>
     <section className="split-grid">
       <article className="buffer-card">
         <div className="section-heading">
@@ -107,12 +191,10 @@ export function TranscribeView({
           <div className="section-heading compact">
             <h2>Output behavior</h2>
           </div>
-          <SettingRow
-            description="On: your transcript is pasted automatically when you stop talking. Off: it's saved to the buffer — paste it anywhere with the Paste-last hotkey."
-            label="Auto-insert after dictation"
-          >
-            <Toggle
+          <div className="settings-list">
+            <OutputModeRow
               checked={isAutoInsert(settings.outputMode)}
+              description={`On: your transcript is pasted automatically when you stop talking. Off: it's saved to the buffer — paste it anywhere with ${formatHotkey(settings.hotkeys.pasteLastTranscript)}.`}
               disabled={actions.savingSettings}
               label="Auto-insert after dictation"
               onChange={(on) =>
@@ -124,13 +206,9 @@ export function TranscribeView({
                 })
               }
             />
-          </SettingRow>
-          <SettingRow
-            description="On: Scribe borrows your clipboard for the paste, then restores what you had — Ctrl+V keeps working with your stuff. Off: it leaves the transcript on your clipboard so you paste it yourself with any bind (Ctrl+V / Shift+Insert), replacing your previous clipboard."
-            label="Keep my clipboard"
-          >
-            <Toggle
+            <OutputModeRow
               checked={isKeepClipboard(settings.outputMode)}
+              description="On: Scribe borrows your clipboard for the paste, then restores what you had — Ctrl+V keeps working with your stuff. Off: it leaves the transcript on your clipboard so you paste it yourself with any bind (Ctrl+V / Shift+Insert), replacing your previous clipboard."
               disabled={actions.savingSettings}
               label="Keep my clipboard"
               onChange={(on) =>
@@ -142,28 +220,72 @@ export function TranscribeView({
                 })
               }
             />
-          </SettingRow>
+          </div>
         </article>
 
-        <LastTranscriptCard
-          clearing={actions.clearingLastTranscript}
-          compact
-          copying={actions.copyingLastTranscript}
-          onClear={actions.clearLastTranscript}
-          onCopy={actions.copyLastTranscript}
-          onPaste={actions.pasteLastTranscript}
-          pasting={actions.pastingLastTranscript}
-          settings={settings}
-          transcript={lastTranscript}
-        />
+        <div className="transcribe-buffer-scroll">
+          <LastTranscriptCard
+            clearing={actions.clearingLastTranscript}
+            compact
+            copying={actions.copyingLastTranscript}
+            onClear={actions.clearLastTranscript}
+            onCopy={actions.copyLastTranscript}
+            onPaste={actions.pasteLastTranscript}
+            pasting={actions.pastingLastTranscript}
+            settings={settings}
+            transcript={lastTranscript}
+          />
+        </div>
       </div>
     </section>
-
-    <FileTranscribeCard />
-    </>
   );
 }
 
+/** Compact, full-width output-mode row: label + toggle on one line, a
+ * single-line clamped description below with an inline "see more" expander so
+ * the verbose copy doesn't waste the wide right column. */
+function OutputModeRow({
+  checked,
+  description,
+  disabled,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  description: string;
+  disabled?: boolean;
+  label: string;
+  onChange: (checked: boolean) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="output-mode-row">
+      <div className="output-mode-head">
+        <strong>{label}</strong>
+        <Toggle
+          checked={checked}
+          disabled={disabled}
+          label={label}
+          onChange={onChange}
+        />
+      </div>
+      <p className={`output-mode-desc${expanded ? "" : " is-clamped"}`}>
+        {description}
+      </p>
+      <button
+        className="output-mode-more"
+        onClick={() => setExpanded((value) => !value)}
+        type="button"
+      >
+        {expanded ? "See less" : "See more"}
+      </button>
+    </div>
+  );
+}
+
+/** "Transcribe a file" tab: transcribe an existing audio/video file locally.
+ * Owns its own local state and talks to the backend directly. */
 function FileTranscribeCard() {
   const [path, setPath] = useState("");
   const [busy, setBusy] = useState(false);
@@ -228,7 +350,10 @@ function FileTranscribeCard() {
   return (
     <article className="panel-card file-transcribe-card">
       <div className="section-heading compact">
-        <h2>Transcribe a file</h2>
+        <h2>
+          <FileAudio aria-hidden="true" size={16} />
+          Transcribe a file
+        </h2>
         {result ? (
           <span className="pill preserve">
             Done in {formatMsReadable(result.latencyMs)}
@@ -278,6 +403,7 @@ function FileTranscribeCard() {
         <>
           <textarea
             aria-label="File transcription result"
+            className="transcribe-file-result"
             readOnly
             rows={6}
             value={result.text}

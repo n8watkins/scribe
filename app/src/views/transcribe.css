@@ -1,0 +1,99 @@
+/* Transcribe view styles (Batch D).
+
+   Scoped to the Transcribe view only. The top sub-nav reuses the shared
+   .settings-tabs / .settings-tab / .settings-tabpanel look so it reads
+   identically to the Settings view's tabs; everything else here is local. */
+
+/* ---- Top sub-nav (mirrors Settings, but the Transcribe view isn't laid out
+   on .view-grid, so the tabs span the full single column here). ---- */
+.transcribe-tabs {
+  margin-bottom: 8px;
+}
+
+/* The Transcribe view is a plain stacked column, not a 2-col grid, so the
+   shared .settings-tabs/.settings-tabpanel `grid-column: 1 / -1` is a no-op
+   that's harmless here; the tabpanel just holds the active tab's content. */
+.transcribe-tabpanel {
+  display: block;
+}
+
+/* ---- Last-transcript buffer: cap height and scroll inside the card instead
+   of letting a long transcript grow it. The text stays selectable/copyable. ---- */
+.transcribe-buffer-scroll .transcript-text.compact-text {
+  /* ~7 lines at the compact line-height, then scroll. Overrides the shared
+     min-height so a short transcript still stays compact. */
+  max-height: calc(7 * 1.5em + 20px);
+  min-height: 0;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  /* Keep the scrollbar off the text. */
+  scrollbar-gutter: stable;
+}
+
+/* ---- Compact, full-width output-mode rows. Replaces the shared SettingRow's
+   right-aligned narrow column with a full-width layout: label + toggle on one
+   line, a one-line clamped description below with an inline "see more". ---- */
+.output-mode-row {
+  display: grid;
+  gap: 4px;
+  padding: 8px 9px;
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 6px;
+  background: rgba(7, 11, 20, 0.32);
+}
+
+.output-mode-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.output-mode-head strong {
+  color: #f8fafc;
+  font-size: 12px;
+}
+
+.output-mode-desc {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 11px;
+  line-height: 1.4;
+  /* Full width of the wide card; clamp to a single line until expanded. */
+  overflow-wrap: anywhere;
+}
+
+.output-mode-desc.is-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Inline "see more / see less" affordance, styled like the existing
+   .text-button / .see-more-button used elsewhere. */
+.output-mode-more {
+  align-self: flex-start;
+  margin-top: 1px;
+  padding: 0;
+  color: #67e8f9;
+  background: transparent;
+  border: 0;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.output-mode-more:hover {
+  color: #22d3ee;
+  text-decoration: underline;
+}
+
+/* ---- File transcription result: cap the readonly result height and scroll,
+   matching the buffer treatment. ---- */
+.transcribe-file-result {
+  max-height: 220px;
+  overflow-y: auto;
+  resize: vertical;
+}
