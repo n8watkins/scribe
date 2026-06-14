@@ -29,14 +29,23 @@ import type { ViewActions } from "../types";
 import { EmptyState, InlineError } from "../components/feedback";
 import { TranscriptRow } from "../components/transcript";
 
-/// Given a `YYYY-MM-DD` date-input value, returns the next day as `YYYY-MM-DD`
-/// (UTC). Used to build the backend's exclusive `to` bound: the start of the day
-/// after the selected end date, which is a clean half-open upper bound that
-/// still includes everything dictated on the selected day.
-function nextDayIso(date: string): string {
-  const next = new Date(`${date}T00:00:00+00:00`);
-  next.setUTCDate(next.getUTCDate() + 1);
-  return next.toISOString().slice(0, 10);
+/// Converts a `YYYY-MM-DD` date-input value into the UTC instant for LOCAL
+/// midnight `dayOffset` days later. The date picker reports a calendar day in
+/// the user's own timezone, and the backend compares against `created_at` (a UTC
+/// instant) with an EXCLUSIVE upper bound — so `from` uses offset 0 (start of
+/// the selected local day) and `to` uses offset 1 (start of the next local day),
+/// a clean half-open range that includes everything dictated on the local day.
+function localDayBound(date: string, dayOffset: number): string | undefined {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!match) {
+    return undefined;
+  }
+  const [, year, month, day] = match;
+  return new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day) + dayOffset,
+  ).toISOString();
 }
 
 export function HistoryView({
@@ -71,14 +80,13 @@ export function HistoryView({
   const { settings } = data;
   const pageSize = 25;
 
-  // Convert the From/To date inputs into the RFC3339 bounds the backend
-  // compares against `created_at` (chrono `to_rfc3339()`, +00:00). `from` is
-  // inclusive (day start); `to` is the backend's EXCLUSIVE upper bound, so we
-  // pass the START of the day AFTER `toDate` — a clean half-open end that
-  // includes everything on `toDate` without the old `T23:59:59.999` boundary
-  // dropping sub-millisecond-later rows.
-  const fromBound = fromDate ? `${fromDate}T00:00:00+00:00` : undefined;
-  const toBound = toDate ? `${nextDayIso(toDate)}T00:00:00+00:00` : undefined;
+  // Convert the From/To date inputs into the UTC instants the backend compares
+  // against `created_at`. The picker is in the user's LOCAL timezone, so `from`
+  // is local midnight of `fromDate` and `to` is local midnight of the day AFTER
+  // `toDate` — the backend's EXCLUSIVE upper bound, a clean half-open range that
+  // includes everything dictated on the local day. Each is omitted when empty.
+  const fromBound = localDayBound(fromDate, 0);
+  const toBound = localDayBound(toDate, 1);
 
   const loadHistory = useCallback(
     async (nextOffset: number) => {
@@ -123,6 +131,15 @@ export function HistoryView({
     [query, notesOnly, fromBound, toBound, sort],
   );
 
+  // Always points at the latest `loadHistory` so effects that must NOT re-run
+  // when the query/filters change (and rebuild `loadHistory`) can still invoke
+  // the current implementation without listing it as a dependency.
+  const loadHistoryRef = useRef(loadHistory);
+  loadHistoryRef.current = loadHistory;
+
+  // The single trigger for query/filter changes: `loadHistory`'s identity
+  // changes whenever query/from/to/sort change, so this debounced page-0 load
+  // covers all of them (including each search keystroke) in one place.
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void loadHistory(0);
@@ -137,9 +154,15 @@ export function HistoryView({
     setSelectedIds([]);
   }, [query, fromDate, toDate, sort, notesOnly]);
 
+  // Reload when fresh data arrives (a new transcript/dictation) or the page
+  // changes — but NOT when query/filters change: those flow through the
+  // debounced page-0 effect above, so we call via the ref and omit
+  // `loadHistory` from deps to avoid a second, undebounced per-keystroke query
+  // (which also raced and could read a stale `offset`).
   useEffect(() => {
-    void loadHistory(offset);
-  }, [data.lastTranscript?.id, data.stats.dictationsToday, loadHistory, offset]);
+    void loadHistoryRef.current(offset);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.lastTranscript?.id, data.stats.dictationsToday, offset]);
 
   const refreshAfterMutation = useCallback(async () => {
     await actions.refresh();
@@ -204,10 +227,14 @@ export function HistoryView({
       try {
         const base64 = await getTranscriptAudio(id);
         const audio = new Audio(`data:audio/wav;base64,${base64}`);
-        audio.onended = () => {
+        // Reset on both natural end and decode/playback failure so a bad clip
+        // doesn't strand the row showing "Stop" with no way to recover.
+        const finish = () => {
           playbackRef.current = null;
           setPlayingId(null);
         };
+        audio.onended = finish;
+        audio.onerror = finish;
         playbackRef.current = audio;
         setPlayingId(id);
         await audio.play();

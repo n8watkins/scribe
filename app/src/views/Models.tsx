@@ -122,6 +122,18 @@ export function ModelsView({
 
       try {
         await action();
+        // Drop any live progress entry for this model so a stale terminal
+        // status (e.g. a prior "downloaded") can't shadow the fresh
+        // `model.status` via `effectiveStatus` — e.g. a just-deleted model must
+        // fall back to `not_downloaded` rather than keep showing Delete.
+        setProgressByModel((current) => {
+          if (!(modelId in current)) {
+            return current;
+          }
+          const next = { ...current };
+          delete next[modelId];
+          return next;
+        });
         await loadModels();
         await actions.refresh();
       } catch (error) {

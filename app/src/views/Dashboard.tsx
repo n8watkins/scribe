@@ -9,6 +9,7 @@ import {
 import type { DashboardData, MicrophoneInfo, ModelInfo } from "../backend";
 import type { ViewActions, ViewName } from "../types";
 import {
+  isAutoInsert,
   isSelectedModelReady,
   microphoneDisplayName,
   statusCardValue,
@@ -83,7 +84,7 @@ export function DashboardView({
           Icon={Clipboard}
           label="Auto-insert"
           onAction={() => setActiveView("Settings")}
-          value={settings.outputMode === "auto_paste" ? "On" : "Off"}
+          value={isAutoInsert(settings.outputMode) ? "On" : "Off"}
         />
       </section>
 

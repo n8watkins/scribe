@@ -7,6 +7,7 @@ import {
   listMicrophones,
   recordTestClip,
   type AppSettings,
+  type AppStateSnapshot,
   type AudioLevelEvent,
   type MicrophoneInfo,
   type RecordingErrorEvent,
@@ -60,6 +61,14 @@ export function AudioView({
         listen<AudioLevelEvent>("audio://level", (event) => {
           setAudioLevel(Math.round(event.payload.level * 100));
         }),
+        // Level events stop arriving once recording ends, which would otherwise
+        // freeze the meter at its last value; zero it whenever we leave the
+        // Recording state so the bar returns to rest.
+        listen<AppStateSnapshot>("scribe:app-state", (event) => {
+          if (event.payload.status !== "Recording") {
+            setAudioLevel(0);
+          }
+        }),
         listen<RecordingErrorEvent>("audio://recording-error", (event) => {
           setMicrophonesError(event.payload.message);
         }),
@@ -104,21 +113,28 @@ export function AudioView({
     setPlayingTestClip(true);
     setTestClipError(null);
 
+    let url: string | null = null;
     try {
       const base64Wav = await getTestClipAudio();
       const bytes = Uint8Array.from(atob(base64Wav), (char) =>
         char.charCodeAt(0),
       );
-      const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
-      const audio = new Audio(url);
+      url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+      const objectUrl = url;
+      const audio = new Audio(objectUrl);
       const finish = () => {
-        URL.revokeObjectURL(url);
+        URL.revokeObjectURL(objectUrl);
         setPlayingTestClip(false);
       };
       audio.onended = finish;
       audio.onerror = finish;
       await audio.play();
     } catch (error) {
+      // A rejected play() promise won't fire `onerror`, so revoke here too to
+      // avoid leaking the object URL.
+      if (url !== null) {
+        URL.revokeObjectURL(url);
+      }
       setTestClipError(commandErrorMessage(error));
       setPlayingTestClip(false);
     }

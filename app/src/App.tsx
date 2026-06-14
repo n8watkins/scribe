@@ -161,6 +161,7 @@ function App() {
   const [liveTranscript, setLiveTranscript] =
     useState<PartialTranscriptEvent | null>(null);
   const soundsEnabledRef = useRef(false);
+  const notificationsEnabledRef = useRef(false);
   const heading = viewTitles[activeView];
 
   // The Developer panel is opt-in (Settings -> App behavior). Insert it just
@@ -180,6 +181,11 @@ function App() {
     soundsEnabledRef.current = dashboardData?.settings.soundsEnabled ?? false;
   }, [dashboardData?.settings.soundsEnabled]);
 
+  useEffect(() => {
+    notificationsEnabledRef.current =
+      dashboardData?.settings.notificationsEnabled ?? false;
+  }, [dashboardData?.settings.notificationsEnabled]);
+
   // If the Developer panel is turned off while it is the active view, fall back
   // to the Dashboard so the user isn't stranded on a now-hidden page.
   useEffect(() => {
@@ -188,15 +194,30 @@ function App() {
     }
   }, [activeView, developerEnabled]);
 
+  // A deep-link tab (from `openSettings(tab)`) is one-shot: once the user leaves
+  // Settings, clear it so re-entering Settings via the sidebar opens the default
+  // (last) tab instead of reopening the stale deep-linked one. Guarded on the
+  // current value so this can't loop.
+  useEffect(() => {
+    if (activeView !== "Settings" && settingsTabId !== null) {
+      setSettingsTabId(null);
+    }
+  }, [activeView, settingsTabId]);
+
+  // Read `notificationsEnabled` from a ref (kept in sync above) rather than from
+  // settings directly, so toggling notifications doesn't change this callback's
+  // identity — otherwise the main event-listener effect (which depends on
+  // `showNotice`) would tear down and re-subscribe every listener on each
+  // toggle. The callback stays stable for the lifetime of the component.
   const showNotice = useCallback(
     (message: string, tone: ToastNotice["tone"] = "info") => {
-      if (!dashboardData?.settings.notificationsEnabled) {
+      if (!notificationsEnabledRef.current) {
         return;
       }
 
       setToast({ id: Date.now(), message, tone });
     },
-    [dashboardData?.settings.notificationsEnabled],
+    [],
   );
 
   const refresh = useCallback(async () => {
