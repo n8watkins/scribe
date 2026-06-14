@@ -411,6 +411,41 @@ pub fn rebind_hotkey(
     hotkeys::status(&app, &settings.hotkeys)
 }
 
+/// Sets whether a single-shot bind (Toggle, Paste, Open Dashboard) acts on key
+/// press or release. Rejected for Hold-to-Talk, which is push-to-talk. Re-runs
+/// registration so the toggle watcher picks up the new edge, then persists.
+#[tauri::command]
+pub fn set_hotkey_trigger(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, BackendState>,
+    action: String,
+    trigger: crate::settings::TriggerEdge,
+) -> Result<HotkeyStatus, CommandError> {
+    let action = hotkeys::HotkeyAction::parse(&action)?;
+    let mut settings = state.db()?.get_settings()?;
+    let previous_hotkeys = settings.hotkeys.clone();
+    let mut next_hotkeys = previous_hotkeys.clone();
+
+    if !action.set_trigger(&mut next_hotkeys, trigger) {
+        return Err(CommandError::new(
+            "invalid_hotkey_trigger",
+            "Hold-to-Talk is push-to-talk; it has no press/release option.",
+        ));
+    }
+
+    hotkeys::validate_hotkeys(&next_hotkeys)?;
+    let failures = hotkeys::replace_hotkeys(&app, &previous_hotkeys, &next_hotkeys)?;
+
+    settings.hotkeys = next_hotkeys.clone();
+    if let Err(error) = state.db()?.save_settings(&settings) {
+        let _ = hotkeys::replace_hotkeys(&app, &next_hotkeys, &previous_hotkeys);
+        return Err(error);
+    }
+
+    hotkeys::emit_registration_failures(&app, &failures);
+    hotkeys::status(&app, &settings.hotkeys)
+}
+
 #[tauri::command]
 pub fn reset_hotkeys_to_defaults(
     app: tauri::AppHandle,

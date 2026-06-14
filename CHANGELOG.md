@@ -4,6 +4,18 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.3 — 2026-06-13
+
+- **Per-bind press/release trigger.** Toggle Dictation, Paste Last Transcript,
+  and Open Dashboard each get an "On press / On release" switch in Hotkeys
+  settings — pick which key edge fires the action. Hold-to-Talk is unchanged
+  (it is push-to-talk and inherently uses both edges). Defaults preserve today's
+  behavior: Toggle on release, Paste and Open Dashboard on press, so existing
+  installs see no change until they flip a switch.
+- Choosing **press** for Toggle automatically disables the hold-`~`+Q note
+  chord (which needs the key held — i.e. release mode). The Toggle hint explains
+  this right where you flip the edge, instead of failing silently.
+
 ## 0.5.2 — 2026-06-13
 
 - **Paste-last fires on key-press, not on release.** The clipboard paste no

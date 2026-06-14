@@ -236,6 +236,25 @@ pub enum PasteMethod {
     ClipboardPaste,
 }
 
+/// Which key edge a single-shot hotkey acts on. Hold-to-Talk is excluded — it
+/// is push-to-talk and inherently uses both edges (press starts, release stops).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerEdge {
+    /// Fire as soon as the chord is pressed down.
+    #[default]
+    Press,
+    /// Fire when the chord is released. Required for the Toggle key's
+    /// hold-and-tap-Q note chord, which needs the key to stay held to arm Q.
+    Release,
+}
+
+fn default_toggle_trigger() -> TriggerEdge {
+    // Toggle fires on release by default so the note chord (hold the toggle
+    // key, tap Q) keeps working, matching the shipped Backquote behavior.
+    TriggerEdge::Release
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HotkeySettings {
@@ -243,6 +262,16 @@ pub struct HotkeySettings {
     pub toggle_dictation: String,
     pub paste_last_transcript: String,
     pub open_dashboard: String,
+    /// Which edge Toggle Dictation acts on. Release (default) keeps the
+    /// hold-and-tap-Q note chord; Press fires immediately and disables it.
+    #[serde(default = "default_toggle_trigger")]
+    pub toggle_dictation_trigger: TriggerEdge,
+    /// Which edge Paste Last Transcript acts on (default Press).
+    #[serde(default)]
+    pub paste_last_transcript_trigger: TriggerEdge,
+    /// Which edge Open Dashboard acts on (default Press).
+    #[serde(default)]
+    pub open_dashboard_trigger: TriggerEdge,
 }
 
 impl Default for HotkeySettings {
@@ -252,6 +281,9 @@ impl Default for HotkeySettings {
             toggle_dictation: "Backquote".to_string(),
             paste_last_transcript: "Ctrl+Alt+V".to_string(),
             open_dashboard: "Ctrl+Alt+F".to_string(),
+            toggle_dictation_trigger: TriggerEdge::Release,
+            paste_last_transcript_trigger: TriggerEdge::Press,
+            open_dashboard_trigger: TriggerEdge::Press,
         }
     }
 }
@@ -289,6 +321,9 @@ impl HotkeySettings {
             toggle_dictation: "Ctrl+Shift+Backquote".to_string(),
             paste_last_transcript: "Ctrl+Alt+Shift+V".to_string(),
             open_dashboard: "Ctrl+Alt+Shift+F".to_string(),
+            toggle_dictation_trigger: TriggerEdge::Release,
+            paste_last_transcript_trigger: TriggerEdge::Press,
+            open_dashboard_trigger: TriggerEdge::Press,
         }
     }
 }
@@ -632,6 +667,7 @@ mod tests {
                 toggle_dictation: "Backquote".to_string(),
                 paste_last_transcript: "Ctrl+Shift+V".to_string(),
                 open_dashboard: "Ctrl+Alt+V".to_string(),
+                ..Default::default()
             },
             ..AppSettings::default()
         };
@@ -656,6 +692,7 @@ mod tests {
                 toggle_dictation: "F9".to_string(),
                 paste_last_transcript: "Ctrl+Shift+V".to_string(),
                 open_dashboard: "Ctrl+Alt+V".to_string(),
+                ..Default::default()
             },
             ..AppSettings::default()
         };
@@ -742,6 +779,54 @@ mod tests {
             settings.pill_display_mode,
             PillDisplayMode::VisualizerWithText
         );
+        // Trigger fields are absent from this legacy hotkeys JSON, so the serde
+        // defaults preserve today's behavior: toggle on release (note chord),
+        // paste/dashboard on press.
+        assert_eq!(
+            settings.hotkeys.toggle_dictation_trigger,
+            TriggerEdge::Release
+        );
+        assert_eq!(
+            settings.hotkeys.paste_last_transcript_trigger,
+            TriggerEdge::Press
+        );
+        assert_eq!(settings.hotkeys.open_dashboard_trigger, TriggerEdge::Press);
+    }
+
+    #[test]
+    fn hotkey_trigger_defaults_preserve_current_behavior() {
+        let defaults = HotkeySettings::default();
+        assert_eq!(defaults.toggle_dictation_trigger, TriggerEdge::Release);
+        assert_eq!(defaults.paste_last_transcript_trigger, TriggerEdge::Press);
+        assert_eq!(defaults.open_dashboard_trigger, TriggerEdge::Press);
+
+        let dev = HotkeySettings::dev_defaults();
+        assert_eq!(dev.toggle_dictation_trigger, TriggerEdge::Release);
+        assert_eq!(dev.paste_last_transcript_trigger, TriggerEdge::Press);
+        assert_eq!(dev.open_dashboard_trigger, TriggerEdge::Press);
+    }
+
+    #[test]
+    fn explicit_triggers_round_trip_through_json() {
+        let mut settings = AppSettings::default();
+        settings.hotkeys.toggle_dictation_trigger = TriggerEdge::Press;
+        settings.hotkeys.paste_last_transcript_trigger = TriggerEdge::Release;
+
+        let json = serde_json::to_string(&settings).unwrap();
+        // snake_case rename: enum variants serialize lowercase.
+        assert!(json.contains("\"toggleDictationTrigger\":\"press\""));
+        assert!(json.contains("\"pasteLastTranscriptTrigger\":\"release\""));
+
+        let restored: AppSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            restored.hotkeys.toggle_dictation_trigger,
+            TriggerEdge::Press
+        );
+        assert_eq!(
+            restored.hotkeys.paste_last_transcript_trigger,
+            TriggerEdge::Release
+        );
+        assert_eq!(restored.hotkeys.open_dashboard_trigger, TriggerEdge::Press);
     }
 
     #[test]
@@ -817,6 +902,7 @@ mod tests {
                 toggle_dictation: "Backquote".to_string(),
                 paste_last_transcript: "Ctrl+Alt+V".to_string(),
                 open_dashboard: "Ctrl+Alt+D".to_string(),
+                ..Default::default()
             },
             ..AppSettings::default()
         };
@@ -835,6 +921,7 @@ mod tests {
                 toggle_dictation: "F9".to_string(),
                 paste_last_transcript: "Ctrl+Alt+V".to_string(),
                 open_dashboard: "Ctrl+Alt+D".to_string(),
+                ..Default::default()
             },
             ..AppSettings::default()
         };
@@ -852,6 +939,7 @@ mod tests {
             toggle_dictation: "Ctrl+Win+D".to_string(),
             paste_last_transcript: "Ctrl+Alt+V".to_string(),
             open_dashboard: "Ctrl+Win+H".to_string(),
+            ..Default::default()
         };
 
         assert!(hotkeys.migrate_legacy_defaults());
@@ -865,6 +953,7 @@ mod tests {
             toggle_dictation: "Ctrl+Win+D".to_string(),
             paste_last_transcript: "Ctrl+Alt+V".to_string(),
             open_dashboard: "Ctrl+Alt+J".to_string(),
+            ..Default::default()
         };
         let before = hotkeys.clone();
 

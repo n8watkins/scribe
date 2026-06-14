@@ -1384,6 +1384,13 @@ textarea {
   gap: 1px;
 }
 
+/* Per-bind press/release switch, stacked under the action's hint. Capped so
+   the two segments stay compact instead of stretching the whole column. */
+.trigger-segments {
+  margin-top: 6px;
+  max-width: 176px;
+}
+
 .hotkey-error {
   color: #fca5a5 !important;
 }

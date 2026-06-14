@@ -15,7 +15,7 @@ use tauri_plugin_global_shortcut::Code;
 
 use crate::{
     app_state::AppStatus, audio, commands::BackendState, error::CommandError,
-    settings::HotkeySettings, tray,
+    settings::{HotkeySettings, TriggerEdge}, tray,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -71,6 +71,38 @@ impl HotkeyAction {
             Self::OpenDashboard => hotkeys.open_dashboard = shortcut,
         }
     }
+
+    /// The key edge this action acts on, or None for Hold-to-Talk, which is
+    /// push-to-talk and inherently uses both edges (press starts, release
+    /// stops) rather than a single configurable edge.
+    pub fn trigger(self, hotkeys: &HotkeySettings) -> Option<TriggerEdge> {
+        match self {
+            Self::HoldToTalk => None,
+            Self::ToggleDictation => Some(hotkeys.toggle_dictation_trigger),
+            Self::PasteLastTranscript => Some(hotkeys.paste_last_transcript_trigger),
+            Self::OpenDashboard => Some(hotkeys.open_dashboard_trigger),
+        }
+    }
+
+    /// Sets this action's trigger edge. Returns false for Hold-to-Talk, which
+    /// is push-to-talk and has no single-edge option, without modifying anything.
+    pub fn set_trigger(self, hotkeys: &mut HotkeySettings, edge: TriggerEdge) -> bool {
+        match self {
+            Self::HoldToTalk => false,
+            Self::ToggleDictation => {
+                hotkeys.toggle_dictation_trigger = edge;
+                true
+            }
+            Self::PasteLastTranscript => {
+                hotkeys.paste_last_transcript_trigger = edge;
+                true
+            }
+            Self::OpenDashboard => {
+                hotkeys.open_dashboard_trigger = edge;
+                true
+            }
+        }
+    }
 }
 
 const HOTKEY_ACTIONS: [HotkeyAction; 4] = [
@@ -84,6 +116,10 @@ const HOTKEY_ACTIONS: [HotkeyAction; 4] = [
 #[serde(rename_all = "camelCase")]
 pub struct HotkeyStatus {
     pub bindings: Vec<HotkeyBindingStatus>,
+    /// True when the hold-toggle-key + tap-Q note chord is currently usable:
+    /// Toggle acts on release AND its bind is a pollable single key. The UI
+    /// uses this to explain why the note chord is on or off.
+    pub note_chord_active: bool,
     pub hold_release_verification_required: bool,
     pub windows_fallback_note: String,
 }
@@ -94,6 +130,8 @@ pub struct HotkeyBindingStatus {
     pub action: HotkeyAction,
     pub shortcut: String,
     pub normalized_shortcut: Option<String>,
+    /// Which key edge this bind acts on, or None for Hold-to-Talk (a hold).
+    pub trigger: Option<TriggerEdge>,
     pub registered: bool,
     pub error: Option<String>,
 }
@@ -205,6 +243,9 @@ struct ChordWatcherHandle {
 pub struct HotkeyRuntimeState {
     actions_by_id: Mutex<HashMap<u32, HotkeyAction>>,
     pressed_actions: Mutex<HashSet<HotkeyAction>>,
+    /// Per-action trigger edge, cached from settings at registration time so
+    /// per-keystroke dispatch never has to read the database.
+    triggers: Mutex<HashMap<HotkeyAction, TriggerEdge>>,
     chord_bindings: Mutex<Vec<(ModifierChord, HotkeyAction)>>,
     chord_watcher: Mutex<Option<ChordWatcherHandle>>,
     registration_errors: Mutex<HashMap<HotkeyAction, String>>,
@@ -246,6 +287,22 @@ impl HotkeyRuntimeState {
             .lock()
             .ok()
             .and_then(|bindings| bindings.get(&shortcut.id()).copied())
+    }
+
+    fn store_triggers(&self, triggers: HashMap<HotkeyAction, TriggerEdge>) {
+        if let Ok(mut stored) = self.triggers.lock() {
+            *stored = triggers;
+        }
+    }
+
+    /// The cached trigger edge for `action`, defaulting to Press if absent
+    /// (Hold-to-Talk has no entry and never calls this).
+    fn trigger_for(&self, action: HotkeyAction) -> TriggerEdge {
+        self.triggers
+            .lock()
+            .ok()
+            .and_then(|triggers| triggers.get(&action).copied())
+            .unwrap_or(TriggerEdge::Press)
     }
 
     fn mark_pressed_once(&self, action: HotkeyAction) -> bool {
@@ -379,22 +436,23 @@ pub fn handle_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEven
             if !runtime.mark_pressed_once(action) {
                 return;
             }
-            handle_pressed(app, action);
+            handle_press_edge(app, action);
         }
         ShortcutState::Released => {
             if !runtime.mark_released_once(action) {
                 return;
             }
-            handle_released(app, action);
+            handle_release_edge(app, action);
         }
     }
 }
 
-/// Stops any running toggle-key watcher and starts a fresh one when the
-/// toggle binding maps to a pollable virtual key. The watcher detects both
-/// edges: key down arms the Q note chord, key up runs the toggle (unless Q
-/// fired during the hold).
-fn configure_toggle_watcher(app: &AppHandle, vk: Option<i32>) {
+/// Stops any running toggle-key watcher and starts a fresh one when the toggle
+/// binding maps to a pollable virtual key (needed in both modes — modifier-less
+/// keys deliver no plugin events). In Release mode the watcher arms the Q note
+/// chord on key down and runs the toggle on key up (unless Q fired). In Press
+/// mode it runs the toggle on key down and skips the note chord entirely.
+fn configure_toggle_watcher(app: &AppHandle, vk: Option<i32>, trigger: TriggerEdge) {
     let Some(runtime) = app.try_state::<HotkeyRuntimeState>() else {
         return;
     };
@@ -414,14 +472,18 @@ fn configure_toggle_watcher(app: &AppHandle, vk: Option<i32>) {
         let app_handle = app.clone();
         let spawned = std::thread::Builder::new()
             .name("scribe-toggle-watcher".to_string())
-            .spawn(move || run_toggle_watcher(app_handle, vk, thread_stop));
+            .spawn(move || run_toggle_watcher(app_handle, vk, trigger, thread_stop));
         match spawned {
             Ok(thread) => {
                 runtime.toggle_watched.store(true, Ordering::SeqCst);
                 if let Ok(mut guard) = runtime.toggle_watcher.lock() {
                     *guard = Some(ChordWatcherHandle { stop, thread });
                 }
-                log::info!("Toggle key watcher active (vk 0x{:X})", vk);
+                log::info!(
+                    "Toggle key watcher active (vk 0x{:X}, trigger {:?})",
+                    vk,
+                    trigger
+                );
             }
             Err(error) => {
                 log::error!("Failed to start toggle key watcher: {}", error);
@@ -431,31 +493,37 @@ fn configure_toggle_watcher(app: &AppHandle, vk: Option<i32>) {
 
     #[cfg(not(windows))]
     {
-        let _ = vk;
+        let _ = (vk, trigger);
     }
 }
 
 #[cfg(windows)]
-fn run_toggle_watcher(app: AppHandle, vk: i32, stop: Arc<AtomicBool>) {
+fn run_toggle_watcher(app: AppHandle, vk: i32, trigger: TriggerEdge, stop: Arc<AtomicBool>) {
     use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 
     let mut was_down = false;
     while !stop.load(Ordering::SeqCst) {
         let down = (unsafe { GetAsyncKeyState(vk) } as u16) & 0x8000 != 0;
         if down && !was_down {
-            on_toggle_key_down(&app);
-        } else if !down && was_down {
+            match trigger {
+                TriggerEdge::Release => on_toggle_key_down(&app),
+                TriggerEdge::Press => on_toggle_key_press(&app),
+            }
+        } else if !down && was_down && trigger == TriggerEdge::Release {
             on_toggle_key_up(&app);
         }
         was_down = down;
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    // Never leave a Q grab behind when the watcher is being replaced.
-    if was_down {
+    // Never leave a Q grab behind when the watcher is being replaced (only the
+    // Release path ever arms it).
+    if was_down && trigger == TriggerEdge::Release {
         disarm_note_chord(&app);
     }
 }
 
+/// Release-mode key down: arm the Q note chord and signal the frontend. The
+/// actual toggle waits for key up so a hold-and-tap-Q makes a note instead.
 #[cfg(windows)]
 fn on_toggle_key_down(app: &AppHandle) {
     let Some(runtime) = app.try_state::<HotkeyRuntimeState>() else {
@@ -479,6 +547,19 @@ fn on_toggle_key_up(app: &AppHandle) {
         if let Err(error) = toggle_dictation(app) {
             audio::emit_recording_error(app, error);
         }
+    }
+}
+
+/// Press-mode key down: toggle immediately. No note chord (there is no hold
+/// window when the toggle fires on press).
+#[cfg(windows)]
+fn on_toggle_key_press(app: &AppHandle) {
+    let _ = app.emit(
+        "scribe:hotkey-action",
+        HotkeyAction::ToggleDictation.event_name(),
+    );
+    if let Err(error) = toggle_dictation(app) {
+        audio::emit_recording_error(app, error);
     }
 }
 
@@ -650,20 +731,28 @@ fn register_hotkey_set(
         }
     }
 
+    let triggers = HOTKEY_ACTIONS
+        .into_iter()
+        .filter_map(|action| action.trigger(hotkeys).map(|edge| (action, edge)))
+        .collect::<HashMap<_, _>>();
+
     if let Some(runtime) = app.try_state::<HotkeyRuntimeState>() {
         runtime.replace_bindings(actions_by_id);
         runtime.store_registration_errors(&failures);
+        runtime.store_triggers(triggers);
     }
 
     configure_chord_watcher(app, chord_bindings);
 
-    // The toggle key gets a native press/release watcher whenever its
-    // binding maps to a pollable virtual key (see configure_toggle_watcher).
+    // The toggle key gets a native press/release watcher whenever its binding
+    // maps to a pollable virtual key (see configure_toggle_watcher) — needed in
+    // both modes, since modifier-less keys deliver no plugin events at all. The
+    // watcher fires on the edge the toggle trigger selects.
     let toggle_vk = match parse_shortcut(HotkeyAction::ToggleDictation.shortcut(hotkeys)) {
         Ok(ParsedShortcut::Plugin(shortcut)) => toggle_vk_for(shortcut),
         _ => None,
     };
-    configure_toggle_watcher(app, toggle_vk);
+    configure_toggle_watcher(app, toggle_vk, hotkeys.toggle_dictation_trigger);
 
     failures
 }
@@ -772,6 +861,7 @@ pub fn status(app: &AppHandle, hotkeys: &HotkeySettings) -> Result<HotkeyStatus,
             action,
             shortcut: shortcut.to_string(),
             normalized_shortcut,
+            trigger: action.trigger(hotkeys),
             registered,
             error,
         });
@@ -779,6 +869,7 @@ pub fn status(app: &AppHandle, hotkeys: &HotkeySettings) -> Result<HotkeyStatus,
 
     Ok(HotkeyStatus {
         bindings,
+        note_chord_active: note_chord_active(hotkeys),
         hold_release_verification_required: true,
         windows_fallback_note:
             "Manual Windows verification is still required for hold-to-talk release events. If releases are unreliable, use a Windows-only SetWindowsHookExW(WH_KEYBOARD_LL) fallback."
@@ -786,19 +877,71 @@ pub fn status(app: &AppHandle, hotkeys: &HotkeySettings) -> Result<HotkeyStatus,
     })
 }
 
-fn handle_pressed(app: &AppHandle, action: HotkeyAction) {
+/// The hold-toggle-key + tap-Q note chord works only when the toggle acts on
+/// release (so the key can be held) AND its bind is a pollable single key (the
+/// watcher that arms Q polls a virtual key). Always false off Windows, where
+/// `toggle_vk_for` returns None.
+fn note_chord_active(hotkeys: &HotkeySettings) -> bool {
+    hotkeys.toggle_dictation_trigger == TriggerEdge::Release
+        && matches!(
+            parse_shortcut(HotkeyAction::ToggleDictation.shortcut(hotkeys)),
+            Ok(ParsedShortcut::Plugin(shortcut)) if toggle_vk_for(shortcut).is_some()
+        )
+}
+
+/// Press edge of a binding. Hold-to-talk always starts here (it is push-to-talk
+/// and uses both edges); single-shot actions fire only when their configured
+/// trigger is Press. Reached by the plugin shortcut handler and the
+/// modifier-chord watcher.
+fn handle_press_edge(app: &AppHandle, action: HotkeyAction) {
+    // Hold-to-talk never auto-stops on silence: the user is still holding the
+    // key, and a pause mid-thought must not cut them off.
+    if action == HotkeyAction::HoldToTalk {
+        let _ = app.emit("scribe:hotkey-action", action.event_name());
+        if let Err(error) = tray::start_dictation(app, false) {
+            audio::emit_recording_error(app, error);
+        }
+        return;
+    }
+
+    if trigger_of(app, action) == TriggerEdge::Press {
+        run_action(app, action);
+    }
+}
+
+/// Release edge of a binding. Hold-to-talk always stops here; single-shot
+/// actions fire only when their configured trigger is Release.
+fn handle_release_edge(app: &AppHandle, action: HotkeyAction) {
+    if action == HotkeyAction::HoldToTalk {
+        if let Err(error) = tray::stop_dictation(app) {
+            audio::emit_recording_error(app, error);
+        }
+        return;
+    }
+
+    if trigger_of(app, action) == TriggerEdge::Release {
+        run_action(app, action);
+    }
+}
+
+/// The cached trigger edge for a single-shot action.
+fn trigger_of(app: &AppHandle, action: HotkeyAction) -> TriggerEdge {
+    app.try_state::<HotkeyRuntimeState>()
+        .map(|runtime| runtime.trigger_for(action))
+        .unwrap_or(TriggerEdge::Press)
+}
+
+/// Performs a single-shot action (toggle / paste / open dashboard) and emits
+/// the frontend hotkey-action event. Called on whichever edge the action's
+/// trigger selects. Hold-to-talk is not a single-shot action and is ignored.
+fn run_action(app: &AppHandle, action: HotkeyAction) {
     let _ = app.emit("scribe:hotkey-action", action.event_name());
 
-    // Hold-to-talk and toggle both always work, regardless of the (legacy)
-    // recordingMode setting; gating either one made the other hotkey a
-    // silent no-op. Hold-to-talk never auto-stops on silence: the user is
-    // still holding the key, and a pause mid-thought must not cut them off.
     let result = match action {
-        HotkeyAction::HoldToTalk => tray::start_dictation(app, false),
-        // Reached by the modifier-chord watcher and by toggle keys the
-        // release watcher cannot poll; plugin-shortcut toggles go through
-        // begin_toggle_hold instead (toggle on release + the ~+Q note chord).
         HotkeyAction::ToggleDictation => {
+            // Clear the pressed mark so a toggle bound to a key that delivers
+            // no Released event (modifier-less keys, modifier chords) still
+            // re-fires on the next press.
             if let Some(runtime) = app.try_state::<HotkeyRuntimeState>() {
                 runtime.mark_released_once(HotkeyAction::ToggleDictation);
             }
@@ -818,23 +961,11 @@ fn handle_pressed(app: &AppHandle, action: HotkeyAction) {
                 tray::open_dashboard(app, None)
             }
         }
+        HotkeyAction::HoldToTalk => return,
     };
 
     if let Err(error) = result {
         audio::emit_recording_error(app, error);
-    }
-}
-
-fn handle_released(app: &AppHandle, action: HotkeyAction) {
-    match action {
-        HotkeyAction::HoldToTalk => {
-            if let Err(error) = tray::stop_dictation(app) {
-                audio::emit_recording_error(app, error);
-            }
-        }
-        // ToggleDictation releases are handled by the native watcher;
-        // RegisterHotKey-based shortcuts never deliver Released here anyway.
-        _ => {}
     }
 }
 
@@ -1003,7 +1134,7 @@ fn dispatch_chord_pressed(app: &AppHandle, action: HotkeyAction) {
     if !runtime.mark_pressed_once(action) {
         return;
     }
-    handle_pressed(app, action);
+    handle_press_edge(app, action);
 }
 
 #[cfg(windows)]
@@ -1014,7 +1145,7 @@ fn dispatch_chord_released(app: &AppHandle, action: HotkeyAction) {
     if !runtime.mark_released_once(action) {
         return;
     }
-    handle_released(app, action);
+    handle_release_edge(app, action);
 }
 
 #[cfg(windows)]
@@ -1048,7 +1179,7 @@ mod windows_chord {
         Idle,
         /// Chord is down; firing at the deadline unless another key shows up.
         Arming(Instant),
-        /// handle_pressed has fired; waiting for a modifier release.
+        /// The press edge has fired; waiting for a modifier release.
         Active,
         /// Aborted or finished; waiting for all chord modifiers to be
         /// released before re-arming.
@@ -1297,6 +1428,7 @@ mod tests {
             toggle_dictation: "Ctrl+Win+Space".to_string(),
             paste_last_transcript: "Ctrl+Alt+V".to_string(),
             open_dashboard: "Ctrl+Win+H".to_string(),
+            ..Default::default()
         };
 
         assert!(validate_hotkeys(&hotkeys).is_err());
@@ -1309,6 +1441,7 @@ mod tests {
             toggle_dictation: "shift+control".to_string(),
             paste_last_transcript: "Ctrl+Alt+V".to_string(),
             open_dashboard: "Ctrl+Alt+D".to_string(),
+            ..Default::default()
         };
 
         assert!(validate_hotkeys(&hotkeys).is_err());
@@ -1321,6 +1454,7 @@ mod tests {
             toggle_dictation: "Ctrl+Shift+T".to_string(),
             paste_last_transcript: "Ctrl+Alt+V".to_string(),
             open_dashboard: "Ctrl+Alt+D".to_string(),
+            ..Default::default()
         };
 
         assert!(validate_hotkeys(&hotkeys).is_ok());

@@ -5,10 +5,12 @@ import {
   getHotkeyStatus,
   rebindHotkey,
   resetHotkeysToDefaults,
+  setHotkeyTrigger,
   type AppSettings,
   type HotkeyAction,
   type HotkeyBinding,
   type HotkeyStatus,
+  type TriggerEdge,
 } from "../backend";
 import type { ViewActions } from "../types";
 import { formatHotkey, hotkeyRows } from "../lib/format";
@@ -23,10 +25,26 @@ const hotkeyActionLabels: Record<string, string> = {
 
 const hotkeyActionHints: Record<string, string> = {
   holdToTalk: "Hold to record, release to transcribe",
-  toggleDictation: "Acts on release; hold it and tap Q to dictate a note",
+  toggleDictation: "Toggle dictation on and off",
   pasteLastTranscript: "Insert the Last Transcript Buffer",
   openDashboard: "Bring up this dashboard",
 };
+
+const triggerLabels: Record<TriggerEdge, string> = {
+  press: "On press",
+  release: "On release",
+};
+
+/** The Toggle hint explains the note-chord trade-off right where the user
+ * flips the edge: it is only available while Toggle acts on release. */
+function toggleHint(trigger: TriggerEdge | null, noteChordActive: boolean): string {
+  if (trigger === "press") {
+    return "Acts on press — the hold-and-tap-Q note chord is off in this mode";
+  }
+  return noteChordActive
+    ? "Acts on release — hold it and tap Q to dictate a note"
+    : "Acts on release";
+}
 
 const hotkeyModifierOrder = ["Ctrl", "Shift", "Alt", "Super"] as const;
 
@@ -116,6 +134,35 @@ export function HotkeysView({
 
       try {
         setStatus(await rebindHotkey(action, shortcut));
+        await refreshSettings();
+      } catch (error) {
+        setRowErrors((current) => ({
+          ...current,
+          [action]: commandErrorMessage(error),
+        }));
+        try {
+          setStatus(await getHotkeyStatus());
+        } catch {
+          // Keep the previous status if the refresh fails.
+        }
+      } finally {
+        setHotkeyBusy(false);
+      }
+    },
+    [refreshSettings],
+  );
+
+  const applyTrigger = useCallback(
+    async (action: HotkeyAction, trigger: TriggerEdge) => {
+      setHotkeyBusy(true);
+      setRowErrors((current) => {
+        const next = { ...current };
+        delete next[action];
+        return next;
+      });
+
+      try {
+        setStatus(await setHotkeyTrigger(action, trigger));
         await refreshSettings();
       } catch (error) {
         setRowErrors((current) => ({
@@ -243,15 +290,31 @@ export function HotkeysView({
     }
   }, [refreshSettings]);
 
+  const triggerFromSettings = (action: string): TriggerEdge | null => {
+    switch (action) {
+      case "toggleDictation":
+        return settings.hotkeys.toggleDictationTrigger;
+      case "pasteLastTranscript":
+        return settings.hotkeys.pasteLastTranscriptTrigger;
+      case "openDashboard":
+        return settings.hotkeys.openDashboardTrigger;
+      default:
+        return null;
+    }
+  };
+
   const bindings: HotkeyBinding[] =
     status?.bindings ??
     hotkeyRows(settings).map((row) => ({
       action: row.action,
       shortcut: row.value,
       normalizedShortcut: null,
+      trigger: triggerFromSettings(row.action),
       registered: false,
       error: null,
     }));
+
+  const noteChordActive = status?.noteChordActive ?? false;
 
   return (
     <section className="view-grid">
@@ -302,9 +365,38 @@ export function HotkeysView({
                       <span className="hotkey-error">{rowError}</span>
                     ) : (
                       <span>
-                        {hotkeyActionHints[binding.action] ?? "Global shortcut"}
+                        {binding.action === "toggleDictation"
+                          ? toggleHint(binding.trigger, noteChordActive)
+                          : (hotkeyActionHints[binding.action] ??
+                            "Global shortcut")}
                       </span>
                     )}
+                    {binding.trigger ? (
+                      <div
+                        className="trigger-segments segmented-control"
+                        role="group"
+                        aria-label="Trigger edge"
+                      >
+                        {(["press", "release"] as const).map((edge) => (
+                          <button
+                            key={edge}
+                            type="button"
+                            className={
+                              binding.trigger === edge ? "active-segment" : ""
+                            }
+                            disabled={hotkeyBusy || captureAction !== null}
+                            onClick={() =>
+                              void applyTrigger(
+                                binding.action as HotkeyAction,
+                                edge,
+                              )
+                            }
+                          >
+                            {triggerLabels[edge]}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                   <kbd>
                     {isCapturing

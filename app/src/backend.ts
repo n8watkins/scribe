@@ -39,11 +39,18 @@ export type PasteMethod =
 export type HistoryRetentionDays = 7 | 30 | 90 | 365 | null;
 export type PillDisplayMode = "dot" | "visualizer" | "visualizer_with_text";
 
+/** Which key edge a single-shot bind acts on. Hold-to-Talk has no trigger —
+ * it is push-to-talk and uses both edges (press starts, release stops). */
+export type TriggerEdge = "press" | "release";
+
 export type HotkeySettings = {
   holdToTalk: string;
   toggleDictation: string;
   pasteLastTranscript: string;
   openDashboard: string;
+  toggleDictationTrigger: TriggerEdge;
+  pasteLastTranscriptTrigger: TriggerEdge;
+  openDashboardTrigger: TriggerEdge;
 };
 
 /** Deterministic post-transcription replacement: whenever `from` is spoken,
@@ -305,12 +312,16 @@ export type HotkeyBinding = {
   action: string;
   shortcut: string;
   normalizedShortcut: string | null;
+  /** Which key edge this bind acts on, or null for Hold-to-Talk (a hold). */
+  trigger: TriggerEdge | null;
   registered: boolean;
   error: string | null;
 };
 
 export type HotkeyStatus = {
   bindings: HotkeyBinding[];
+  /** Whether the hold-toggle-key + tap-Q note chord is currently usable. */
+  noteChordActive: boolean;
   holdReleaseVerificationRequired: boolean;
   windowsFallbackNote: string;
 };
@@ -628,6 +639,15 @@ export function rebindHotkey(
   shortcut: string,
 ): Promise<HotkeyStatus> {
   return invoke("rebind_hotkey", { action, shortcut });
+}
+
+/** Sets whether a single-shot bind acts on key press or release. Rejected by
+ * the backend for Hold-to-Talk, which is push-to-talk. */
+export function setHotkeyTrigger(
+  action: HotkeyAction,
+  trigger: TriggerEdge,
+): Promise<HotkeyStatus> {
+  return invoke("set_hotkey_trigger", { action, trigger });
 }
 
 export function resetHotkeysToDefaults(): Promise<HotkeyStatus> {

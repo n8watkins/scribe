@@ -364,6 +364,7 @@ pub fn run() {
             commands::refresh_basic_stats,
             commands::get_hotkey_status,
             commands::rebind_hotkey,
+            commands::set_hotkey_trigger,
             commands::reset_hotkeys_to_defaults,
             commands::load_production_hotkey_defaults,
             commands::open_dashboard,
