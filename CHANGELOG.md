@@ -4,6 +4,16 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.4.4 — 2026-06-13
+
+- **Phase 2 — transcript archive.** History/Notes rows now **lead with the
+  transcript text** (timestamp + meta secondary) with inline **See more / See
+  less**; a per-row **Open in external editor**; **search by date range + sort**
+  (newest / oldest / longest); and **multi-select → Combine** → merged preview →
+  **Copy** or **Save as new entry**. Backend: `search_transcripts` gained
+  `from`/`to`/`sort`, plus `combine_transcripts`, `save_combined_transcript`, and
+  `open_transcript_externally` commands.
+
 ## 0.4.3 — 2026-06-13
 
 - **"Keep my clipboard" toggle** — the second insertion switch. Together,
