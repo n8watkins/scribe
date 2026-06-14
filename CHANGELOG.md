@@ -4,6 +4,13 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.4.6 — 2026-06-13
+
+- **Pill polish.** The floating pill is now a true rounded pill and a bit
+  narrower; the waveform **tapers at the edges** (outer bars quieter than the
+  center); and the **bar/dot colors are configurable** — normal + note-session
+  color pickers in Settings (defaults amber / cyan).
+
 ## 0.4.5 — 2026-06-13
 
 - **Models view rework.** Summary header (active model + storage used + open
