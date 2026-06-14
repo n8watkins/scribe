@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import {
   analyzeNote,
+  clearNotes,
   clearTranscriptHistory,
   combineTranscripts,
   commandErrorMessage,
@@ -32,6 +33,7 @@ import {
 } from "../backend";
 import type { ViewActions } from "../types";
 import { EmptyState, InlineError } from "../components/feedback";
+import { ConfirmDialog } from "../components/modal";
 import { TranscriptRow } from "../components/transcript";
 import "./history.css";
 
@@ -74,6 +76,7 @@ export function HistoryView({
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [busyTranscriptId, setBusyTranscriptId] = useState<string | null>(null);
   const [clearingHistory, setClearingHistory] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
   const [syncingToDrive, setSyncingToDrive] = useState(false);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
@@ -398,24 +401,23 @@ export function HistoryView({
   );
 
   const handleClearHistory = useCallback(async () => {
-    if (!window.confirm("Clear all saved transcript history?")) {
-      return;
-    }
-
     setClearingHistory(true);
     setHistoryError(null);
 
     try {
-      await clearTranscriptHistory();
+      // Notes view clears notes only; the transcript archive clears dictation
+      // transcripts only (the backend preserves the other set either way).
+      await (notesOnly ? clearNotes() : clearTranscriptHistory());
       setOffset(0);
       setSelectedIds([]);
       await refreshAfterMutation();
+      setConfirmClear(false);
     } catch (error) {
       setHistoryError(commandErrorMessage(error));
     } finally {
       setClearingHistory(false);
     }
-  }, [refreshAfterMutation]);
+  }, [notesOnly, refreshAfterMutation]);
 
   const pageStart = total === 0 ? 0 : offset + 1;
   const pageEnd = Math.min(offset + pageSize, total);
@@ -464,7 +466,7 @@ export function HistoryView({
             <button
               className="secondary-button danger"
               disabled={clearingHistory || total === 0}
-              onClick={() => void handleClearHistory()}
+              onClick={() => setConfirmClear(true)}
               type="button"
             >
               <Trash2 aria-hidden="true" size={15} />
@@ -697,6 +699,21 @@ export function HistoryView({
           </div>
         </div>
       ) : null}
+
+      <ConfirmDialog
+        busy={clearingHistory}
+        confirmLabel={notesOnly ? "Clear notes" : "Clear history"}
+        danger
+        message={
+          notesOnly
+            ? "This permanently deletes every saved note (and its audio clip) on this device. Your dictation transcripts and Last Transcript Buffer are untouched. This can't be undone."
+            : "This permanently deletes every saved dictation transcript (and its audio clip) on this device. Your notes and Last Transcript Buffer are untouched. This can't be undone."
+        }
+        onCancel={() => setConfirmClear(false)}
+        onConfirm={() => void handleClearHistory()}
+        open={confirmClear}
+        title={notesOnly ? "Clear all notes?" : "Clear transcript history?"}
+      />
     </section>
   );
 }

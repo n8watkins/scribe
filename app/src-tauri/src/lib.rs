@@ -369,6 +369,7 @@ pub fn run() {
             commands::update_transcript,
             commands::delete_transcript,
             commands::clear_transcript_history,
+            commands::clear_notes,
             commands::combine_transcripts,
             commands::save_combined_transcript,
             commands::open_transcript_externally,

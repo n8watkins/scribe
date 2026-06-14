@@ -461,6 +461,11 @@ export function clearTranscriptHistory(): Promise<void> {
   return invoke("clear_transcript_history");
 }
 
+/** Deletes only notes (is_note=1); leaves dictation transcripts intact. */
+export function clearNotes(): Promise<void> {
+  return invoke("clear_notes");
+}
+
 /** Loads the given transcripts (oldest-first) and joins their text with
  * `separator` (default "\n\n"). Ids that don't resolve are skipped. */
 export function combineTranscripts(

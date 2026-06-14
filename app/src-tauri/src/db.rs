@@ -564,13 +564,31 @@ impl Database {
         Ok(())
     }
 
+    /// Clears dictation transcripts only. Notes (`is_note = 1`) are deliberate
+    /// saves and are preserved — matching the confirmation copy and the
+    /// separate Notes view; use `clear_notes` to delete those.
     pub fn clear_transcript_history(&self) -> Result<(), CommandError> {
         let clips = self.clip_paths(
-            "SELECT audio_path FROM transcripts WHERE audio_path IS NOT NULL",
+            "SELECT audio_path FROM transcripts \
+             WHERE audio_path IS NOT NULL AND COALESCE(is_note, 0) = 0",
             [],
         )?;
         self.conn
-            .execute("DELETE FROM transcripts", [])
+            .execute("DELETE FROM transcripts WHERE COALESCE(is_note, 0) = 0", [])
+            .map_err(CommandError::database)?;
+        remove_clip_files(clips);
+        Ok(())
+    }
+
+    /// Clears notes only (`is_note = 1`), leaving dictation transcripts intact.
+    pub fn clear_notes(&self) -> Result<(), CommandError> {
+        let clips = self.clip_paths(
+            "SELECT audio_path FROM transcripts \
+             WHERE audio_path IS NOT NULL AND is_note = 1",
+            [],
+        )?;
+        self.conn
+            .execute("DELETE FROM transcripts WHERE is_note = 1", [])
             .map_err(CommandError::database)?;
         remove_clip_files(clips);
         Ok(())
@@ -585,12 +603,18 @@ impl Database {
         };
 
         let cutoff = (Utc::now() - chrono::Duration::days(i64::from(retention_days))).to_rfc3339();
+        // Notes (is_note = 1) are deliberate saves and are never auto-pruned;
+        // retention only ages out ordinary dictation transcripts.
         let clips = self.clip_paths(
-            "SELECT audio_path FROM transcripts WHERE created_at < ?1 AND audio_path IS NOT NULL",
+            "SELECT audio_path FROM transcripts \
+             WHERE created_at < ?1 AND audio_path IS NOT NULL AND COALESCE(is_note, 0) = 0",
             [&cutoff],
         )?;
         self.conn
-            .execute("DELETE FROM transcripts WHERE created_at < ?1", [&cutoff])
+            .execute(
+                "DELETE FROM transcripts WHERE created_at < ?1 AND COALESCE(is_note, 0) = 0",
+                [&cutoff],
+            )
             .map_err(CommandError::database)?;
         remove_clip_files(clips);
         Ok(())
@@ -810,6 +834,31 @@ mod tests {
             )
             .unwrap();
         assert_eq!(queried.total, 1);
+    }
+
+    #[test]
+    fn clearing_and_retention_preserve_notes() {
+        let db = Database::in_memory().unwrap();
+        db.save_last_transcript(&transcript_with_text("regular dictation"))
+            .unwrap();
+        let mut note = transcript_with_text("note to self");
+        note.is_note = true;
+        db.save_last_transcript(&note).unwrap();
+
+        // Clearing transcript history removes the dictation row but keeps the note.
+        db.clear_transcript_history().unwrap();
+        let remaining = db
+            .search_transcripts(None, false, None, None, TranscriptSort::default(), 10, 0)
+            .unwrap();
+        assert_eq!(remaining.total, 1, "note must survive clear_transcript_history");
+        assert!(remaining.transcripts[0].is_note);
+
+        // clear_notes then removes the note.
+        db.clear_notes().unwrap();
+        let after = db
+            .search_transcripts(None, false, None, None, TranscriptSort::default(), 10, 0)
+            .unwrap();
+        assert_eq!(after.total, 0);
     }
 
     #[test]

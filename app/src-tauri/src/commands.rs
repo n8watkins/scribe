@@ -231,6 +231,11 @@ pub fn clear_transcript_history(state: tauri::State<'_, BackendState>) -> Result
     state.db()?.clear_transcript_history()
 }
 
+#[tauri::command]
+pub fn clear_notes(state: tauri::State<'_, BackendState>) -> Result<(), CommandError> {
+    state.db()?.clear_notes()
+}
+
 /// Loads the given transcripts, orders them oldest-first, and joins their text
 /// with `separator` (default "\n\n"). Ids that don't resolve are skipped.
 #[tauri::command]

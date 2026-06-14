@@ -4,6 +4,16 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.11 — 2026-06-14
+
+- **Fixed: clearing transcript history (and the retention auto-delete) was also
+  wiping your notes**, despite the dialog promising notes are safe. Notes are
+  now protected: "Clear transcript history" and the automatic retention sweep
+  only delete dictation transcripts (+ their audio clips); notes are never
+  auto-pruned. The Notes view's "Clear all" now clears notes specifically (new
+  `clear_notes`), and the History/Notes "Clear all" uses the on-brand
+  confirmation dialog instead of the native popup.
+
 ## 0.5.10 — 2026-06-14
 
 - **Real app icon everywhere.** Regenerated all icons from the Scribe mic logo,
