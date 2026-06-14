@@ -8,6 +8,7 @@ import {
   sendNotification,
 } from "@tauri-apps/plugin-notification";
 import { check as checkUpdaterPackage } from "@tauri-apps/plugin-updater";
+import { detectUpdate } from "./lib/updates";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
   BarChart3,
@@ -40,7 +41,6 @@ import {
   listMicrophones,
   listModels,
   pasteLastTranscript,
-  checkForUpdate,
   startRecording,
   stopRecording,
   transcribeRecording,
@@ -462,7 +462,7 @@ function App() {
       if (!autoUpdateCheckRef.current) {
         return;
       }
-      void checkForUpdate()
+      void detectUpdate()
         .then((result) => {
           // Record every successful poll so the "last checked" line in About
           // advances — this is how the polling is observable even when you're
@@ -498,11 +498,11 @@ function App() {
     };
 
     const timer = window.setTimeout(() => runCheck(true), 5000);
-    // ITERATION CADENCE: poll every 60s while we're actively shipping/testing
-    // updates so detection is immediate. For production this should be ~6h — the
-    // on-launch and on-focus checks already make a new release feel instant, so
-    // the interval is just a backstop for long open-and-idle sessions (and 60s
-    // would hit GitHub's ~60/hr unauthenticated limit).
+    // Poll every 60s while testing so detection is immediate. Detection now uses
+    // the updater's latest.json (a release CDN file) rather than the GitHub REST
+    // API, so this no longer trips the API's ~60/hr rate limit (which a 1-min
+    // poll did, returning 403 to every check). For production ~6h is plenty —
+    // the on-launch and on-focus checks already make a new release feel instant.
     const interval = window.setInterval(() => runCheck(false), 60 * 1000);
     const onFocus = () => runCheck(false);
     window.addEventListener("focus", onFocus);

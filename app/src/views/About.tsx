@@ -18,13 +18,13 @@ import {
   StickyNote,
 } from "lucide-react";
 import {
-  checkForUpdate,
   commandErrorMessage,
   getDataDir,
   openDataFolder,
   openReleasePage,
   type UpdateCheckResult,
 } from "../backend";
+import { detectUpdate } from "../lib/updates";
 import type { ViewName } from "../types";
 import { Toggle } from "../components/primitives";
 import "./about.css";
@@ -140,7 +140,7 @@ export function AboutView({
     setUpdateError(null);
     setUpdateResult(null);
     try {
-      setUpdateResult(await checkForUpdate());
+      setUpdateResult(await detectUpdate());
     } catch (cause) {
       setUpdateError(commandErrorMessage(cause));
     } finally {

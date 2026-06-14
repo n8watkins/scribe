@@ -4,6 +4,17 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.22 — 2026-06-14
+
+- **Fixed: update checks were tripping GitHub's API rate limit (HTTP 403).** The
+  background poll used the GitHub REST API (~60 requests/hour for unauthenticated
+  callers), so the 1-minute test cadence + focus checks exhausted the quota — and
+  then *every* check, including manual "Check for updates," returned **403**,
+  silently disabling update detection (no chip, no auto-install). Detection now
+  uses the updater's **`latest.json`** endpoint (a release-CDN file, **not**
+  subject to the API rate limit) — the exact source the install already uses, so
+  frequent polling works again and detection/install can't disagree.
+
 ## 0.5.21 — 2026-06-14
 
 - **Multilingual transcription.** Added multilingual Whisper models
