@@ -107,9 +107,7 @@ Design and architecture docs live in [`docs/`](docs/), including the [PRD](docs/
 
 ## Roadmap / known gaps
 
-- **No Authenticode code signing yet** — Windows SmartScreen warns on first install (the in-app updater artifact *is* cryptographically signed; that's separate from an OS code-signing certificate).
-- **English only today** — the model catalog ships English (`.en`) Whisper models and the language picker resolves to English, so non-English transcription and Whisper translate-to-English aren't available yet (selected-text transform can still translate via the LLM).
-- **Fixed model catalog** — you download from a curated list; pointing Scribe at an arbitrary local `ggml` `.bin` isn't supported in the UI yet.
+- **Custom models** — you download from a curated catalog (English-only and multilingual Whisper models); pointing Scribe at an arbitrary local `ggml` `.bin` isn't supported in the UI yet.
 - Transcript search uses SQL `LIKE`; fine for thousands of entries, not millions.
 
 Contributions and issue reports are welcome.
@@ -117,3 +115,10 @@ Contributions and issue reports are welcome.
 ## License
 
 [MIT](LICENSE)
+
+## Code signing
+
+Windows releases of Scribe are code-signed through the [SignPath Foundation](https://signpath.org/)'s
+free code-signing program for open-source projects (signing infrastructure by
+[SignPath.io](https://signpath.io/)). The code-signing certificate is issued in the name of the
+SignPath Foundation.
