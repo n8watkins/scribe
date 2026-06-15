@@ -3,7 +3,7 @@ name = "app"
 version = "0.5.22"
 description = "Private local dictation for Windows."
 authors = ["Nat Atkins"]
-license = "UNLICENSED"
+license = "MIT"
 edition = "2021"
 
 [lib]
