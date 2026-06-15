@@ -7,8 +7,8 @@
 > competitive review + prioritized gap list see
 > [`docs/COMPETITIVE-ANALYSIS.md`](COMPETITIVE-ANALYSIS.md).
 
-Status: Shipping (public, source-available) — current version **0.5.18**  
-Last updated: 2026-06-14  
+Status: Shipping (public, MIT open-source) — current version **0.5.22**  
+Last updated: 2026-06-15  
 Repository: `https://github.com/n8watkins/scribe` (public)  
 Releases: signed installers published per tag via CI (see the GitHub Releases page)
 
@@ -72,18 +72,20 @@ For a researched, prioritized "build next to be competitive" list (with rough
 effort), see [`docs/COMPETITIVE-ANALYSIS.md`](COMPETITIVE-ANALYSIS.md). Short
 version of the open gaps:
 
-1. **Authenticode code signing** — kills the SmartScreen first-run warning; costs
-   money (EV/OV cert) but is the single biggest friction for new installers.
-   (Distinct from the updater's minisign artifact signing, which already ships.)
-2. **Multilingual transcription + Whisper translate** — today the catalog is
-   English-only (`.en` models) and the language picker resolves to English;
-   adding multilingual `ggml` models + a `--translate` path is high-impact and
-   leans on plumbing that mostly exists.
+1. **Authenticode code signing — IN PROGRESS.** Kills the SmartScreen first-run
+   warning. Now pursued **free via the SignPath Foundation** OSS program (repo is
+   MIT + credits SignPath in the README); blocked on project reputation (the repo
+   is brand-new with no stars yet). Alternatives: Azure Trusted Signing
+   (~$10/mo) or stay unsigned. Distinct from the updater's minisign artifact
+   signing, which already ships. See [`docs/HANDOFF.md`](HANDOFF.md).
+2. ~~Multilingual transcription + Whisper translate~~ — **DONE in 0.5.21**
+   (multilingual `ggml` models + a ~29-language picker + Translate→English).
 3. **Custom / arbitrary local model selection** — let users point Scribe at any
    whisper.cpp-compatible `ggml` `.bin` instead of only the curated catalog.
-4. Smaller: GPU whisper builds as optional download, tray icon state variants,
-   FTS5 search if histories grow, pill shutdown when main window closes with
-   tray-minimize off (known edge case, currently moot).
+4. **Spoken punctuation / voice commands / voice editing** during dictation, and
+   **real-time streaming insertion** (text currently lands only after you stop).
+5. Smaller: GPU whisper builds as optional download, a first-run onboarding
+   wizard, FTS5 search if histories grow.
 
 ## Working notes for the next session
 
