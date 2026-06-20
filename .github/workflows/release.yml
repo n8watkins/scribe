@@ -5,6 +5,14 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      flavor:
+        description: "Build flavor: stable (Scribe) or dev (Scribe Dev, side-by-side)"
+        type: choice
+        options:
+          - stable
+          - dev
+        default: stable
 
 permissions:
   contents: write
@@ -78,11 +86,18 @@ jobs:
 
       - name: Build installers
         working-directory: app
+        shell: pwsh
         env:
           # Signs the NSIS updater artifact (createUpdaterArtifacts).
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri build
+        run: |
+          if ("${{ github.event.inputs.flavor }}" -eq "dev") {
+            Write-Host "Building Scribe Dev flavor (com.natkins.scribe.dev, installs side-by-side)"
+            npm run tauri -- build --config src-tauri/tauri.dev-flavor.conf.json
+          } else {
+            npm run tauri build
+          }
 
       # The in-app updater fetches latest.json from the latest release; it
       # points at the signed NSIS installer of this release.
