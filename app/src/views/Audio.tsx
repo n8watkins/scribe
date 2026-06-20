@@ -301,6 +301,59 @@ export function AudioView({
             />
           </SettingRow>
           <SettingRow
+            description="Split a phrase at a pause while you talk. Off: phrases split only when they get long (see below) — fewer sentence breaks, but text appears in larger jumps."
+            label="Split on pause"
+          >
+            <Toggle
+              checked={settings.segmentPauseEnabled}
+              disabled={
+                actions.savingSettings ||
+                !settings.incrementalTranscriptionEnabled
+              }
+              label="Split on pause"
+              onChange={(segmentPauseEnabled) =>
+                actions.updateSettings({ segmentPauseEnabled })
+              }
+            />
+          </SettingRow>
+          <SettingRow
+            description="How long a pause must be to split a phrase. Higher = fewer stray periods/commas when you pause mid-sentence, slightly more delay before text is ready (200–10000 ms)."
+            label="Pause before splitting (ms)"
+          >
+            <MsInput
+              ariaLabel="Pause length before splitting a phrase, in milliseconds"
+              disabled={
+                actions.savingSettings ||
+                !settings.incrementalTranscriptionEnabled ||
+                !settings.segmentPauseEnabled
+              }
+              max={10000}
+              min={200}
+              onCommit={(segmentPauseMs) =>
+                actions.updateSettings({ segmentPauseMs })
+              }
+              value={settings.segmentPauseMs}
+            />
+          </SettingRow>
+          <SettingRow
+            description="Longest a single phrase can run before it is split anyway. Capped at 25 s because Whisper can only transcribe ~30 s at once (10000–25000 ms)."
+            label="Max phrase length (ms)"
+          >
+            <MsInput
+              ariaLabel="Maximum phrase length before forced split, in milliseconds"
+              disabled={
+                actions.savingSettings ||
+                !settings.incrementalTranscriptionEnabled
+              }
+              max={25000}
+              min={10000}
+              onCommit={(segmentMaxMs) =>
+                actions.updateSettings({ segmentMaxMs })
+              }
+              value={settings.segmentMaxMs}
+            />
+          </SettingRow>
+          <SettingRow
             description="Ignore captures below this length, in milliseconds."
             label="Minimum duration (ms)"
           >

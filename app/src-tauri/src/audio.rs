@@ -309,11 +309,20 @@ impl AudioService {
         // never test clips — and only when the setting is enabled. When the
         // coordinator cannot start this is None and behavior is unchanged.
         let incremental = if !is_test_clip && settings.incremental_transcription_enabled {
+            // Pause-based cutting can be turned off (then segments end only at
+            // the length cap); the cap is clamped to a Whisper-safe range by
+            // settings validation.
+            let segment_pause_ms = settings
+                .segment_pause_enabled
+                .then_some(settings.segment_pause_ms as u64);
+            let segment_max_ms = settings.segment_max_ms as u64;
             crate::incremental::start_session(
                 app,
                 &session_id,
                 self.temp_dir.clone(),
                 source_sample_rate,
+                segment_pause_ms,
+                segment_max_ms,
             )
         } else {
             None

@@ -60,12 +60,14 @@ export function MsInput({
   ariaLabel,
   disabled = false,
   min = 1,
+  max,
   onCommit,
   value,
 }: {
   ariaLabel: string;
   disabled?: boolean;
   min?: number;
+  max?: number;
   onCommit: (ms: number) => void;
   value: number;
 }) {
@@ -84,7 +86,12 @@ export function MsInput({
       setText(String(value));
       return;
     }
-    const next = Math.max(min, Math.round(parsed));
+    // Clamp to [min, max] so the field can never commit a value the backend
+    // would reject (e.g. a segment cap above Whisper's safe window).
+    let next = Math.max(min, Math.round(parsed));
+    if (max !== undefined) {
+      next = Math.min(max, next);
+    }
     setText(String(next));
     if (next !== value) {
       onCommit(next);

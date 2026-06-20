@@ -34,23 +34,24 @@ use crate::{
     whisper_server::WarmTranscriber,
 };
 
-/// Trailing continuous silence that finalizes an in-progress segment.
-///
-/// This is the dominant lever on "too much punctuation when I pause": each
-/// finalized segment is transcribed as a standalone clip, so Whisper closes it
-/// with sentence-final punctuation, and `join_segments` then concatenates them
-/// — planting a period/comma exactly where the cut happened. At 350 ms almost
-/// every mid-sentence hesitation triggered a cut, manufacturing sentence breaks
-/// all over normal speech. 1 s sits above typical thinking-pauses (~0.2–0.6 s)
-/// but at/below deliberate sentence-ending pauses, so segments line up with
-/// real phrase boundaries instead of hesitations. Trade-off: a larger tail can
-/// be left untranscribed at stop (slightly higher stop-to-text latency) and the
-/// live transcript streams in larger chunks. Cutting stays pause-based (never a
-/// fixed time slice, which would cut mid-word and hand Whisper a truncated
-/// fragment); SEGMENT_MAX_MS is only a safety cap for speech with no pause.
-const SEGMENT_SILENCE_MS: u64 = 1_000;
-/// Hard cap on segment length, comfortably inside Whisper's 30 s window.
-const SEGMENT_MAX_MS: u64 = 25_000;
+// The pause threshold and length cap are now per-recording settings
+// (`segment_pause_*` / `segment_max_ms`), passed into `Segmenter::new` from
+// `start_session`. Why they are the dominant lever on "too much punctuation
+// when I pause": each finalized segment is transcribed as a standalone clip, so
+// Whisper closes it with sentence-final punctuation, and `join_segments` then
+// concatenates them — planting a period/comma exactly where the cut happened. A
+// short pause threshold (the old 350 ms) cut on nearly every mid-sentence
+// hesitation, manufacturing sentence breaks all over normal speech; a longer
+// one (default 3 s) lines segments up with deliberate sentence-ending pauses.
+// Cutting stays pause-based (never a fixed time slice, which would cut mid-word
+// and hand Whisper a truncated fragment); the length cap is only a safety net
+// for speech with no qualifying pause, bounded to Whisper's ~30 s window so a
+// segment can never be truncated.
+
+/// When pause-based cutting is disabled, how much trailing audio to keep while
+/// bounding the buffer at the length cap during speechless input. Independent
+/// of the user's pause threshold.
+const SILENCE_KEEP_MS: u64 = 1_000;
 /// Trailing silence appended to each segment WAV. Whisper tends to drop the
 /// final word when the audio ends abruptly mid-/right-after speech, which the
 /// tail segment otherwise does.
@@ -96,23 +97,30 @@ pub fn emit_partial_transcript(
 
 /// Cuts a stream of audio chunks into transcribable segments. A segment is
 /// finalized once it contains speech (any chunk RMS at or above
-/// [`AUTO_STOP_SPEECH_RMS`]) and ends in [`SEGMENT_SILENCE_MS`] of continuous
-/// silence, or once it reaches [`SEGMENT_MAX_MS`]. Silence-only audio between
-/// segments is never accumulated.
+/// [`AUTO_STOP_SPEECH_RMS`]) and ends in `pause_ms` of continuous silence (when
+/// pause-based cutting is enabled), or once it reaches `max_ms`. Silence-only
+/// audio between segments is never accumulated.
 struct Segmenter {
     sample_rate: u32,
     samples: Vec<f32>,
     speech_detected: bool,
     trailing_silence_samples: usize,
+    /// Pause length that finalizes a segment, or `None` to disable pause-based
+    /// cutting (segments then end only at `max_ms`).
+    pause_ms: Option<u64>,
+    /// Hard cap on segment length (Whisper-safe; the caller clamps it).
+    max_ms: u64,
 }
 
 impl Segmenter {
-    fn new(sample_rate: u32) -> Self {
+    fn new(sample_rate: u32, pause_ms: Option<u64>, max_ms: u64) -> Self {
         Self {
             sample_rate,
             samples: Vec::new(),
             speech_detected: false,
             trailing_silence_samples: 0,
+            pause_ms,
+            max_ms,
         }
     }
 
@@ -140,21 +148,22 @@ impl Segmenter {
             self.trailing_silence_samples += chunk.len();
         }
 
-        if self.speech_detected
-            && audio::duration_ms(self.trailing_silence_samples, self.sample_rate)
-                >= SEGMENT_SILENCE_MS
-        {
-            return Some(self.take_segment());
+        if let Some(pause_ms) = self.pause_ms {
+            if self.speech_detected
+                && audio::duration_ms(self.trailing_silence_samples, self.sample_rate) >= pause_ms
+            {
+                return Some(self.take_segment());
+            }
         }
 
-        if audio::duration_ms(self.samples.len(), self.sample_rate) >= SEGMENT_MAX_MS {
+        if audio::duration_ms(self.samples.len(), self.sample_rate) >= self.max_ms {
             if self.speech_detected {
                 return Some(self.take_segment());
             }
             // Speech never showed up: keep only a short tail so the buffer
             // stays bounded. Everything dropped is below the speech
             // threshold; the full recording still captures it.
-            let keep = ((self.sample_rate as u64 * SEGMENT_SILENCE_MS) / 1_000) as usize;
+            let keep = ((self.sample_rate as u64 * SILENCE_KEEP_MS) / 1_000) as usize;
             let drop = self.samples.len().saturating_sub(keep);
             self.samples.drain(..drop);
             self.trailing_silence_samples = self.trailing_silence_samples.min(self.samples.len());
@@ -374,6 +383,8 @@ pub fn start_session(
     session_id: &str,
     temp_dir: PathBuf,
     source_sample_rate: u32,
+    pause_ms: Option<u64>,
+    max_ms: u64,
 ) -> Option<WorkerLink> {
     let (msg_tx, msg_rx) = unbounded::<Msg>();
     let (result_tx, result_rx) = bounded::<Result<AssembledTranscript, ()>>(1);
@@ -404,16 +415,19 @@ pub fn start_session(
     }
 
     log::info!(
-        "Incremental transcription active for session {} (segment silence {} ms, cap {} ms)",
+        "Incremental transcription active for session {} (segment pause {}, cap {} ms)",
         session_id,
-        SEGMENT_SILENCE_MS,
-        SEGMENT_MAX_MS
+        match pause_ms {
+            Some(ms) => format!("{} ms", ms),
+            None => "disabled".to_string(),
+        },
+        max_ms
     );
     Some(WorkerLink {
         session_id: session_id.to_string(),
         temp_dir,
         msg_tx,
-        segmenter: Segmenter::new(source_sample_rate),
+        segmenter: Segmenter::new(source_sample_rate, pause_ms, max_ms),
         next_segment: 0,
         failed: false,
     })
@@ -545,6 +559,15 @@ mod tests {
     const RATE: u32 = 16_000;
     /// 20 ms chunks at 16 kHz, matching the trim window granularity.
     const CHUNK: usize = 320;
+    /// Pause/cap the tests construct segmenters with, independent of the
+    /// shipped defaults so the assertions don't drift if those change.
+    const TEST_PAUSE_MS: u64 = 1_000;
+    const TEST_MAX_MS: u64 = 25_000;
+
+    /// A segmenter with pause-based cutting on, at the test pause/cap.
+    fn new_segmenter() -> Segmenter {
+        Segmenter::new(RATE, Some(TEST_PAUSE_MS), TEST_MAX_MS)
+    }
 
     fn speech(ms: usize) -> Vec<f32> {
         vec![0.5; RATE as usize * ms / 1_000]
@@ -559,10 +582,10 @@ mod tests {
         vec![0.02; RATE as usize * ms / 1_000]
     }
 
-    /// Trailing silence included in a finalized segment: SEGMENT_SILENCE_MS
-    /// rounded up to the 20 ms chunk that crossed the threshold.
+    /// Trailing silence included in a finalized segment: the pause threshold
+    /// rounded up to the 20 ms chunk that crossed it.
     fn silence_marker_len() -> usize {
-        ((RATE as u64 * SEGMENT_SILENCE_MS / 1_000) as usize).div_ceil(CHUNK) * CHUNK
+        ((RATE as u64 * TEST_PAUSE_MS / 1_000) as usize).div_ceil(CHUNK) * CHUNK
     }
 
     /// Feeds samples in 20 ms chunks and collects every finalized segment.
@@ -575,10 +598,10 @@ mod tests {
 
     #[test]
     fn finalizes_on_silence_after_speech() {
-        let mut segmenter = Segmenter::new(RATE);
+        let mut segmenter = new_segmenter();
         let mut audio = speech(1_000);
         // A pause comfortably past the finalize threshold.
-        audio.extend(silence(SEGMENT_SILENCE_MS as usize + 400));
+        audio.extend(silence(TEST_PAUSE_MS as usize + 400));
 
         let segments = feed(&mut segmenter, &audio);
 
@@ -591,13 +614,13 @@ mod tests {
 
     #[test]
     fn brief_pause_below_threshold_does_not_split_a_segment() {
-        // The punctuation-on-pauses fix: a short hesitation (well under
-        // SEGMENT_SILENCE_MS) must NOT finalize a segment, so Whisper sees one
-        // continuous phrase and does not punctuate the gap. Before the
-        // threshold was raised, this pause would have cut a segment and planted
-        // a sentence break here.
-        let mut segmenter = Segmenter::new(RATE);
-        let pause = silence(SEGMENT_SILENCE_MS as usize / 2);
+        // The punctuation-on-pauses fix: a short hesitation (well under the
+        // pause threshold) must NOT finalize a segment, so Whisper sees one
+        // continuous phrase and does not punctuate the gap. With the old 350 ms
+        // threshold this pause would have cut a segment and planted a sentence
+        // break here.
+        let mut segmenter = new_segmenter();
+        let pause = silence(TEST_PAUSE_MS as usize / 2);
         let mut audio = speech(1_000);
         audio.extend_from_slice(&pause);
         audio.extend(speech(1_000));
@@ -615,8 +638,39 @@ mod tests {
     }
 
     #[test]
+    fn pause_disabled_never_cuts_on_silence() {
+        // With pause-based cutting off (the user's "disable the pause" setting),
+        // even a long silence must not finalize a segment — only the length cap
+        // (large here) can.
+        let mut segmenter = Segmenter::new(RATE, None, TEST_MAX_MS);
+        let mut audio = speech(1_000);
+        audio.extend(silence(3_000));
+
+        let segments = feed(&mut segmenter, &audio);
+
+        assert!(segments.is_empty(), "pause-disabled must not cut on silence");
+        let tail = segmenter.take_tail().expect("tail contains speech");
+        // The whole thing — speech and the long pause — stays one segment.
+        assert_eq!(tail.len(), RATE as usize * 4);
+    }
+
+    #[test]
+    fn length_cap_still_bounds_segments_when_pause_disabled() {
+        // The safety cap is independent of pause cutting: a 2 s cap finalizes a
+        // 2 s segment out of 3 s of continuous speech.
+        let mut segmenter = Segmenter::new(RATE, None, 2_000);
+
+        let segments = feed(&mut segmenter, &speech(3_000));
+
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].len(), RATE as usize * 2);
+        let tail = segmenter.take_tail().expect("tail contains speech");
+        assert_eq!(tail.len(), RATE as usize);
+    }
+
+    #[test]
     fn does_not_finalize_without_speech() {
-        let mut segmenter = Segmenter::new(RATE);
+        let mut segmenter = new_segmenter();
         let mut audio = quiet(2_000);
         audio.extend(silence(1_000));
 
@@ -628,7 +682,7 @@ mod tests {
 
     #[test]
     fn finalizes_at_hard_cap_during_continuous_speech() {
-        let mut segmenter = Segmenter::new(RATE);
+        let mut segmenter = new_segmenter();
 
         let segments = feed(&mut segmenter, &speech(27_000));
 
@@ -642,7 +696,7 @@ mod tests {
 
     #[test]
     fn hard_cap_without_speech_keeps_buffer_bounded_and_discards() {
-        let mut segmenter = Segmenter::new(RATE);
+        let mut segmenter = new_segmenter();
 
         let segments = feed(&mut segmenter, &quiet(60_000));
 
@@ -653,10 +707,10 @@ mod tests {
 
     #[test]
     fn leading_silence_is_never_accumulated() {
-        let mut segmenter = Segmenter::new(RATE);
+        let mut segmenter = new_segmenter();
         let mut audio = silence(1_000);
         audio.extend(speech(1_000));
-        audio.extend(silence(SEGMENT_SILENCE_MS as usize + 400));
+        audio.extend(silence(TEST_PAUSE_MS as usize + 400));
 
         let segments = feed(&mut segmenter, &audio);
 
@@ -668,7 +722,7 @@ mod tests {
 
     #[test]
     fn tail_flushes_speech_without_silence_requirement() {
-        let mut segmenter = Segmenter::new(RATE);
+        let mut segmenter = new_segmenter();
 
         let segments = feed(&mut segmenter, &speech(300));
 

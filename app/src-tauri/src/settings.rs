@@ -73,6 +73,23 @@ pub struct AppSettings {
     /// to dictation recordings only — never test clips.
     #[serde(default = "default_incremental_transcription_enabled")]
     pub incremental_transcription_enabled: bool,
+    /// When incremental transcription is on, finalize the current segment after
+    /// this much continuous silence (a pause). Turning this off leaves only the
+    /// max-length cap, so a phrase is split only when it gets long — never at a
+    /// pause.
+    #[serde(default = "default_segment_pause_enabled")]
+    pub segment_pause_enabled: bool,
+    /// The pause length (ms) that finalizes a segment. Longer = fewer sentence
+    /// breaks manufactured at brief mid-speech pauses (less stray punctuation),
+    /// at a little more stop-to-text latency. Only used when
+    /// `segment_pause_enabled`.
+    #[serde(default = "default_segment_pause_ms")]
+    pub segment_pause_ms: u32,
+    /// Hard cap (ms) on segment length. Bounded to Whisper's safe window: it can
+    /// only transcribe ~30 s at once, so a longer segment would be truncated and
+    /// silently lose words. 25 s is the safe maximum, 10 s the minimum.
+    #[serde(default = "default_segment_max_ms")]
+    pub segment_max_ms: u32,
     pub selected_mic_id: Option<String>,
     pub selected_model_id: Option<String>,
     pub language: Language,
@@ -204,6 +221,18 @@ fn default_silence_auto_stop_ms() -> u32 {
 
 fn default_incremental_transcription_enabled() -> bool {
     true
+}
+
+fn default_segment_pause_enabled() -> bool {
+    true
+}
+
+fn default_segment_pause_ms() -> u32 {
+    3_000
+}
+
+fn default_segment_max_ms() -> u32 {
+    25_000
 }
 
 fn default_pill_display_mode() -> PillDisplayMode {
@@ -570,6 +599,9 @@ impl Default for AppSettings {
             silence_auto_stop_enabled: default_silence_auto_stop_enabled(),
             silence_auto_stop_ms: default_silence_auto_stop_ms(),
             incremental_transcription_enabled: default_incremental_transcription_enabled(),
+            segment_pause_enabled: default_segment_pause_enabled(),
+            segment_pause_ms: default_segment_pause_ms(),
+            segment_max_ms: default_segment_max_ms(),
             selected_mic_id: None,
             selected_model_id: Some("small.en-q5_1".to_string()),
             language: Language::english(),
@@ -702,6 +734,19 @@ impl AppSettings {
             ));
         }
 
+        if !(200..=10_000).contains(&self.segment_pause_ms) {
+            return Err(SettingsValidationError::new(
+                "segmentPauseMs must be between 200 and 10000.",
+            ));
+        }
+
+        // Bounded to Whisper's ~30 s window so a segment can never be truncated.
+        if !(10_000..=25_000).contains(&self.segment_max_ms) {
+            return Err(SettingsValidationError::new(
+                "segmentMaxMs must be between 10000 and 25000.",
+            ));
+        }
+
         // The language must be "auto" or a code from the curated list. Legacy
         // values ("auto"/"en") are covered by the list, so old settings stay
         // valid.
@@ -779,6 +824,9 @@ mod tests {
         assert!(settings.silence_auto_stop_enabled);
         assert_eq!(settings.silence_auto_stop_ms, 60_000);
         assert!(settings.incremental_transcription_enabled);
+        assert!(settings.segment_pause_enabled);
+        assert_eq!(settings.segment_pause_ms, 3_000);
+        assert_eq!(settings.segment_max_ms, 25_000);
         assert_eq!(settings.vocabulary_prompt, "");
         assert!(settings.text_replacements.is_empty());
         assert!(settings.history_enabled);
@@ -936,6 +984,32 @@ mod tests {
         assert!(settings.validate().is_ok());
 
         settings.silence_auto_stop_ms = 300_001;
+        assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn validates_segment_pause_and_max_ranges() {
+        let mut settings = AppSettings::default();
+
+        // Pause threshold: 200..=10000 ms.
+        settings.segment_pause_ms = 199;
+        assert!(settings.validate().is_err());
+        settings.segment_pause_ms = 200;
+        assert!(settings.validate().is_ok());
+        settings.segment_pause_ms = 10_000;
+        assert!(settings.validate().is_ok());
+        settings.segment_pause_ms = 10_001;
+        assert!(settings.validate().is_err());
+        settings.segment_pause_ms = default_segment_pause_ms();
+
+        // Max segment length is clamped to Whisper's safe window: 10000..=25000.
+        settings.segment_max_ms = 9_999;
+        assert!(settings.validate().is_err());
+        settings.segment_max_ms = 10_000;
+        assert!(settings.validate().is_ok());
+        settings.segment_max_ms = 25_000;
+        assert!(settings.validate().is_ok());
+        settings.segment_max_ms = 25_001;
         assert!(settings.validate().is_err());
     }
 

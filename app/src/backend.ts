@@ -136,6 +136,15 @@ export type AppSettings = {
   silenceAutoStopEnabled: boolean;
   silenceAutoStopMs: number;
   incrementalTranscriptionEnabled: boolean;
+  /** When live transcription is on, split a segment after this much silence (a
+   * pause). Off = split only at the max length. */
+  segmentPauseEnabled: boolean;
+  /** Pause length (ms) that splits a segment. Higher = fewer sentence breaks at
+   * brief pauses (less stray punctuation), slightly more latency. */
+  segmentPauseMs: number;
+  /** Max segment length (ms), 10000–25000. Bounded to Whisper's safe window so
+   * audio is never truncated. */
+  segmentMaxMs: number;
   selectedMicId: string | null;
   selectedModelId: string | null;
   language: Language;
