@@ -16,6 +16,9 @@ const AUDIO_CLIPS_MIGRATION: &str = include_str!("../migrations/002_audio_clips.
 const NOTES_MIGRATION: &str = include_str!("../migrations/003_notes.sql");
 const NOTE_ANALYSIS_MIGRATION: &str = include_str!("../migrations/004_note_analysis.sql");
 const SETTINGS_KEY: &str = "app_settings";
+/// Where a corrupt `app_settings` value is preserved before self-healing to
+/// defaults. Fixed (not timestamped) so it can never accumulate without bound.
+const CORRUPT_SETTINGS_KEY: &str = "app_settings_corrupt";
 const LAST_TRANSCRIPT_ID_KEY: &str = "last_transcript_id";
 const LAST_TRANSCRIPT_BUFFER_KEY: &str = "last_transcript_buffer";
 
@@ -49,7 +52,37 @@ impl Database {
             .map_err(CommandError::database)?;
 
         match value {
-            Some(value) => serde_json::from_str(&value).map_err(CommandError::from),
+            Some(value) => match serde_json::from_str(&value) {
+                Ok(settings) => Ok(settings),
+                Err(error) => {
+                    // A corrupt or partially-written settings value must never
+                    // make the app unlaunchable: setup() calls `get_settings()?`
+                    // and an error there aborts startup (and run() .expect()s,
+                    // i.e. panics). Preserve the bad value under a timestamped
+                    // key for diagnosis, then fall back to — and persist —
+                    // defaults so this and every later launch is clean. Mirrors
+                    // the missing-row path below.
+                    log::error!(
+                        "Stored settings are corrupt ({}); backing them up and resetting to defaults. Raw value: {}",
+                        error,
+                        value
+                    );
+                    // A single fixed key (overwritten, not timestamped): if
+                    // save_settings below keeps failing across launches — e.g.
+                    // an unwritable DB — this can never accumulate unbounded
+                    // backup rows. The row's updated_at records when it was
+                    // captured.
+                    if let Err(backup_error) = self.upsert_setting(CORRUPT_SETTINGS_KEY, &value) {
+                        log::warn!(
+                            "Could not back up corrupt settings: {}",
+                            backup_error.message
+                        );
+                    }
+                    let settings = AppSettings::default();
+                    self.save_settings(&settings)?;
+                    Ok(settings)
+                }
+            },
             None => {
                 let settings = AppSettings::default();
                 self.save_settings(&settings)?;
@@ -1067,6 +1100,45 @@ mod tests {
         db.save_settings(&settings).unwrap();
 
         assert_eq!(db.get_settings().unwrap(), settings);
+    }
+
+    #[test]
+    fn corrupt_settings_self_heal_to_defaults_and_are_backed_up() {
+        let db = Database::in_memory().unwrap();
+
+        // Simulate a truncated / hand-edited / partially-written settings row
+        // that no longer deserializes into AppSettings.
+        db.upsert_setting(SETTINGS_KEY, "{ this is not valid settings json")
+            .unwrap();
+
+        // get_settings must NOT propagate an error (which at startup would
+        // abort setup() and panic) — it self-heals to defaults instead.
+        let recovered = db.get_settings().unwrap();
+        assert_eq!(recovered, AppSettings::default());
+
+        // The corrupt value is preserved under a timestamped backup key.
+        let backup_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM settings WHERE key = 'app_settings_corrupt'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(backup_count, 1);
+
+        // The main row now holds valid (default) settings, so a second load is
+        // stable and never re-triggers recovery.
+        assert_eq!(db.get_settings().unwrap(), AppSettings::default());
+        let backup_count_after: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM settings WHERE key = 'app_settings_corrupt'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(backup_count_after, 1);
     }
 
     #[test]
