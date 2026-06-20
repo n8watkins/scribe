@@ -152,6 +152,11 @@ enum StopReason {
     Completed,
     Cancelled,
     Timeout,
+    /// The capture stream errored mid-recording (e.g. the mic was unplugged or
+    /// disabled). Finalized like a normal completion — whatever was captured
+    /// before the drop is still transcribed — but with no stop-grace sleep
+    /// (the device is gone) so it tears down immediately.
+    Disconnected,
 }
 
 #[derive(Debug)]
@@ -329,8 +334,14 @@ impl AudioService {
             )
         });
 
-        let stream =
-            build_input_stream(&candidate.device, &stream_config, sample_format, chunk_tx)?;
+        let stream = build_input_stream(
+            &candidate.device,
+            &stream_config,
+            sample_format,
+            chunk_tx,
+            app.clone(),
+            session_id.clone(),
+        )?;
         stream.play().map_err(|error| {
             CommandError::new(
                 "recording_failed",
@@ -629,6 +640,52 @@ fn timeout_recording_for_app(app: &AppHandle, session_id: &str) -> Result<(), Co
     Ok(())
 }
 
+/// Recovers from a capture-stream error (e.g. the mic was unplugged mid-record).
+/// Runs on a background thread spawned by the cpal error callback. Stops the
+/// in-flight session like a normal completion — so whatever was captured before
+/// the drop is still transcribed — surfaces a `microphone_unavailable`
+/// recording error, then finishes transcription exactly like the manual-stop
+/// and timeout paths so the app never strands in Recording/Transcribing. If the
+/// session is already gone (the user stopped first, or a duplicate error
+/// callback slipped past the guard), it no-ops cleanly.
+#[cfg(windows)]
+fn disconnect_recording_for_app(app: &AppHandle, session_id: &str) -> Result<(), CommandError> {
+    let result = match stop_recording_with_reason(app, StopReason::Disconnected, Some(session_id)) {
+        Ok(result) => result,
+        Err(error) => {
+            log::info!(
+                "Audio stream error for session {}, but it was no longer the active recording: {}",
+                session_id,
+                error.message
+            );
+            return Ok(());
+        }
+    };
+
+    emit_recording_error(
+        app,
+        CommandError::new(
+            "microphone_unavailable",
+            "The microphone stopped sending audio (it may have been unplugged or disabled). \
+             Anything captured before that was kept; reconnect the mic and record again.",
+        ),
+    );
+
+    // Stopping moved the state machine into Transcribing (valid audio) or Idle
+    // (too short). Finish the same way the manual-stop / timeout paths do, or
+    // the app stays stuck in Transcribing forever.
+    if result.status == RecordingResultStatus::TooShort {
+        crate::dictation::emit_dictation_empty(app);
+    } else {
+        crate::dictation::transcribe_recording_for_app(app, result)?;
+    }
+
+    let state = app.state::<BackendState>();
+    let status = state.app_state()?.status().clone();
+    crate::tray::update_tray_status(app, status);
+    Ok(())
+}
+
 #[cfg(windows)]
 fn stop_recording_with_reason(
     app: &AppHandle,
@@ -639,8 +696,21 @@ fn stop_recording_with_reason(
     let should_transition = state.app_state()?.snapshot().status == AppStatus::Recording;
 
     if should_transition {
-        let snapshot = state.transition_app_state(AppEvent::StopRecording)?;
-        emit_state_snapshot(app, &snapshot);
+        // Three callers can stop a session — a manual/auto stop, the
+        // max-duration timeout thread, and the mic-disconnect handler — and the
+        // state lock is released between the snapshot read above and here. If a
+        // racing stopper already advanced the FSM past Recording, StopRecording
+        // is no longer a legal edge; treat that as a benign no-op instead of
+        // propagating an "invalid state transition" error, which the timeout
+        // path would otherwise surface to the user as a confusing toast. The
+        // stopper that actually takes the session still drives the rest.
+        match state.transition_app_state(AppEvent::StopRecording) {
+            Ok(snapshot) => emit_state_snapshot(app, &snapshot),
+            Err(error) => log::debug!(
+                "StopRecording transition skipped; another stopper already advanced the state: {}",
+                error.message
+            ),
+        }
     }
 
     let no_active_session =
@@ -1017,10 +1087,35 @@ fn build_input_stream(
     config: &StreamConfig,
     sample_format: SampleFormat,
     chunk_tx: Sender<AudioChunk>,
+    app: AppHandle,
+    session_id: String,
 ) -> Result<Stream, CommandError> {
     let channels = config.channels as usize;
-    let err_fn = |error| {
+    // cpal delivers stream errors (the mic being unplugged, the WASAPI endpoint
+    // dying) on its own thread via this callback. Logging alone leaves the
+    // worker blocked on the now-dead chunk channel and the app wedged in
+    // Recording until the user stops or the max-duration timeout fires — up to
+    // ten minutes of captured silence. Instead, drive the same stop +
+    // transcribe path the timeout uses, exactly once, on a fresh thread (the
+    // callback must never block), and surface a recording error so the UI can
+    // tell the user the mic dropped. `handled` collapses repeated error
+    // callbacks into a single recovery.
+    let handled = Arc::new(AtomicBool::new(false));
+    let err_fn = move |error: cpal::StreamError| {
         log::error!("Audio stream error: {}", error);
+        if handled.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let app = app.clone();
+        let session_id = session_id.clone();
+        thread::spawn(move || {
+            if let Err(error) = disconnect_recording_for_app(&app, &session_id) {
+                log::warn!(
+                    "Could not recover from a mid-recording audio stream error: {}",
+                    error.message
+                );
+            }
+        });
     };
 
     match sample_format {
