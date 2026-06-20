@@ -34,10 +34,21 @@ use crate::{
     whisper_server::WarmTranscriber,
 };
 
-/// Trailing continuous silence that finalizes an in-progress segment. Long
-/// enough to be a natural phrase pause, short enough that the tail left at
-/// stop time stays small and the live transcript streams promptly.
-const SEGMENT_SILENCE_MS: u64 = 350;
+/// Trailing continuous silence that finalizes an in-progress segment.
+///
+/// This is the dominant lever on "too much punctuation when I pause": each
+/// finalized segment is transcribed as a standalone clip, so Whisper closes it
+/// with sentence-final punctuation, and `join_segments` then concatenates them
+/// — planting a period/comma exactly where the cut happened. At 350 ms almost
+/// every mid-sentence hesitation triggered a cut, manufacturing sentence breaks
+/// all over normal speech. 1 s sits above typical thinking-pauses (~0.2–0.6 s)
+/// but at/below deliberate sentence-ending pauses, so segments line up with
+/// real phrase boundaries instead of hesitations. Trade-off: a larger tail can
+/// be left untranscribed at stop (slightly higher stop-to-text latency) and the
+/// live transcript streams in larger chunks. Cutting stays pause-based (never a
+/// fixed time slice, which would cut mid-word and hand Whisper a truncated
+/// fragment); SEGMENT_MAX_MS is only a safety cap for speech with no pause.
+const SEGMENT_SILENCE_MS: u64 = 1_000;
 /// Hard cap on segment length, comfortably inside Whisper's 30 s window.
 const SEGMENT_MAX_MS: u64 = 25_000;
 /// Trailing silence appended to each segment WAV. Whisper tends to drop the
@@ -566,7 +577,8 @@ mod tests {
     fn finalizes_on_silence_after_speech() {
         let mut segmenter = Segmenter::new(RATE);
         let mut audio = speech(1_000);
-        audio.extend(silence(700));
+        // A pause comfortably past the finalize threshold.
+        audio.extend(silence(SEGMENT_SILENCE_MS as usize + 400));
 
         let segments = feed(&mut segmenter, &audio);
 
@@ -575,6 +587,31 @@ mod tests {
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].len(), 16_000 + silence_marker_len());
         assert!(segmenter.take_tail().is_none());
+    }
+
+    #[test]
+    fn brief_pause_below_threshold_does_not_split_a_segment() {
+        // The punctuation-on-pauses fix: a short hesitation (well under
+        // SEGMENT_SILENCE_MS) must NOT finalize a segment, so Whisper sees one
+        // continuous phrase and does not punctuate the gap. Before the
+        // threshold was raised, this pause would have cut a segment and planted
+        // a sentence break here.
+        let mut segmenter = Segmenter::new(RATE);
+        let pause = silence(SEGMENT_SILENCE_MS as usize / 2);
+        let mut audio = speech(1_000);
+        audio.extend_from_slice(&pause);
+        audio.extend(speech(1_000));
+
+        let segments = feed(&mut segmenter, &audio);
+
+        assert!(
+            segments.is_empty(),
+            "a sub-threshold hesitation must not split the segment"
+        );
+        // It all flushes as one segment at stop: both speech runs plus the
+        // hesitation between them, transcribed together.
+        let tail = segmenter.take_tail().expect("tail contains speech");
+        assert_eq!(tail.len(), RATE as usize * 2 + pause.len());
     }
 
     #[test]
@@ -619,7 +656,7 @@ mod tests {
         let mut segmenter = Segmenter::new(RATE);
         let mut audio = silence(1_000);
         audio.extend(speech(1_000));
-        audio.extend(silence(700));
+        audio.extend(silence(SEGMENT_SILENCE_MS as usize + 400));
 
         let segments = feed(&mut segmenter, &audio);
 
