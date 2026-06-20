@@ -177,8 +177,46 @@ fn copy_dir_skip_existing(from: &std::path::Path, to: &std::path::Path) -> std::
     Ok(())
 }
 
+/// Routes panics into the app log in addition to the default stderr behavior.
+///
+/// Several subsystems run on spawned threads (the audio worker, the timeout
+/// thread, the hotkey chord/toggle watchers, and the Drive sync/organize
+/// workers). A panic on one of those threads is only observed where a `join()`
+/// exists; everywhere else it dies silently with nothing in the log file,
+/// which makes field diagnosis from a user's logs nearly impossible. Chaining
+/// the previous hook keeps the standard stderr backtrace while also emitting an
+/// `log::error!` line (which the file logger captures) with the thread name and
+/// panic location.
+fn install_panic_logger() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map(|location| {
+                format!("{}:{}:{}", location.file(), location.line(), location.column())
+            })
+            .unwrap_or_else(|| "unknown location".to_string());
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("<non-string panic payload>");
+        let thread = std::thread::current();
+        let thread_name = thread.name().unwrap_or("<unnamed>");
+        log::error!(
+            "PANIC on thread '{}' at {}: {}",
+            thread_name,
+            location,
+            message
+        );
+        previous(info);
+    }));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    install_panic_logger();
     tauri::Builder::default()
         // The single-instance plugin must be the first plugin registered so
         // it can take over before anything else initializes.
@@ -194,6 +232,16 @@ pub fn run() {
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
                 .level_for("app_lib", log::LevelFilter::Debug)
+                // The plugin defaults (40 KB max, KeepOne) self-delete the log
+                // every ~40 KB, so under normal dictation the file churns past
+                // a few sessions within minutes and nothing older survives —
+                // useless when a user reports "it failed an hour ago." Keep a
+                // few MB across several rotated files, and stamp timestamps in
+                // the user's local time so log lines line up with the clock
+                // they saw the problem on.
+                .max_file_size(5_000_000)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(5))
+                .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
                 .targets([
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
                         file_name: None,
@@ -395,6 +443,8 @@ pub fn run() {
             commands::get_test_clip_audio,
             commands::open_data_folder,
             commands::open_models_folder,
+            commands::open_logs_folder,
+            commands::get_logs_dir,
             commands::get_data_dir,
             commands::pick_data_dir,
             commands::save_window_size,

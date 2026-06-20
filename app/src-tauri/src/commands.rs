@@ -657,6 +657,33 @@ pub fn open_models_folder(app: tauri::AppHandle) -> Result<(), CommandError> {
     open_folder(&app, dir)
 }
 
+/// The directory tauri-plugin-log writes rotating log files to (TargetKind::
+/// LogDir resolves to app_log_dir()). Unlike the data/models folders this is
+/// always the OS log dir and is not affected by the custom data_dir setting.
+fn logs_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandError> {
+    app.path().app_log_dir().map_err(|error| {
+        CommandError::new(
+            "app_log_dir_unavailable",
+            format!("Could not locate the Scribe logs directory. {}", error),
+        )
+    })
+}
+
+/// Opens the folder that holds Scribe's rotating local log files, so a user can
+/// find and attach them to a bug report.
+#[tauri::command]
+pub fn open_logs_folder(app: tauri::AppHandle) -> Result<(), CommandError> {
+    let dir = logs_dir(&app)?;
+    open_folder(&app, dir)
+}
+
+/// Returns the logs directory as a display string for the Data & Privacy view,
+/// mirroring get_data_dir.
+#[tauri::command]
+pub fn get_logs_dir(app: tauri::AppHandle) -> Result<String, CommandError> {
+    Ok(logs_dir(&app)?.to_string_lossy().into_owned())
+}
+
 /// Reads the main window's current inner size and persists it as the default
 /// window size, mirroring how the pill stores its position. The saved size is
 /// restored on the next launch (see lib.rs setup).

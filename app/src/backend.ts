@@ -631,10 +631,21 @@ export function openModelsFolder(): Promise<void> {
   return invoke("open_models_folder");
 }
 
+/** Opens the folder holding Scribe's rotating local log files, so the user can
+ * find them to attach to a bug report. */
+export function openLogsFolder(): Promise<void> {
+  return invoke("open_logs_folder");
+}
+
 /** The current effective data directory (custom when set, else the OS app-data
  * dir) as a display string. */
 export function getDataDir(): Promise<string> {
   return invoke("get_data_dir");
+}
+
+/** The OS log directory where Scribe writes its rotating log files. */
+export function getLogsDir(): Promise<string> {
+  return invoke("get_logs_dir");
 }
 
 /** Opens a native folder picker for the data directory; resolves to the chosen

@@ -14,7 +14,9 @@ import {
   clearTranscriptHistory,
   commandErrorMessage,
   getDataDir,
+  getLogsDir,
   openDataFolder,
+  openLogsFolder,
   openModelsFolder,
   saveWindowSize,
   type AppSettings,
@@ -38,6 +40,7 @@ export function DataPrivacyView({
   const [confirmClearHistory, setConfirmClearHistory] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
   const [dataDir, setDataDir] = useState<string | null>(null);
+  const [logsDir, setLogsDir] = useState<string | null>(null);
   const [savingWindowSize, setSavingWindowSize] = useState(false);
   const [windowSizeSaved, setWindowSizeSaved] = useState(false);
   const [foldersOpen, setFoldersOpen] = useState(true);
@@ -54,6 +57,13 @@ export function DataPrivacyView({
       setDataDir(await getDataDir());
     } catch (error) {
       setDataError(commandErrorMessage(error));
+    }
+    // The logs folder is the OS log dir (not under the data dir), so fetch it
+    // separately. A failure here must not blank the whole Folders panel.
+    try {
+      setLogsDir(await getLogsDir());
+    } catch {
+      setLogsDir(null);
     }
   }, []);
 
@@ -218,6 +228,13 @@ export function DataPrivacyView({
               note="Downloaded Whisper models."
               onOpen={() => void handleOpenFolder(openModelsFolder)}
               path={modelsDir}
+            />
+            <hr className="local-data-divider" />
+            <FolderRow
+              label="Local logs folder"
+              note="Rotating diagnostic logs for bug reports."
+              onOpen={() => void handleOpenFolder(openLogsFolder)}
+              path={logsDir}
             />
           </div>
         ) : null}
