@@ -90,9 +90,110 @@ fn transcribe_recording_checked(
     })?);
     let cleanup = WavCleanup::new(wav_path.clone());
 
-    let result = transcribe_recording_inner(app, recording, wav_path, incremental, stopped);
-    cleanup.remove();
+    let result =
+        transcribe_recording_inner(app, recording, wav_path.clone(), incremental, stopped);
+    match &result {
+        Ok(_) => cleanup.remove(),
+        Err(error) => {
+            // Transcription failed (e.g. the whisper server AND its whisper-cli
+            // fallback were both unavailable, or the model is corrupt). Deleting
+            // the temp WAV here — the only copy of what the user just said —
+            // makes a transient failure unrecoverable. Quarantine the clip into
+            // the app-data `failed/` folder instead so the audio is not lost and
+            // can be recovered/inspected from disk. Fully best-effort: on any
+            // quarantine problem fall back to the normal delete, so we never
+            // leak temp files and never change the result.
+            if !quarantine_failed_recording(app, &wav_path, &recording.session_id, &error.message)
+            {
+                cleanup.remove();
+            }
+        }
+    }
     result
+}
+
+/// How many quarantined failed recordings to keep before pruning the oldest, so
+/// a run of failures cannot grow the `failed/` folder without bound.
+const MAX_FAILED_RECORDINGS: usize = 20;
+
+/// Best-effort: moves a failed dictation's WAV out of the temp dir into a
+/// `failed/` quarantine folder under app-data, so the audio survives a
+/// transient transcription failure instead of being deleted. Returns true when
+/// the clip was preserved (the caller then skips its normal delete), false on
+/// any problem (the caller deletes as usual). Never errors and never affects
+/// the dictation result.
+fn quarantine_failed_recording(
+    app: &AppHandle,
+    wav_path: &Path,
+    session_id: &str,
+    reason: &str,
+) -> bool {
+    if !wav_path.exists() {
+        // An earlier step (e.g. the success-path clip move) already consumed
+        // the WAV; there is nothing left to preserve.
+        return false;
+    }
+    let Ok(data_dir) = app.path().app_data_dir() else {
+        return false;
+    };
+    let dir = data_dir.join("failed");
+    if let Err(error) = fs::create_dir_all(&dir) {
+        log::warn!(
+            "Could not create failed-recording folder {}: {}",
+            dir.display(),
+            error
+        );
+        return false;
+    }
+    let target = dir.join(format!("{}.wav", session_id));
+    // fs::rename cannot cross volumes (the temp dir may live on a different one
+    // than app data), so fall back to copy + delete, exactly like
+    // save_audio_clip.
+    let preserved = if fs::rename(wav_path, &target).is_ok() {
+        true
+    } else if fs::copy(wav_path, &target).is_ok() {
+        let _ = fs::remove_file(wav_path);
+        true
+    } else {
+        false
+    };
+    if preserved {
+        log::warn!(
+            "Transcription failed ({}); kept the recording at {} so the audio is not lost (recoverable from disk).",
+            reason,
+            target.display()
+        );
+        prune_failed_recordings(&dir, MAX_FAILED_RECORDINGS);
+    }
+    preserved
+}
+
+/// Best-effort: keeps only the newest `keep` WAVs in `dir`, deleting older ones
+/// by modified time. Silent on any error.
+fn prune_failed_recordings(dir: &Path, keep: usize) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut wavs: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("wav") {
+                return None;
+            }
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            Some((modified, path))
+        })
+        .collect();
+    if wavs.len() <= keep {
+        return;
+    }
+    // Oldest first, then drop everything beyond the newest `keep`.
+    wavs.sort_by_key(|(modified, _)| *modified);
+    let remove_count = wavs.len() - keep;
+    for (_, path) in wavs.into_iter().take(remove_count) {
+        let _ = fs::remove_file(path);
+    }
 }
 
 fn transcribe_recording_inner(
@@ -586,5 +687,65 @@ impl WavCleanup {
 
     fn remove(&self) {
         let _ = fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prune_failed_recordings;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn unique_temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("scribe-test-{}-{}", tag, uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn wav_count(dir: &Path) -> usize {
+        fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.path().extension().and_then(|e| e.to_str()) == Some("wav"))
+            .count()
+    }
+
+    #[test]
+    fn prune_failed_recordings_caps_the_folder_and_spares_non_wavs() {
+        let dir = unique_temp_dir("prune");
+        for index in 0..25 {
+            fs::write(dir.join(format!("rec-{:02}.wav", index)), b"RIFF").unwrap();
+        }
+        // A non-WAV alongside the clips must never be counted or deleted.
+        fs::write(dir.join("notes.txt"), b"keep me").unwrap();
+
+        prune_failed_recordings(&dir, 20);
+
+        assert_eq!(wav_count(&dir), 20, "should keep exactly `keep` WAVs");
+        assert!(
+            dir.join("notes.txt").exists(),
+            "non-WAV files must be left untouched"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn prune_failed_recordings_is_a_noop_under_the_cap() {
+        let dir = unique_temp_dir("prune-under");
+        for index in 0..5 {
+            fs::write(dir.join(format!("rec-{}.wav", index)), b"RIFF").unwrap();
+        }
+
+        prune_failed_recordings(&dir, 20);
+
+        assert_eq!(wav_count(&dir), 5);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn prune_failed_recordings_tolerates_a_missing_folder() {
+        // Best-effort: a directory that does not exist must not panic.
+        prune_failed_recordings(Path::new("/scribe-nonexistent/failed/xyz"), 20);
     }
 }

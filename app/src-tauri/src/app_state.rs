@@ -267,4 +267,88 @@ mod tests {
             AppStatus::Recording
         );
     }
+
+    #[test]
+    fn pasting_flow_round_trips_back_to_ready_then_idle() {
+        let mut machine = AppStateMachine::default();
+
+        machine.transition(AppEvent::StartRecording).unwrap();
+        machine.transition(AppEvent::StopRecording).unwrap();
+        machine.transition(AppEvent::ValidAudio).unwrap();
+        machine
+            .transition(AppEvent::TranscriptionSucceeded)
+            .unwrap();
+        assert_eq!(machine.status(), &AppStatus::Ready);
+
+        assert_eq!(
+            machine.transition(AppEvent::StartPasting).unwrap().status,
+            AppStatus::Pasting
+        );
+        assert_eq!(
+            machine.transition(AppEvent::PasteCompleted).unwrap().status,
+            AppStatus::Ready
+        );
+        assert_eq!(
+            machine.transition(AppEvent::ReadyTimeout).unwrap().status,
+            AppStatus::Idle
+        );
+    }
+
+    #[test]
+    fn pause_and_resume_round_trip() {
+        let mut machine = AppStateMachine::default();
+
+        assert_eq!(
+            machine.transition(AppEvent::Pause).unwrap().status,
+            AppStatus::Paused
+        );
+        // A paused app rejects recording until it resumes.
+        assert!(machine.transition(AppEvent::StartRecording).is_err());
+        assert_eq!(machine.status(), &AppStatus::Paused);
+
+        assert_eq!(
+            machine.transition(AppEvent::Resume).unwrap().status,
+            AppStatus::Idle
+        );
+    }
+
+    #[test]
+    fn disconnect_recovery_reuses_the_normal_stop_to_transcribe_sequence() {
+        // A microphone unplugged mid-recording drives the SAME state events a
+        // manual stop with valid audio does (audio::disconnect_recording_for_app
+        // -> stop_recording_with_reason -> transcribe). This locks that the
+        // recovery sequence is a legal path the FSM accepts, so a dropped mic
+        // lands the user back on Ready (then Idle) rather than wedged.
+        let mut machine = AppStateMachine::default();
+
+        machine.transition(AppEvent::StartRecording).unwrap();
+        assert_eq!(machine.status(), &AppStatus::Recording);
+        assert_eq!(
+            machine.transition(AppEvent::StopRecording).unwrap().status,
+            AppStatus::Stopping
+        );
+        assert_eq!(
+            machine.transition(AppEvent::ValidAudio).unwrap().status,
+            AppStatus::Transcribing
+        );
+        let snapshot = machine
+            .transition(AppEvent::TranscriptionSucceeded)
+            .unwrap();
+        assert_eq!(snapshot.status, AppStatus::Ready);
+        assert!(snapshot.error.is_none());
+    }
+
+    #[test]
+    fn illegal_transition_is_rejected_and_leaves_state_unchanged() {
+        let mut machine = AppStateMachine::default();
+
+        // Stopping from Idle is not a valid edge.
+        let error = machine.transition(AppEvent::StopRecording).unwrap_err();
+        assert_eq!(error.from, AppStatus::Idle);
+        assert_eq!(machine.status(), &AppStatus::Idle);
+
+        // Pasting requires Ready first.
+        assert!(machine.transition(AppEvent::StartPasting).is_err());
+        assert_eq!(machine.status(), &AppStatus::Idle);
+    }
 }
