@@ -18,11 +18,12 @@ fill the real gaps** pass rather than a build-from-scratch pass.
 
 I found and fixed **5 genuine reliability holes**, added tests, and ran an adversarial multi-agent
 review of the diff (no blockers; 4 low-severity findings, the worthwhile ones fixed, the rest recorded
-below). The two items you flagged as "review, not code" — **punctuation** and **local-model grading** —
-are written up in [§6](#6-review-too-much-punctuation-when-i-pause) and
-[§7](#7-review-should-a-local-model-grade-while-we-dictate) with concrete options and a recommendation.
+below). For the two items flagged as "review, not code": **local-model grading** stays a write-up
+([§7](#7-review-should-a-local-model-grade-while-we-dictate)); **punctuation**
+([§6](#6-review--fix-too-much-punctuation-when-i-pause)) was reviewed **and then fixed** at the user's
+request — the incremental segment pause threshold was raised 350 ms → 1 s (commit `0a74ffc`).
 
-**Build status:** `cargo test --lib` → **179 passed, 0 failed** on Linux/WSL (was 171; +8 new).
+**Build status:** `cargo test --lib` → **180 passed, 0 failed** on Linux/WSL (was 171; +9 new).
 TypeScript `tsc --noEmit` clean. ⚠️ One important caveat: the Windows-only audio code can't be
 compiled on this Linux box — see [§5](#5-verification--what-could-not-be-checked-here).
 
@@ -119,7 +120,7 @@ report. Not a redesign — it matches the existing data/models folder rows. *Fil
 
 ---
 
-## 4. Tests added (8 new; 171 → 179)
+## 4. Tests added (9 new; 171 → 180)
 
 | Test | What it locks down |
 |---|---|
@@ -131,6 +132,7 @@ report. Not a redesign — it matches the existing data/models folder rows. *Fil
 | `app_state::pause_and_resume_round_trip` | Pause/Resume + reject-while-paused |
 | `app_state::disconnect_recovery_reuses_the_normal_stop_to_transcribe_sequence` | Fix D's event sequence is a legal FSM path |
 | `app_state::illegal_transition_is_rejected_and_leaves_state_unchanged` | Invalid edges don't corrupt state |
+| `incremental::brief_pause_below_threshold_does_not_split_a_segment` | §6 punctuation fix: a sub-threshold hesitation no longer cuts a segment |
 
 The mic-disconnect *wiring* itself (Fix D) is `#[cfg(windows)]` and not unit-testable on Linux; the
 test instead pins that the recovery's **state sequence** (`Recording → StopRecording → ValidAudio →
@@ -156,11 +158,10 @@ Transcribing → success → Ready`) is one the FSM accepts.
 
 ---
 
-## 6. Review: "too much punctuation when I pause"
+## 6. Review + fix: "too much punctuation when I pause"
 
-**This is a real, explainable behavior, and there are two compounding root causes.** (Review only — I
-did **not** change decoding behavior, since it carries an accuracy trade-off and you framed this as a
-review. Concrete options below.)
+**This is a real, explainable behavior with two compounding root causes.** Reviewed below; the
+dominant cause (root cause 1) was then **fixed** at the user's request — see "Implemented".
 
 ### Root cause 1 — the incremental segmenter manufactures sentence breaks at every pause *(the big one)*
 Incremental transcription is **ON by default** (`incremental_transcription_enabled`,
@@ -206,10 +207,16 @@ pause **ellipses** and `[BLANK_AUDIO]` markers but does nothing about stray sing
    (`dictation_cleanup_enabled`, default off) explicitly "fixes punctuation… merges run-ons." It's the
    highest-quality fix but adds latency and requires a local LLM server (LM Studio/Ollama).
 
-**Recommended path:** ship a single user-facing **"Reduce extra punctuation on pauses"** toggle that
-flips option 2 (longer segment silence + don't bias on punctuated context) — deterministic, testable,
-no external dependency, defaulted off so nothing changes for existing users. Reach for option 3 only
-after verifying flags against the bundled binary. Until then, option 1 is your immediate relief.
+**Implemented (commit `0a74ffc`):** option 2's core lever — `SEGMENT_SILENCE_MS` raised **350 ms → 1 s**
+in `incremental.rs`. Cuts now line up with deliberate sentence-ending pauses (~1 s) instead of
+mid-sentence hesitations (~0.2–0.6 s), so far fewer manufactured sentence breaks. Cutting stays
+pause-based (a fixed time slice would cut mid-word). This is a default behavior change (it slightly
+raises stop-to-text latency and streams partials in larger chunks — the documented trade-off), fully
+unit-tested on Linux including a new regression test that a sub-threshold hesitation no longer splits a
+segment. **Not yet done** (further options if 1 s isn't enough): strip trailing punctuation from
+non-final segments / stop biasing on punctuated context (option 2 remainder), the whisper decode flags
+(option 3, needs flag-spelling verification against the bundled binary), or exposing this as a settings
+slider rather than a baked-in constant.
 
 ---
 
@@ -302,7 +309,9 @@ never blanks" contract), gated behind `llm_status` + off by default — never pe
 1. **CI: `cargo check --target x86_64-pc-windows-msvc`** (or a Windows runner) so the `#[cfg(windows)]`
    code is type-checked on every push. Today it never is — this pass is the proof (Fix D shipped
    unverified-by-compile).
-2. **Punctuation:** ship the "Reduce extra punctuation on pauses" toggle from §6 (option 2).
+2. **Punctuation:** the 350 ms → 1 s threshold (commit `0a74ffc`) is in. If 1 s isn't enough, add the
+   remaining §6 option-2 work (strip non-final-segment punctuation) and/or expose it as a settings
+   slider; verify decode flags (option 3) against the bundled whisper binary.
 3. **Settings robustness (R3):** add per-field `#[serde(default = …)]` to the original `AppSettings`
    fields + a user-visible "settings were reset" notice.
 4. **Confidence/grading (§7):** capture Whisper's `verbose_json` confidence and surface it.
@@ -310,6 +319,7 @@ never blanks" contract), gated behind `llm_status` + off by default — never pe
 
 ---
 
-*Generated by Claude Code (Opus 4.8, 1M context) during an overnight reliability pass. All code changes
-are on the `reliability-pass` branch in 4 commits (`caea821`, `0a11107`, `5c88473`, `15329ae`); the
-working tree is otherwise clean.*
+*Generated by Claude Code (Opus 4.8, 1M context) during an overnight reliability pass. Code changes are
+on the `reliability-pass` branch: `caea821` (settings self-heal), `0a11107` (logs), `5c88473` (mic
+disconnect), `15329ae` (failed-recording quarantine + tests), `0a74ffc` (punctuation: segment pause
+threshold). The working tree is otherwise clean.*
