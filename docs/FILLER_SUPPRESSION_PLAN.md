@@ -162,8 +162,10 @@ just leaving it disabled. To delete it outright:
 - `4520c16` WS3 core (`filler.rs::suppress_fillers` + tests)
 - `5945471` WS4 settings (3 `AppSettings` fields)
 - `2aff990` WS1 parse (`whisper::parse_cli_words` + tests)
-- `3722e50` WS1/WS2 pipeline wiring
+- `3722e50` WS1/WS2 pipeline wiring (CLI path)
 - `01641f6` WS5 settings UI
+- WS2 warm-server path: `parse_server_words` (step 1) + verbose_json wiring in
+  `whisper_server::transcribe_via_server` (step 2)
 
 **Files & touch-points** (every integration line is marked `// FILLER`):
 - **New, delete entirely:** `app/src-tauri/src/filler.rs` (+ `pub mod filler;` in

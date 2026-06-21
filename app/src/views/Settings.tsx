@@ -284,8 +284,8 @@ export function SettingsView({
               />
             </SettingRow>
             <p className="muted vocab-hint">
-              Uses Whisper's own word timings; no LLM. While on, dictation uses
-              the whisper-cli path (a touch slower than the warm server).
+              Uses Whisper's own word timings; no LLM, and it runs on the warm
+              transcription server, so there's no real speed cost.
             </p>
           </div>
 
