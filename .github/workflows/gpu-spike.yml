@@ -1,0 +1,174 @@
+name: GPU Vulkan Spike
+
+# EXPLORATORY — not part of the release pipeline. Lives on feat/gpu-vulkan-spike.
+# Goal: prove (1) whisper.cpp builds from source with -DGGML_VULKAN=ON on the
+# Windows toolchain, (2) the Vulkan backend actually ENGAGES and produces a
+# correct transcript (validated against a Lavapipe software Vulkan device, since
+# hosted runners have no discrete GPU), (3) forced-CPU (--no-gpu) still works,
+# and (4) ships the built Vulkan binaries as an artifact so the maintainer can
+# run the real detection test on the RX 7800 XT without building anything.
+#
+# What this CANNOT prove: that the discrete AMD RDNA3 card is detected/engaged or
+# how fast it is — that needs the actual hardware (download the artifact below).
+
+on:
+  workflow_dispatch:
+    inputs:
+      whisper_ref:
+        description: "whisper.cpp git ref to build (tag/branch/SHA)"
+        type: string
+        default: "v1.9.1"
+      model:
+        description: "ggml model to test (e.g. tiny.en, base.en)"
+        type: string
+        default: "tiny.en"
+  push:
+    branches: [feat/gpu-vulkan-spike]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-probe:
+    runs-on: windows-latest
+    env:
+      WHISPER_REF: ${{ github.event.inputs.whisper_ref || 'v1.9.1' }}
+      MODEL: ${{ github.event.inputs.model || 'tiny.en' }}
+    steps:
+      - name: Install Vulkan SDK + Lavapipe (software Vulkan device)
+        uses: jakoch/install-vulkan-sdk-action@v1.5.5
+        with:
+          vulkan_version: 1.4.350.0
+          install_runtime: true
+          install_lavapipe: true
+          cache: true
+
+      - name: Show Vulkan toolchain
+        shell: pwsh
+        run: |
+          Write-Host "VULKAN_SDK=$env:VULKAN_SDK"
+          if (Test-Path "$env:VULKAN_SDK\Bin\glslc.exe") { & "$env:VULKAN_SDK\Bin\glslc.exe" --version }
+          # Find any Vulkan ICD JSONs that got installed (lavapipe etc.).
+          Write-Host "--- candidate ICD jsons ---"
+          Get-ChildItem -Path $env:RUNNER_TEMP, $env:VULKAN_SDK, "C:\" -Recurse -Filter "*.json" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match 'icd|lvp|lavapipe' } | Select-Object -First 20 FullName
+
+      - name: Clone whisper.cpp @ ref
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch "$env:WHISPER_REF" https://github.com/ggml-org/whisper.cpp wcpp
+          Push-Location wcpp; Write-Host "HEAD: $(git rev-parse HEAD)"; Pop-Location
+
+      - name: Configure + build (Vulkan, shared libs)
+        shell: pwsh
+        working-directory: wcpp
+        run: |
+          cmake -B build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DGGML_VULKAN=ON `
+            -DGGML_NATIVE=OFF `
+            -DBUILD_SHARED_LIBS=ON `
+            -DWHISPER_BUILD_EXAMPLES=ON `
+            -DWHISPER_BUILD_TESTS=OFF `
+            -DWHISPER_BUILD_SERVER=ON
+          cmake --build build --config Release -j
+          Write-Host "--- build/bin/Release ---"
+          Get-ChildItem build/bin/Release | Select-Object Name,Length
+
+      - name: Download model
+        shell: pwsh
+        working-directory: wcpp
+        run: |
+          $url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-$env:MODEL.bin"
+          Write-Host "Downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile "ggml-$env:MODEL.bin"
+          Get-Item "ggml-$env:MODEL.bin" | Select-Object Name,Length
+
+      - name: Locate Lavapipe ICD
+        id: icd
+        shell: pwsh
+        run: |
+          $icd = Get-ChildItem -Path $env:RUNNER_TEMP, "C:\" -Recurse -Filter "*.json" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match 'lvp_icd|lavapipe' } | Select-Object -First 1
+          if ($icd) {
+            Write-Host "Lavapipe ICD: $($icd.FullName)"
+            "path=$($icd.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            Write-Host "No Lavapipe ICD found — GPU probe will likely report 0 devices."
+            "path=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+
+      - name: Probe GPU (Vulkan via Lavapipe) — should ENGAGE
+        continue-on-error: true
+        shell: pwsh
+        working-directory: wcpp
+        run: |
+          $bin = "build/bin/Release"
+          $icd = "${{ steps.icd.outputs.path }}"
+          if ($icd) { $env:VK_DRIVER_FILES = $icd; $env:VK_ICD_FILENAMES = $icd }
+          Write-Host "VK_DRIVER_FILES=$env:VK_DRIVER_FILES"
+          & "$bin/whisper-cli.exe" -m "ggml-$env:MODEL.bin" -f samples/jfk.wav -nt 1>gpu.txt 2>gpu.err
+          Write-Host "===== backend/device lines (stderr) ====="
+          Select-String -Path gpu.err -Pattern 'Found .*Vulkan devices|ggml_vulkan|using Vulkan|whisper_backend_init|use gpu|register_device' | ForEach-Object { $_.Line }
+          Write-Host "===== transcript (stdout) ====="
+          Get-Content gpu.txt
+
+      - name: Probe CPU (--no-gpu) — forced fallback
+        continue-on-error: true
+        shell: pwsh
+        working-directory: wcpp
+        run: |
+          $bin = "build/bin/Release"
+          & "$bin/whisper-cli.exe" -m "ggml-$env:MODEL.bin" -f samples/jfk.wav -nt --no-gpu 1>cpu.txt 2>cpu.err
+          Write-Host "===== backend/device lines (stderr) ====="
+          Select-String -Path cpu.err -Pattern 'Found .*Vulkan devices|using Vulkan|whisper_backend_init|use gpu|system_info' | ForEach-Object { $_.Line }
+          Write-Host "===== transcript (stdout) ====="
+          Get-Content cpu.txt
+
+      - name: Verify Vulkan engaged + output parity
+        continue-on-error: true
+        shell: pwsh
+        working-directory: wcpp
+        run: |
+          $engaged = (Test-Path gpu.err) -and (Select-String -Path gpu.err -Pattern 'using Vulkan0|whisper_backend_init_gpu' -Quiet)
+          Write-Host "Vulkan backend engaged in GPU probe: $engaged"
+          if ((Test-Path gpu.txt) -and (Test-Path cpu.txt)) {
+            $g = (Get-Content gpu.txt -Raw).Trim()
+            $c = (Get-Content cpu.txt -Raw).Trim()
+            if ($g -eq $c) { Write-Host "PARITY: GPU and CPU transcripts are identical." }
+            else { Write-Host "DIFF: transcripts differ (may be acceptable FP variance)."; Write-Host "GPU: $g"; Write-Host "CPU: $c" }
+          }
+
+      - name: Stage Vulkan binaries for artifact
+        shell: pwsh
+        working-directory: wcpp
+        run: |
+          $bin = "build/bin/Release"
+          $out = "vulkan-bin"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          # Match Scribe's bundled layout + the Vulkan backend DLL.
+          $want = @("whisper-cli.exe","whisper-server.exe","whisper.dll","ggml.dll","ggml-base.dll","ggml-cpu.dll","ggml-vulkan.dll")
+          foreach ($n in $want) {
+            $f = Get-ChildItem -Path $bin -Recurse -Filter $n -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($f) { Copy-Item $f.FullName $out } else { Write-Host "WARN: $n not found" }
+          }
+          "Built from whisper.cpp $env:WHISPER_REF" | Out-File "$out/BUILD_INFO.txt"
+          Get-ChildItem $out | Select-Object Name,Length
+
+      - name: Upload Vulkan binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-vulkan-windows-${{ github.event.inputs.whisper_ref || 'v1.9.1' }}
+          path: wcpp/vulkan-bin/**
+
+      - name: Upload probe logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spike-logs
+          path: |
+            wcpp/gpu.txt
+            wcpp/gpu.err
+            wcpp/cpu.txt
+            wcpp/cpu.err
+          if-no-files-found: ignore
