@@ -1,10 +1,63 @@
 # Scribe — Session Handoff
 
-> **Current as of 2026-06-15, version 0.5.22.** For the running feature log read
-> [`CHANGELOG.md`](../CHANGELOG.md); for competitive positioning + a prioritized
-> gap list read [`docs/COMPETITIVE-ANALYSIS.md`](COMPETITIVE-ANALYSIS.md); for
-> longer history read [`docs/STATUS_AND_NEXT_STEPS.md`](STATUS_AND_NEXT_STEPS.md).
-> Earlier point-in-time handoffs (pre-0.5) are superseded by this file.
+> **Current as of 2026-06-21, version 0.6.0.** For the running feature log read
+> [`CHANGELOG.md`](../CHANGELOG.md); for the **active roadmap** (phased, checkbox
+> tracker) read [`docs/UX_REFINEMENT_BACKLOG.md`](UX_REFINEMENT_BACKLOG.md); for
+> competitive positioning read [`docs/COMPETITIVE-ANALYSIS.md`](COMPETITIVE-ANALYSIS.md);
+> for longer history read [`docs/STATUS_AND_NEXT_STEPS.md`](STATUS_AND_NEXT_STEPS.md).
+> The Project summary / release process / gotchas below stay accurate; the
+> 0.5.22-era "State" and "Next steps" sections further down are **historical** —
+> the current state and next steps are immediately below.
+
+## Current state — v0.6.0 (shipped 2026-06-21)
+
+**GPU acceleration via Vulkan shipped, plus a Phase 0 cleanup pass.** All on
+`main`, released as **v0.6.0** (CI green, installer published). This session's
+commits: `git log v0.5.24..HEAD` (newest `38d7f5d` … oldest `e0a5eee`).
+
+- **GPU (Vulkan).** whisper.cpp built from source with `-DGGML_VULKAN=ON` in
+  `release.yml` (pinned **v1.9.1**), `ggml-vulkan.dll` bundled. **~16× faster
+  end-to-end / ~88× encode** on the RX 7800 XT (`large-v3-turbo`), measured. On
+  by default (`gpu_acceleration` = Auto), automatic CPU fallback, device pin via
+  `GGML_VK_VISIBLE_DEVICES`, GPU→CPU retry on failure. UI: **Audio → GPU
+  acceleration** (probe-backed status + toggle + multi-GPU device picker).
+  Installer download grew only ~7 MB.
+- **Removed local-LLM dictation cleanup** — duplicated filler suppression and
+  added a per-dictation round-trip (the lag). The LLM now powers only **Notes
+  analysis + Selection transform** (both on-demand, never in the dictation path).
+- **Silent recordings return empty** (no Whisper hallucination):
+  `audio::wav_has_speech` gates the full-clip path; fails open.
+- **Cheap GPU probe** — cached + async (`spawn_blocking`) + smallest downloaded
+  Whisper model (`gpu.rs`).
+- **Catalog**: full fp16 `large-v3-turbo`; **English/Multilingual filter** in the
+  model browser.
+
+Verified: **216** backend lib tests, `tsc` + frontend build clean, CI Windows
+`cargo check --all-targets` green, release build green + published, GPU
+benchmarked on the actual 7800 XT.
+
+## Next: Phase 1 — Integrations + managed local LLM
+
+**Read [`docs/UX_REFINEMENT_BACKLOG.md`](UX_REFINEMENT_BACKLOG.md) first** — it's
+the phased, checkbox roadmap (Phase 0 is checked off there). Phase 1:
+
+1. **Integrations sidebar** (backlog §A) — new "Integrations" nav section; move
+   **Sync (GitHub)** and **Local LLM** under it; enabling an integration opens
+   its settings + shows the features it unlocks. Icons: GitHub + LM Studio logos
+   + a generic integrations icon.
+2. **Scribe-managed local LLM** (backlog §B) — the "inside the app" goal: a
+   **`llama-server`** (llama.cpp, same ggml family as whisper.cpp) that Scribe
+   spawns/manages itself like `whisper_server.rs`, **GPU-accelerated via the
+   Vulkan backend shipped in 0.6.0**, OpenAI-compatible so `note_analysis` /
+   `selection_transform` clients don't change; download-on-enable GGUF (e.g.
+   Gemma 3 4B) mirroring the Whisper model catalog. **NOTE:** Ollama *and* LM
+   Studio are both **external** servers — Ollama already works as BYO
+   (`http://localhost:11434/v1`); neither is "inside the app." Only managed
+   llama-server is. **Spike first** (prove llama-server runs GPU-accelerated on
+   the 7800 XT, mirroring `docs/GPU_VULKAN_SPIKE.md`) before wiring it in.
+
+Phase 2 (per-view UX) and Phase 3 (Transcribe refactor; Transform-selection
+expansion) follow — all itemized in the backlog. **History + Notes are deferred.**
 
 ## Project summary
 
