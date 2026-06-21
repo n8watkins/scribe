@@ -4,6 +4,58 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.23 — 2026-06-21
+
+A reliability, text-quality, and polish pass.
+
+**Reliability**
+
+- **A mic unplugged mid-recording no longer wedges the app.** A disconnect now
+  cleanly stops, keeps whatever was captured before the drop, and recovers —
+  instead of sitting on "Recording" until the max-duration timeout. The salvaged
+  audio is saved to History but **not** auto-pasted (dead air otherwise pastes
+  Whisper's silence hallucinations into the focused app).
+- **Corrupt settings can't brick launch.** A bad or half-written settings value
+  is backed up and replaced with defaults instead of failing to start, and any
+  missing settings field now degrades to its own default rather than resetting
+  everything.
+- **Useful local logs** — larger and rotated (5 MB × 5), local timestamps, and a
+  panic hook so background-thread crashes reach the log. New "Local logs folder"
+  and "Failed recordings folder" rows in Data & Privacy.
+
+**Text quality**
+
+- **Pause-aware filler suppression (optional, off by default).** Removes "um",
+  "uh", … — but only when there's a real pause around them, so fluent uses ("oh
+  no", "like this") are kept. Editable word list and tunable pause threshold;
+  runs on the warm transcription server, so there's no speed cost.
+- **Stops pasting Whisper's silence hallucinations.** `--suppress-nst` on both
+  transcription paths, plus a small denylist that drops video-outro junk ("be
+  sure to subscribe", "thanks for watching") when a transcript is nothing but
+  that.
+- **Tunable pause-to-split** for live transcription — fewer stray periods/commas
+  when you pause mid-sentence.
+
+**Backup**
+
+- **GitHub notes/transcript backup replaces Google Drive.** Device-flow OAuth to
+  a private repo you control; the access token lives in the OS keyring, never in
+  settings.
+
+**Polish**
+
+- **Themes** — a calm "Pewter" light theme in place of the bright Daylight, a
+  user-defined 5-color custom theme, and contrast fixes applied across every view
+  and component state.
+- **Toasts** — up to two now stack instead of one clobbering the next; the
+  mic-disconnect notice cascade collapses to a single message; error toasts
+  linger longer than routine confirmations.
+
+**Dropped**
+
+- Authenticode code signing is no longer being pursued; installers stay unsigned
+  (the SmartScreen first-run warning remains).
+
 ## 0.5.22 — 2026-06-14
 
 - **Fixed: update checks were tripping GitHub's API rate limit (HTTP 403).** The
