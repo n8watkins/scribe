@@ -180,10 +180,17 @@ impl WarmTranscriber {
         app: &AppHandle,
         request: WhisperRequest,
     ) -> Result<WhisperTranscription, CommandError> {
+        // FILLER: the warm server returns text only; pause-aware filler removal
+        // needs per-word timestamps, which today come from the whisper-cli
+        // `--output-json-full` path. So a filler request skips the server and
+        // uses the CLI directly. (A warm-server verbose_json path is a perf
+        // follow-up — see docs/FILLER_SUPPRESSION_PLAN.md.)
+        let server_eligible = request.filler.is_none();
+
         // Missing inputs are user-facing errors, not server failures; let the
         // CLI path produce its existing error messages without touching the
         // failure counter.
-        if request.model_path.is_file() && request.wav_path.is_file() {
+        if server_eligible && request.model_path.is_file() && request.wav_path.is_file() {
             if let Some(transcription) = self.try_server(app, &request) {
                 return Ok(transcription);
             }

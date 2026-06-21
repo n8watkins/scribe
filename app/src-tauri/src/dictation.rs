@@ -232,6 +232,8 @@ fn transcribe_recording_inner(
                     language: language.clone(),
                     translate: settings.translate_to_english,
                     vocabulary_prompt: settings.vocabulary_prompt.clone(),
+                    // FILLER: gate from settings (None = off, unchanged path).
+                    filler: crate::filler::FillerConfig::from_settings(&settings),
                 },
             )
         }

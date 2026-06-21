@@ -10,6 +10,34 @@
 //! This module is pure and timing-only so it is fully unit-testable off-Windows;
 //! the (Windows-gated) timestamp capture lives in `whisper.rs`.
 
+/// The gate for the whole feature: present only when suppression is enabled and
+/// the user's list is non-empty. A `WhisperRequest` carrying `Some(_)` takes the
+/// word-timestamp transcription path; `None` is the unchanged plain-text path.
+#[derive(Debug, Clone)]
+pub struct FillerConfig {
+    pub words: Vec<String>,
+    pub pause_threshold_ms: i64,
+}
+
+impl FillerConfig {
+    /// Build from settings — `None` when the feature is off or the list is
+    /// empty, so callers branch on a single Option.
+    pub fn from_settings(settings: &crate::settings::AppSettings) -> Option<Self> {
+        if !settings.filler_suppression_enabled || settings.filler_words.is_empty() {
+            return None;
+        }
+        Some(Self {
+            words: settings.filler_words.clone(),
+            pause_threshold_ms: i64::from(settings.filler_pause_threshold_ms),
+        })
+    }
+
+    /// Apply the pause-aware removal to a parsed, timed word list.
+    pub fn apply(&self, words: &[TimedWord]) -> String {
+        suppress_fillers(words, &self.words, self.pause_threshold_ms)
+    }
+}
+
 /// One word with its Whisper timing, in milliseconds from the clip start.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimedWord {

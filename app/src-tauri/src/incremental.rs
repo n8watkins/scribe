@@ -439,6 +439,8 @@ struct SegmentContext {
     language: String,
     translate: bool,
     vocabulary_prompt: String,
+    // FILLER: gate, captured once when the session starts.
+    filler: Option<crate::filler::FillerConfig>,
 }
 
 fn run_coordinator(
@@ -530,6 +532,7 @@ fn transcribe_segment(
                 language: context.language.clone(),
                 translate: context.translate,
                 vocabulary_prompt: prompt_with_context(&context.vocabulary_prompt, accumulated),
+                filler: context.filler.clone(), // FILLER
             },
         )
         .map_err(|error| error.message)?;
@@ -548,6 +551,7 @@ fn segment_context(app: &AppHandle) -> Result<SegmentContext, String> {
         model_path,
         language: crate::dictation::whisper_language(&settings.language),
         translate: settings.translate_to_english,
+        filler: crate::filler::FillerConfig::from_settings(&settings),
         vocabulary_prompt: settings.vocabulary_prompt,
     })
 }

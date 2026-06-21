@@ -22,6 +22,10 @@ pub struct WhisperRequest {
     /// Custom vocabulary / spelling hints; passed as `--prompt` when the
     /// trimmed value is non-empty.
     pub vocabulary_prompt: String,
+    /// FILLER: when set, transcription takes the word-timestamp path
+    /// (`--output-json-full` -> parse -> pause-aware filler removal). `None`
+    /// leaves the plain-text path byte-for-byte unchanged.
+    pub filler: Option<crate::filler::FillerConfig>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -76,10 +80,14 @@ pub(crate) fn transcribe_with_output_prefix(
         request.translate,
         output_prefix,
         &request.vocabulary_prompt,
+        request.filler.is_some(), // FILLER: word timestamps only when needed
     );
     let started = Instant::now();
     let output = run_whisper_command(&executable, &args)?;
     let latency_ms = started.elapsed().as_millis().min(u32::MAX as u128) as u32;
+
+    // FILLER: the word-timestamp path writes <prefix>.json; the plain path .txt.
+    let json_path = output_prefix.with_extension("json");
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -90,14 +98,31 @@ pub(crate) fn transcribe_with_output_prefix(
             stdout.trim()
         };
         let _ = fs::remove_file(&output_txt_path);
+        let _ = fs::remove_file(&json_path);
         return Err(CommandError::new(
             "whisper_transcription_failed",
             format!("Whisper transcription failed. {}", detail),
         ));
     }
 
-    let text = parse_output_text(&output_txt_path, &output.stdout)?;
+    // FILLER: with a config, parse word timings, drop pause-bracketed fillers,
+    // then normalize. If the JSON is unreadable/empty, fall back to plain text so
+    // a parse hiccup never loses the dictation.
+    let text = match &request.filler {
+        Some(config) => {
+            let words = fs::read_to_string(&json_path)
+                .map(|json| parse_cli_words(&json))
+                .unwrap_or_default();
+            if words.is_empty() {
+                parse_output_text(&output_txt_path, &output.stdout)?
+            } else {
+                normalize_transcript_text(&config.apply(&words))
+            }
+        }
+        None => parse_output_text(&output_txt_path, &output.stdout)?,
+    };
     let _ = fs::remove_file(&output_txt_path);
+    let _ = fs::remove_file(&json_path);
 
     Ok(WhisperTranscription { text, latency_ms })
 }
@@ -137,6 +162,7 @@ fn whisper_args(
     translate: bool,
     output_prefix: &Path,
     vocabulary_prompt: &str,
+    word_timestamps: bool,
 ) -> Vec<String> {
     let mut args = vec![
         "-m".to_string(),
@@ -145,7 +171,13 @@ fn whisper_args(
         wav_path.to_string_lossy().to_string(),
         "--language".to_string(),
         language.to_string(),
-        "--output-txt".to_string(),
+        // FILLER: word timestamps need the JSON-full output; otherwise plain txt
+        // (the default path, unchanged). Both still print --no-timestamps text.
+        if word_timestamps {
+            "--output-json-full".to_string()
+        } else {
+            "--output-txt".to_string()
+        },
         "--output-file".to_string(),
         output_prefix.to_string_lossy().to_string(),
         "--no-timestamps".to_string(),
@@ -462,6 +494,7 @@ mod tests {
             false,
             Path::new("temp/out"),
             "",
+            false,
         );
 
         assert_eq!(
@@ -495,6 +528,7 @@ mod tests {
             true,
             Path::new("temp/out"),
             "",
+            false,
         );
 
         let lang_index = args.iter().position(|arg| arg == "--language").unwrap();
@@ -511,6 +545,7 @@ mod tests {
             false,
             Path::new("temp/out"),
             "",
+            false,
         );
         let lang_index = args.iter().position(|arg| arg == "--language").unwrap();
         assert_eq!(args[lang_index + 1], "auto");
@@ -601,8 +636,36 @@ mod tests {
             false,
             Path::new("out"),
             "",
+            false,
         );
         assert!(args.iter().any(|arg| arg == "--suppress-nst"));
+    }
+
+    #[test]
+    fn word_timestamps_switch_output_format() {
+        let plain = whisper_args(
+            Path::new("m.bin"),
+            Path::new("a.wav"),
+            "en",
+            false,
+            Path::new("out"),
+            "",
+            false,
+        );
+        assert!(plain.iter().any(|arg| arg == "--output-txt"));
+        assert!(!plain.iter().any(|arg| arg == "--output-json-full"));
+
+        let timed = whisper_args(
+            Path::new("m.bin"),
+            Path::new("a.wav"),
+            "en",
+            false,
+            Path::new("out"),
+            "",
+            true,
+        );
+        assert!(timed.iter().any(|arg| arg == "--output-json-full"));
+        assert!(!timed.iter().any(|arg| arg == "--output-txt"));
     }
 
     #[test]
@@ -614,6 +677,7 @@ mod tests {
             false,
             Path::new("out"),
             "   \n\t ",
+            false,
         );
 
         assert!(!args.iter().any(|arg| arg == "--prompt"));
@@ -628,6 +692,7 @@ mod tests {
             false,
             Path::new("out"),
             "  Scribe, Tauri, WASAPI; \"quoted\" & spaced terms  ",
+            false,
         );
 
         let prompt_index = args.iter().position(|arg| arg == "--prompt").unwrap();

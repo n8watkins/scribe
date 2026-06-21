@@ -76,6 +76,8 @@ pub fn transcribe_file(app: &AppHandle, path: &str) -> Result<TranscribeFileResu
         language: whisper_language(&settings.language),
         translate: settings.translate_to_english,
         vocabulary_prompt: settings.vocabulary_prompt.clone(),
+        // FILLER: gate from settings (None = off, unchanged path).
+        filler: crate::filler::FillerConfig::from_settings(&settings),
     };
     let output_prefix = work_dir.join(format!("file-{}", Uuid::new_v4().simple()));
     let transcription = whisper::transcribe_with_output_prefix(app, &request, &output_prefix)?;
