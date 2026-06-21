@@ -186,6 +186,13 @@ function TitleBar({ isDev }: { isDev: boolean }) {
 const MAX_TOASTS = 2;
 const TOAST_DURATION_MS = 5000;
 
+// When the mic is unplugged mid-recording the backend salvages + transcribes
+// what it captured, which would fire the normal "Transcript ready." and paste
+// notices right behind the disconnect notice — three toasts for one event. For
+// this window after a disconnect, the routine success/empty notices are
+// suppressed so only the single, explanatory disconnect toast shows.
+const DISCONNECT_NOTICE_SUPPRESS_MS = 8000;
+
 function App() {
   const [activeView, setActiveView] = useState<ViewName>("Dashboard");
   const [settingsTabId, setSettingsTabId] = useState<string | null>(null);
@@ -204,6 +211,9 @@ function App() {
   const [models, setModels] = useState<ModelInfo[] | null>(null);
   const [toasts, setToasts] = useState<ToastNotice[]>([]);
   const toastIdRef = useRef(0);
+  // Epoch (ms) until which routine dictation notices are suppressed because a
+  // mic-disconnect just explained the situation in one toast. 0 = not active.
+  const suppressRoutineNoticesUntilRef = useRef(0);
   const [isDevFlavor, setIsDevFlavor] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
   // Drives the branded auto-update screen. Non-null while an on-launch silent
@@ -598,6 +608,9 @@ function App() {
         }),
         listen<RecordingSessionInfo>("audio://recording-started", (event) => {
           setLiveTranscript(null);
+          // A fresh recording ends any prior disconnect episode, so its own
+          // notices are never suppressed by a stale flag.
+          suppressRoutineNoticesUntilRef.current = 0;
           if (soundsEnabledRef.current) {
             playStartCue();
           }
@@ -625,11 +638,20 @@ function App() {
           scheduleRefresh();
         }),
         listen<RecordingErrorEvent>("audio://recording-error", (event) => {
+          // A mid-recording disconnect is followed by salvage transcription +
+          // paste, whose routine notices would bury this one. Suppress those for
+          // a short window so the disconnect speaks for itself.
+          if (event.payload.code === "microphone_unavailable") {
+            suppressRoutineNoticesUntilRef.current =
+              Date.now() + DISCONNECT_NOTICE_SUPPRESS_MS;
+          }
           showNotice(event.payload.message, "error");
           scheduleRefresh();
         }),
         listen<DictationResult>("scribe:dictation-transcribed", () => {
-          showNotice("Transcript ready.", "success");
+          if (Date.now() >= suppressRoutineNoticesUntilRef.current) {
+            showNotice("Transcript ready.", "success");
+          }
           scheduleRefresh();
         }),
         listen<ModelDownloadProgress>("model://download-progress", (event) => {
@@ -642,11 +664,15 @@ function App() {
           scheduleRefresh();
         }),
         listen<OutputResult>("scribe:output-completed", (event) => {
-          showNotice(event.payload.message, "success");
+          if (Date.now() >= suppressRoutineNoticesUntilRef.current) {
+            showNotice(event.payload.message, "success");
+          }
           scheduleRefresh();
         }),
         listen<{ message: string }>("scribe:dictation-empty", (event) => {
-          showNotice(event.payload.message, "info");
+          if (Date.now() >= suppressRoutineNoticesUntilRef.current) {
+            showNotice(event.payload.message, "info");
+          }
           scheduleRefresh();
         }),
         listen<{ message: string }>("scribe:output-failed", (event) => {
