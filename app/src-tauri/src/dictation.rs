@@ -380,8 +380,12 @@ fn transcribe_recording_inner(
     // Output fires exactly once here, on the final assembled transcript — never
     // per partial. Any "streaming" feel comes from the DirectInsert keystroke
     // injection, not from multiple output passes.
-    // Notes are for the archive, not the cursor: never auto-paste them.
-    if !transcript.is_note {
+    // Notes are for the archive, not the cursor: never auto-paste them. A
+    // disconnect salvage is likewise saved (above) but never pasted — the mic
+    // died on dead air, so auto-pasting would dump Whisper's silence
+    // hallucinations into the focused app. It's in History; Paste-Last can
+    // recover it if the user really did say something before the drop.
+    if !transcript.is_note && !recording.disconnected {
         if let Err(error) = output::handle_transcription_output(app, &transcript, &settings) {
             output::emit_output_failed(app, transcript.id.clone(), &error);
         }

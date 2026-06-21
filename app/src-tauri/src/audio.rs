@@ -128,6 +128,12 @@ pub struct RecordingResult {
     pub is_note: bool,
     #[serde(default)]
     pub is_transform: bool,
+    /// True when the recording ended because the mic was disconnected
+    /// mid-capture. The salvaged audio is transcribed and saved to History so
+    /// nothing is lost, but it is NOT auto-pasted — a mic dying on dead air
+    /// otherwise pastes Whisper's silence hallucinations into the focused app.
+    #[serde(default)]
+    pub disconnected: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -676,7 +682,7 @@ fn disconnect_recording_for_app(app: &AppHandle, session_id: &str) -> Result<(),
         CommandError::new(
             "microphone_unavailable",
             "The microphone stopped sending audio (it may have been unplugged or disabled). \
-             Anything captured before that was kept; reconnect the mic and record again.",
+             Anything captured was saved to your History (not pasted) — reconnect the mic and record again.",
         ),
     );
 
@@ -1014,6 +1020,7 @@ fn finalize_recording(
 ) -> Result<RecordingResult, CommandError> {
     let stopped_at = Utc::now();
     let duration_ms = duration_ms(samples.len(), source_sample_rate);
+    let disconnected = stop_reason == StopReason::Disconnected;
 
     if stop_reason == StopReason::Cancelled {
         return Ok(recording_result(
@@ -1024,6 +1031,7 @@ fn finalize_recording(
             None,
             Some("Recording was cancelled.".to_string()),
             stopped_at,
+            disconnected,
         ));
     }
 
@@ -1039,6 +1047,7 @@ fn finalize_recording(
                 min_recording_ms
             )),
             stopped_at,
+            disconnected,
         ));
     }
 
@@ -1061,9 +1070,11 @@ fn finalize_recording(
         bytes_written,
         None,
         stopped_at,
+        disconnected,
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn recording_result(
     info: RecordingSessionInfo,
     status: RecordingResultStatus,
@@ -1072,6 +1083,7 @@ fn recording_result(
     bytes_written: Option<u64>,
     reason: Option<String>,
     stopped_at: DateTime<Utc>,
+    disconnected: bool,
 ) -> RecordingResult {
     RecordingResult {
         session_id: info.session_id,
@@ -1087,6 +1099,7 @@ fn recording_result(
         stopped_at,
         is_note: info.is_note,
         is_transform: info.is_transform,
+        disconnected,
     }
 }
 
