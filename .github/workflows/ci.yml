@@ -1,0 +1,60 @@
+name: CI
+
+# Fast, compile-only checks on every push / PR. The Release workflow only runs
+# on tags, so until now nothing type-checked the Windows-only (`#[cfg(windows)]`)
+# code between releases — the dev box is Linux/WSL, where that whole surface
+# (WASAPI capture, Win32 paste/clipboard, global hotkeys) compiles to no-op
+# stubs. This catches a broken Windows-only path on push instead of at
+# install-build time. (See OVERNIGHT_REPORT risk R1: Fix D shipped never having
+# been compiled on Windows.)
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-check:
+    name: Windows compile check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      # `cargo check` only — no binary, no installer, no tests run. On a Windows
+      # runner the default target is x86_64-pc-windows-msvc, so this compiles
+      # every #[cfg(windows)] block (including the ones inside test modules via
+      # --all-targets). No whisper.cpp binaries are fetched: those are bundled at
+      # `tauri build`, not needed to type-check the Rust.
+      - name: cargo check (all targets, Windows)
+        working-directory: app/src-tauri
+        run: cargo check --all-targets
+
+  frontend-typecheck:
+    name: Frontend typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: tsc --noEmit
+        working-directory: app
+        run: npx tsc --noEmit
