@@ -89,8 +89,12 @@ version of the open gaps:
    transcription). Still open: **literal spoken punctuation** ("period" → `.`) /
    voice-command editing, and **real-time streaming insertion** (text still lands
    only after you stop, not while you talk).
-5. Smaller: GPU whisper builds as optional download, a first-run onboarding
-   wizard, FTS5 search if histories grow.
+5. **GPU acceleration (Vulkan)** — speed up the large/most-accurate models on
+   any modern GPU (NVIDIA/AMD/Intel). Designed but not started; see
+   [`docs/GPU_VULKAN_BUILD_PLAN.md`](GPU_VULKAN_BUILD_PLAN.md). The open question
+   that picks the approach: does a single Vulkan build still run on a no-GPU
+   machine (one build, auto-fallback) or do we ship it as an optional download?
+6. Parked: a first-run onboarding wizard; FTS5 search if histories grow.
 
 ## Working notes for the next session
 
