@@ -152,6 +152,8 @@ jobs:
             $f = Get-ChildItem -Path $bin -Recurse -Filter $n -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($f) { Copy-Item $f.FullName $out } else { Write-Host "WARN: $n not found" }
           }
+          # Bundle the test clip so the hardware spike is fully self-contained.
+          if (Test-Path samples/jfk.wav) { Copy-Item samples/jfk.wav $out }
           "Built from whisper.cpp $env:WHISPER_REF" | Out-File "$out/BUILD_INFO.txt"
           Get-ChildItem $out | Select-Object Name,Length
 
