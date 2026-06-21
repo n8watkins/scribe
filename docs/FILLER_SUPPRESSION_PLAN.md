@@ -141,8 +141,11 @@ mirrors existing settings, WS5 mirrors the existing table UI.
 
 ## 9. Open questions
 
-1. Can the bundled `whisper-server.exe` return token/word timestamps in a shape
-   we can parse (decides WS2 vs. CLI-only)? — verify against the binary first.
+1. ~~Can the bundled `whisper-server.exe` return token/word timestamps?~~
+   **RESOLVED (verified against the bundled v1.8.6 binaries):** CLI
+   `--output-json-full` gives per-token `offsets` in ms; the server's
+   `response_format=verbose_json` returns per-word `segments` with `start`/`end`
+   (seconds) plus a `words` array. Both paths can do it.
 2. v1 filler defaults: safe-only (`um/uh/er/hmm`), or include the risky
    (`oh/like/so`) on the strength of the pause guard?
 3. Default threshold — is 300 ms right, or start more conservative (~400 ms)?
