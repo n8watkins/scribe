@@ -28,11 +28,20 @@ green, see §0). Shipped in this branch:
 - **Catalog/QoL** — full fp16 `large-v3-turbo` added next to the q5_0 default; an
   English/Multilingual/All filter in the model browser.
 
-Decision deferred to the maintainer: `ggml-vulkan.dll` is **~74 MB** (embedded
-SPIR-V shaders), so Option A grows the base installer ~74 MB for everyone,
-including no-GPU users — much more than the original "+a few MB" estimate. If
-that's unacceptable, pivot to Option B (optional download); the WS4/5/6 settings,
-fallback, and UI all carry over.
+Installer-size impact (measured from the green branch build vs the CPU-only
+v0.5.24 release): **the download barely grows.** `ggml-vulkan.dll` is ~74 MB
+uncompressed, but its SPIR-V shaders compress extremely well under NSIS/lzma:
+
+| | CPU-only v0.5.24 | this Vulkan build | delta |
+|---|---|---|---|
+| `setup.exe` (download + auto-update) | 5 MB | 12 MB | **+7 MB** |
+| MSI | 7 MB | 30 MB | +23 MB |
+| on-disk `ggml-vulkan.dll` | — | 74 MB | +74 MB |
+
+So the **download** (the NSIS setup.exe the updater uses) only grows ~7 MB; the
+~74 MB is the on-disk footprint. That makes **Option A acceptable** — no pivot to
+Option B needed. (If on-disk footprint ever matters, Option B's WS4/5/6 all carry
+over.)
 
 Verification: 220 backend lib tests pass; frontend tsc + build clean; CI's
 Windows `cargo check --all-targets` green; full `release.yml` build (Vulkan from
