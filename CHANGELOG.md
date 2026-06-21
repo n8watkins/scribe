@@ -4,6 +4,40 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.6.0 — 2026-06-21
+
+GPU acceleration, and a simpler/faster local-LLM story.
+
+**GPU acceleration (Vulkan)**
+
+- **Whisper now runs on your GPU.** The bundled whisper.cpp is built from source
+  with Vulkan, so the large/most-accurate models run *dramatically* faster — on a
+  Radeon RX 7800 XT, `large-v3-turbo` went from ~12 s to **~0.75 s** on an 11 s
+  clip (**~16× end-to-end, ~88× on the encode**), with identical output. Works on
+  any modern NVIDIA/AMD/Intel GPU; falls back to CPU automatically when there's no
+  usable GPU, and a GPU failure retries on CPU rather than losing the dictation.
+- **On by default** (Auto) — existing installs start using the GPU after updating;
+  turn it off (or pin a specific GPU on multi-GPU machines) in **Audio → GPU
+  acceleration**, which also shows the detected device. The installer download
+  grows only ~7 MB despite the new Vulkan backend (the shaders compress well).
+- **Full-precision `large-v3-turbo`** added to the model catalog alongside the
+  quantized one (max accuracy, GPU-recommended), plus an **English / Multilingual
+  filter** in the model browser.
+
+**Text quality & speed**
+
+- **Silent recordings no longer paste invented text.** A record toggle on/off with
+  nothing said now returns empty instead of a Whisper silence-hallucination — the
+  model is skipped entirely when no speech is detected.
+
+**Removed**
+
+- **AI dictation cleanup (local LLM) is gone.** It duplicated the deterministic
+  filler suppression and added a per-dictation LLM round-trip (a real slowdown) for
+  little benefit. Use **Filler suppression** (instant, on-device) instead. The
+  local LLM still powers **Notes analysis** and **Selection transform** — both
+  on-demand, never in the dictation path.
+
 ## 0.5.24 — 2026-06-21
 
 A small frontend-polish patch (the fixes landed just after the 0.5.23 tag, so
