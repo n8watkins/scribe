@@ -3,7 +3,10 @@ import type { ToastNotice } from "../types";
 
 export function Toast({ notice }: { notice: ToastNotice }) {
   return (
-    <div className={`toast-notice ${notice.tone}`} role="status">
+    <div
+      className={`toast-notice ${notice.tone}`}
+      role={notice.tone === "error" ? "alert" : "status"}
+    >
       {notice.tone === "error" ? (
         <AlertCircle aria-hidden="true" size={16} />
       ) : (

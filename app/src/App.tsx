@@ -214,6 +214,8 @@ function App() {
   const [models, setModels] = useState<ModelInfo[] | null>(null);
   const [toasts, setToasts] = useState<ToastNotice[]>([]);
   const toastIdRef = useRef(0);
+  // Pending toast-dismissal timers, so they can be cleared on unmount.
+  const toastTimersRef = useRef<number[]>([]);
   // Epoch (ms) until which routine dictation notices are suppressed because a
   // mic-disconnect just explained the situation in one toast. 0 = not active.
   const suppressRoutineNoticesUntilRef = useRef(0);
@@ -359,9 +361,19 @@ function App() {
     setToasts((prev) => [...prev, { ...notice, id }].slice(-MAX_TOASTS));
     const duration =
       notice.tone === "error" ? TOAST_ERROR_DURATION_MS : TOAST_DURATION_MS;
-    window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
+      toastTimersRef.current = toastTimersRef.current.filter((t) => t !== timer);
       setToasts((prev) => prev.filter((existing) => existing.id !== id));
     }, duration);
+    toastTimersRef.current.push(timer);
+  }, []);
+
+  // Clear any pending toast timers on unmount (no setState after unmount).
+  useEffect(() => {
+    return () => {
+      toastTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      toastTimersRef.current = [];
+    };
   }, []);
 
   const showNotice = useCallback(

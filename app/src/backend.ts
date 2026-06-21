@@ -358,6 +358,11 @@ export type RecordingResult = {
   startedAt: string;
   stoppedAt: string;
   isNote: boolean;
+  isTransform: boolean;
+  // True when the recording ended because the mic was disconnected mid-capture
+  // (salvaged + saved to History, never auto-pasted). Kept on the type so the
+  // round-trip through transcribe_recording doesn't silently drop it.
+  disconnected: boolean;
 };
 
 export type AudioLevelEvent = {
