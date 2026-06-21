@@ -26,7 +26,7 @@ import {
   outputModeFromToggles,
 } from "../lib/format";
 import { SettingRow } from "../components/layout";
-import { Toggle } from "../components/primitives";
+import { MsInput, Toggle } from "../components/primitives";
 
 export function SettingsView({
   actions,
@@ -231,6 +231,61 @@ export function SettingsView({
             <p className="muted vocab-hint">
               Uses the local LLM server from the Notes tab. If it's unavailable,
               you get the raw transcript.
+            </p>
+          </div>
+
+          {/* FILLER: pause-aware filler suppression */}
+          <div className="settings-subsection">
+            <h3 className="settings-subhead">Filler suppression</h3>
+            <SettingRow
+              description={
+                'Remove filler words (um, uh, …) — but only when there’s a real pause around them, so fluent uses ("oh no", "like this") are kept. Deterministic; runs on the device, no LLM.'
+              }
+              label="Remove pause-bracketed filler words"
+            >
+              <Toggle
+                checked={settings.fillerSuppressionEnabled}
+                disabled={actions.savingSettings}
+                label="Remove pause-bracketed filler words"
+                onChange={(fillerSuppressionEnabled) =>
+                  actions.updateSettings({ fillerSuppressionEnabled })
+                }
+              />
+            </SettingRow>
+            <SettingRow
+              description="The words to remove, comma-separated. Add the risky ones (oh, like, so) only if you want — the pause check guards them. Clearing this removes nothing."
+              label="Filler words"
+            >
+              <BlurSavedTextArea
+                ariaLabel="Filler words, comma-separated"
+                onSave={(raw) =>
+                  actions.updateSettings({ fillerWords: parseFillerWords(raw) })
+                }
+                placeholder="um, uh, er, hmm"
+                rows={2}
+                value={settings.fillerWords.join(", ")}
+              />
+            </SettingRow>
+            <SettingRow
+              description="How long an adjacent silence must be (ms) for a filler to count as a hesitation worth removing. Lower = more aggressive (100–1500 ms)."
+              label="Pause before removing (ms)"
+            >
+              <MsInput
+                ariaLabel="Pause length before removing a filler, in milliseconds"
+                disabled={
+                  actions.savingSettings || !settings.fillerSuppressionEnabled
+                }
+                max={1500}
+                min={100}
+                onCommit={(fillerPauseThresholdMs) =>
+                  actions.updateSettings({ fillerPauseThresholdMs })
+                }
+                value={settings.fillerPauseThresholdMs}
+              />
+            </SettingRow>
+            <p className="muted vocab-hint">
+              Uses Whisper's own word timings; no LLM. While on, dictation uses
+              the whisper-cli path (a touch slower than the warm server).
             </p>
           </div>
 
@@ -901,4 +956,20 @@ function replacementsEqual(a: TextReplacement[], b: TextReplacement[]): boolean 
   return a.every(
     (row, i) => row.from === b[i].from && row.to === b[i].to,
   );
+}
+
+// FILLER: parse the comma/newline-separated filler list into a clean,
+// lowercased, de-duplicated array. Split only on commas/newlines so multi-word
+// fillers ("you know") survive.
+function parseFillerWords(raw: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of raw.split(/[,\n]+/)) {
+    const word = part.trim().toLowerCase();
+    if (word && !seen.has(word)) {
+      seen.add(word);
+      out.push(word);
+    }
+  }
+  return out;
 }

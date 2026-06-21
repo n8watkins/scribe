@@ -176,6 +176,10 @@ export type AppSettings = {
   dictationCleanupEnabled: boolean;
   dictationCleanupMode: DictationCleanupMode;
   dictationCleanupPrompt: string;
+  // FILLER: pause-aware filler suppression (deterministic, no LLM).
+  fillerSuppressionEnabled: boolean;
+  fillerWords: string[];
+  fillerPauseThresholdMs: number;
   githubSyncEnabled: boolean;
   githubRepo: string;
   githubSyncAllTranscripts: boolean;
