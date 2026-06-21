@@ -22,7 +22,7 @@ use crate::error::CommandError;
 /// Device Flow" checked in its settings, or `/login/device/code` returns
 /// `device_flow_disabled`. Until the real id is filled in this stays a
 /// `REPLACE_…` placeholder and `is_configured()` is false.
-pub const CLIENT_ID: &str = "REPLACE_WITH_GITHUB_OAUTH_APP_CLIENT_ID";
+pub const CLIENT_ID: &str = "Ov23lilxsW0SfcDVjNdD";
 
 const DEVICE_CODE_URI: &str = "https://github.com/login/device/code";
 const ACCESS_TOKEN_URI: &str = "https://github.com/login/oauth/access_token";
