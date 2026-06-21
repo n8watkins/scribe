@@ -163,6 +163,20 @@ pub struct AppSettings {
     /// Blank falls back to the Standard prompt.
     #[serde(default)]
     pub dictation_cleanup_prompt: String,
+    /// Deterministic, pause-aware filler removal: strip a `filler_words` entry
+    /// from a transcript only when Whisper's word timestamps show an adjacent
+    /// silence >= `filler_pause_threshold_ms`, so fluent uses ("oh no") survive.
+    /// Off by default; needs no LLM. See `filler.rs`.
+    #[serde(default)]
+    pub filler_suppression_enabled: bool,
+    /// The user's editable filler list. Matched case/punctuation-insensitively
+    /// (see `filler::suppress_fillers`); an empty list removes nothing.
+    #[serde(default = "default_filler_words")]
+    pub filler_words: Vec<String>,
+    /// How long an adjacent silence (ms) must be for a filler to count as a
+    /// hesitation worth removing. Lower = more aggressive.
+    #[serde(default = "default_filler_pause_threshold_ms")]
+    pub filler_pause_threshold_ms: u32,
     /// Back up dictated notes as dated Markdown to a private GitHub repo via the
     /// Contents API. Off until the user connects GitHub (device flow) and turns
     /// this on. The OAuth access token lives in the OS keyring (see
@@ -271,6 +285,19 @@ fn default_segment_pause_enabled() -> bool {
 
 fn default_segment_pause_ms() -> u32 {
     3_000
+}
+
+fn default_filler_words() -> Vec<String> {
+    // Safe defaults — words that are almost always genuine disfluency. The user
+    // can add the riskier ones (oh/like/so); the pause check guards them.
+    ["um", "umm", "uh", "uhh", "er", "erm", "hmm"]
+        .iter()
+        .map(|word| word.to_string())
+        .collect()
+}
+
+fn default_filler_pause_threshold_ms() -> u32 {
+    300
 }
 
 fn default_segment_max_ms() -> u32 {
@@ -651,6 +678,9 @@ impl Default for AppSettings {
             dictation_cleanup_enabled: false,
             dictation_cleanup_mode: default_dictation_cleanup_mode(),
             dictation_cleanup_prompt: String::new(),
+            filler_suppression_enabled: false,
+            filler_words: default_filler_words(),
+            filler_pause_threshold_ms: default_filler_pause_threshold_ms(),
             github_sync_enabled: false,
             github_repo: String::new(),
             github_sync_all_transcripts: false,
@@ -771,6 +801,12 @@ impl AppSettings {
         if !(10_000..=25_000).contains(&self.segment_max_ms) {
             return Err(SettingsValidationError::new(
                 "segmentMaxMs must be between 10000 and 25000.",
+            ));
+        }
+
+        if !(100..=1_500).contains(&self.filler_pause_threshold_ms) {
+            return Err(SettingsValidationError::new(
+                "fillerPauseThresholdMs must be between 100 and 1500.",
             ));
         }
 
@@ -1209,6 +1245,31 @@ mod tests {
             settings.notes_retention_days = ok;
             assert!(settings.validate().is_ok());
         }
+    }
+
+    #[test]
+    fn filler_suppression_defaults_off_with_a_safe_word_list() {
+        let settings = AppSettings::default();
+        assert!(!settings.filler_suppression_enabled);
+        assert_eq!(settings.filler_pause_threshold_ms, 300);
+        assert!(settings.filler_words.contains(&"um".to_string()));
+        assert!(settings.filler_words.contains(&"uh".to_string()));
+        // Risky words are NOT shipped by default; the user opts in.
+        assert!(!settings.filler_words.contains(&"like".to_string()));
+        assert!(!settings.filler_words.contains(&"so".to_string()));
+    }
+
+    #[test]
+    fn validates_filler_pause_threshold_range() {
+        let mut settings = AppSettings::default();
+        settings.filler_pause_threshold_ms = 99;
+        assert!(settings.validate().is_err());
+        settings.filler_pause_threshold_ms = 100;
+        assert!(settings.validate().is_ok());
+        settings.filler_pause_threshold_ms = 1_500;
+        assert!(settings.validate().is_ok());
+        settings.filler_pause_threshold_ms = 1_501;
+        assert!(settings.validate().is_err());
     }
 
     #[test]
