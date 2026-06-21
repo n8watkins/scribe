@@ -45,8 +45,20 @@ over.)
 
 Verification: 220 backend lib tests pass; frontend tsc + build clean; CI's
 Windows `cargo check --all-targets` green; full `release.yml` build (Vulkan from
-source + installer) validated via `workflow_dispatch`. Final on-hardware smoke
-test (install the build, confirm the GPU engages in-app) is the maintainer's.
+source + installer) validated via `workflow_dispatch`; the GPU build was installed
+and smoke-tested on the RX 7800 XT.
+
+**Measured speedup (large-v3-turbo q5_0, jfk.wav 11s, on the 7800 XT):**
+
+| | encode | total |
+|---|---|---|
+| CPU (`--no-gpu`) | 11,065 ms | 11,935 ms |
+| GPU (Vulkan0) | 126 ms | 746 ms |
+| speedup | ~88× | ~16× |
+
+Identical transcript both ways (no accuracy regression). On CPU large-v3-turbo
+runs ~real-time (unusably slow for dictation); on the GPU it's ~15× faster than
+real-time. Option A is validated end-to-end.
 
 ## 0. Update 2026-06-21 — research refresh + CI-first approach
 
