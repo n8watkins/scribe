@@ -151,3 +151,36 @@ mirrors existing settings, WS5 mirrors the existing table UI.
 3. Default threshold — is 300 ms right, or start more conservative (~400 ms)?
 4. Should a removed filler that *was* a whole segment also collapse that segment
    (so "Um." alone → nothing), reusing the empty→no-paste path?
+
+## 10. Rollback (how to remove this cleanly)
+
+The feature is **off by default** and entirely behind `FillerConfig` — when off,
+the transcription path is byte-for-byte unchanged, so the simplest "removal" is
+just leaving it disabled. To delete it outright:
+
+**Commits** (`git log --grep='feat(filler)'`):
+- `4520c16` WS3 core (`filler.rs::suppress_fillers` + tests)
+- `5945471` WS4 settings (3 `AppSettings` fields)
+- `2aff990` WS1 parse (`whisper::parse_cli_words` + tests)
+- `3722e50` WS1/WS2 pipeline wiring
+- `01641f6` WS5 settings UI
+
+**Files & touch-points** (every integration line is marked `// FILLER`):
+- **New, delete entirely:** `app/src-tauri/src/filler.rs` (+ `pub mod filler;` in
+  `lib.rs`).
+- `whisper.rs` — `WhisperRequest.filler` field; the `word_timestamps` param +
+  output-format switch in `whisper_args`; the `Some(config)` branch in
+  `transcribe_with_output_prefix`; `parse_cli_words` (+ its tests).
+- `whisper_server.rs` — the `server_eligible = request.filler.is_none()` guard in
+  `transcribe`.
+- `dictation.rs`, `incremental.rs` (`SegmentContext.filler`), `file_transcribe.rs`
+  — the `filler: …` line in each `WhisperRequest`.
+- `settings.rs` — `filler_suppression_enabled` / `filler_words` /
+  `filler_pause_threshold_ms` (+ defaults, validation, tests).
+- `backend.ts` — the three `filler*` type fields.
+- `Settings.tsx` — the "Filler suppression" subsection + `parseFillerWords` +
+  the `MsInput` import.
+
+Cleanest revert: `git revert 01641f6 3722e50 2aff990 5945471 4520c16` (newest
+first), or delete the marked lines + `filler.rs` by hand. No data migration is
+needed — the unused settings columns are harmless if left.
