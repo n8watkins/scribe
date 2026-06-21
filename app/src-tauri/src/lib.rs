@@ -7,6 +7,7 @@ pub mod dictation_cleanup;
 pub mod error;
 pub mod export;
 pub mod file_transcribe;
+pub mod filler;
 pub mod github_backup;
 pub mod github_oauth;
 pub mod hotkeys;
