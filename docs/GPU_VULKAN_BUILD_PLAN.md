@@ -7,6 +7,38 @@
 > turnkey hardware test in [`GPU_VULKAN_SPIKE.md`](GPU_VULKAN_SPIKE.md), and the
 > CI spike workflow `.github/workflows/gpu-spike.yml`.
 
+## 0a. Implementation status (2026-06-21) — Option A built
+
+Option A is **implemented** on `feat/gpu-vulkan-spike` (hardware gate already
+green, see §0). Shipped in this branch:
+
+- **WS1** — `release.yml` builds whisper.cpp from source with `-DGGML_VULKAN=ON`
+  (Vulkan SDK + MSVC + Ninja, pinned to `v1.9.1`) and bundles the Vulkan binaries
+  incl. `ggml-vulkan.dll` into `resources/bin/windows`, replacing the CPU-only
+  prebuilt fetch. `ggml-cpu.dll` stays for no-GPU machines.
+- **WS4** — `gpu_acceleration` setting (`Auto`/`Off`, default `Auto`, serde-default
+  so existing installs adopt the GPU) + `gpu_device_index` pin; shared
+  `push_gpu_args` (`--no-gpu`) and `GGML_VK_VISIBLE_DEVICES` env across the CLI and
+  warm-server paths; a best-effort Vulkan device **probe** (`gpu.rs`, parser
+  unit-tested vs the real 7800 XT output) behind a `probe_gpu_devices` command.
+- **WS5** — a whisper-cli GPU failure retries once on CPU (driver crash / VRAM OOM
+  degrades to slower-but-working, never loses the dictation).
+- **WS6** — Audio view "GPU acceleration" panel: probe-backed status, Use-GPU
+  toggle, and a device picker shown only on multi-GPU boxes.
+- **Catalog/QoL** — full fp16 `large-v3-turbo` added next to the q5_0 default; an
+  English/Multilingual/All filter in the model browser.
+
+Decision deferred to the maintainer: `ggml-vulkan.dll` is **~74 MB** (embedded
+SPIR-V shaders), so Option A grows the base installer ~74 MB for everyone,
+including no-GPU users — much more than the original "+a few MB" estimate. If
+that's unacceptable, pivot to Option B (optional download); the WS4/5/6 settings,
+fallback, and UI all carry over.
+
+Verification: 220 backend lib tests pass; frontend tsc + build clean; CI's
+Windows `cargo check --all-targets` green; full `release.yml` build (Vulkan from
+source + installer) validated via `workflow_dispatch`. Final on-hardware smoke
+test (install the build, confirm the GPU engages in-app) is the maintainer's.
+
 ## 0. Update 2026-06-21 — research refresh + CI-first approach
 
 Re-research + the "can we test in CI?" question reshaped the plan. Net: **the
