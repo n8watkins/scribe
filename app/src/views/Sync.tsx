@@ -61,40 +61,46 @@ export function SyncView({
   // `configured === false` means this build ships without a GitHub OAuth client
   // id, so connecting can never succeed; surface that instead of a dead button.
   const unconfigured = status != null && !status.configured;
-  // The sync toggles require a target repo, or the first sync just errors.
-  const repoSet = settings.githubRepo.trim().length > 0;
+  // The sync toggles require a VALID "owner/name" repo, or the save is rejected
+  // (validate()) and the first sync just errors. A non-empty but malformed value
+  // (e.g. a bare "notes") must not arm the toggles.
+  const repoValid = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(
+    settings.githubRepo.trim(),
+  );
 
-  // Set true by Cancel so a late-resolving poll (the backend keeps polling
-  // until the device code expires; the request can't be aborted mid-flight)
-  // can't clobber state after the user has backed out.
-  const connectCancelled = useRef(false);
+  // A monotonic epoch for connect attempts. handleConnect snapshots the current
+  // epoch at its start; Cancel (and any new attempt) bumps it. A late-resolving
+  // poll (the backend keeps polling until the device code expires; the request
+  // can't be aborted mid-flight) then no-ops because its snapshot is stale — so
+  // a cancel→reconnect race can't let a stale poll clobber the new attempt.
+  const connectEpoch = useRef(0);
 
   // Two-step device flow: get + show the code, then await authorization.
   const handleConnect = useCallback(async () => {
-    connectCancelled.current = false;
+    const myEpoch = ++connectEpoch.current;
     setBusy(true);
     setError(null);
     setNotice(null);
 
     try {
       const code = await githubDeviceStart();
-      if (connectCancelled.current) {
+      if (connectEpoch.current !== myEpoch) {
         return;
       }
       // Show the code immediately, THEN block on the (long-running) poll.
       setDevice(code);
       const updated = await githubDevicePoll(code.deviceCode, code.intervalSecs);
-      if (connectCancelled.current) {
+      if (connectEpoch.current !== myEpoch) {
         return;
       }
       actions.updateSettings(updated);
       await reloadStatus();
     } catch (cause) {
-      if (!connectCancelled.current) {
+      if (connectEpoch.current === myEpoch) {
         setError(commandErrorMessage(cause));
       }
     } finally {
-      if (!connectCancelled.current) {
+      if (connectEpoch.current === myEpoch) {
         setDevice(null);
         setBusy(false);
       }
@@ -102,10 +108,10 @@ export function SyncView({
   }, [actions, reloadStatus]);
 
   // Back out of an in-progress sign-in. The orphaned backend poll keeps running
-  // until GitHub's device code expires (~15 min) and then stops on its own; the
-  // guards above make its eventual result a no-op.
+  // until GitHub's device code expires (~15 min) and then stops on its own;
+  // bumping the epoch makes its eventual result a no-op.
   const handleCancelConnect = useCallback(() => {
-    connectCancelled.current = true;
+    connectEpoch.current += 1;
     setDevice(null);
     setBusy(false);
     setNotice("GitHub sign-in cancelled.");
@@ -141,10 +147,13 @@ export function SyncView({
       );
     } catch (cause) {
       setError(commandErrorMessage(cause));
+      // A github_unauthorized error has already cleared the dead token in the
+      // backend; refresh status so the Connected pill flips to Not connected.
+      void reloadStatus();
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [reloadStatus]);
 
   const handleExport = useCallback(async () => {
     setExporting(true);
@@ -274,21 +283,35 @@ export function SyncView({
           >
             <RepoInput
               disabled={actions.savingSettings || busy}
-              onSave={(githubRepo) => actions.updateSettings({ githubRepo })}
+              onSave={(githubRepo) => {
+                // Clearing the repo must also disable sync, or validate()
+                // rejects an empty-repo-with-sync-on save (and we'd keep
+                // pushing to nowhere). A non-empty value saves as-is.
+                const trimmed = githubRepo.trim();
+                actions.updateSettings(
+                  trimmed.length === 0
+                    ? {
+                        githubRepo: "",
+                        githubSyncEnabled: false,
+                        githubSyncAllTranscripts: false,
+                      }
+                    : { githubRepo: trimmed },
+                );
+              }}
               value={settings.githubRepo}
             />
           </SettingRow>
           <SettingRow
             description={
-              repoSet
+              repoValid
                 ? "Write a GitHub copy whenever a note is saved or analyzed."
-                : "Set a repository above first, then turn this on."
+                : "Set a valid owner/name repository above first."
             }
             label="Sync notes to GitHub"
           >
             <Toggle
               checked={settings.githubSyncEnabled}
-              disabled={actions.savingSettings || busy || !repoSet}
+              disabled={actions.savingSettings || busy || !repoValid}
               label="Sync notes to GitHub"
               onChange={(githubSyncEnabled) =>
                 actions.updateSettings({ githubSyncEnabled })
@@ -296,12 +319,16 @@ export function SyncView({
             />
           </SettingRow>
           <SettingRow
-            description="Also back up every dictation transcript (not just notes) to a separate “transcripts” folder in the repo, for a full-history backup."
+            description={
+              repoValid
+                ? "Also back up every dictation transcript (not just notes) to a separate “transcripts” folder in the repo, for a full-history backup."
+                : "Set a valid owner/name repository above first."
+            }
             label="Back up all transcripts"
           >
             <Toggle
               checked={settings.githubSyncAllTranscripts}
-              disabled={actions.savingSettings || busy || !repoSet}
+              disabled={actions.savingSettings || busy || !repoValid}
               label="Back up all transcripts"
               onChange={(githubSyncAllTranscripts) =>
                 actions.updateSettings({ githubSyncAllTranscripts })

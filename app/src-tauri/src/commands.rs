@@ -25,6 +25,10 @@ pub struct BackendState {
     db: Mutex<Database>,
     model_downloads: DownloadRegistry,
     incremental: crate::incremental::Registry,
+    /// Serializes GitHub note/transcript syncs so the debounce worker and a
+    /// manual "Sync now" can never PUT the same daily file concurrently. The
+    /// `()` payload is irrelevant — it's a plain mutual-exclusion latch.
+    github_sync_lock: Mutex<()>,
     /// Selection captured when a voice Transform Selection recording starts,
     /// held until that recording's transcription consumes it.
     #[cfg(windows)]
@@ -39,6 +43,7 @@ impl BackendState {
             db: Mutex::new(db),
             model_downloads: DownloadRegistry::default(),
             incremental: crate::incremental::Registry::default(),
+            github_sync_lock: Mutex::new(()),
             #[cfg(windows)]
             pending_transform: Mutex::new(None),
         }
@@ -90,6 +95,16 @@ impl BackendState {
 
     pub fn model_downloads(&self) -> &DownloadRegistry {
         &self.model_downloads
+    }
+
+    /// Acquires the GitHub-sync mutex, held for the duration of one sync entry
+    /// point so syncs run one at a time. The guarded value is `()`, so a poisoned
+    /// lock (a prior sync thread panicked while holding it) carries no corrupt
+    /// state — recover with `into_inner` and carry on.
+    pub fn github_sync_lock(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.github_sync_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Active incremental transcription sessions, keyed by recording session
@@ -907,8 +922,10 @@ pub async fn github_device_poll(
     Ok(settings)
 }
 
-/// Clears the stored GitHub token and turns GitHub sync off. Returns the updated
-/// settings.
+/// Clears the stored GitHub token and fully resets the GitHub backup settings:
+/// both backup toggles off, the connected login and target repo cleared. A later
+/// reconnect then starts clean rather than silently resuming pushes to a stale
+/// repo. Returns the updated settings.
 #[tauri::command]
 pub async fn github_disconnect(app: tauri::AppHandle) -> Result<AppSettings, CommandError> {
     let service = app.config().identifier.clone();
@@ -920,24 +937,38 @@ pub async fn github_disconnect(app: tauri::AppHandle) -> Result<AppSettings, Com
     let mut settings = state.db()?.get_settings()?;
     settings.github_account_login = String::new();
     settings.github_sync_enabled = false;
+    settings.github_sync_all_transcripts = false;
+    settings.github_repo = String::new();
     state.db()?.save_settings(&settings)?;
     Ok(settings)
 }
 
 /// Pushes the current notes (is_note=1 only) to the configured GitHub repo as
-/// dated Markdown, creating the repo when needed. The daily files are
-/// regenerated from the DB, so this is safe to run repeatedly. This is the notes
-/// log only; the separate full-history transcript backup
-/// (`github_sync_all_transcripts`) runs from the auto-sync worker on its own
-/// trigger, not from this command.
+/// dated Markdown, AND — when "Back up all transcripts" is on — the full-history
+/// transcript dump, so a user who enabled only that backup isn't met with a
+/// no-op. The daily files are regenerated from the DB, so this is safe to run
+/// repeatedly. Both `collect_*` helpers self-gate on their setting and return an
+/// empty report when off; the two reports are summed into one.
 #[tauri::command]
 pub async fn github_sync_now(
     app: tauri::AppHandle,
 ) -> Result<crate::github_backup::SyncReport, CommandError> {
     let service = app.config().identifier.clone();
-    tauri::async_runtime::spawn_blocking(move || crate::note_sync::collect_and_sync(&app, &service))
-        .await
-        .map_err(|error| CommandError::new("github_sync_failed", error.to_string()))?
+    tauri::async_runtime::spawn_blocking(move || {
+        // Serialize against the debounce worker so the same daily file is never
+        // PUT concurrently. Held for the whole sync; recovers from a poisoned
+        // lock (the guarded value is `()`).
+        let state = app.state::<BackendState>();
+        let _guard = state.github_sync_lock();
+        let notes = crate::note_sync::collect_and_sync(&app, &service)?;
+        let transcripts = crate::note_sync::collect_and_sync_all_transcripts(&app, &service)?;
+        Ok(crate::github_backup::SyncReport {
+            synced_notes: notes.synced_notes + transcripts.synced_notes,
+            files_written: notes.files_written + transcripts.files_written,
+        })
+    })
+    .await
+    .map_err(|error| CommandError::new("github_sync_failed", error.to_string()))?
 }
 
 /// Exports transcripts to a local file the user picks via a native save dialog.

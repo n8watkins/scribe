@@ -1,6 +1,6 @@
 # Scribe
 
-Private, local-first dictation for Windows. Hold a hotkey, talk, release — your words are transcribed on your own machine by [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and inserted wherever your cursor is. No cloud, no account, no audio ever leaving your PC. Free and source-available.
+Private, local-first dictation for Windows. Hold a hotkey, talk, release — your words are transcribed on your own machine by [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and inserted wherever your cursor is. Your audio never leaves your PC, and no account is required. Optional GitHub backup (off by default) uploads your note text to a private repo you control. Free and source-available.
 
 ## What it does
 

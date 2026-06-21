@@ -141,8 +141,21 @@ impl GitHubBackup {
     /// asking the user to create `owner/name` manually.
     pub fn ensure_repo(&self) -> Result<(), CommandError> {
         let url = format!("{}/repos/{}/{}", self.api, self.owner, self.repo);
-        let (status, _) = self.get_json(&url)?;
+        let (status, json) = self.get_json(&url)?;
         if status.is_success() {
+            // Privacy guard: Scribe only ever backs up to a PRIVATE repo. If the
+            // existing repo is public (or its visibility can't be confirmed),
+            // refuse rather than upload note text where anyone can read it.
+            if json.get("private").and_then(|v| v.as_bool()) != Some(true) {
+                return Err(CommandError::new(
+                    "github_repo_public",
+                    format!(
+                        "The repository {}/{} is public. Scribe only backs up to a PRIVATE repo. \
+                         Make it private on GitHub, or choose a different repo.",
+                        self.owner, self.repo
+                    ),
+                ));
+            }
             return Ok(());
         }
         if status.as_u16() != 404 {
@@ -154,6 +167,16 @@ impl GitHubBackup {
 
         // 404: create it under the authenticated user, if that's the owner.
         let login = self.fetch_login()?;
+        if login.trim().is_empty() {
+            // Without a confirmed login we can't tell whose account to create the
+            // repo under, so don't guess (and don't print a nonsense "owned by X,
+            // not your account \"\"" message). Ask the user to create it manually.
+            return Err(failure(format!(
+                "Could not confirm your GitHub username to safely auto-create {}/{}. \
+                 Create it on GitHub first, then retry.",
+                self.owner, self.repo
+            )));
+        }
         if !login.eq_ignore_ascii_case(&self.owner) {
             return Err(failure(format!(
                 "The repository {}/{} does not exist and could not be created automatically \
@@ -190,8 +213,8 @@ impl GitHubBackup {
     }
 
     /// GET the file's blob sha (None on 404), then PUT the new content (base64,
-    /// with the sha when updating). On 409/422 (sha conflict / mismatch), re-GET
-    /// the sha and retry the PUT once.
+    /// with the sha when updating). On 409 (stale-sha conflict) only, re-GET the
+    /// sha and retry the PUT once.
     fn put_day_file(&self, path: &str, content: &str) -> Result<(), CommandError> {
         let sha = self.get_sha(path)?;
         match self.put_contents(path, content, sha.as_deref())? {
@@ -230,7 +253,8 @@ impl GitHubBackup {
     }
 
     /// PUT `contents/{path}` with base64 content (+ sha when updating). Returns
-    /// `Conflict` on 409/422 so the caller can re-fetch the sha and retry.
+    /// `Conflict` on 409 so the caller can re-fetch the sha and retry; any other
+    /// non-success status (incl. 422 validation errors) is a hard `Err`.
     fn put_contents(
         &self,
         path: &str,
@@ -259,11 +283,14 @@ impl GitHubBackup {
         if status.is_success() {
             return Ok(PutOutcome::Ok);
         }
-        if status.as_u16() == 409 || status.as_u16() == 422 {
-            return Ok(PutOutcome::Conflict);
-        }
         if status.as_u16() == 401 {
             return Err(unauthorized());
+        }
+        // Only 409 is a retriable stale-sha conflict. 422 is a validation error
+        // (e.g. the file exceeds the Contents-API 1 MB limit) — re-fetching the
+        // sha won't help, so surface GitHub's real message instead of looping.
+        if status.as_u16() == 409 {
+            return Ok(PutOutcome::Conflict);
         }
         let text = response
             .text()
@@ -578,7 +605,11 @@ mod tests {
     fn sync_notes_ensures_repo_then_writes_path() {
         // ensure_repo GET (200), then GET-contents (404) + PUT for the one day.
         let (base, handle) = mock_server(vec![
-            (200, serde_json::json!({ "id": 1, "full_name": "alice/scribe-notes" }).to_string()),
+            (
+                200,
+                serde_json::json!({ "id": 1, "full_name": "alice/scribe-notes", "private": true })
+                    .to_string(),
+            ),
             (404, serde_json::json!({ "message": "Not Found" }).to_string()),
             (201, serde_json::json!({ "content": { "sha": "s" } }).to_string()),
         ]);
@@ -614,7 +645,7 @@ mod tests {
     #[test]
     fn sync_all_transcripts_uses_transcripts_path() {
         let (base, handle) = mock_server(vec![
-            (200, serde_json::json!({ "id": 1 }).to_string()),
+            (200, serde_json::json!({ "id": 1, "private": true }).to_string()),
             (404, serde_json::json!({ "message": "Not Found" }).to_string()),
             (201, serde_json::json!({ "content": { "sha": "s" } }).to_string()),
         ]);
@@ -643,5 +674,47 @@ mod tests {
         let json = serde_json::to_value(&report).unwrap();
         assert_eq!(json["syncedNotes"], 3);
         assert_eq!(json["filesWritten"], 2);
+    }
+
+    #[test]
+    fn ensure_repo_rejects_public_repo() {
+        // GET repo → 200 but the repo is PUBLIC. Scribe must refuse to back up
+        // note text there, with a distinct code so the UI can explain it.
+        let (base, handle) = mock_server(vec![(
+            200,
+            serde_json::json!({ "id": 1, "full_name": "alice/scribe-notes", "private": false })
+                .to_string(),
+        )]);
+
+        let backup = GitHubBackup::with_base("tok", "alice", "scribe-notes", &base);
+        let error = backup.ensure_repo().unwrap_err();
+        assert_eq!(error.code, "github_repo_public");
+        // Only the one GET happened — we never reached a create/PUT.
+        let requests = handle.join().unwrap();
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[test]
+    fn put_contents_422_is_an_error_not_a_silent_retry() {
+        // GET sha → 404 (new file), then PUT → 422 (a validation error, e.g. the
+        // file exceeds the 1 MB Contents-API limit). This is NOT a stale-sha
+        // conflict, so put_day_file must surface an Err — never re-GET and loop.
+        let (base, handle) = mock_server(vec![
+            (404, serde_json::json!({ "message": "Not Found" }).to_string()),
+            (
+                422,
+                serde_json::json!({ "message": "size 2000000 exceeds 1048576" }).to_string(),
+            ),
+        ]);
+
+        let backup = GitHubBackup::with_base("tok", "alice", "scribe-notes", &base);
+        let error = backup
+            .put_day_file("2026-06/2026-06-12.md", "too big")
+            .unwrap_err();
+        assert_eq!(error.code, "github_sync_failed");
+        assert!(error.message.contains("422"));
+        // Exactly GET-then-PUT: no second (retry) GET/PUT pair.
+        let requests = handle.join().unwrap();
+        assert_eq!(requests.len(), 2, "422 must not trigger the conflict retry");
     }
 }

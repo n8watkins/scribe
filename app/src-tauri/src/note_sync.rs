@@ -25,6 +25,15 @@ pub fn collect_and_sync(app: &AppHandle, service: &str) -> Result<SyncReport, Co
     let (repo, notes) = {
         let db = state.db()?;
         let settings = db.get_settings()?;
+        // Gate on the notes-sync setting, mirroring the all-transcripts gate in
+        // collect_and_sync_all_transcripts: the worker (and Sync now) must not
+        // push notes when only "Back up all transcripts" is on.
+        if !settings.github_sync_enabled {
+            return Ok(SyncReport {
+                synced_notes: 0,
+                files_written: 0,
+            });
+        }
         if !crate::github_oauth::has_stored_token(service) {
             return Err(CommandError::new(
                 "github_not_signed_in",
@@ -60,7 +69,25 @@ pub fn collect_and_sync(app: &AppHandle, service: &str) -> Result<SyncReport, Co
     }
 
     let token = crate::github_oauth::access_token(service)?;
-    GitHubBackup::new(token, &repo)?.sync_notes(&notes)
+    let result = GitHubBackup::new(token, &repo)?.sync_notes(&notes);
+    clear_token_if_unauthorized(service, result)
+}
+
+/// When a GitHub call comes back `github_unauthorized` (HTTP 401 — the token was
+/// revoked or expired), drop the dead token from the keyring so `github_status`
+/// immediately flips to not-connected and the UI prompts a reconnect. The Err is
+/// still returned for the caller to log. Sign-out is best-effort; its own failure
+/// never masks the original error.
+fn clear_token_if_unauthorized(
+    service: &str,
+    result: Result<SyncReport, CommandError>,
+) -> Result<SyncReport, CommandError> {
+    if let Err(error) = &result {
+        if error.code == "github_unauthorized" {
+            let _ = crate::github_oauth::sign_out(service);
+        }
+    }
+    result
 }
 
 /// Backs up every DICTATION transcript to the repo's distinct `transcripts/`
@@ -110,7 +137,8 @@ pub fn collect_and_sync_all_transcripts(
     }
 
     let token = crate::github_oauth::access_token(service)?;
-    GitHubBackup::new(token, &repo)?.sync_all_transcripts(&dictations)
+    let result = GitHubBackup::new(token, &repo)?.sync_all_transcripts(&dictations);
+    clear_token_if_unauthorized(service, result)
 }
 
 /// Owns the channel that note-save events are pushed onto. Held in Tauri's
@@ -151,6 +179,15 @@ fn worker_loop(app: AppHandle, service: String, rx: Receiver<()>) {
                 Err(RecvTimeoutError::Disconnected) => return,
             }
         }
+        // Serialize this whole sync against a manual "Sync now" so the same
+        // daily file is never PUT concurrently. Acquired once here (not inside
+        // the collect_* helpers) to stay re-entrancy-/deadlock-free, and held
+        // across both collect calls below. Dropped at the end of the iteration.
+        let state = app.state::<BackendState>();
+        let _guard = state.github_sync_lock();
+
+        // A github_unauthorized error has already cleared the dead token inside
+        // collect_*, so by the time we log here the connection state is clean.
         match collect_and_sync(&app, &service) {
             Ok(report) => log::info!(
                 "Auto-synced {} note(s) into {} GitHub file(s)",

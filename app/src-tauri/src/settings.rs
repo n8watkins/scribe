@@ -760,15 +760,19 @@ impl AppSettings {
             let owner = parts.next().unwrap_or("");
             let name = parts.next().unwrap_or("");
             let extra = parts.next();
-            let ok = !owner.is_empty()
-                && !name.is_empty()
-                && extra.is_none()
-                && owner
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
-                && name
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.');
+            // A segment is valid only with the allowed chars AND when it isn't a
+            // dot-name: "." / ".." or any segment that starts with '.' (e.g.
+            // ".git") would otherwise slip through as "owner/.." or "owner/.git".
+            let valid_segment = |segment: &str| {
+                !segment.is_empty()
+                    && segment != "."
+                    && segment != ".."
+                    && !segment.starts_with('.')
+                    && segment
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+            };
+            let ok = extra.is_none() && valid_segment(owner) && valid_segment(name);
             if !ok {
                 return Err(SettingsValidationError::new(
                     "githubRepo must be in \"owner/name\" form when GitHub sync is enabled.",
@@ -880,6 +884,51 @@ mod tests {
     }
 
     #[test]
+    fn legacy_drive_sync_blob_does_not_enable_github_sync() {
+        // A realistic pre-GitHub settings blob from the Drive era: it has the old
+        // drive_* sync flags ON but none of the new github_* keys. The Drive→
+        // GitHub migration must NOT carry that "on" state over — the drive keys
+        // don't exist on the struct, so they're ignored, and the github_* fields
+        // fall back to their off/empty serde defaults. (Migrating those flags on
+        // would silently start pushing to GitHub without consent.)
+        let json = serde_json::json!({
+            "launchAtStartup": false,
+            "minimizeToTray": true,
+            "showFloatingPill": true,
+            "notificationsEnabled": true,
+            "soundsEnabled": true,
+            "recordingMode": "both",
+            "minRecordingMs": 300,
+            "maxRecordingMs": 600000,
+            "silenceTrimEnabled": true,
+            "selectedMicId": null,
+            "selectedModelId": "small.en-q5_1",
+            "language": "en",
+            "outputMode": "auto_paste",
+            "pasteMethod": "clipboard_paste",
+            "historyEnabled": true,
+            "saveAudioClips": true,
+            "historyRetentionDays": 30,
+            // Old Drive-era sync flags, both ON.
+            "driveSyncEnabled": true,
+            "driveSyncAllTranscripts": true,
+            "driveAccountEmail": "old@example.com",
+            "hotkeys": {
+                "holdToTalk": "Ctrl+Win",
+                "toggleDictation": "Backquote",
+                "pasteLastTranscript": "Ctrl+Alt+V",
+                "openDashboard": "Ctrl+Alt+F"
+            }
+        });
+
+        let settings: AppSettings = serde_json::from_value(json).unwrap();
+        assert!(!settings.github_sync_enabled);
+        assert!(!settings.github_sync_all_transcripts);
+        assert_eq!(settings.github_repo, "");
+        assert_eq!(settings.github_account_login, "");
+    }
+
+    #[test]
     fn validates_github_repo_when_sync_enabled() {
         // Enabled + a well-formed slug is OK.
         let mut settings = AppSettings::default();
@@ -887,14 +936,24 @@ mod tests {
         settings.github_repo = "owner/name".to_string();
         assert!(settings.validate().is_ok());
 
-        // Enabled + a malformed slug is an error.
-        for bad in ["", "bad", "a/b/c", "/name", "owner/"] {
+        // Enabled + a malformed slug is an error. Includes dot-name segments
+        // ("." / ".." / a leading-dot name) which must be rejected even though
+        // '.' is otherwise an allowed character.
+        for bad in [
+            "", "bad", "a/b/c", "/name", "owner/", "owner/..", "owner/.", "owner/.git", "../name",
+            "./name",
+        ] {
             settings.github_repo = bad.to_string();
             assert!(
                 settings.validate().is_err(),
                 "github_repo {bad:?} should be rejected when sync is on"
             );
         }
+
+        // A dot *inside* a segment is still fine (e.g. a repo literally named
+        // "my.notes").
+        settings.github_repo = "owner/my.notes".to_string();
+        assert!(settings.validate().is_ok());
 
         // Disabled: any junk repo is fine (the rule only fires when enabled).
         settings.github_sync_enabled = false;
