@@ -7,6 +7,15 @@ the bug commit everything" + "[test] in CI".
 
 ---
 
+## Hardware gate result (2026-06-21) — ✅ GREEN
+
+Ran the CI artifact on the RX 7800 XT: Vulkan found 2 devices, ggml auto-selected
+**device 0 = the discrete 7800 XT** (`fp16/bf16`, `KHR_coopmat` matrix cores) over
+device 1 = the integrated Radeon (no matrix cores), `using Vulkan0 backend`,
+correct transcript. **The feature is viable → Option A is a go.** Open: the speed
+number on `large-v3-turbo` (base.en is too small to show the win); WS4 should pin
+the discrete card by **name** (index order isn't guaranteed — index 1 is the iGPU).
+
 ## TL;DR
 
 1. **0.5.24 shipped green.** The orphan UI-polish commit that was sitting on `main`

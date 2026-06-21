@@ -52,10 +52,13 @@ cannot prove:
   come up as a usable device on a hosted runner. Not a build problem — folded into
   the hardware test below. (A self-hosted runner on the Windows box would close
   this "in CI".)
-- ❌ **Discrete 7800 XT detection / engagement / speed** — hosted runners have no
-  Radeon or Adrenalin ICD. The *only* hardware-bound step, and now also the
-  Vulkan-engages proof. Closed by downloading the CI-built artifact and running
-  [`GPU_VULKAN_SPIKE.md`](GPU_VULKAN_SPIKE.md) on the box (~5 min, no local build).
+- ✅ **Discrete 7800 XT detection / engagement** — **DONE & GREEN (2026-06-21).**
+  Ran the CI artifact on the box: Vulkan found 2 devices, ggml auto-selected
+  device 0 = the discrete 7800 XT (`fp16/bf16`, `KHR_coopmat`) over device 1 = the
+  integrated Radeon (no matrix cores), `using Vulkan0 backend`, correct transcript.
+  Still open: the **speed number** on `large-v3-turbo` (base.en is too small to
+  show the win). Implication for WS4: pin the discrete card **by name**, since the
+  device-index order isn't guaranteed (index 1 is the slow iGPU).
 
 **Revised recommended path:** (1) CI builds the Vulkan binaries + proves
 build/engage/parity/fallback overnight (workflow `gpu-spike.yml`); (2) maintainer
