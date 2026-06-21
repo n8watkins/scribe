@@ -72,18 +72,23 @@ For a researched, prioritized "build next to be competitive" list (with rough
 effort), see [`docs/COMPETITIVE-ANALYSIS.md`](COMPETITIVE-ANALYSIS.md). Short
 version of the open gaps:
 
-1. **Authenticode code signing — IN PROGRESS.** Kills the SmartScreen first-run
-   warning. Now pursued **free via the SignPath Foundation** OSS program (repo is
-   MIT + credits SignPath in the README); blocked on project reputation (the repo
-   is brand-new with no stars yet). Alternatives: Azure Trusted Signing
-   (~$10/mo) or stay unsigned. Distinct from the updater's minisign artifact
-   signing, which already ships. See [`docs/HANDOFF.md`](HANDOFF.md).
+1. ~~Authenticode code signing~~ — **DROPPED (2026-06-20).** Decided not to
+   pursue. We're staying unsigned, so the SmartScreen first-run warning remains.
+   The free **SignPath Foundation** OSS route existed but wasn't worth the
+   dependency on repo reputation; paid Azure Trusted Signing (~$10/mo) is out of
+   scope. (Unrelated to the updater's minisign artifact signing, which already
+   ships.)
 2. ~~Multilingual transcription + Whisper translate~~ — **DONE in 0.5.21**
    (multilingual `ggml` models + a ~29-language picker + Translate→English).
 3. **Custom / arbitrary local model selection** — let users point Scribe at any
-   whisper.cpp-compatible `ggml` `.bin` instead of only the curated catalog.
-4. **Spoken punctuation / voice commands / voice editing** during dictation, and
-   **real-time streaming insertion** (text currently lands only after you stop).
+   whisper.cpp-compatible `ggml` `.bin` they already have on disk, instead of
+   only the curated download catalog in the Models tab.
+4. **Spoken punctuation / voice editing + real-time streaming insertion** —
+   _partially addressed._ The "too much punctuation when I pause" complaint was
+   fixed (tunable `segment_pause_ms`, default **3 s** — Audio → Live
+   transcription). Still open: **literal spoken punctuation** ("period" → `.`) /
+   voice-command editing, and **real-time streaming insertion** (text still lands
+   only after you stop, not while you talk).
 5. Smaller: GPU whisper builds as optional download, a first-run onboarding
    wizard, FTS5 search if histories grow.
 
