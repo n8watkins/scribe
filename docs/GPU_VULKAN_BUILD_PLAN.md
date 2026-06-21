@@ -1,9 +1,82 @@
 # GPU Acceleration via Vulkan — Build Plan (design only)
 
-> **Status: design / not started.** This outlines *how* a GPU-accelerated whisper
-> build would work in Scribe and what it would take. No code here is committed to;
-> it exists so the work is a concrete, scoped next task. See the open-items list in
-> [`STATUS_AND_NEXT_STEPS.md`](STATUS_AND_NEXT_STEPS.md).
+> **Status: design + spike in progress.** This outlines *how* a GPU-accelerated
+> whisper build would work in Scribe and what it would take. The §0 update below
+> supersedes the more cautious framing in §5b/§8 — read it first. See the
+> open-items list in [`STATUS_AND_NEXT_STEPS.md`](STATUS_AND_NEXT_STEPS.md), the
+> turnkey hardware test in [`GPU_VULKAN_SPIKE.md`](GPU_VULKAN_SPIKE.md), and the
+> CI spike workflow `.github/workflows/gpu-spike.yml`.
+
+## 0. Update 2026-06-21 — research refresh + CI-first approach
+
+Re-research + the "can we test in CI?" question reshaped the plan. Net: **the
+risk profile is materially better than §5b assumed, and most of the validation is
+CI-automatable. Only one step truly needs the RX 7800 XT.**
+
+**The §5b #1 gate is largely retired upstream.** Issue **#3455 (AMD GPU not
+detected with Vulkan, the regression that drove the whole §5b risk table) was
+fixed in whisper.cpp `v1.8.1`** (issue closed 2025-10-14; PR #3469). Multiple AMD
+users confirmed `ggml_vulkan: Found 1 Vulkan devices` + `whisper_backend_init_gpu:
+using Vulkan0`. So Scribe's currently-pinned **`v1.8.6` already contains the fix**,
+and so does the latest **`v1.9.1`**. The confirmations were on *integrated* AMD
+(RADV/Linux), not a *discrete* RDNA3 card on Windows/Adrenalin — so empirical
+confirmation on the 7800 XT is still the closing step, but the *regression itself
+is gone*, not an open unknown.
+
+**Latest release is `v1.9.1` (2026-06-19).** Candidate refs for the spike, pinned
+by commit SHA (pin SHAs, not tags — see review note below):
+
+| ref | SHA | why |
+|---|---|---|
+| `v1.9.1` | `f049fff95a089aa9969deb009cdd4892b3e74916` | latest; primary spike target |
+| `v1.8.6` | `23ee03506a91ac3d3f0071b40e66a430eebdfa1d` | **what Scribe ships for CPU today** — using it for Vulkan guarantees identical accuracy |
+| `v1.7.6` | `a8d002cfd879315632a579e73f0148d06959de36` | pre-regression legacy known-good (fallback only) |
+
+**No trustworthy prebuilt Vulkan-Windows binary exists.** Official releases are
+CPU+CUDA only (#3673, still open). The community repo
+`jerryshell/whisper.cpp-windows-vulkan-bin` is stale (`v1.0.0`, Aug 2025 —
+predates the AMD fix). **Build from source in CI** is confirmed as the path (WS1).
+
+**CI-first split (the "test in CI" answer).** What CI on `windows-latest` can and
+cannot prove:
+
+- ✅ **WS1 build-from-source** with `-DGGML_VULKAN=ON` — CI's job; retires the
+  "can we even build it" risk.
+- ✅ **Vulkan backend actually engages + output parity** — validated against a
+  **Lavapipe** software Vulkan device installed on the runner (hosted runners have
+  no discrete GPU). Proves the Vulkan *code path* runs end-to-end and the
+  transcript matches the CPU path — directly attacks the "silent CPU fallback"
+  worry at the code level.
+- ✅ **Forced-CPU + no-GPU fallback** — `--no-gpu` and the 0-device path both
+  exercised; modern Windows ships `vulkan-1.dll`, so the realistic no-GPU machine
+  is "loader present, 0 devices → CPU," which CI covers.
+- ❌ **Discrete 7800 XT detection / engagement / speed** — hosted runners have no
+  Radeon or Adrenalin ICD. The *only* hardware-bound step. Closed by downloading
+  the CI-built artifact and running [`GPU_VULKAN_SPIKE.md`](GPU_VULKAN_SPIKE.md)
+  on the box (~5 min, no local build). Or: register the Windows box as a
+  self-hosted runner to do it "in CI."
+
+**Revised recommended path:** (1) CI builds the Vulkan binaries + proves
+build/engage/parity/fallback overnight (workflow `gpu-spike.yml`); (2) maintainer
+downloads the artifact and runs the one-liner on the 7800 XT to confirm detection
++ a real speedup on `large-v3-turbo`; (3) if green, proceed to Option A — most of
+WS1 is already done (the CI build *is* WS1), leaving device selection (WS4),
+fallback hardening (WS5), and the settings toggle/UI (WS6).
+
+**Review refinements (carried into the sections below):**
+
+- **Pin the whisper.cpp build to a commit SHA, not a tag.** Tags have shifted
+  behavior mid-line before (#3455 lived inside the `v1.8.x` line).
+- **Select the GPU by device name/type, never a persisted index** (WS4). Indices
+  aren't stable across driver updates / reboots / monitor changes; enumerate and
+  prefer the non-integrated, largest-VRAM device, resolving to an index right
+  before spawn.
+- **Soften the accuracy criterion** (§6) from "byte-identical CPU vs GPU" to "no
+  accuracy regression on a small benchmark set" — backends can differ by a float
+  ULP and pick a different token on greedy ties.
+- **VRAM contention is unaddressed** — if the local LLM (notes analysis /
+  dictation cleanup) also uses the GPU, it contends with `large-v3-turbo` for the
+  16 GB. Out of scope for v1, but a known, not a surprise.
 
 ## 1. Goal & why Vulkan
 
