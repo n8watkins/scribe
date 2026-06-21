@@ -5,7 +5,7 @@
 /* The `.eyebrow` label sits above the hero heading; it had no styling before. */
 .eyebrow {
   margin: 0 0 2px;
-  color: #67e8f9;
+  color: var(--scribe-accent-bright);
   font-size: 10.5px;
   font-weight: 800;
   text-transform: uppercase;
@@ -16,7 +16,7 @@
    the description reads as a lead-in rather than a paragraph block. */
 .about-lead {
   margin: 0;
-  color: #cbd5e1;
+  color: var(--scribe-text-secondary);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -40,20 +40,20 @@
 }
 
 .about-block-head strong {
-  color: #f8fafc;
+  color: var(--scribe-text);
   font-size: 12px;
 }
 
 /* Version value rendered beside the title, not in a cramped right column. */
 .about-version {
-  color: #a5f3fc;
+  color: var(--scribe-accent-bright);
   font-size: 12px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
 }
 
 .about-block small {
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   font-size: 11px;
   line-height: 1.4;
 }
@@ -85,7 +85,7 @@
   border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 6px;
   background: var(--scribe-bg-elevated);
-  color: #e2e8f0;
+  color: var(--scribe-text);
   font-family: ui-monospace, "Cascadia Code", "Fira Code", monospace;
   font-size: 12px;
   word-break: break-all;
@@ -133,10 +133,14 @@
   background:
     radial-gradient(
       120% 100% at 0% 0%,
-      rgba(34, 211, 238, 0.07),
+      var(--scribe-accent-glow),
       transparent 60%
     ),
-    linear-gradient(180deg, rgba(23, 32, 51, 0.7), rgba(13, 19, 32, 0.85));
+    linear-gradient(
+      180deg,
+      var(--scribe-card-gradient-top),
+      var(--scribe-card-gradient-bottom)
+    );
   transition:
     border-color 150ms ease,
     transform 150ms ease,
@@ -144,7 +148,7 @@
 }
 
 .feature-card:hover {
-  border-color: rgba(34, 211, 238, 0.4);
+  border-color: var(--scribe-accent-soft);
   transform: translateY(-1px);
   box-shadow: 0 10px 26px rgba(2, 6, 14, 0.4);
 }
@@ -157,18 +161,18 @@
   width: 32px;
   height: 32px;
   border-radius: 8px;
-  color: #67e8f9;
+  color: var(--scribe-accent-bright);
   background: linear-gradient(
     150deg,
-    rgba(34, 211, 238, 0.18),
+    var(--scribe-accent-soft),
     rgba(139, 92, 246, 0.16)
   );
-  border: 1px solid rgba(34, 211, 238, 0.22);
+  border: 1px solid var(--scribe-accent-soft);
 }
 
 .feature-card-title {
   grid-area: title;
-  color: #f8fafc;
+  color: var(--scribe-text);
   font-size: 12.5px;
   font-weight: 800;
   line-height: 1.2;
@@ -177,7 +181,7 @@
 .feature-card-text {
   grid-area: text;
   margin-top: 5px;
-  color: #cbd5e1;
+  color: var(--scribe-text-secondary);
   font-size: 11.5px;
   line-height: 1.45;
 }
@@ -212,8 +216,8 @@
   width: 20px;
   height: 20px;
   border-radius: 999px;
-  color: #06111f;
-  background: #22d3ee;
+  color: var(--scribe-accent-on);
+  background: var(--scribe-accent);
   font-size: 11px;
   font-weight: 800;
 }
@@ -224,12 +228,12 @@
 }
 
 .about-step-body strong {
-  color: #f8fafc;
+  color: var(--scribe-text);
   font-size: 12px;
 }
 
 .about-step-body small {
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   font-size: 11px;
   line-height: 1.4;
 }
@@ -247,6 +251,6 @@
 }
 
 .about-step-button:not(:disabled):hover {
-  border-color: rgba(34, 211, 238, 0.6);
-  color: #67e8f9;
+  border-color: var(--scribe-accent-soft);
+  color: var(--scribe-accent-bright);
 }

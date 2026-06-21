@@ -51,13 +51,13 @@
 }
 
 .output-mode-head strong {
-  color: #f8fafc;
+  color: var(--scribe-text);
   font-size: 12px;
 }
 
 .output-mode-desc {
   margin: 0;
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   font-size: 11px;
   line-height: 1.4;
   /* Full width of the wide card; clamp to a single line until expanded. */
@@ -77,7 +77,7 @@
   align-self: flex-start;
   margin-top: 1px;
   padding: 0;
-  color: #67e8f9;
+  color: var(--scribe-accent-bright);
   background: transparent;
   border: 0;
   font-size: 11px;
@@ -86,7 +86,7 @@
 }
 
 .output-mode-more:hover {
-  color: #22d3ee;
+  color: var(--scribe-accent);
   text-decoration: underline;
 }
 

@@ -11,9 +11,9 @@
   padding: 32px;
   -webkit-app-region: drag;
   background:
-    radial-gradient(circle at top left, rgba(34, 211, 238, 0.16), transparent 32rem),
-    radial-gradient(circle at bottom right, rgba(139, 92, 246, 0.16), transparent 30rem),
-    #070b14;
+    radial-gradient(circle at top left, var(--scribe-glow-1), transparent 32rem),
+    radial-gradient(circle at bottom right, var(--scribe-glow-2), transparent 30rem),
+    var(--scribe-bg);
 }
 
 .update-overlay-card {
@@ -25,11 +25,15 @@
   gap: 14px;
   width: min(440px, 100%);
   padding: 34px 32px 30px;
-  border: 1px solid rgba(34, 211, 238, 0.26);
+  border: 1px solid var(--scribe-accent-soft);
   border-radius: 16px;
   background:
-    linear-gradient(180deg, rgba(23, 32, 51, 0.92), rgba(13, 19, 32, 0.97)),
-    #0d1320;
+    linear-gradient(
+      180deg,
+      var(--scribe-card-gradient-top),
+      var(--scribe-card-gradient-bottom)
+    ),
+    var(--scribe-bg-elevated);
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
 }
 
@@ -41,7 +45,7 @@
   width: 60px;
   height: 60px;
   border-radius: 14px;
-  filter: drop-shadow(0 6px 18px rgba(34, 211, 238, 0.32));
+  filter: drop-shadow(0 6px 18px var(--scribe-accent-soft));
   animation: update-overlay-pulse 2.4s ease-in-out infinite;
 }
 
@@ -67,7 +71,7 @@
   font-size: 19px;
   font-weight: 600;
   letter-spacing: -0.01em;
-  color: #f8fafc;
+  color: var(--scribe-text);
 }
 
 .update-overlay-detail {
@@ -75,7 +79,7 @@
   max-width: 34ch;
   font-size: 13px;
   line-height: 1.5;
-  color: #cbd5e1;
+  color: var(--scribe-text-secondary);
 }
 
 .update-overlay-progress {
@@ -91,7 +95,7 @@
   display: block;
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, #22d3ee, #818cf8);
+  background: linear-gradient(90deg, var(--scribe-accent), #818cf8);
   box-shadow: 0 0 14px rgba(34, 211, 238, 0.4);
   transition: width 0.2s ease;
 }
@@ -114,7 +118,7 @@
 .update-overlay-hint {
   margin: 2px 0 0;
   font-size: 11.5px;
-  color: #64748b;
+  color: var(--scribe-text-faint);
 }
 
 .update-overlay-continue {

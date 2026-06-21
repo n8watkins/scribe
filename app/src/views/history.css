@@ -72,7 +72,7 @@
 .history-row .history-row-date {
   display: block;
   margin-bottom: 2px;
-  color: #64748b;
+  color: var(--scribe-text-faint);
   font-size: 11px;
 }
 
@@ -173,7 +173,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: #67e8f9;
+  color: var(--scribe-accent-bright);
   font-size: 11px;
   white-space: nowrap;
 }
@@ -192,9 +192,9 @@
   gap: 5px;
   margin-right: 4px;
   padding: 3px 8px;
-  color: #67e8f9;
-  background: rgba(34, 211, 238, 0.08);
-  border: 1px solid rgba(34, 211, 238, 0.28);
+  color: var(--scribe-accent-bright);
+  background: var(--scribe-accent-glow);
+  border: 1px solid var(--scribe-accent-soft);
   border-radius: 6px;
   font-size: 11px;
   font-weight: 700;
@@ -205,8 +205,8 @@
 }
 
 .select-all-button:hover:not(:disabled) {
-  background: rgba(34, 211, 238, 0.16);
-  border-color: rgba(34, 211, 238, 0.45);
+  background: var(--scribe-accent-soft);
+  border-color: var(--scribe-accent-soft);
 }
 
 /* Always rendered now, so dim it when the page has nothing to select. */

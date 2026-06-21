@@ -36,7 +36,7 @@
    layouts; it wraps under them when the panel narrows. */
 .hotkeys-toolbar-note {
   margin: 0 0 0 auto;
-  color: #64748b;
+  color: var(--scribe-text-faint);
   font-size: 11px;
   white-space: nowrap;
 }
@@ -77,7 +77,7 @@
 }
 
 .hotkeys-row-label {
-  color: #f8fafc;
+  color: var(--scribe-text);
   font-size: 13.5px;
   font-weight: 720;
   line-height: 1.25;
@@ -86,7 +86,7 @@
 /* Bumped up from the old 11px caption — the per-row description is now clearly
    readable. */
 .hotkeys-row-desc {
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   font-size: 12.5px;
   line-height: 1.35;
 }
@@ -133,7 +133,7 @@
   min-width: 132px;
   min-height: 38px;
   padding: 7px 14px;
-  color: #f8fafc;
+  color: var(--scribe-text);
   background: var(--scribe-bg);
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-bottom-color: rgba(148, 163, 184, 0.4);
@@ -153,14 +153,14 @@
 
 .hotkeys-bind:hover {
   transform: translateY(-1px);
-  border-color: rgba(34, 211, 238, 0.5);
-  box-shadow: 0 6px 18px rgba(34, 211, 238, 0.12);
+  border-color: var(--scribe-accent-soft);
+  box-shadow: 0 6px 18px var(--scribe-accent-ring);
 }
 
 .hotkeys-bind:focus-visible {
   outline: none;
-  border-color: rgba(34, 211, 238, 0.7);
-  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.22);
+  border-color: var(--scribe-accent-soft);
+  box-shadow: 0 0 0 3px var(--scribe-accent-soft);
 }
 
 .hotkeys-bind:disabled {
@@ -176,10 +176,10 @@
 
 /* While capturing, the bind reads as an active cyan target prompting keys. */
 .hotkeys-bind.hotkeys-bind-capturing {
-  color: #a5f3fc;
-  border-color: rgba(34, 211, 238, 0.7);
-  background: rgba(34, 211, 238, 0.08);
-  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.18);
+  color: var(--scribe-accent-bright);
+  border-color: var(--scribe-accent-soft);
+  background: var(--scribe-accent-glow);
+  box-shadow: 0 0 0 3px var(--scribe-accent-soft);
 }
 
 /* A bind that is NOT registered is styled as an error so the failure is
@@ -200,7 +200,7 @@
    compact (zero-height, just the line) while still teaching the interaction. */
 .hotkeys-bind-hint {
   margin-top: 3px;
-  color: #475569;
+  color: var(--scribe-text-faint);
   font-size: 10.5px;
   font-weight: 600;
   text-align: center;
@@ -211,7 +211,7 @@
 
 .hotkeys-row:hover .hotkeys-bind-hint {
   opacity: 1;
-  color: #67e8f9;
+  color: var(--scribe-accent-bright);
 }
 
 /* Wrap the bind + its hint so the hint stays centered under the kbd. */
@@ -233,7 +233,7 @@
 
 .hotkeys-notes .hotkey-note {
   margin: 0;
-  color: #94a3b8;
+  color: var(--scribe-text-muted);
   font-size: 12px;
   line-height: 1.4;
 }

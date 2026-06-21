@@ -22,9 +22,9 @@
   width: 34px;
   height: 34px;
   border-radius: 8px;
-  color: #67e8f9;
-  background: rgba(34, 211, 238, 0.1);
-  border: 1px solid rgba(34, 211, 238, 0.18);
+  color: var(--scribe-accent-bright);
+  background: var(--scribe-accent-glow);
+  border: 1px solid var(--scribe-accent-soft);
 }
 
 .sync-destination-meta {
@@ -35,13 +35,13 @@
 }
 
 .sync-destination-meta strong {
-  color: #f8fafc;
+  color: var(--scribe-text);
   font-size: 13px;
   font-weight: 760;
 }
 
 .sync-destination-meta small {
-  color: #64748b;
+  color: var(--scribe-text-faint);
   font-size: 11.5px;
   line-height: 1.45;
 }
@@ -71,13 +71,13 @@
 }
 
 .sync-prompt-label strong {
-  color: #f8fafc;
+  color: var(--scribe-text);
   font-size: 12px;
   font-weight: 760;
 }
 
 .sync-prompt-label small {
-  color: #64748b;
+  color: var(--scribe-text-faint);
   font-size: 11.5px;
   line-height: 1.45;
 }
@@ -87,7 +87,7 @@
 .sync-status-line {
   margin: -2px 0 0;
   padding-left: 10px;
-  border-left: 2px solid rgba(34, 211, 238, 0.3);
+  border-left: 2px solid var(--scribe-accent-soft);
 }
 
 .sync-status-line[role="alert"] {

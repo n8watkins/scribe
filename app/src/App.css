@@ -418,7 +418,7 @@ button {
   height: 48px;
   object-fit: contain;
   flex: 0 0 auto;
-  filter: drop-shadow(0 0 14px rgba(34, 211, 238, 0.3));
+  filter: drop-shadow(0 0 14px var(--scribe-accent-soft));
 }
 
 .brand-name {
@@ -431,7 +431,7 @@ button {
 .brand-badge {
   margin-left: 6px;
   padding: 1px 5px;
-  border: 1px solid rgba(34, 211, 238, 0.5);
+  border: 1px solid var(--scribe-accent-soft);
   border-radius: 4px;
   color: var(--scribe-accent-bright);
   font-size: 9px;
@@ -477,7 +477,7 @@ button {
 .nav-item:hover,
 .nav-item.active {
   color: var(--scribe-text);
-  background: rgba(17, 24, 39, 0.9);
+  background: var(--scribe-accent-soft);
   border-color: var(--scribe-accent-soft);
 }
 
@@ -543,8 +543,8 @@ button {
 .primary-button {
   color: var(--scribe-accent-on);
   background: var(--scribe-accent);
-  border: 1px solid rgba(34, 211, 238, 0.72);
-  box-shadow: 0 8px 20px rgba(34, 211, 238, 0.16);
+  border: 1px solid var(--scribe-accent);
+  box-shadow: 0 8px 20px var(--scribe-accent-soft);
 }
 
 .secondary-button {
@@ -575,7 +575,7 @@ button {
 .ghost-button:hover,
 .compact-action:hover {
   transform: translateY(-1px);
-  border-color: rgba(34, 211, 238, 0.42);
+  border-color: var(--scribe-accent-soft);
 }
 
 .stop-button {
@@ -592,14 +592,14 @@ button {
 /* Topbar "Update available" pill — on-brand blue so it stands out next to the
    neutral History button. */
 .update-available-button {
-  color: #082f49;
-  background: #38bdf8;
-  border-color: rgba(56, 189, 248, 0.8);
+  color: var(--scribe-accent-on);
+  background: var(--scribe-accent-strong);
+  border-color: var(--scribe-accent-strong);
 }
 
 .update-available-button:hover {
-  background: #7dd3fc;
-  border-color: rgba(125, 211, 252, 0.9);
+  background: var(--scribe-accent-bright);
+  border-color: var(--scribe-accent-bright);
 }
 
 .about-update-poll {
@@ -700,9 +700,9 @@ button:disabled {
   width: 30px;
   height: 30px;
   border-radius: 7px;
-  color: #67e8f9;
-  background: rgba(34, 211, 238, 0.1);
-  border: 1px solid rgba(34, 211, 238, 0.18);
+  color: var(--scribe-accent-bright);
+  background: var(--scribe-accent-glow);
+  border: 1px solid var(--scribe-accent-soft);
 }
 
 .status-card-main {
@@ -734,8 +734,8 @@ button:disabled {
 }
 
 .status-card-go:hover {
-  color: #67e8f9;
-  border-color: rgba(34, 211, 238, 0.35);
+  color: var(--scribe-accent-bright);
+  border-color: var(--scribe-accent-soft);
 }
 
 .card-header,
@@ -819,9 +819,9 @@ button:disabled {
 }
 
 .pill.preserve {
-  color: #a5f3fc;
-  background: rgba(34, 211, 238, 0.12);
-  border: 1px solid rgba(34, 211, 238, 0.22);
+  color: var(--scribe-accent-bright);
+  background: var(--scribe-accent-ring);
+  border: 1px solid var(--scribe-accent-soft);
 }
 
 .pill.pending {
@@ -983,15 +983,15 @@ button:disabled {
 }
 
 .settings-tab:hover {
-  color: #e2e8f0;
-  border-color: rgba(34, 211, 238, 0.42);
+  color: var(--scribe-text);
+  border-color: var(--scribe-accent-soft);
 }
 
 .settings-tab.is-active {
   color: var(--scribe-accent-on);
   background: var(--scribe-accent);
-  border-color: rgba(34, 211, 238, 0.72);
-  box-shadow: 0 8px 20px rgba(34, 211, 238, 0.16);
+  border-color: var(--scribe-accent);
+  box-shadow: 0 8px 20px var(--scribe-accent-soft);
 }
 
 .settings-tabpanel {
@@ -1056,7 +1056,7 @@ textarea {
 
 input:focus,
 select:focus {
-  border-color: rgba(34, 211, 238, 0.72);
+  border-color: var(--scribe-accent);
   box-shadow: 0 0 0 2px var(--scribe-accent-ring);
 }
 
@@ -1170,7 +1170,7 @@ textarea {
   gap: 8px;
   margin-top: 8px;
   padding: 7px 9px;
-  border: 1px solid rgba(34, 211, 238, 0.2);
+  border: 1px solid var(--scribe-accent-soft);
   border-radius: 6px;
   background: rgba(var(--scribe-surface-rgb),0.55);
 }
@@ -1181,7 +1181,7 @@ textarea {
   margin-top: 5px;
   flex: 0 0 auto;
   border-radius: 999px;
-  background: #22d3ee;
+  background: var(--scribe-accent);
   box-shadow: 0 0 10px rgba(34, 211, 238, 0.55);
   animation: live-transcript-pulse 1.2s ease-in-out infinite;
 }
@@ -1192,7 +1192,7 @@ textarea {
   min-width: 0;
   flex: 1;
   overflow-y: auto;
-  color: #e2e8f0;
+  color: var(--scribe-text-secondary);
   font-size: 12px;
   line-height: 1.45;
   white-space: pre-wrap;
@@ -1233,9 +1233,9 @@ textarea {
 
 .segmented-control button.active-segment {
   color: var(--scribe-text);
-  background: rgba(17, 24, 39, 0.95);
-  border-color: rgba(34, 211, 238, 0.24);
-  box-shadow: inset 0 0 0 1px rgba(34, 211, 238, 0.08);
+  background: rgba(var(--scribe-surface-rgb), 0.95);
+  border-color: var(--scribe-accent-soft);
+  box-shadow: inset 0 0 0 1px var(--scribe-accent-glow);
 }
 
 .choice-list,
@@ -1279,7 +1279,7 @@ textarea {
 }
 
 .selected-choice {
-  border-color: rgba(34, 211, 238, 0.3);
+  border-color: var(--scribe-accent-soft);
 }
 
 .history-row,
@@ -1324,9 +1324,9 @@ textarea {
 .note-analysis {
   margin: 4px 0 6px;
   padding: 6px 8px;
-  border-left: 2px solid rgba(34, 211, 238, 0.45);
+  border-left: 2px solid var(--scribe-accent-soft);
   border-radius: 4px;
-  background: rgba(34, 211, 238, 0.06);
+  background: var(--scribe-accent-glow);
 }
 
 /* Three classes so this beats `.history-row span:not(.pill)`. */
@@ -1334,7 +1334,7 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: #67e8f9;
+  color: var(--scribe-accent-bright);
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1367,8 +1367,8 @@ textarea {
 }
 
 .history-row.is-selected {
-  border-color: rgba(34, 211, 238, 0.45);
-  background: rgba(34, 211, 238, 0.06);
+  border-color: var(--scribe-accent-soft);
+  background: var(--scribe-accent-glow);
 }
 
 .history-row-select {
@@ -1378,7 +1378,7 @@ textarea {
   margin: 0;
   padding: 0;
   align-self: center;
-  accent-color: #22d3ee;
+  accent-color: var(--scribe-accent);
   cursor: pointer;
 }
 
@@ -1410,7 +1410,7 @@ textarea {
   padding: 0;
   border: 0;
   background: transparent;
-  color: #67e8f9;
+  color: var(--scribe-accent-bright);
   font-size: 11px;
   font-weight: 700;
   cursor: pointer;
@@ -1565,17 +1565,17 @@ textarea {
   gap: 10px;
   margin-bottom: 10px;
   padding: 8px 11px;
-  border: 1px solid rgba(34, 211, 238, 0.4);
+  border: 1px solid var(--scribe-accent-soft);
   border-radius: 8px;
   background: linear-gradient(
     90deg,
-    rgba(34, 211, 238, 0.13),
+    var(--scribe-accent-ring),
     rgba(139, 92, 246, 0.09)
   );
 }
 
 .setup-banner > svg {
-  color: #22d3ee;
+  color: var(--scribe-accent);
   flex: 0 0 auto;
 }
 
@@ -1909,7 +1909,7 @@ textarea {
 }
 
 .model-row.is-selected {
-  background: rgba(34, 211, 238, 0.06);
+  background: var(--scribe-accent-glow);
 }
 
 .model-select {
@@ -1925,7 +1925,7 @@ textarea {
   min-height: 0;
   margin: 0;
   padding: 0;
-  accent-color: #22d3ee;
+  accent-color: var(--scribe-accent);
   cursor: pointer;
 }
 
@@ -1989,7 +1989,7 @@ textarea {
 .icon-button:hover {
   color: var(--scribe-text);
   transform: translateY(-1px);
-  border-color: rgba(34, 211, 238, 0.42);
+  border-color: var(--scribe-accent-soft);
 }
 
 .icon-button.danger:hover {
@@ -2055,8 +2055,8 @@ textarea {
 }
 
 .toggle.is-on {
-  background: rgba(34, 211, 238, 0.9);
-  border-color: rgba(34, 211, 238, 0.95);
+  background: var(--scribe-accent);
+  border-color: var(--scribe-accent);
 }
 
 .toggle.is-on span {
@@ -2089,7 +2089,7 @@ textarea {
 .empty-state svg,
 .loading-panel svg,
 .inline-error svg {
-  color: #22d3ee;
+  color: var(--scribe-accent);
   flex: 0 0 auto;
 }
 
@@ -2140,7 +2140,7 @@ textarea {
 .progress-track div {
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #22d3ee, #3b82f6);
+  background: linear-gradient(90deg, var(--scribe-accent), #3b82f6);
 }
 
 .toast-notice {
@@ -2184,8 +2184,8 @@ code {
   max-width: 100%;
   overflow-wrap: anywhere;
   padding: 7px 9px;
-  color: #a5f3fc;
-  border: 1px solid rgba(34, 211, 238, 0.18);
+  color: var(--scribe-accent-bright);
+  border: 1px solid var(--scribe-accent-soft);
   border-radius: 6px;
   background: rgba(var(--scribe-surface-rgb),0.45);
   font-size: 12px;
