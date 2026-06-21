@@ -129,9 +129,15 @@ export type AppSettings = {
    * Maps to a CSS palette via `data-theme`; "midnight" is the default look.
    * "custom" derives its palette from `customTheme` (see deriveCustomThemeVars). */
   theme: string;
-  /** The three core colors of the user-defined "custom" theme. Only used when
+  /** The five core colors of the user-defined "custom" theme. Only used when
    * `theme === "custom"`; the rest of the palette is derived from these. */
-  customTheme: { background: string; accent: string; text: string };
+  customTheme: {
+    background: string;
+    surface: string;
+    accent: string;
+    text: string;
+    textMuted: string;
+  };
   devHotkeysSeeded: boolean;
   recordingMode: RecordingMode;
   minRecordingMs: number;

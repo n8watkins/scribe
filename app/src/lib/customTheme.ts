@@ -1,13 +1,14 @@
 /**
- * Derivation of the full `--scribe-*` palette from the three core colors of the
- * user-defined "custom" theme (background, accent, text).
+ * Derivation of the full `--scribe-*` palette from the five core colors of the
+ * user-defined "custom" theme (background, surface, accent, text, textMuted).
  *
  * The preset dark themes in App.css relate their tones in a consistent way — the
- * elevated surface is a touch lighter than the page, inset surfaces step up from
- * there, borders are a faint tint of the text color, the accent family is the
- * accent plus lighter variants, and the secondary/muted/faint text tones are the
- * text color progressively mixed toward the background. These helpers reproduce
- * that relationship so a custom dark theme stays coherent across the whole UI.
+ * inset surfaces step off the elevated surface, borders are a faint tint of the
+ * text color, the accent family is the accent plus lighter variants, and the
+ * secondary/faint text tones bridge the text and muted-text colors. The five
+ * user-set colors are used DIRECTLY (surface → --scribe-bg-elevated, textMuted →
+ * --scribe-text-muted); everything else is derived off them so a custom theme
+ * stays coherent across the whole UI.
  *
  * Everything here is pure (no DOM access), so App.tsx can derive the variables
  * and apply them, and the result is easy to reason about in isolation.
@@ -15,8 +16,10 @@
 
 export type CustomThemeColors = {
   background: string;
+  surface: string;
   accent: string;
   text: string;
+  textMuted: string;
 };
 
 type Rgb = { r: number; g: number; b: number };
@@ -108,7 +111,7 @@ function rgbTriple(hex: string): string {
  * `removeProperty` the same keys when switching back to a preset).
  */
 export function deriveCustomThemeVars(colors: CustomThemeColors): Record<string, string> {
-  const { background, accent, text } = colors;
+  const { background, surface, accent, text, textMuted } = colors;
   // Light accents need dark text on top; dark accents need light text. The 0.5
   // luminance split mirrors how the presets pick `--scribe-accent-on`.
   const accentOn =
@@ -116,18 +119,20 @@ export function deriveCustomThemeVars(colors: CustomThemeColors): Record<string,
 
   return {
     "--scribe-bg": background,
-    "--scribe-bg-elevated": lighten(background, 0.06),
-    "--scribe-sidebar-bg": rgba(lighten(background, 0.04), 0.9),
-    "--scribe-card-gradient-top": rgba(lighten(background, 0.12), 0.82),
+    // `surface` is used directly as the elevated/card base; the inset surfaces
+    // step off it (and the page background) the way the presets relate them.
+    "--scribe-bg-elevated": surface,
+    "--scribe-sidebar-bg": rgba(surface, 0.9),
+    "--scribe-card-gradient-top": rgba(lighten(surface, 0.06), 0.82),
     "--scribe-card-gradient-bottom": rgba(background, 0.92),
     "--scribe-border": rgba(text, 0.18),
     "--scribe-glow-1": rgba(accent, 0.12),
     "--scribe-glow-2": rgba(accent, 0.08),
     "--scribe-surface-rgb": rgbTriple(background),
-    "--scribe-surface-solid": lighten(background, 0.08),
-    "--scribe-surface-strong": lighten(background, 0.14),
-    "--scribe-surface-sunken": darken(background, 0.02),
-    "--scribe-surface-raised": lighten(background, 0.04),
+    "--scribe-surface-solid": lighten(surface, 0.02),
+    "--scribe-surface-strong": lighten(surface, 0.08),
+    "--scribe-surface-sunken": darken(surface, 0.04),
+    "--scribe-surface-raised": darken(surface, 0.02),
     "--scribe-surface-kbd": darken(background, 0.02),
     "--scribe-accent": accent,
     "--scribe-accent-strong": lighten(accent, 0.1),
@@ -139,8 +144,10 @@ export function deriveCustomThemeVars(colors: CustomThemeColors): Record<string,
     "--scribe-scrollbar-thumb": rgba(accent, 0.3),
     "--scribe-scrollbar-thumb-hover": rgba(accent, 0.55),
     "--scribe-text": text,
-    "--scribe-text-secondary": mix(text, background, 0.18),
-    "--scribe-text-muted": mix(text, background, 0.42),
-    "--scribe-text-faint": mix(text, background, 0.58),
+    // `textMuted` is used directly; secondary bridges text↔muted, faint pushes
+    // muted toward the background so the three tiers stay evenly spaced.
+    "--scribe-text-secondary": mix(text, textMuted, 0.5),
+    "--scribe-text-muted": textMuted,
+    "--scribe-text-faint": mix(textMuted, background, 0.4),
   };
 }

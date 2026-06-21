@@ -49,12 +49,12 @@ const THEMES: ThemeOption[] = [
     key: "daylight",
     name: "Daylight",
     description: "A clean light theme: soft off-white surfaces and a deep-blue accent.",
-    swatches: ["#e7ecf3", "#f9fbfd", "#0369a1", "#075985", "#0f172a"],
+    swatches: ["#e2e8f0", "#f9fbfd", "#0369a1", "#075985", "#0f172a"],
   },
 ];
 
 /** The custom theme is rendered separately from THEMES (it has no fixed swatch
- * list — its preview is built live from the user's three core colors). */
+ * list — its preview is built live from the user's five core colors). */
 const CUSTOM_KEY = "custom";
 
 export function ThemesView({
@@ -70,10 +70,19 @@ export function ThemesView({
   const isCustomActive = activeTheme === CUSTOM_KEY;
   const custom = settings.customTheme;
   // Live preview chips for the Custom tile, derived from the user's core colors.
-  const customSwatches = [custom.background, custom.accent, custom.text];
+  // Five swatches so the tile reads the same way as the preset tiles.
+  const customSwatches = [
+    custom.background,
+    custom.surface,
+    custom.accent,
+    custom.text,
+    custom.textMuted,
+  ];
 
-  const setCustomColor = (key: "background" | "accent" | "text", value: string) =>
-    actions.updateSettings({ customTheme: { ...custom, [key]: value } });
+  const setCustomColor = (
+    key: "background" | "surface" | "accent" | "text" | "textMuted",
+    value: string,
+  ) => actions.updateSettings({ customTheme: { ...custom, [key]: value } });
 
   return (
     <section className="stack">
@@ -145,7 +154,7 @@ export function ThemesView({
             </div>
             <div className="theme-card-body">
               <strong>Custom</strong>
-              <small>Your own palette from three core colors.</small>
+              <small>Your own palette from five core colors.</small>
             </div>
             {isCustomActive ? (
               <span className="theme-card-check" aria-hidden="true">
@@ -158,8 +167,9 @@ export function ThemesView({
         {isCustomActive ? (
           <div className="custom-theme-controls">
             <p className="muted" style={{ margin: "8px 0 4px" }}>
-              Pick a background, accent, and text color. The rest of the palette
-              (surfaces, borders, muted text) is derived to match.
+              Pick a background, surface, accent, text, and muted-text color. The
+              rest of the palette (borders, secondary text, glows) is derived to
+              match.
             </p>
             <div className="custom-theme-row">
               <CustomColorField
@@ -167,6 +177,12 @@ export function ThemesView({
                 label="Background"
                 onChange={(value) => setCustomColor("background", value)}
                 value={custom.background}
+              />
+              <CustomColorField
+                disabled={actions.savingSettings}
+                label="Surface"
+                onChange={(value) => setCustomColor("surface", value)}
+                value={custom.surface}
               />
               <CustomColorField
                 disabled={actions.savingSettings}
@@ -179,6 +195,12 @@ export function ThemesView({
                 label="Text"
                 onChange={(value) => setCustomColor("text", value)}
                 value={custom.text}
+              />
+              <CustomColorField
+                disabled={actions.savingSettings}
+                label="Muted text"
+                onChange={(value) => setCustomColor("textMuted", value)}
+                value={custom.textMuted}
               />
             </div>
           </div>

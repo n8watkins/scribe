@@ -29,7 +29,7 @@
   padding: 9px 10px;
   border: 1px solid rgba(148, 163, 184, 0.13);
   border-radius: 6px;
-  background: rgba(7, 11, 20, 0.32);
+  background: rgba(var(--scribe-surface-rgb), 0.32);
 }
 
 .about-block-head {
@@ -84,7 +84,7 @@
   padding: 7px 9px;
   border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 6px;
-  background: #0d1320;
+  background: var(--scribe-bg-elevated);
   color: #e2e8f0;
   font-family: ui-monospace, "Cascadia Code", "Fira Code", monospace;
   font-size: 12px;
@@ -199,7 +199,7 @@
   padding: 8px 9px;
   border: 1px solid rgba(148, 163, 184, 0.13);
   border-radius: 6px;
-  background: rgba(7, 11, 20, 0.32);
+  background: rgba(var(--scribe-surface-rgb), 0.32);
 }
 
 .about-steps li::before {

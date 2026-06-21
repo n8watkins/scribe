@@ -206,25 +206,41 @@ pub struct AppSettings {
     pub hotkeys: HotkeySettings,
 }
 
-/// The three core colors of the user-defined "custom" theme (hex strings). The
+/// The five core colors of the user-defined "custom" theme (hex strings). The
 /// frontend derives the full `--scribe-*` palette from these, mirroring how the
 /// preset dark themes relate their tones, so a custom dark theme stays coherent.
 /// Defaults are slate-like (a dark indigo-blue) so a fresh "custom" pick is
-/// already readable before the user touches anything.
+/// already readable before the user touches anything. `surface` and `text_muted`
+/// were added after the original 3-color version, so they carry per-field serde
+/// defaults — legacy JSON with only the old three keys still deserializes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CustomTheme {
     pub background: String,
+    #[serde(default = "default_custom_surface")]
+    pub surface: String,
     pub accent: String,
     pub text: String,
+    #[serde(default = "default_custom_text_muted")]
+    pub text_muted: String,
+}
+
+fn default_custom_surface() -> String {
+    "#151a23".to_string()
+}
+
+fn default_custom_text_muted() -> String {
+    "#94a3b8".to_string()
 }
 
 impl Default for CustomTheme {
     fn default() -> Self {
         Self {
             background: "#0b0e14".to_string(),
+            surface: default_custom_surface(),
             accent: "#818cf8".to_string(),
             text: "#f1f5f9".to_string(),
+            text_muted: default_custom_text_muted(),
         }
     }
 }
@@ -882,10 +898,12 @@ mod tests {
         assert!(!settings.dev_hotkeys_seeded);
         // The default theme equals the historical look so installs are unchanged.
         assert_eq!(settings.theme, "midnight");
-        // The custom theme defaults to the slate-like dark trio.
+        // The custom theme defaults to the slate-like dark five-color set.
         assert_eq!(settings.custom_theme.background, "#0b0e14");
+        assert_eq!(settings.custom_theme.surface, "#151a23");
         assert_eq!(settings.custom_theme.accent, "#818cf8");
         assert_eq!(settings.custom_theme.text, "#f1f5f9");
+        assert_eq!(settings.custom_theme.text_muted, "#94a3b8");
         assert_eq!(settings.pill_color_normal, "#fbbf24");
         assert_eq!(settings.pill_color_note, "#38bdf8");
     }
@@ -906,6 +924,25 @@ mod tests {
         value.as_object_mut().unwrap().remove("customTheme");
         let legacy: AppSettings = serde_json::from_value(value).unwrap();
         assert_eq!(legacy.custom_theme, CustomTheme::default());
+
+        // Legacy JSON with only the original three custom-theme keys (no surface
+        // / textMuted) still deserializes, filling the two new fields from their
+        // per-field serde defaults.
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        value.as_object_mut().unwrap().insert(
+            "customTheme".to_string(),
+            serde_json::json!({
+                "background": "#101010",
+                "accent": "#abcdef",
+                "text": "#fefefe",
+            }),
+        );
+        let legacy_three: AppSettings = serde_json::from_value(value).unwrap();
+        assert_eq!(legacy_three.custom_theme.background, "#101010");
+        assert_eq!(legacy_three.custom_theme.accent, "#abcdef");
+        assert_eq!(legacy_three.custom_theme.text, "#fefefe");
+        assert_eq!(legacy_three.custom_theme.surface, "#151a23");
+        assert_eq!(legacy_three.custom_theme.text_muted, "#94a3b8");
     }
 
     #[test]

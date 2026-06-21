@@ -40,7 +40,7 @@
   padding: 8px 9px;
   border: 1px solid rgba(148, 163, 184, 0.13);
   border-radius: 6px;
-  background: rgba(7, 11, 20, 0.32);
+  background: rgba(var(--scribe-surface-rgb), 0.32);
 }
 
 .output-mode-head {

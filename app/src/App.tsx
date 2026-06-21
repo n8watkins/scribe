@@ -95,8 +95,10 @@ import scribeIcon from "./assets/scribe-icon.png";
 // away from custom (the values are irrelevant — only the key set is read).
 const EMPTY_CUSTOM_THEME = {
   background: "#000000",
+  surface: "#000000",
   accent: "#000000",
   text: "#000000",
+  textMuted: "#000000",
 } as const;
 
 const navItems: { label: ViewName; Icon: LucideIcon }[] = [

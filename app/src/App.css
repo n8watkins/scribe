@@ -255,7 +255,7 @@
  * one deliberate exception — its face stays dark (surface-raised) with the
  * existing light label, which pops cleanly over the light page. */
 :root[data-theme="daylight"] {
-  --scribe-bg: #e7ecf3;
+  --scribe-bg: #e2e8f0;
   --scribe-bg-elevated: #f9fbfd;
   --scribe-sidebar-bg: rgba(248, 250, 252, 0.92);
   --scribe-card-gradient-top: rgba(255, 255, 255, 0.96);
@@ -344,7 +344,7 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: rgba(10, 15, 26, 0.95);
+  background: rgba(var(--scribe-surface-rgb), 0.92);
   border-bottom: 1px solid rgba(148, 163, 184, 0.12);
   user-select: none;
   -webkit-user-select: none;
@@ -2064,7 +2064,7 @@ textarea {
 
 .toggle.is-on span {
   transform: translateX(18px);
-  background: #06212a;
+  background: var(--scribe-accent-on);
 }
 
 .pending-panel,
