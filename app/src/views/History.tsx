@@ -21,8 +21,8 @@ import {
   commandErrorMessage,
   copyTranscript,
   deleteTranscript,
-  driveSyncNow,
   getTranscriptAudio,
+  githubSyncNow,
   openTranscriptExternally,
   pasteTranscript,
   saveCombinedTranscript,
@@ -77,7 +77,7 @@ export function HistoryView({
   const [busyTranscriptId, setBusyTranscriptId] = useState<string | null>(null);
   const [clearingHistory, setClearingHistory] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
-  const [syncingToDrive, setSyncingToDrive] = useState(false);
+  const [syncingToGithub, setSyncingToGithub] = useState(false);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -439,27 +439,27 @@ export function HistoryView({
             />
           </div>
           {notesOnly ? (
-            settings.driveSyncEnabled ? (
+            settings.githubSyncEnabled ? (
               <button
                 className="secondary-button"
-                disabled={syncingToDrive}
+                disabled={syncingToGithub}
                 onClick={() => {
-                  setSyncingToDrive(true);
+                  setSyncingToGithub(true);
                   setSyncNotice(null);
                   setHistoryError(null);
-                  driveSyncNow()
+                  githubSyncNow()
                     .then((report) =>
                       setSyncNotice(
-                        `Synced ${report.syncedNotes} note(s) to Google Drive.`,
+                        `Synced ${report.syncedNotes} note(s) to GitHub.`,
                       ),
                     )
                     .catch((cause) => setHistoryError(commandErrorMessage(cause)))
-                    .finally(() => setSyncingToDrive(false));
+                    .finally(() => setSyncingToGithub(false));
                 }}
                 type="button"
               >
                 <Cloud aria-hidden="true" size={15} />
-                {syncingToDrive ? "Syncing…" : "Sync to Drive"}
+                {syncingToGithub ? "Syncing…" : "Sync to GitHub"}
               </button>
             ) : null
           ) : (

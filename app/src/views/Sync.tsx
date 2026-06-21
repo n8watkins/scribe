@@ -1,25 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  Cloud,
-  CloudOff,
-  Download,
-  FolderSync,
-  HardDriveUpload,
-  RefreshCw,
-} from "lucide-react";
+import { Cloud, CloudOff, Download, GitBranch, RefreshCw } from "lucide-react";
 import {
   commandErrorMessage,
-  driveOrganizeNow,
-  driveSyncNow,
   exportTranscripts,
-  googleSignIn,
-  googleSignOut,
-  googleStatus,
+  githubDevicePoll,
+  githubDeviceStart,
+  githubDisconnect,
+  githubStatus,
+  githubSyncNow,
   type AppSettings,
-  type DriveSyncReport,
   type ExportFormat,
   type ExportScope,
-  type GoogleStatus,
+  type GithubDeviceCode,
+  type GithubStatus,
+  type GithubSyncReport,
 } from "../backend";
 import type { ViewActions } from "../types";
 import { SectionPanel, SettingRow } from "../components/layout";
@@ -28,10 +22,9 @@ import "./sync.css";
 
 /**
  * Sync is the home for backing up / exporting your notes and transcripts to
- * outside destinations. Today the only destination is Google Drive; the page is
- * laid out as a hub (Connection -> What to back up -> Organize / schedule) so
- * more targets can slot in later. The Google Drive logic here was promoted out
- * of Settings so backup is a first-class feature rather than a buried tab.
+ * outside destinations. Today the only destination is GitHub (a private repo of
+ * dated Markdown); the page is laid out as a hub (Connection -> What to back up)
+ * so more targets can slot in later.
  */
 export function SyncView({
   actions,
@@ -40,9 +33,10 @@ export function SyncView({
   actions: ViewActions;
   settings: AppSettings;
 }) {
-  const [status, setStatus] = useState<GoogleStatus | null>(null);
+  const [status, setStatus] = useState<GithubStatus | null>(null);
   const [busy, setBusy] = useState(false);
-  const [lastReport, setLastReport] = useState<DriveSyncReport | null>(null);
+  const [device, setDevice] = useState<GithubDeviceCode | null>(null);
+  const [lastReport, setLastReport] = useState<GithubSyncReport | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("markdown");
@@ -51,7 +45,7 @@ export function SyncView({
 
   const reloadStatus = useCallback(async () => {
     try {
-      const next = await googleStatus();
+      const next = await githubStatus();
       setStatus(next);
     } catch (cause) {
       setError(commandErrorMessage(cause));
@@ -62,37 +56,69 @@ export function SyncView({
     void reloadStatus();
   }, [reloadStatus]);
 
-  // Source of truth is a stored token (status.signedIn), not the email — the
-  // email can be blank on tokens granted before the email scope.
-  const signedIn = status?.signedIn ?? false;
-  // `configured === false` means this build ships without Drive credentials, so
-  // sign-in can never succeed; surface that instead of a dead button.
+  // Source of truth is a stored token (status.connected).
+  const connected = status?.connected ?? false;
+  // `configured === false` means this build ships without a GitHub OAuth client
+  // id, so connecting can never succeed; surface that instead of a dead button.
   const unconfigured = status != null && !status.configured;
+  // The sync toggles require a target repo, or the first sync just errors.
+  const repoSet = settings.githubRepo.trim().length > 0;
 
-  const handleSignIn = useCallback(async () => {
+  // Set true by Cancel so a late-resolving poll (the backend keeps polling
+  // until the device code expires; the request can't be aborted mid-flight)
+  // can't clobber state after the user has backed out.
+  const connectCancelled = useRef(false);
+
+  // Two-step device flow: get + show the code, then await authorization.
+  const handleConnect = useCallback(async () => {
+    connectCancelled.current = false;
     setBusy(true);
     setError(null);
     setNotice(null);
 
     try {
-      const updated = await googleSignIn();
+      const code = await githubDeviceStart();
+      if (connectCancelled.current) {
+        return;
+      }
+      // Show the code immediately, THEN block on the (long-running) poll.
+      setDevice(code);
+      const updated = await githubDevicePoll(code.deviceCode, code.intervalSecs);
+      if (connectCancelled.current) {
+        return;
+      }
       actions.updateSettings(updated);
       await reloadStatus();
     } catch (cause) {
-      setError(commandErrorMessage(cause));
+      if (!connectCancelled.current) {
+        setError(commandErrorMessage(cause));
+      }
     } finally {
-      setBusy(false);
+      if (!connectCancelled.current) {
+        setDevice(null);
+        setBusy(false);
+      }
     }
   }, [actions, reloadStatus]);
 
-  const handleSignOut = useCallback(async () => {
+  // Back out of an in-progress sign-in. The orphaned backend poll keeps running
+  // until GitHub's device code expires (~15 min) and then stops on its own; the
+  // guards above make its eventual result a no-op.
+  const handleCancelConnect = useCallback(() => {
+    connectCancelled.current = true;
+    setDevice(null);
+    setBusy(false);
+    setNotice("GitHub sign-in cancelled.");
+  }, []);
+
+  const handleDisconnect = useCallback(async () => {
     setBusy(true);
     setError(null);
     setNotice(null);
     setLastReport(null);
 
     try {
-      const updated = await googleSignOut();
+      const updated = await githubDisconnect();
       actions.updateSettings(updated);
       await reloadStatus();
     } catch (cause) {
@@ -108,29 +134,10 @@ export function SyncView({
     setNotice(null);
 
     try {
-      const report = await driveSyncNow();
+      const report = await githubSyncNow();
       setLastReport(report);
       setNotice(
         `Synced ${report.syncedNotes} notes into ${report.filesWritten} file(s).`,
-      );
-    } catch (cause) {
-      setError(commandErrorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  }, []);
-
-  const handleOrganizeNow = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-
-    try {
-      const wrote = await driveOrganizeNow();
-      setNotice(
-        wrote
-          ? "Organized today's notes into a Drive file."
-          : "No notes for today yet — nothing to organize.",
       );
     } catch (cause) {
       setError(commandErrorMessage(cause));
@@ -165,13 +172,12 @@ export function SyncView({
       >
         <div className="sync-destination-head">
           <span className="sync-destination-icon" aria-hidden="true">
-            <HardDriveUpload size={18} />
+            <GitBranch size={18} />
           </span>
           <span className="sync-destination-meta">
-            <strong>Google Drive</strong>
+            <strong>GitHub</strong>
             <small>
-              Back up and export your notes (and optionally transcripts) to a
-              folder in your Google Drive.
+              Back up your notes as dated Markdown to a private GitHub repo.
             </small>
           </span>
           <span className="sync-destination-state">
@@ -180,7 +186,7 @@ export function SyncView({
                 <CloudOff aria-hidden="true" size={13} />
                 Unavailable
               </span>
-            ) : signedIn ? (
+            ) : connected ? (
               <>
                 <span className="status-dot success" aria-hidden="true" />
                 <span className="pill ready">Connected</span>
@@ -193,166 +199,127 @@ export function SyncView({
 
         {unconfigured ? (
           <p className="muted vocab-hint">
-            This build isn't configured for Google Drive sync.
+            This build isn't configured for GitHub sync.
           </p>
-        ) : !signedIn ? (
+        ) : device != null ? (
+          <div className="setting-control" style={{ flexDirection: "column", alignItems: "flex-start" }}>
+            <p className="muted vocab-hint">
+              Go to <strong>{device.verificationUri}</strong> and enter this
+              code:
+            </p>
+            <span className="pill preserve">{device.userCode}</span>
+            <p className="muted vocab-hint">Waiting for authorization…</p>
+            <button
+              className="secondary-button"
+              onClick={handleCancelConnect}
+              type="button"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : !connected ? (
           <>
             <p className="muted vocab-hint">
-              Connect a Google account to back up your notes to Google Drive.
-              Sign-in opens your browser to grant access.
+              Connect a GitHub account to back up your notes. We'll open GitHub
+              in your browser to enter a one-time code. GitHub will ask for
+              access to your repositories — Scribe uses it only to create and
+              write your private backup repo.
             </p>
             <div className="setting-control">
               <button
                 className="primary-button"
                 disabled={busy}
-                onClick={() => void handleSignIn()}
+                onClick={() => void handleConnect()}
                 type="button"
               >
-                {busy ? "Signing in…" : "Sign in with Google"}
+                <GitBranch aria-hidden="true" size={15} />
+                {busy ? "Connecting…" : "Connect GitHub"}
               </button>
             </div>
           </>
         ) : (
           <SettingRow
-            description="The connected Google account that your backups are written to."
+            description="The connected GitHub account that your backups are written with."
             label="Connected account"
           >
             <div className="setting-control">
               <span className="pill preserve">
-                {settings.driveAccountEmail || status?.email || "Signed in"}
+                {settings.githubAccountLogin || status?.username || "Connected"}
               </span>
               <button
                 className="secondary-button"
                 disabled={busy}
-                onClick={() => void handleSignOut()}
+                onClick={() => void handleDisconnect()}
                 type="button"
               >
-                {busy ? "Working…" : "Sign out"}
+                {busy ? "Working…" : "Disconnect"}
               </button>
             </div>
           </SettingRow>
         )}
       </SectionPanel>
 
-      {signedIn && !unconfigured ? (
-        <>
-          <SectionPanel
-            icon={<HardDriveUpload aria-hidden="true" size={16} />}
-            title="What to back up"
+      {connected && !unconfigured ? (
+        <SectionPanel
+          icon={<GitBranch aria-hidden="true" size={16} />}
+          title="What to back up"
+        >
+          <p className="muted vocab-hint">
+            Choose what Scribe writes to GitHub. Backups are written
+            automatically as you go, and you can force one any time.
+          </p>
+          <SettingRow
+            description="The private repo to write notes to, as owner/name (e.g. alice/scribe-notes). Created automatically if it's yours and missing."
+            label="Repository"
           >
-            <p className="muted vocab-hint">
-              Choose what Scribe exports to Drive. Backups are written
-              automatically as you go, and you can force one any time from
-              Schedule below.
-            </p>
-            <SettingRow
-              description="Write a Drive copy whenever a note is saved or analyzed."
-              label="Sync notes to Drive"
-            >
-              <Toggle
-                checked={settings.driveSyncEnabled}
-                disabled={actions.savingSettings || busy}
-                label="Sync notes to Drive"
-                onChange={(driveSyncEnabled) =>
-                  actions.updateSettings({ driveSyncEnabled })
-                }
-              />
-            </SettingRow>
-            <SettingRow
-              description="Also back up every dictation transcript (not just notes) to a separate “Scribe Transcripts” folder in Drive, for a full-history backup."
+            <RepoInput
+              disabled={actions.savingSettings || busy}
+              onSave={(githubRepo) => actions.updateSettings({ githubRepo })}
+              value={settings.githubRepo}
+            />
+          </SettingRow>
+          <SettingRow
+            description={
+              repoSet
+                ? "Write a GitHub copy whenever a note is saved or analyzed."
+                : "Set a repository above first, then turn this on."
+            }
+            label="Sync notes to GitHub"
+          >
+            <Toggle
+              checked={settings.githubSyncEnabled}
+              disabled={actions.savingSettings || busy || !repoSet}
+              label="Sync notes to GitHub"
+              onChange={(githubSyncEnabled) =>
+                actions.updateSettings({ githubSyncEnabled })
+              }
+            />
+          </SettingRow>
+          <SettingRow
+            description="Also back up every dictation transcript (not just notes) to a separate “transcripts” folder in the repo, for a full-history backup."
+            label="Back up all transcripts"
+          >
+            <Toggle
+              checked={settings.githubSyncAllTranscripts}
+              disabled={actions.savingSettings || busy || !repoSet}
               label="Back up all transcripts"
+              onChange={(githubSyncAllTranscripts) =>
+                actions.updateSettings({ githubSyncAllTranscripts })
+              }
+            />
+          </SettingRow>
+          <div className="setting-control">
+            <button
+              className="secondary-button"
+              disabled={busy}
+              onClick={() => void handleSyncNow()}
+              type="button"
             >
-              <Toggle
-                checked={settings.driveSyncAllTranscripts}
-                disabled={actions.savingSettings || busy}
-                label="Back up all transcripts"
-                onChange={(driveSyncAllTranscripts) =>
-                  actions.updateSettings({ driveSyncAllTranscripts })
-                }
-              />
-            </SettingRow>
-          </SectionPanel>
-
-          <SectionPanel
-            icon={<FolderSync aria-hidden="true" size={16} />}
-            title="Organize &amp; schedule"
-          >
-            <SettingRow
-              description="At the hour below, the local LLM reorganizes the previous day's notes into a tidy Drive file."
-              label="End-of-day auto-organize (local LLM)"
-            >
-              <Toggle
-                checked={settings.driveOrganizeEnabled}
-                disabled={actions.savingSettings || busy}
-                label="End-of-day auto-organize (local LLM)"
-                onChange={(driveOrganizeEnabled) =>
-                  actions.updateSettings({ driveOrganizeEnabled })
-                }
-              />
-            </SettingRow>
-            <SettingRow
-              description="Hour of day (local time) for the daily organize pass."
-              label="Daily organize hour (local time)"
-            >
-              <select
-                disabled={actions.savingSettings || busy}
-                onChange={(event) =>
-                  actions.updateSettings({
-                    driveOrganizeHour: Number(event.currentTarget.value),
-                  })
-                }
-                value={String(settings.driveOrganizeHour)}
-              >
-                {Array.from({ length: 24 }, (_, hour) => (
-                  <option key={hour} value={hour}>
-                    {String(hour).padStart(2, "0")}:00
-                  </option>
-                ))}
-              </select>
-            </SettingRow>
-            <div className="sync-prompt-field">
-              <span className="sync-prompt-label">
-                <strong>Organize prompt</strong>
-                <small>
-                  The instruction sent to the local LLM when it reorganizes a
-                  day's notes — it alone decides how the tidy Drive file reads.
-                </small>
-              </span>
-              <SyncPromptTextArea
-                ariaLabel="Drive organize prompt"
-                disabled={actions.savingSettings}
-                onSave={(driveOrganizePrompt) =>
-                  actions.updateSettings({ driveOrganizePrompt })
-                }
-                placeholder="Reorganize today's dictated notes into a clean summary…"
-                value={settings.driveOrganizePrompt}
-              />
-            </div>
-            <p className="muted vocab-hint">
-              Auto-organize needs the local LLM (notes analysis) running.
-            </p>
-            <div className="setting-control">
-              <button
-                className="secondary-button"
-                disabled={busy}
-                onClick={() => void handleSyncNow()}
-                type="button"
-              >
-                <RefreshCw aria-hidden="true" size={15} />
-                {busy ? "Syncing…" : "Sync now"}
-              </button>
-              <button
-                className="secondary-button"
-                disabled={busy}
-                onClick={() => void handleOrganizeNow()}
-                type="button"
-              >
-                <FolderSync aria-hidden="true" size={15} />
-                {busy ? "Working…" : "Organize today now"}
-              </button>
-            </div>
-          </SectionPanel>
-        </>
+              <RefreshCw aria-hidden="true" size={15} />
+              {busy ? "Syncing…" : "Sync now"}
+            </button>
+          </div>
+        </SectionPanel>
       ) : null}
 
       <SectionPanel
@@ -423,31 +390,25 @@ export function SyncView({
 
       <p className="muted vocab-hint sync-more-note">
         More backup &amp; export destinations are coming. For now, everything
-        syncs to Google Drive.
+        syncs to GitHub.
       </p>
     </section>
   );
 }
 
-/** Multi-line prompt field that mirrors the BlurSaved* pattern used elsewhere:
+/** Single-line repo input that mirrors the BlurSaved* pattern used elsewhere:
  * keystrokes live in a local draft and only flush to settings on blur (and on
  * unmount), so editing never round-trips the settings command per keystroke. */
-function SyncPromptTextArea({
-  ariaLabel,
+function RepoInput({
   disabled,
   onSave,
-  placeholder,
   value,
 }: {
-  ariaLabel: string;
   disabled?: boolean;
   onSave: (value: string) => void;
-  placeholder?: string;
   value: string;
 }) {
   const [draft, setDraft] = useState(value);
-  const latestRef = useRef({ draft, onSave, value });
-  latestRef.current = { draft, onSave, value };
 
   // Re-sync from props when the saved value changes elsewhere. Safe mid-edit:
   // we only flush on blur, so the prop doesn't move while the field is focused.
@@ -455,31 +416,19 @@ function SyncPromptTextArea({
     setDraft(value);
   }, [value]);
 
-  // Flush an unsaved draft if the view unmounts (e.g. sidebar navigation)
-  // before blur fires, so a typed prompt is never lost.
-  useEffect(
-    () => () => {
-      const latest = latestRef.current;
-      if (latest.draft !== latest.value) {
-        latest.onSave(latest.draft);
-      }
-    },
-    [],
-  );
-
   return (
-    <textarea
-      aria-label={ariaLabel}
-      className="vocab-textarea"
+    <input
+      aria-label="GitHub repository"
       disabled={disabled}
       onBlur={() => {
-        if (draft !== value) {
-          onSave(draft);
+        const trimmed = draft.trim();
+        if (trimmed !== value) {
+          onSave(trimmed);
         }
       }}
       onChange={(event) => setDraft(event.currentTarget.value)}
-      placeholder={placeholder}
-      rows={4}
+      placeholder="owner/scribe-notes"
+      type="text"
       value={draft}
     />
   );

@@ -166,13 +166,10 @@ export type AppSettings = {
   dictationCleanupEnabled: boolean;
   dictationCleanupMode: DictationCleanupMode;
   dictationCleanupPrompt: string;
-  driveSyncEnabled: boolean;
-  driveSyncAllTranscripts: boolean;
-  driveOrganizeHour: number;
-  driveOrganizeEnabled: boolean;
-  driveOrganizePrompt: string;
-  driveLastOrganizedDate: string;
-  driveAccountEmail: string;
+  githubSyncEnabled: boolean;
+  githubRepo: string;
+  githubSyncAllTranscripts: boolean;
+  githubAccountLogin: string;
   hotkeys: HotkeySettings;
   pillX: number | null;
   pillY: number | null;
@@ -717,45 +714,62 @@ export function llmStatus(endpoint?: string): Promise<LlmStatus> {
   return invoke("llm_status", { endpoint });
 }
 
-export type GoogleStatus = {
+export type GithubStatus = {
+  /** Whether this build ships a GitHub OAuth client id (device flow configured). */
   configured: boolean;
-  signedIn: boolean;
-  email: string;
+  /** Whether an access token is stored in the keyring. */
+  connected: boolean;
+  /** GitHub login of the connected account, "" when not connected. */
+  username: string;
+  /** The configured target repo ("owner/name"), "" when unset. */
+  repo: string;
 };
 
-export type DriveSyncReport = {
+/** The device-flow code to show the user. `deviceCode` + `intervalSecs` are
+ * passed back into githubDevicePoll(). */
+export type GithubDeviceCode = {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  expiresInSecs: number;
+  intervalSecs: number;
+};
+
+export type GithubSyncReport = {
   syncedNotes: number;
   filesWritten: number;
 };
 
-/** Reports whether this build is configured for Google Drive sync and the
- * current sign-in state. */
-export function googleStatus(): Promise<GoogleStatus> {
-  return invoke("google_status");
+/** Reports whether this build is configured for GitHub sync, the current
+ * connection state, the connected username, and the configured repo. */
+export function githubStatus(): Promise<GithubStatus> {
+  return invoke("github_status");
 }
 
-/** Opens a browser for Google OAuth; can take up to a minute while the user
- * consents. Returns the full updated settings with the account email filled in. */
-export function googleSignIn(): Promise<AppSettings> {
-  return invoke("google_sign_in");
+/** Starts the OAuth device flow: opens the verification page and returns the
+ * user code to show the user. Does not block on polling. */
+export function githubDeviceStart(): Promise<GithubDeviceCode> {
+  return invoke("github_device_start");
 }
 
-/** Clears the stored Google account; returns the full updated settings
- * (email back to "", driveSyncEnabled false). */
-export function googleSignOut(): Promise<AppSettings> {
-  return invoke("google_sign_out");
+/** Polls until the user authorizes (or the code expires); stores the token in
+ * the keyring and returns the updated settings. Long-running. */
+export function githubDevicePoll(
+  deviceCode: string,
+  interval: number,
+): Promise<AppSettings> {
+  return invoke("github_device_poll", { deviceCode, interval });
 }
 
-/** Syncs notes (and optionally all transcripts) to Google Drive now. */
-export function driveSyncNow(): Promise<DriveSyncReport> {
-  return invoke("drive_sync_now");
+/** Clears the stored GitHub token; returns the updated settings
+ * (githubSyncEnabled false). */
+export function githubDisconnect(): Promise<AppSettings> {
+  return invoke("github_disconnect");
 }
 
-/** Runs the end-of-day organize pass now for a local calendar day (today when
- * omitted). Resolves true when an organized file was written, false when the
- * day had no notes. Needs the local LLM (notes analysis) running. */
-export function driveOrganizeNow(day?: string): Promise<boolean> {
-  return invoke("drive_organize_now", { day });
+/** Backs up notes (and optionally all transcripts) to the configured repo now. */
+export function githubSyncNow(): Promise<GithubSyncReport> {
+  return invoke("github_sync_now");
 }
 
 /** Which transcripts a local export includes. */
@@ -765,7 +779,7 @@ export type ExportFormat = "markdown" | "csv" | "json";
 
 /** Exports transcripts (by scope) to a local file (in the chosen format) the
  * user picks via a native save dialog. Resolves to the saved absolute path, or
- * null when the user cancels. Purely local — no Google account required. */
+ * null when the user cancels. Purely local — no connected account required. */
 export function exportTranscripts(
   scope: ExportScope,
   format: ExportFormat,

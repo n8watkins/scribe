@@ -1,5 +1,5 @@
 /* Sync view: the hub for backing up / exporting notes and transcripts to
-   outside destinations (today: Google Drive). Shared shells (view-grid,
+   outside destinations (today: GitHub). Shared shells (view-grid,
    panel-card, settings-list, pill, status-dot, setting-control, vocab-hint)
    come from App.css; this file only adds the Sync-specific bits — the
    destination header row, the organize-prompt field, and the status/footer
