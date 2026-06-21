@@ -216,28 +216,42 @@ fn transcribe_recording_inner(
     {
         Some(assembled) => Ok(assembled),
         None => {
-            log::info!(
-                "Transcription started for session {} (model {}, recording {} ms)",
-                recording.session_id,
-                model_id,
-                recording.duration_ms
-            );
-            // The warm whisper-server transcriber falls back to whisper-cli
-            // internally when the server path is unavailable.
-            app.state::<WarmTranscriber>().transcribe(
-                app,
-                WhisperRequest {
-                    model_path,
-                    wav_path: wav_path.clone(),
-                    language: language.clone(),
-                    translate: settings.translate_to_english,
-                    vocabulary_prompt: settings.vocabulary_prompt.clone(),
-                    // FILLER: gate from settings (None = off, unchanged path).
-                    filler: crate::filler::FillerConfig::from_settings(&settings),
-                    gpu: settings.gpu_acceleration,
-                    gpu_device_index: settings.gpu_device_index,
-                },
-            )
+            // Skip the model entirely on effectively-silent audio (e.g. a record
+            // toggle on/off with nothing said) so Whisper can't hallucinate text
+            // from silence. Fails open: an unreadable WAV still transcribes.
+            if !crate::audio::wav_has_speech(&wav_path) {
+                log::info!(
+                    "No speech detected for session {}; skipping transcription (empty result)",
+                    recording.session_id
+                );
+                Ok(crate::whisper::WhisperTranscription {
+                    text: String::new(),
+                    latency_ms: 0,
+                })
+            } else {
+                log::info!(
+                    "Transcription started for session {} (model {}, recording {} ms)",
+                    recording.session_id,
+                    model_id,
+                    recording.duration_ms
+                );
+                // The warm whisper-server transcriber falls back to whisper-cli
+                // internally when the server path is unavailable.
+                app.state::<WarmTranscriber>().transcribe(
+                    app,
+                    WhisperRequest {
+                        model_path,
+                        wav_path: wav_path.clone(),
+                        language: language.clone(),
+                        translate: settings.translate_to_english,
+                        vocabulary_prompt: settings.vocabulary_prompt.clone(),
+                        // FILLER: gate from settings (None = off, unchanged path).
+                        filler: crate::filler::FillerConfig::from_settings(&settings),
+                        gpu: settings.gpu_acceleration,
+                        gpu_device_index: settings.gpu_device_index,
+                    },
+                )
+            }
         }
     };
 

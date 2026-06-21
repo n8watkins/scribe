@@ -1009,6 +1009,34 @@ pub(crate) fn chunk_rms(samples: &[f32]) -> f32 {
         .sqrt() as f32
 }
 
+/// Whether a recorded WAV contains any speech — true if any short (30 ms) window
+/// reaches [`AUTO_STOP_SPEECH_RMS`]. Used to skip transcription on effectively
+/// silent clips (e.g. a record toggle on/off with nothing said) so Whisper can't
+/// hallucinate text from silence. **Fails open:** an unreadable/unsamplable WAV
+/// returns `true`, so real audio is never dropped on a read hiccup.
+pub(crate) fn wav_has_speech(path: &std::path::Path) -> bool {
+    const WINDOW: usize = 480; // 30 ms at 16 kHz
+
+    let Ok(mut reader) = hound::WavReader::open(path) else {
+        return true;
+    };
+
+    let mut window: Vec<f32> = Vec::with_capacity(WINDOW);
+    for sample in reader.samples::<i16>() {
+        let Ok(sample) = sample else {
+            return true; // decode hiccup → fail open
+        };
+        window.push(sample as f32 / i16::MAX as f32);
+        if window.len() == WINDOW {
+            if chunk_rms(&window) >= AUTO_STOP_SPEECH_RMS {
+                return true;
+            }
+            window.clear();
+        }
+    }
+    !window.is_empty() && chunk_rms(&window) >= AUTO_STOP_SPEECH_RMS
+}
+
 fn finalize_recording(
     info: RecordingSessionInfo,
     stop_reason: StopReason,
@@ -1684,5 +1712,23 @@ mod tests {
         assert_eq!(spec.sample_format, hound::SampleFormat::Int);
 
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn wav_has_speech_distinguishes_silence_from_speech() {
+        // A silent clip → no speech (so transcription is skipped).
+        let silent = std::env::temp_dir().join(format!("scribe-silent-{}.wav", Uuid::new_v4()));
+        write_wav(&silent, &vec![0.0_f32; 16_000]).unwrap();
+        assert!(!wav_has_speech(&silent), "all-silence WAV must report no speech");
+        let _ = fs::remove_file(&silent);
+
+        // A loud clip (well above AUTO_STOP_SPEECH_RMS) → speech present.
+        let loud = std::env::temp_dir().join(format!("scribe-loud-{}.wav", Uuid::new_v4()));
+        write_wav(&loud, &vec![0.5_f32; 16_000]).unwrap();
+        assert!(wav_has_speech(&loud), "loud WAV must report speech");
+        let _ = fs::remove_file(&loud);
+
+        // A missing file fails open (true) so real audio is never dropped.
+        assert!(wav_has_speech(std::path::Path::new("/no/such/scribe.wav")));
     }
 }
