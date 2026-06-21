@@ -149,6 +149,10 @@ fn whisper_args(
         "--output-file".to_string(),
         output_prefix.to_string_lossy().to_string(),
         "--no-timestamps".to_string(),
+        // Suppress non-speech tokens (e.g. "(laughs)", "[Music]") so silence and
+        // near-silent audio hallucinate less of that filler. Mirrored in
+        // server_args so the warm-server and CLI paths behave identically.
+        "--suppress-nst".to_string(),
     ];
 
     // Translate task: whisper.cpp emits English for any spoken language. Only
@@ -222,7 +226,111 @@ pub(crate) fn normalize_transcript_text(raw_text: &str) -> String {
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
-    tidy_punctuation_spacing(&joined)
+    let tidy = tidy_punctuation_spacing(&joined);
+    // Drop transcripts that are entirely Whisper's silence-hallucinated YouTube
+    // filler ("be sure to subscribe", "thanks for watching") — common on a
+    // mic-disconnect's dead-air salvage — so the junk is never pasted. An empty
+    // result is treated as "no speech" by the dictation flow (no paste).
+    if is_pure_hallucination(&tidy) {
+        return String::new();
+    }
+    tidy
+}
+
+/// Whisper, trained heavily on captioned video, hallucinates YouTube-style outro
+/// filler on silence or near-silent audio — "thanks for watching", "be sure to
+/// subscribe to our channel", "(laughs)". A mic unplugged mid-recording salvages
+/// mostly dead air, so that junk gets transcribed and pasted.
+///
+/// Returns true only when the WHOLE transcript is such filler. Conservative by
+/// construction: it fires only if *every* sentence is a known filler phrase AND
+/// at least one is a "strong" phrase that is never legitimately dictated. So any
+/// real content keeps the transcript, and a lone "Thank you." / "Bye." that a
+/// user might actually say is kept (those are "weak" phrases).
+fn is_pure_hallucination(text: &str) -> bool {
+    // Strong: unmistakable video outro; never normal dictation, even alone.
+    const STRONG: &[&str] = &[
+        "thanks for watching",
+        "thank you for watching",
+        "thank you for watching this video",
+        "be sure to subscribe",
+        "be sure to subscribe to our channel",
+        "subscribe to our channel",
+        "subscribe to my channel",
+        "please subscribe",
+        "please subscribe to my channel",
+        "dont forget to subscribe",
+        "like and subscribe",
+        "please like and subscribe",
+        "like comment and subscribe",
+        "see you in the next one",
+        "see you in the next video",
+        "see you next time",
+        "well see you next time",
+        "ill see you in the next one",
+    ];
+    // Weak: plausibly real on their own, so they count as filler only alongside a
+    // strong phrase in an otherwise all-filler transcript.
+    const WEAK: &[&str] = &[
+        "thank you",
+        "thanks",
+        "thank you very much",
+        "thank you so much",
+        "bye",
+        "bye bye",
+        "goodbye",
+        "good bye",
+        "the end",
+        "okay",
+        "ok",
+        "you",
+        "oh",
+        "ooh",
+        "uh",
+        "um",
+        "so",
+        "hmm",
+        "yeah",
+        "right",
+        "see you",
+    ];
+    // Connectives Whisper tacks onto a hallucinated phrase ("and be sure to ...").
+    const LEADING: &[&str] = &[
+        "and", "so", "okay", "ok", "oh", "well", "but", "um", "uh", "now",
+    ];
+
+    let mut saw_any = false;
+    let mut saw_strong = false;
+    for sentence in text.split(|c| matches!(c, '.' | '!' | '?')) {
+        let mut words: Vec<String> = sentence
+            .split_whitespace()
+            .map(|word| {
+                word.chars()
+                    .filter(|c| c.is_alphanumeric())
+                    .flat_map(|c| c.to_lowercase())
+                    .collect::<String>()
+            })
+            .filter(|word| !word.is_empty())
+            .collect();
+        while words
+            .first()
+            .is_some_and(|word| LEADING.contains(&word.as_str()))
+        {
+            words.remove(0);
+        }
+        if words.is_empty() {
+            continue;
+        }
+        saw_any = true;
+        let phrase = words.join(" ");
+        if STRONG.contains(&phrase.as_str()) {
+            saw_strong = true;
+        } else if !WEAK.contains(&phrase.as_str()) {
+            // A real sentence -> not pure hallucination; keep the transcript.
+            return false;
+        }
+    }
+    saw_any && saw_strong
 }
 
 /// Whisper renders speech pauses as an ellipsis ("..." or the "…" character).
@@ -270,7 +378,7 @@ fn tidy_punctuation_spacing(text: &str) -> String {
 /// "[BLANK_AUDIO]", "(silence)", "[Music]". Only known annotation words are
 /// removed so legitimately dictated brackets survive.
 fn strip_noise_annotations(line: &str) -> String {
-    const NOISE: [&str; 12] = [
+    const NOISE: [&str; 14] = [
         "blank audio",
         "silence",
         "silent",
@@ -278,6 +386,8 @@ fn strip_noise_annotations(line: &str) -> String {
         "applause",
         "laughter",
         "laughing",
+        "laughs",
+        "laugh",
         "noise",
         "inaudible",
         "no audio",
@@ -337,6 +447,7 @@ mod tests {
                 "--output-file",
                 "temp/out",
                 "--no-timestamps",
+                "--suppress-nst",
             ]
         );
         // No translate task unless explicitly requested.
@@ -411,6 +522,57 @@ mod tests {
         );
         // A line that was only an ellipsis collapses to nothing.
         assert_eq!(normalize_transcript_text("..."), "");
+    }
+
+    #[test]
+    fn drops_whole_transcript_of_youtube_hallucinations() {
+        // The exact mic-disconnect junk: every sentence is filler and several are
+        // the unmistakable subscribe outro -> the whole thing is dropped.
+        assert_eq!(
+            normalize_transcript_text(
+                "Ooh. (laughs) And be sure to subscribe. And the end. And be sure to subscribe to our channel."
+            ),
+            ""
+        );
+        assert_eq!(normalize_transcript_text("Thanks for watching!"), "");
+        assert_eq!(
+            normalize_transcript_text("Be sure to subscribe to our channel."),
+            ""
+        );
+        // All filler, and a strong outro phrase is present -> dropped.
+        assert_eq!(
+            normalize_transcript_text("Thank you. Please subscribe. Bye."),
+            ""
+        );
+    }
+
+    #[test]
+    fn keeps_real_dictation_near_filler_words() {
+        // A lone weak phrase a user might actually dictate is kept (no strong outro).
+        assert_eq!(normalize_transcript_text("Thank you."), "Thank you.");
+        assert_eq!(normalize_transcript_text("Thank you. Bye."), "Thank you. Bye.");
+        // Real content that merely mentions a filler word is never dropped.
+        assert_eq!(
+            normalize_transcript_text("Please subscribe to my newsletter."),
+            "Please subscribe to my newsletter."
+        );
+        assert_eq!(
+            normalize_transcript_text("Okay, let's ship the build."),
+            "Okay, let's ship the build."
+        );
+    }
+
+    #[test]
+    fn whisper_args_suppress_non_speech_tokens() {
+        let args = whisper_args(
+            Path::new("model.bin"),
+            Path::new("audio.wav"),
+            "en",
+            false,
+            Path::new("out"),
+            "",
+        );
+        assert!(args.iter().any(|arg| arg == "--suppress-nst"));
     }
 
     #[test]

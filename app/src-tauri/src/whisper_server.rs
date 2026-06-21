@@ -543,6 +543,9 @@ fn server_args(
         threads.to_string(),
         "--language".to_string(),
         language.to_string(),
+        // Suppress non-speech tokens (e.g. "(laughs)", "[Music]"); mirrors the
+        // CLI path (whisper_args) so the warm-server and fallback agree.
+        "--suppress-nst".to_string(),
     ];
 
     // Translate task (English output for any spoken language). Launch-time
@@ -599,6 +602,7 @@ mod tests {
                 "4",
                 "--language",
                 "en",
+                "--suppress-nst",
             ]
         );
         // The vocabulary prompt is per-request, never a launch argument.
