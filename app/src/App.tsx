@@ -179,6 +179,13 @@ function TitleBar({ isDev }: { isDev: boolean }) {
   );
 }
 
+// Toast stack limits: at most MAX_TOASTS visible at once — so a later notice
+// never instantly clobbers an earlier one the user hasn't read (e.g. the
+// mic-disconnect notice immediately followed by the stop notice) — each shown
+// for TOAST_DURATION_MS before it auto-dismisses.
+const MAX_TOASTS = 2;
+const TOAST_DURATION_MS = 5000;
+
 function App() {
   const [activeView, setActiveView] = useState<ViewName>("Dashboard");
   const [settingsTabId, setSettingsTabId] = useState<string | null>(null);
@@ -195,7 +202,8 @@ function App() {
   const [recordingBusy, setRecordingBusy] = useState(false);
   const [microphones, setMicrophones] = useState<MicrophoneInfo[] | null>(null);
   const [models, setModels] = useState<ModelInfo[] | null>(null);
-  const [toast, setToast] = useState<ToastNotice | null>(null);
+  const [toasts, setToasts] = useState<ToastNotice[]>([]);
+  const toastIdRef = useRef(0);
   const [isDevFlavor, setIsDevFlavor] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
   // Drives the branded auto-update screen. Non-null while an on-launch silent
@@ -329,15 +337,27 @@ function App() {
   // identity — otherwise the main event-listener effect (which depends on
   // `showNotice`) would tear down and re-subscribe every listener on each
   // toggle. The callback stays stable for the lifetime of the component.
+  // Append a toast to the stack and schedule its own dismissal. The stack is
+  // capped at MAX_TOASTS (oldest drops out), so two notices fired back-to-back
+  // both stay readable instead of the second replacing the first. Stable
+  // (no deps) so it doesn't re-subscribe the event listeners below.
+  const pushToast = useCallback((notice: Omit<ToastNotice, "id">) => {
+    const id = (toastIdRef.current += 1);
+    setToasts((prev) => [...prev, { ...notice, id }].slice(-MAX_TOASTS));
+    window.setTimeout(() => {
+      setToasts((prev) => prev.filter((existing) => existing.id !== id));
+    }, TOAST_DURATION_MS);
+  }, []);
+
   const showNotice = useCallback(
     (message: string, tone: ToastNotice["tone"] = "info") => {
       if (!notificationsEnabledRef.current) {
         return;
       }
 
-      setToast({ id: Date.now(), message, tone });
+      pushToast({ message, tone });
     },
-    [],
+    [pushToast],
   );
 
   const refresh = useCallback(async () => {
@@ -513,8 +533,7 @@ function App() {
             lastNotifiedVersion = result.latestVersion;
             // Update availability is high-signal, so it shows regardless of the
             // in-app notifications setting.
-            setToast({
-              id: Date.now(),
+            pushToast({
               tone: "info",
               message: `Scribe ${result.latestVersion} is available — open About to install it.`,
             });
@@ -548,15 +567,6 @@ function App() {
       window.removeEventListener("focus", onFocus);
     };
   }, [maybeRunLaunchInstall]);
-
-  useEffect(() => {
-    if (!toast) {
-      return;
-    }
-
-    const timer = window.setTimeout(() => setToast(null), 4200);
-    return () => window.clearTimeout(timer);
-  }, [toast]);
 
   useEffect(() => {
     let refreshTimer: number | null = null;
@@ -648,15 +658,13 @@ function App() {
         // rather than gating on the notifications setting — a silent failure
         // would leave the selection unchanged with no explanation.
         listen<string>("scribe:selection-transformed", () => {
-          setToast({
-            id: Date.now(),
+          pushToast({
             tone: "success",
             message: "Selection transformed.",
           });
         }),
         listen<string>("scribe:selection-transform-failed", (event) => {
-          setToast({
-            id: Date.now(),
+          pushToast({
             tone: "error",
             message: event.payload || "Couldn't transform the selection.",
           });
@@ -677,8 +685,7 @@ function App() {
               )
               .join("; ");
             // Always surface hotkey failures, regardless of notification setting.
-            setToast({
-              id: Date.now(),
+            pushToast({
               tone: "error",
               message: `Hotkey(s) failed to register: ${details}`,
             });
@@ -700,7 +707,7 @@ function App() {
       }
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [refresh, showNotice]);
+  }, [refresh, showNotice, pushToast]);
 
   const persistSettings = useCallback(
     async (patch: SettingsPatch) => {
@@ -998,7 +1005,13 @@ function App() {
               updateInfo,
             )
           : null}
-        {toast ? <Toast notice={toast} /> : null}
+        {toasts.length > 0 ? (
+          <div className="toast-stack">
+            {toasts.map((notice) => (
+              <Toast key={notice.id} notice={notice} />
+            ))}
+          </div>
+        ) : null}
       </main>
       </div>
     </div>

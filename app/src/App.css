@@ -2162,11 +2162,23 @@ textarea {
   background: linear-gradient(90deg, var(--scribe-accent), #3b82f6);
 }
 
-.toast-notice {
+.toast-stack {
   position: fixed;
   right: 16px;
   bottom: 16px;
   z-index: 41;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  /* The container is just a layout shell; the pills themselves take pointer
+     events (it spans only their stacked height, but keep clicks passing through
+     the gaps). */
+  pointer-events: none;
+}
+
+.toast-notice {
+  pointer-events: auto;
   display: inline-flex;
   align-items: center;
   gap: 8px;
