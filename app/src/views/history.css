@@ -127,7 +127,7 @@
  * Transcribe's toolbar, whose buttons never carry `.danger`.
  * ------------------------------------------------------------------------- */
 .toolbar-row .secondary-button.danger {
-  color: #fee2e2;
+  color: var(--scribe-danger);
   background: rgba(220, 38, 38, 0.16);
   border-color: rgba(248, 113, 113, 0.5);
 }

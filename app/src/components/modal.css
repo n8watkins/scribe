@@ -61,7 +61,7 @@
 }
 
 .modal-icon.danger {
-  color: #f87171;
+  color: var(--scribe-danger);
   background: rgba(239, 68, 68, 0.12);
   border-color: rgba(239, 68, 68, 0.26);
 }

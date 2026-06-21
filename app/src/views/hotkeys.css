@@ -97,7 +97,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  color: #fca5a5;
+  color: var(--scribe-danger);
   font-size: 12.5px;
   line-height: 1.35;
 }
@@ -185,7 +185,7 @@
 /* A bind that is NOT registered is styled as an error so the failure is
    unmistakable even before reading the reason. */
 .hotkeys-bind.hotkeys-bind-failed {
-  color: #fecaca;
+  color: var(--scribe-danger);
   border-color: rgba(239, 68, 68, 0.5);
   border-bottom-color: rgba(239, 68, 68, 0.6);
   background: rgba(239, 68, 68, 0.08);

@@ -68,6 +68,15 @@
   --scribe-text-muted: #94a3b8;
   --scribe-text-faint: #64748b;
 
+  /* Semantic status text (error/success/warning/info). These sit on translucent
+     semantic-tinted backgrounds, so on the dark themes they must read LIGHT;
+     Daylight overrides them with darker variants. All dark themes inherit these
+     from :root — do NOT redeclare them in the other theme blocks. */
+  --scribe-danger: #fca5a5;
+  --scribe-success: #86efac;
+  --scribe-warning: #fcd34d;
+  --scribe-info: #bfdbfe;
+
   color-scheme: dark;
   color: var(--scribe-text);
   background: var(--scribe-bg);
@@ -280,6 +289,16 @@
   --scribe-text-secondary: #374151;
   --scribe-text-muted: #4b5563;
   --scribe-text-faint: #525c6a;
+  /* Darker semantic text so status messages read on the PALE tinted panels over
+     the light page. WCAG (composited semantic rgba over page #d6dadf):
+       danger  #991b1b : 5.18 (on red .12) / 4.67 (on red-900 .14)
+       success #166534 : 4.73 (on green .12)
+       warning #92400e : 4.75 (on amber .12)
+       info    #1e40af : 5.56 (on blue .12) — all ≥ 4.5 */
+  --scribe-danger: #991b1b;
+  --scribe-success: #166534;
+  --scribe-warning: #92400e;
+  --scribe-info: #1e40af;
 }
 
 /* Flip native controls (the <select> popup, the date picker, scrollbars) to
@@ -605,7 +624,7 @@ button {
 .about-update-poll {
   display: block;
   margin-top: 2px;
-  color: #64748b;
+  color: var(--scribe-text-faint);
 }
 
 /* "Automatically check for updates" toggle row in About → Updates. */
@@ -632,7 +651,7 @@ button {
 .about-autoinstall-hint {
   display: block;
   margin-top: 5px;
-  color: #64748b;
+  color: var(--scribe-text-faint);
 }
 
 button:disabled {
@@ -795,7 +814,7 @@ button:disabled {
 }
 
 .pill.ready {
-  color: #bbf7d0;
+  color: var(--scribe-success);
   background: rgba(34, 197, 94, 0.14);
   border: 1px solid rgba(34, 197, 94, 0.22);
 }
@@ -807,13 +826,13 @@ button:disabled {
 }
 
 .pill.recording {
-  color: #fef3c7;
+  color: var(--scribe-warning);
   background: rgba(245, 158, 11, 0.14);
   border: 1px solid rgba(245, 158, 11, 0.28);
 }
 
 .pill.selected {
-  color: #bfdbfe;
+  color: var(--scribe-info);
   background: rgba(59, 130, 246, 0.16);
   border: 1px solid rgba(59, 130, 246, 0.24);
 }
@@ -825,13 +844,13 @@ button:disabled {
 }
 
 .pill.pending {
-  color: #fde68a;
+  color: var(--scribe-warning);
   background: rgba(245, 158, 11, 0.12);
   border: 1px solid rgba(245, 158, 11, 0.24);
 }
 
 .pill.error {
-  color: #fecaca;
+  color: var(--scribe-danger);
   background: rgba(239, 68, 68, 0.12);
   border: 1px solid rgba(239, 68, 68, 0.26);
 }
@@ -892,7 +911,7 @@ button:disabled {
   min-height: 84px;
   margin: 0;
   padding: 10px;
-  color: #e2e8f0;
+  color: var(--scribe-text);
   background: rgba(var(--scribe-surface-rgb),0.48);
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 6px;
@@ -1033,7 +1052,7 @@ button:disabled {
 }
 
 .search-field svg {
-  color: #64748b;
+  color: var(--scribe-text-faint);
   flex: 0 0 auto;
 }
 
@@ -1112,7 +1131,7 @@ select option:checked {
 }
 
 .filter-label {
-  color: #64748b;
+  color: var(--scribe-text-faint);
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
@@ -1350,7 +1369,7 @@ textarea {
 .history-row span:not(.pill),
 .hotkey-editor-row span:not(.pill),
 .model-row span:not(.pill) {
-  color: #64748b;
+  color: var(--scribe-text-faint);
   font-size: 11px;
 }
 
@@ -1555,7 +1574,7 @@ textarea {
 
 .field-error {
   margin: 7px 0 0;
-  color: #fca5a5;
+  color: var(--scribe-danger);
   font-size: 11.5px;
 }
 
@@ -1619,7 +1638,7 @@ textarea {
   margin: 0;
   font-size: 13px;
   font-weight: 760;
-  color: #e2e8f0;
+  color: var(--scribe-text);
 }
 
 /* Generic grouped subsections inside a settings tab panel (e.g. the merged
@@ -1670,7 +1689,7 @@ textarea {
 }
 
 .replacement-arrow {
-  color: #64748b;
+  color: var(--scribe-text-faint);
   font-size: 14px;
 }
 
@@ -1692,7 +1711,7 @@ textarea {
 }
 
 .replacement-remove:hover:not(:disabled) {
-  color: #fecaca;
+  color: var(--scribe-danger);
   border-color: rgba(239, 68, 68, 0.55);
   background: rgba(127, 29, 29, 0.22);
 }
@@ -1757,7 +1776,7 @@ textarea {
 }
 
 .danger {
-  color: #fecaca;
+  color: var(--scribe-danger);
   border-color: rgba(239, 68, 68, 0.24);
 }
 
@@ -1779,7 +1798,7 @@ textarea {
 }
 
 .hotkey-error {
-  color: #fca5a5 !important;
+  color: var(--scribe-danger) !important;
 }
 
 .hotkey-note {
@@ -1944,7 +1963,7 @@ textarea {
 .model-row .model-row-sub {
   display: block;
   overflow: hidden;
-  color: #64748b;
+  color: var(--scribe-text-faint);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1964,7 +1983,7 @@ textarea {
 /* "Not downloaded" — the resting state of most models, deliberately quiet
    (plain muted text, no badge). */
 .model-row .model-row-resting {
-  color: #64748b;
+  color: var(--scribe-text-faint);
   font-size: 11px;
 }
 
@@ -1993,7 +2012,7 @@ textarea {
 }
 
 .icon-button.danger:hover {
-  color: #fecaca;
+  color: var(--scribe-danger);
   border-color: rgba(239, 68, 68, 0.55);
   background: rgba(127, 29, 29, 0.22);
 }
@@ -2103,14 +2122,14 @@ textarea {
 
 .error-panel {
   align-items: flex-start;
-  color: #fecaca;
+  color: var(--scribe-danger);
   border-color: rgba(239, 68, 68, 0.24);
   background: rgba(127, 29, 29, 0.14);
 }
 
 .error-panel p {
   margin: 3px 0 0;
-  color: #fca5a5;
+  color: var(--scribe-danger);
   font-size: 12px;
 }
 
@@ -2121,7 +2140,7 @@ textarea {
 .inline-error {
   margin-bottom: 8px;
   padding: 7px 10px;
-  color: #fecaca;
+  color: var(--scribe-danger);
   border-color: rgba(239, 68, 68, 0.24);
   background: rgba(127, 29, 29, 0.14);
 }
@@ -2242,7 +2261,7 @@ code {
   display: block;
   margin-top: 2px;
   overflow-wrap: anywhere;
-  color: #64748b;
+  color: var(--scribe-text-faint);
   font-size: 11px;
 }
 
