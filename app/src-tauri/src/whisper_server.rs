@@ -180,17 +180,15 @@ impl WarmTranscriber {
         app: &AppHandle,
         request: WhisperRequest,
     ) -> Result<WhisperTranscription, CommandError> {
-        // FILLER: the warm server returns text only; pause-aware filler removal
-        // needs per-word timestamps, which today come from the whisper-cli
-        // `--output-json-full` path. So a filler request skips the server and
-        // uses the CLI directly. (A warm-server verbose_json path is a perf
-        // follow-up — see docs/FILLER_SUPPRESSION_PLAN.md.)
-        let server_eligible = request.filler.is_none();
+        // FILLER: the warm server now serves filler requests too — it returns
+        // verbose_json with per-word timings (parsed in transcribe_via_server),
+        // so suppression runs on the warm path with no model-reload overhead. The
+        // whisper-cli path stays the fallback (and also handles filler).
 
         // Missing inputs are user-facing errors, not server failures; let the
         // CLI path produce its existing error messages without touching the
         // failure counter.
-        if server_eligible && request.model_path.is_file() && request.wav_path.is_file() {
+        if request.model_path.is_file() && request.wav_path.is_file() {
             if let Some(transcription) = self.try_server(app, &request) {
                 return Ok(transcription);
             }
@@ -295,7 +293,15 @@ impl WarmTranscriber {
                     .mime_str("audio/wav")
                     .map_err(|error| format!("Could not build multipart request. {}", error))?,
             )
-            .text("response_format", "json");
+            // FILLER: verbose_json carries per-word timings; plain json otherwise.
+            .text(
+                "response_format",
+                if request.filler.is_some() {
+                    "verbose_json"
+                } else {
+                    "json"
+                },
+            );
 
         let vocabulary_prompt = request.vocabulary_prompt.trim();
         if !vocabulary_prompt.is_empty() {
@@ -320,6 +326,16 @@ impl WarmTranscriber {
                 status,
                 body.trim()
             ));
+        }
+
+        // FILLER: with a config, drop pause-bracketed fillers using the per-word
+        // timings; if the words array is missing/unparseable, fall back to the
+        // verbose_json top-level `text` so a hiccup never loses the dictation.
+        if let Some(config) = &request.filler {
+            let words = parse_server_words(&body);
+            if !words.is_empty() {
+                return Ok(whisper::normalize_transcript_text(&config.apply(&words)));
+            }
         }
 
         let parsed: InferenceResponse = serde_json::from_str(&body)
