@@ -161,14 +161,16 @@ pub fn probe(app: &AppHandle) -> GpuProbe {
         return probe_from_stderr("", false);
     }
 
+    // Homogeneous Vec<String> (mixing &str + Cow<str> in one array won't compile).
+    let args = vec![
+        "-m".to_string(),
+        model_path.to_string_lossy().to_string(),
+        "-f".to_string(),
+        wav_path.to_string_lossy().to_string(),
+        "--no-timestamps".to_string(),
+    ];
     let mut command = Command::new(&executable);
-    command.args([
-        "-m",
-        &model_path.to_string_lossy(),
-        "-f",
-        &wav_path.to_string_lossy(),
-        "--no-timestamps",
-    ]);
+    command.args(&args);
     crate::whisper::suppress_console_window(&mut command);
 
     let output = command.output();
@@ -192,7 +194,7 @@ pub fn probe(_app: &AppHandle) -> GpuProbe {
 /// we only need ggml to reach backend init and log its device list.
 #[cfg(windows)]
 fn resolve_probe_model(app: &AppHandle) -> Option<std::path::PathBuf> {
-    use crate::backend::BackendState;
+    use crate::commands::BackendState;
     use tauri::Manager;
 
     let state = app.state::<BackendState>();
