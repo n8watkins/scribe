@@ -48,10 +48,8 @@ jobs:
         run: |
           Write-Host "VULKAN_SDK=$env:VULKAN_SDK"
           if (Test-Path "$env:VULKAN_SDK\Bin\glslc.exe") { & "$env:VULKAN_SDK\Bin\glslc.exe" --version }
-          # Find any Vulkan ICD JSONs that got installed (lavapipe etc.).
-          Write-Host "--- candidate ICD jsons ---"
-          Get-ChildItem -Path $env:RUNNER_TEMP, $env:VULKAN_SDK, "C:\" -Recurse -Filter "*.json" -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match 'icd|lvp|lavapipe' } | Select-Object -First 20 FullName
+          $lvp = "C:\lavapipe\share\vulkan\icd.d\lvp_icd.x86_64.json"
+          Write-Host "Lavapipe ICD present: $(Test-Path $lvp) ($lvp)"
 
       - name: Clone whisper.cpp @ ref
         shell: pwsh
@@ -88,15 +86,14 @@ jobs:
         id: icd
         shell: pwsh
         run: |
-          $icd = Get-ChildItem -Path $env:RUNNER_TEMP, "C:\" -Recurse -Filter "*.json" -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match 'lvp_icd|lavapipe' } | Select-Object -First 1
-          if ($icd) {
-            Write-Host "Lavapipe ICD: $($icd.FullName)"
-            "path=$($icd.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          } else {
-            Write-Host "No Lavapipe ICD found — GPU probe will likely report 0 devices."
-            "path=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $lvp = "C:\lavapipe\share\vulkan\icd.d\lvp_icd.x86_64.json"
+          if (-not (Test-Path $lvp)) {
+            # bounded fallback search under the lavapipe install dir only
+            $f = Get-ChildItem -Path "C:\lavapipe" -Recurse -Filter "lvp_icd*.json" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($f) { $lvp = $f.FullName } else { $lvp = "" }
           }
+          if ($lvp) { Write-Host "Lavapipe ICD: $lvp"; "path=$lvp" | Out-File -FilePath $env:GITHUB_OUTPUT -Append }
+          else { Write-Host "No Lavapipe ICD found — GPU probe will report 0 devices."; "path=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append }
 
       - name: Probe GPU (Vulkan via Lavapipe) — should ENGAGE
         continue-on-error: true
