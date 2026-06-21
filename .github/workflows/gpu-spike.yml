@@ -95,13 +95,11 @@ jobs:
         id: icd
         shell: pwsh
         run: |
-          $lvp = "C:\lavapipe\share\vulkan\icd.d\lvp_icd.x86_64.json"
-          if (-not (Test-Path $lvp)) {
-            # bounded fallback search under the lavapipe install dir only
-            $f = Get-ChildItem -Path "C:\lavapipe" -Recurse -Filter "lvp_icd*.json" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($f) { $lvp = $f.FullName } else { $lvp = "" }
-          }
-          if ($lvp) { Write-Host "Lavapipe ICD: $lvp"; "path=$lvp" | Out-File -FilePath $env:GITHUB_OUTPUT -Append }
+          # Prefer the hostedtoolcache install — that's the ICD the action
+          # registered, and where the lavapipe DLL actually lives so the ICD's
+          # library_path resolves. The C:\lavapipe copy's relative path may not.
+          $icd = Get-ChildItem -Path "C:\hostedtoolcache\windows\lavapipe","C:\lavapipe" -Recurse -Filter "lvp_icd*.json" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($icd) { Write-Host "Lavapipe ICD: $($icd.FullName)"; "path=$($icd.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append }
           else { Write-Host "No Lavapipe ICD found — GPU probe will report 0 devices."; "path=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append }
 
       - name: Probe GPU (Vulkan via Lavapipe) — should ENGAGE
