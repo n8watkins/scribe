@@ -4,6 +4,18 @@ Versions bump with each meaningful increment of progress — patch for small
 changes, minor for feature sets / phases — even when the work is still in flight
 and not yet perfect.
 
+## 0.5.24 — 2026-06-21
+
+A small frontend-polish patch (the fixes landed just after the 0.5.23 tag, so
+they ship here).
+
+- **Toasts no longer leak timers.** Dismissal timers are tracked and cleared on
+  unmount, and each timer self-prunes when it fires — no setState-after-unmount.
+- **Screen readers announce errors promptly.** Error toasts use `role="alert"`
+  (assertive); info/success stay `role="status"`.
+- **Honest types.** `RecordingResult` regained the `isTransform` + `disconnected`
+  fields, so the `transcribe_recording` round-trip can't silently drop them.
+
 ## 0.5.23 — 2026-06-21
 
 A reliability, text-quality, and polish pass.
