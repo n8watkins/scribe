@@ -26,6 +26,16 @@ footprint. If we ever want absolute peak NVIDIA performance later, a CUDA pack
 can be added as a second optional download — but Vulkan is the right first (and
 likely only) backend.
 
+**On AMD — the dev/owner box (Radeon RX 7800 XT, RDNA3, 16 GB) — Vulkan isn't
+just recommended, it's the only practical path.** CUDA is NVIDIA-only and does
+nothing on a Radeon; AMD's ROCm/HIP compute stack is effectively unavailable for
+whisper.cpp on *Windows* (it's Linux-focused with limited consumer-card support).
+Vulkan is the sole mature GPU route for AMD on Windows. RDNA3 supports Vulkan 1.3
+fully, the loader (`vulkan-1.dll`) already ships with the Adrenalin driver, and
+16 GB VRAM comfortably holds `large-v3-turbo`. This makes the §3 "no-GPU
+fallback" risk moot *for the owner's box* (a GPU is present) but it still gates
+the choice for users on machines with no GPU at all.
+
 ## 2. Current state (what we're changing)
 
 - Scribe bundles the **CPU** whisper.cpp binaries under `$RESOURCE/bin/windows/`:
@@ -90,11 +100,22 @@ Teach `resolve_bundled_executable` (and the server spawn) to prefer
 else `bin/windows/<name>`. One resolution helper, threaded through the server +
 CLI paths. (Option A needs none of this.)
 
-### WS4 — GPU detection + settings toggle
+### WS4 — GPU detection, device selection + settings toggle
 A `gpu_acceleration` setting (`Auto` / `On` / `Off`, default `Auto`). `Auto`
 uses the GPU when a Vulkan device is detected. Add an `llm_status`-style probe
 that reports whether a usable Vulkan device exists, for the UI to show "GPU:
 detected / not found". whisper.cpp's `--no-gpu` flag forces CPU when `Off`.
+
+**Multi-adapter selection (required, not optional).** Many machines expose more
+than one Vulkan device — the owner's box has *two*: the discrete Radeon RX 7800
+XT **and** the CPU's integrated Radeon Graphics. ggml/whisper picks a device
+index by default and can land on the weak iGPU. The build must enumerate the
+Vulkan devices and target the **discrete** one (pick by device index — e.g.
+whisper's `--gpu-device N` / ggml's main-gpu, or the `GGML_VK_VISIBLE_DEVICES`
+env filter — and prefer the device with the most VRAM / a non-integrated type).
+Surface the chosen device name in the UI, and ideally let the user pick when more
+than one is present. Getting this wrong silently runs on the iGPU and looks like
+"GPU acceleration barely helped."
 
 ### WS5 — Fallback hardening
 GPU init failure (driver crash, OOM on a huge model) must fall back to CPU, not
@@ -110,6 +131,9 @@ redesign — matches the existing model-download rows.
 
 - cmake flag spelling (`-DGGML_VULKAN=ON`) and resulting DLL name(s).
 - That `whisper-server.exe` uses the GPU by default and honors `--no-gpu`.
+- The device-selection flag/env for `v1.8.6` (`--gpu-device` / main-gpu /
+  `GGML_VK_VISIBLE_DEVICES`) and how it enumerates a multi-adapter box — verify
+  it targets the RX 7800 XT, not the integrated Radeon Graphics (WS4).
 - Whether `vulkan-1.dll` is delay-loaded (decides the no-GPU-machine risk in §3).
 - First-run shader-compile latency (warm the server once at startup to hide it).
 - Confirm the Vulkan build's CPU fallback matches CPU-build accuracy (same model,
@@ -124,6 +148,8 @@ redesign — matches the existing model-download rows.
 - Output text for a given clip is identical CPU vs GPU (no accuracy regression).
 - `gpu_acceleration = Off` forces CPU; `Auto` uses GPU only when detected.
 - A GPU failure mid-session falls back to CPU and still produces the transcript.
+- On a multi-GPU box (the owner's discrete RX 7800 XT + integrated Radeon), the
+  **discrete** card is the device used — confirmed via the reported device name.
 
 ## 7. Effort
 
