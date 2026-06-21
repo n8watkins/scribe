@@ -205,7 +205,7 @@
   --scribe-text: #ecfdf5;
   --scribe-text-secondary: #bbf7d0;
   --scribe-text-muted: #86c5a3;
-  --scribe-text-faint: #5e8a72;
+  --scribe-text-faint: #6fa087;
 }
 
 /* Violet — deep plum/indigo ground with a purple accent. */
@@ -224,10 +224,10 @@
   --scribe-surface-sunken: #0b1220;
   --scribe-surface-raised: #0b1322;
   --scribe-surface-kbd: #070b14;
-  --scribe-accent: #a78bfa;
-  --scribe-accent-strong: #c084fc;
-  --scribe-accent-bright: #d8b4fe;
-  --scribe-accent-on: #140f29;
+  --scribe-accent: #8b5cf6;
+  --scribe-accent-strong: #a78bfa;
+  --scribe-accent-bright: #c4b5fd;
+  --scribe-accent-on: #100b20;
   --scribe-accent-soft: rgba(167, 139, 250, 0.26);
   --scribe-accent-glow: rgba(167, 139, 250, 0.1);
   --scribe-accent-ring: rgba(167, 139, 250, 0.14);
@@ -236,25 +236,27 @@
   --scribe-text: #f5f3ff;
   --scribe-text-secondary: #ddd6fe;
   --scribe-text-muted: #a99fce;
-  --scribe-text-faint: #786e9e;
+  --scribe-text-faint: #8b80b4;
 }
 
-/* Daylight — a light theme: off-white surfaces, dark text, a blue accent.
+/* Daylight — a light theme: soft off-white surfaces, dark text, a blue accent.
  *
  * Contrast verified against the surface each tone actually sits on (ratios are
- * WCAG; body/label text targets ≥ 4.5:1, large headings ≥ 3:1):
- *   - text #0f172a            on white / page / rows : 14.6–17.9 : 1
- *   - text-secondary #334155  on white                : 10.4 : 1
- *   - text-muted #475569      on white / rows         :  6.2–7.6 : 1
- *   - text-faint #576473      on white / page / rows  :  5.0–6.0 : 1
+ * WCAG; body/label text targets ≥ 4.5:1, large headings/icons ≥ 3:1). Surfaces
+ * are the off-white card (#f9fbfd) and the softer page ground (#e7ecf3):
+ *   - text #0f172a            on card / page / rows : 15.0–17.2 : 1
+ *   - text-secondary #334155  on card / page        :  8.7–10.0 : 1
+ *   - text-muted #475569      on card / page / rows  :  6.4–7.3 : 1
+ *   - text-faint #576473      on card / page / rows  :  5.1–5.8 : 1
  *   - accent #0369a1 (button bg) with on-accent white :  5.67 : 1
- *   - accent #0369a1 as a text/icon tint on white     :  5.93 : 1
+ *   - accent #0369a1 as a text/icon tint on card/page :  5.0–5.7 : 1
+ *   - accent-bright #0284c7 (large/icon tint) on card :  3.95 : 1
  * Islands stay light so no row reads as a dark box; the floating tooltip is the
  * one deliberate exception — its face stays dark (surface-raised) with the
  * existing light label, which pops cleanly over the light page. */
 :root[data-theme="daylight"] {
-  --scribe-bg: #eef2f7;
-  --scribe-bg-elevated: #ffffff;
+  --scribe-bg: #e7ecf3;
+  --scribe-bg-elevated: #f9fbfd;
   --scribe-sidebar-bg: rgba(248, 250, 252, 0.92);
   --scribe-card-gradient-top: rgba(255, 255, 255, 0.96);
   --scribe-card-gradient-bottom: rgba(241, 245, 249, 0.96);
@@ -270,7 +272,7 @@
   --scribe-surface-kbd: #f1f5f9; /* kbd key face */
   --scribe-accent: #0369a1;
   --scribe-accent-strong: #075985;
-  --scribe-accent-bright: #0ea5e9;
+  --scribe-accent-bright: #0284c7;
   --scribe-accent-on: #f8fafc;
   --scribe-accent-soft: rgba(3, 105, 161, 0.2);
   --scribe-accent-glow: rgba(3, 105, 161, 0.08);
@@ -2409,6 +2411,44 @@ kbd {
   border-radius: 999px;
   color: var(--scribe-accent-on);
   background: var(--scribe-accent);
+}
+
+/* The three core-color pickers for the custom theme, shown below the grid when
+   "Custom" is selected. */
+.custom-theme-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.custom-theme-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid var(--scribe-border);
+  border-radius: 8px;
+  background: rgba(var(--scribe-surface-rgb), 0.32);
+}
+
+.custom-theme-field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--scribe-text-secondary);
+}
+
+.custom-theme-field-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.custom-theme-field-input code {
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--scribe-text-muted);
 }
 
 @media (max-width: 880px) {

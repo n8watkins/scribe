@@ -126,8 +126,12 @@ export type AppSettings = {
   autoUpdateCheckEnabled: boolean;
   autoInstallUpdates: boolean;
   /** Selected color theme key for the main window (e.g. "midnight", "ocean").
-   * Maps to a CSS palette via `data-theme`; "midnight" is the default look. */
+   * Maps to a CSS palette via `data-theme`; "midnight" is the default look.
+   * "custom" derives its palette from `customTheme` (see deriveCustomThemeVars). */
   theme: string;
+  /** The three core colors of the user-defined "custom" theme. Only used when
+   * `theme === "custom"`; the rest of the palette is derived from these. */
+  customTheme: { background: string; accent: string; text: string };
   devHotkeysSeeded: boolean;
   recordingMode: RecordingMode;
   minRecordingMs: number;

@@ -48,10 +48,14 @@ const THEMES: ThemeOption[] = [
   {
     key: "daylight",
     name: "Daylight",
-    description: "A clean light theme: white surfaces and a deep-blue accent.",
-    swatches: ["#eef2f7", "#ffffff", "#0369a1", "#075985", "#0f172a"],
+    description: "A clean light theme: soft off-white surfaces and a deep-blue accent.",
+    swatches: ["#e7ecf3", "#f9fbfd", "#0369a1", "#075985", "#0f172a"],
   },
 ];
+
+/** The custom theme is rendered separately from THEMES (it has no fixed swatch
+ * list — its preview is built live from the user's three core colors). */
+const CUSTOM_KEY = "custom";
 
 export function ThemesView({
   actions,
@@ -63,6 +67,13 @@ export function ThemesView({
   // Fall back to "midnight" so an unknown/blank stored value still highlights a
   // card (matches the backend default).
   const activeTheme = settings.theme || "midnight";
+  const isCustomActive = activeTheme === CUSTOM_KEY;
+  const custom = settings.customTheme;
+  // Live preview chips for the Custom tile, derived from the user's core colors.
+  const customSwatches = [custom.background, custom.accent, custom.text];
+
+  const setCustomColor = (key: "background" | "accent" | "text", value: string) =>
+    actions.updateSettings({ customTheme: { ...custom, [key]: value } });
 
   return (
     <section className="stack">
@@ -113,8 +124,96 @@ export function ThemesView({
               </button>
             );
           })}
+
+          <button
+            aria-checked={isCustomActive}
+            aria-label="Custom"
+            className={isCustomActive ? "theme-card is-active" : "theme-card"}
+            disabled={actions.savingSettings && !isCustomActive}
+            onClick={() => actions.updateSettings({ theme: CUSTOM_KEY })}
+            role="radio"
+            type="button"
+          >
+            <div className="theme-swatches" aria-hidden="true">
+              {customSwatches.map((color, index) => (
+                <span
+                  className="theme-chip"
+                  key={index}
+                  style={{ background: color }}
+                />
+              ))}
+            </div>
+            <div className="theme-card-body">
+              <strong>Custom</strong>
+              <small>Your own palette from three core colors.</small>
+            </div>
+            {isCustomActive ? (
+              <span className="theme-card-check" aria-hidden="true">
+                <Check size={13} />
+              </span>
+            ) : null}
+          </button>
         </div>
+
+        {isCustomActive ? (
+          <div className="custom-theme-controls">
+            <p className="muted" style={{ margin: "8px 0 4px" }}>
+              Pick a background, accent, and text color. The rest of the palette
+              (surfaces, borders, muted text) is derived to match.
+            </p>
+            <div className="custom-theme-row">
+              <CustomColorField
+                disabled={actions.savingSettings}
+                label="Background"
+                onChange={(value) => setCustomColor("background", value)}
+                value={custom.background}
+              />
+              <CustomColorField
+                disabled={actions.savingSettings}
+                label="Accent"
+                onChange={(value) => setCustomColor("accent", value)}
+                value={custom.accent}
+              />
+              <CustomColorField
+                disabled={actions.savingSettings}
+                label="Text"
+                onChange={(value) => setCustomColor("text", value)}
+                value={custom.text}
+              />
+            </div>
+          </div>
+        ) : null}
       </article>
     </section>
+  );
+}
+
+/** One labelled `<input type="color">` for the custom theme, with the current
+ * hex shown beside the swatch. */
+function CustomColorField({
+  disabled,
+  label,
+  onChange,
+  value,
+}: {
+  disabled: boolean;
+  label: string;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  return (
+    <label className="custom-theme-field">
+      <span className="custom-theme-field-label">{label}</span>
+      <span className="custom-theme-field-input">
+        <input
+          aria-label={`${label} color`}
+          disabled={disabled}
+          onChange={(event) => onChange(event.currentTarget.value)}
+          type="color"
+          value={value}
+        />
+        <code>{value}</code>
+      </span>
+    </label>
   );
 }

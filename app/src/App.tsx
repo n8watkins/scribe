@@ -9,6 +9,7 @@ import {
 } from "@tauri-apps/plugin-notification";
 import { check as checkUpdaterPackage } from "@tauri-apps/plugin-updater";
 import { detectUpdate } from "./lib/updates";
+import { deriveCustomThemeVars } from "./lib/customTheme";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
   BarChart3,
@@ -88,6 +89,15 @@ import { AboutView } from "./views/About";
 import { DeveloperView } from "./views/Developer";
 import { SyncView } from "./views/Sync";
 import scribeIcon from "./assets/scribe-icon.png";
+
+// Dummy colors used only to enumerate the `--scribe-*` keys the custom theme
+// owns, so the theme effect can `removeProperty` exactly those when switching
+// away from custom (the values are irrelevant — only the key set is read).
+const EMPTY_CUSTOM_THEME = {
+  background: "#000000",
+  accent: "#000000",
+  text: "#000000",
+} as const;
 
 const navItems: { label: ViewName; Icon: LucideIcon }[] = [
   { label: "Dashboard", Icon: Gauge },
@@ -258,9 +268,33 @@ function App() {
   // off `[data-theme]` (see App.css). Default to "midnight" — which equals the
   // historical look — so there's no flash before settings load and an unknown or
   // blank stored value still renders the standard theme.
+  //
+  // The "custom" theme has no static CSS block: its palette is derived from the
+  // user's three core colors (see deriveCustomThemeVars) and written as inline
+  // `--scribe-*` properties on the root, which override the [data-theme] block.
+  // Switching away from custom removes those inline props so the chosen preset's
+  // block applies cleanly.
+  const customTheme = dashboardData?.settings.customTheme;
   useEffect(() => {
     const theme = dashboardData?.settings.theme || "midnight";
-    document.documentElement.setAttribute("data-theme", theme);
+    const root = document.documentElement;
+    root.setAttribute("data-theme", theme);
+
+    const style = root.style;
+    if (theme === "custom" && customTheme) {
+      const vars = deriveCustomThemeVars(customTheme);
+      for (const [name, value] of Object.entries(vars)) {
+        style.setProperty(name, value);
+      }
+    } else {
+      // Not custom: strip any inline overrides a prior custom selection left, so
+      // the preset's [data-theme] block is what actually paints. Removing keys
+      // that were never set is a harmless no-op.
+      for (const name of Object.keys(deriveCustomThemeVars(EMPTY_CUSTOM_THEME))) {
+        style.removeProperty(name);
+      }
+    }
+
     // Cache it so the inline bootstrap in index.html can set the theme before
     // first paint on the next launch (no midnight flash for non-default themes).
     try {
@@ -268,7 +302,7 @@ function App() {
     } catch {
       // localStorage may be unavailable; the bootstrap just falls back to midnight.
     }
-  }, [dashboardData?.settings.theme]);
+  }, [dashboardData?.settings.theme, customTheme]);
 
   // If the Developer panel is turned off while it is the active view, fall back
   // to the Dashboard so the user isn't stranded on a now-hidden page.

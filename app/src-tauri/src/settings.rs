@@ -36,6 +36,13 @@ pub struct AppSettings {
     /// own separate color settings and is not affected.
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// The three core colors of the user-defined "custom" theme. Only consulted
+    /// when `theme == "custom"`; the frontend derives the full palette from
+    /// these (see `deriveCustomThemeVars`). Absent from pre-custom-theme
+    /// settings JSON, so `#[serde(default)]` fills it with the slate-like dark
+    /// defaults — existing installs are unaffected.
+    #[serde(default)]
+    pub custom_theme: CustomTheme,
     /// Poll GitHub for new releases in the background (on launch, on window
     /// focus, and on a timer). On by default; turn it off in About. Manual
     /// "Check for updates" still works when off.
@@ -197,6 +204,29 @@ pub struct AppSettings {
     #[serde(default)]
     pub window_height: Option<i32>,
     pub hotkeys: HotkeySettings,
+}
+
+/// The three core colors of the user-defined "custom" theme (hex strings). The
+/// frontend derives the full `--scribe-*` palette from these, mirroring how the
+/// preset dark themes relate their tones, so a custom dark theme stays coherent.
+/// Defaults are slate-like (a dark indigo-blue) so a fresh "custom" pick is
+/// already readable before the user touches anything.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomTheme {
+    pub background: String,
+    pub accent: String,
+    pub text: String,
+}
+
+impl Default for CustomTheme {
+    fn default() -> Self {
+        Self {
+            background: "#0b0e14".to_string(),
+            accent: "#818cf8".to_string(),
+            text: "#f1f5f9".to_string(),
+        }
+    }
 }
 
 fn default_silence_auto_stop_enabled() -> bool {
@@ -565,6 +595,7 @@ impl Default for AppSettings {
             developer_settings_enabled: false,
             auto_update_check_enabled: true,
             theme: default_theme(),
+            custom_theme: CustomTheme::default(),
             auto_install_updates: true,
             dev_hotkeys_seeded: false,
             recording_mode: RecordingMode::Both,
@@ -851,8 +882,30 @@ mod tests {
         assert!(!settings.dev_hotkeys_seeded);
         // The default theme equals the historical look so installs are unchanged.
         assert_eq!(settings.theme, "midnight");
+        // The custom theme defaults to the slate-like dark trio.
+        assert_eq!(settings.custom_theme.background, "#0b0e14");
+        assert_eq!(settings.custom_theme.accent, "#818cf8");
+        assert_eq!(settings.custom_theme.text, "#f1f5f9");
         assert_eq!(settings.pill_color_normal, "#fbbf24");
         assert_eq!(settings.pill_color_note, "#38bdf8");
+    }
+
+    #[test]
+    fn custom_theme_round_trips_through_json() {
+        // The default custom_theme survives a JSON round-trip (camelCase keys),
+        // and pre-custom-theme JSON (the field absent) falls back to the
+        // slate-like defaults rather than failing to deserialize.
+        let settings = AppSettings::default();
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: AppSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.custom_theme, settings.custom_theme);
+        assert_eq!(restored.custom_theme, CustomTheme::default());
+
+        // Legacy JSON without the customTheme key still loads with the defaults.
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        value.as_object_mut().unwrap().remove("customTheme");
+        let legacy: AppSettings = serde_json::from_value(value).unwrap();
+        assert_eq!(legacy.custom_theme, CustomTheme::default());
     }
 
     #[test]
