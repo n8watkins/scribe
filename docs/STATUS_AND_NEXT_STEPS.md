@@ -94,7 +94,13 @@ version of the open gaps:
    [`docs/GPU_VULKAN_BUILD_PLAN.md`](GPU_VULKAN_BUILD_PLAN.md). The open question
    that picks the approach: does a single Vulkan build still run on a no-GPU
    machine (one build, auto-fallback) or do we ship it as an optional download?
-6. Parked: a first-run onboarding wizard; FTS5 search if histories grow.
+6. **Pause-aware filler suppression** — a user-editable filler-word list
+   (`um`/`uh`/…) removed only when bracketed by a pause, so fluent uses ("oh no",
+   "like this") survive. Designed but not started; see
+   [`docs/FILLER_SUPPRESSION_PLAN.md`](FILLER_SUPPRESSION_PLAN.md). Gating
+   question: can the bundled `whisper-server` return token timestamps (needs them
+   off the warm path, not just the CLI)?
+7. Parked: a first-run onboarding wizard; FTS5 search if histories grow.
 
 ## Working notes for the next session
 
