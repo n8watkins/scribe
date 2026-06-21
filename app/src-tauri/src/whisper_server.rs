@@ -58,6 +58,12 @@ struct ServerConfig {
     /// Translate task (English output). Part of the launch config: changing it
     /// requires a server restart, since it is passed as a launch argument.
     translate: bool,
+    /// GPU acceleration preference. A launch-time concern (`--no-gpu`), so a
+    /// change restarts the server.
+    gpu: crate::settings::GpuAcceleration,
+    /// Pinned Vulkan device index (set as an env var at spawn). Also launch-time,
+    /// so a change restarts the server.
+    gpu_device_index: Option<u32>,
 }
 
 impl ServerConfig {
@@ -66,6 +72,8 @@ impl ServerConfig {
             model_path: request.model_path.clone(),
             language: request.language.clone(),
             translate: request.translate,
+            gpu: request.gpu,
+            gpu_device_index: request.gpu_device_index,
         }
     }
 }
@@ -194,7 +202,23 @@ impl WarmTranscriber {
             }
         }
 
-        whisper::transcribe(app, request)
+        // whisper-cli fallback. It uses the GPU per the request; if that fails
+        // while the GPU was in use (a driver crash or VRAM OOM on a big model),
+        // retry once on CPU (--no-gpu) so a GPU problem degrades to
+        // slower-but-working instead of losing the dictation. WS5.
+        match whisper::transcribe(app, request.clone()) {
+            Ok(transcription) => Ok(transcription),
+            Err(error) => match cpu_retry_request(&request) {
+                Some(cpu_request) => {
+                    log::warn!(
+                        "GPU transcription failed ({}); retrying once on CPU (--no-gpu)",
+                        error.message
+                    );
+                    whisper::transcribe(app, cpu_request)
+                }
+                None => Err(error),
+            },
+        }
     }
 
     /// Stops the resident server. Called on app exit; double-stop is safe.
@@ -478,13 +502,15 @@ fn ensure_server(
         .map_err(|error| error.message)?;
     let port = find_free_port()?;
     let threads = server_threads();
-    let args = server_args(
+    let mut args = server_args(
         &config.model_path,
         &config.language,
         config.translate,
         port,
         threads,
     );
+    // GPU off => --no-gpu, mirroring the whisper-cli path (whisper::push_gpu_args).
+    whisper::push_gpu_args(&mut args, config.gpu.is_off());
 
     log::info!(
         "Starting whisper-server on {}:{} (model {}, language {}, {} threads)",
@@ -495,7 +521,11 @@ fn ensure_server(
         threads
     );
     let started = Instant::now();
-    let child = spawn_server_process(&executable, &args)?;
+    let child = spawn_server_process(
+        &executable,
+        &args,
+        whisper::gpu_visible_devices_env(config.gpu, config.gpu_device_index),
+    )?;
     let mut server = ServerProcess {
         child,
         port,
@@ -513,7 +543,11 @@ fn ensure_server(
     Ok(())
 }
 
-fn spawn_server_process(executable: &Path, args: &[String]) -> Result<Child, String> {
+fn spawn_server_process(
+    executable: &Path,
+    args: &[String],
+    vk_visible_devices: Option<String>,
+) -> Result<Child, String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -527,6 +561,12 @@ fn spawn_server_process(executable: &Path, args: &[String]) -> Result<Child, Str
             .stderr(Stdio::null())
             .creation_flags(CREATE_NO_WINDOW);
 
+        // Pin a specific Vulkan device for the resident server (multi-GPU boxes);
+        // absent means ggml picks its default device.
+        if let Some(devices) = vk_visible_devices {
+            command.env("GGML_VK_VISIBLE_DEVICES", devices);
+        }
+
         command
             .spawn()
             .map_err(|error| format!("Could not start whisper-server. {}", error))
@@ -534,7 +574,7 @@ fn spawn_server_process(executable: &Path, args: &[String]) -> Result<Child, Str
 
     #[cfg(not(windows))]
     {
-        let _ = (executable, args, Stdio::null());
+        let _ = (executable, args, vk_visible_devices, Stdio::null());
         Err("whisper-server is only supported on Windows.".to_string())
     }
 }
@@ -632,6 +672,20 @@ fn needs_restart(current: &ServerConfig, desired: &ServerConfig) -> bool {
 
 fn idle_expired(last_used: Instant, now: Instant) -> bool {
     now.saturating_duration_since(last_used) >= IDLE_SHUTDOWN
+}
+
+/// WS5: build the CPU-only retry for a request whose GPU attempt failed. Returns
+/// `None` when the request was already CPU-only (nothing to retry differently),
+/// else the same request forced to `--no-gpu` with no pinned device.
+fn cpu_retry_request(request: &WhisperRequest) -> Option<WhisperRequest> {
+    if request.gpu.is_off() {
+        return None;
+    }
+    Some(WhisperRequest {
+        gpu: crate::settings::GpuAcceleration::Off,
+        gpu_device_index: None,
+        ..request.clone()
+    })
 }
 
 #[cfg(test)]
@@ -737,10 +791,13 @@ mod tests {
 
     #[test]
     fn restart_needed_only_when_config_changes() {
+        use crate::settings::GpuAcceleration;
         let current = ServerConfig {
             model_path: PathBuf::from("models/ggml-base.en.bin"),
             language: "en".to_string(),
             translate: false,
+            gpu: GpuAcceleration::Auto,
+            gpu_device_index: None,
         };
 
         assert!(!needs_restart(&current, &current.clone()));
@@ -748,25 +805,38 @@ mod tests {
             &current,
             &ServerConfig {
                 model_path: PathBuf::from("models/ggml-small.en-q5_1.bin"),
-                language: "en".to_string(),
-                translate: false,
+                ..current.clone()
             }
         ));
         assert!(needs_restart(
             &current,
             &ServerConfig {
-                model_path: current.model_path.clone(),
                 language: "auto".to_string(),
-                translate: false,
+                ..current.clone()
             }
         ));
         // Toggling translate also requires a restart (it is a launch arg).
         assert!(needs_restart(
             &current,
             &ServerConfig {
-                model_path: current.model_path.clone(),
-                language: "en".to_string(),
                 translate: true,
+                ..current.clone()
+            }
+        ));
+        // GPU on/off is a launch arg (--no-gpu), so toggling it restarts.
+        assert!(needs_restart(
+            &current,
+            &ServerConfig {
+                gpu: GpuAcceleration::Off,
+                ..current.clone()
+            }
+        ));
+        // Pinning a different Vulkan device (env at spawn) also restarts.
+        assert!(needs_restart(
+            &current,
+            &ServerConfig {
+                gpu_device_index: Some(1),
+                ..current.clone()
             }
         ));
     }
@@ -804,5 +874,34 @@ mod tests {
         tracker.reset();
         assert!(tracker.server_allowed());
         assert_eq!(tracker.consecutive_failures, 0);
+    }
+
+    #[test]
+    fn cpu_retry_only_when_gpu_was_on() {
+        use crate::settings::GpuAcceleration;
+        let base = WhisperRequest {
+            model_path: PathBuf::from("m.bin"),
+            wav_path: PathBuf::from("a.wav"),
+            language: "en".to_string(),
+            translate: false,
+            vocabulary_prompt: String::new(),
+            filler: None,
+            gpu: GpuAcceleration::Auto,
+            gpu_device_index: Some(1),
+        };
+
+        // GPU was on => retry on CPU, dropping the device pin, other fields kept.
+        let retry = cpu_retry_request(&base).expect("auto attempt should retry on CPU");
+        assert!(retry.gpu.is_off());
+        assert_eq!(retry.gpu_device_index, None);
+        assert_eq!(retry.model_path, base.model_path);
+        assert_eq!(retry.language, base.language);
+
+        // Already CPU => nothing different to retry.
+        let cpu = WhisperRequest {
+            gpu: GpuAcceleration::Off,
+            ..base
+        };
+        assert!(cpu_retry_request(&cpu).is_none());
     }
 }

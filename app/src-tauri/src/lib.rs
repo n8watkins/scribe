@@ -10,6 +10,7 @@ pub mod file_transcribe;
 pub mod filler;
 pub mod github_backup;
 pub mod github_oauth;
+pub mod gpu;
 pub mod hotkeys;
 pub mod incremental;
 pub mod model_manager;
@@ -449,6 +450,7 @@ pub fn run() {
             commands::transcribe_file,
             commands::analyze_note,
             commands::llm_status,
+            gpu::probe_gpu_devices,
             commands::save_text_file,
             commands::paste_last_transcript,
             commands::copy_last_transcript,

@@ -441,6 +441,10 @@ struct SegmentContext {
     vocabulary_prompt: String,
     // FILLER: gate, captured once when the session starts.
     filler: Option<crate::filler::FillerConfig>,
+    // GPU prefs, captured once so every segment in a session uses the same
+    // backend (and so the warm server doesn't restart mid-session).
+    gpu: crate::settings::GpuAcceleration,
+    gpu_device_index: Option<u32>,
 }
 
 fn run_coordinator(
@@ -533,6 +537,8 @@ fn transcribe_segment(
                 translate: context.translate,
                 vocabulary_prompt: prompt_with_context(&context.vocabulary_prompt, accumulated),
                 filler: context.filler.clone(), // FILLER
+                gpu: context.gpu,
+                gpu_device_index: context.gpu_device_index,
             },
         )
         .map_err(|error| error.message)?;
@@ -553,6 +559,8 @@ fn segment_context(app: &AppHandle) -> Result<SegmentContext, String> {
         translate: settings.translate_to_english,
         filler: crate::filler::FillerConfig::from_settings(&settings),
         vocabulary_prompt: settings.vocabulary_prompt,
+        gpu: settings.gpu_acceleration,
+        gpu_device_index: settings.gpu_device_index,
     })
 }
 

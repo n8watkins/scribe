@@ -78,6 +78,8 @@ pub fn transcribe_file(app: &AppHandle, path: &str) -> Result<TranscribeFileResu
         vocabulary_prompt: settings.vocabulary_prompt.clone(),
         // FILLER: gate from settings (None = off, unchanged path).
         filler: crate::filler::FillerConfig::from_settings(&settings),
+        gpu: settings.gpu_acceleration,
+        gpu_device_index: settings.gpu_device_index,
     };
     let output_prefix = work_dir.join(format!("file-{}", Uuid::new_v4().simple()));
     let transcription = whisper::transcribe_with_output_prefix(app, &request, &output_prefix)?;

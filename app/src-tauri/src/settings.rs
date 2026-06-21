@@ -114,6 +114,20 @@ pub struct AppSettings {
     /// existing installs are unaffected.
     #[serde(default)]
     pub translate_to_english: bool,
+    /// GPU (Vulkan) acceleration for transcription. `Auto` uses the GPU when a
+    /// usable Vulkan device is present (whisper.cpp's default) and falls back to
+    /// CPU otherwise; `Off` forces CPU (`--no-gpu`). Absent from pre-GPU settings
+    /// JSON, so serde fills `Auto` — existing installs transparently start using
+    /// the GPU once the Vulkan-enabled binaries ship.
+    #[serde(default)]
+    pub gpu_acceleration: GpuAcceleration,
+    /// Which Vulkan device index to pin (via `GGML_VK_VISIBLE_DEVICES`) when GPU
+    /// acceleration is on. `None` lets ggml pick its default device (index 0,
+    /// usually the discrete card). Set from the Audio view's device picker on a
+    /// machine that exposes more than one GPU (e.g. a discrete card next to an
+    /// integrated one), so the strong card is always the one used.
+    #[serde(default)]
+    pub gpu_device_index: Option<u32>,
     /// Custom vocabulary / spelling hints passed to whisper.cpp via
     /// `--prompt` when non-empty.
     #[serde(default)]
@@ -507,6 +521,29 @@ fn default_dictation_cleanup_mode() -> DictationCleanupMode {
     DictationCleanupMode::Standard
 }
 
+/// GPU (Vulkan) acceleration preference for transcription. Kept deliberately to
+/// two states: whisper.cpp has no "force GPU or fail" mode — when built with
+/// Vulkan it already uses the GPU if one is present and otherwise runs on CPU —
+/// so the only meaningful user choice is "use the GPU (Auto)" vs "stay on CPU
+/// (Off)". Multi-GPU device choice is a separate setting (`gpu_device_index`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GpuAcceleration {
+    /// Use the GPU when a usable Vulkan device is present, else CPU. GPU init
+    /// failure falls back to CPU automatically (see whisper_server / whisper).
+    #[default]
+    Auto,
+    /// Force CPU-only transcription (`--no-gpu`).
+    Off,
+}
+
+impl GpuAcceleration {
+    /// True when transcription should run on CPU only (pass `--no-gpu`).
+    pub fn is_off(self) -> bool {
+        matches!(self, GpuAcceleration::Off)
+    }
+}
+
 /// Which key edge a single-shot hotkey acts on. Hold-to-Talk is excluded — it
 /// is push-to-talk and inherently uses both edges (press starts, release stops).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -663,6 +700,8 @@ impl Default for AppSettings {
             selected_model_id: Some("small.en-q5_1".to_string()),
             language: Language::english(),
             translate_to_english: false,
+            gpu_acceleration: GpuAcceleration::Auto,
+            gpu_device_index: None,
             vocabulary_prompt: String::new(),
             text_replacements: Vec::new(),
             output_mode: OutputMode::AutoPaste,
@@ -1208,6 +1247,33 @@ mod tests {
         let settings: AppSettings = serde_json::from_value(json).unwrap();
         assert!(!settings.translate_to_english);
         assert!(settings.language.is_english());
+    }
+
+    #[test]
+    fn gpu_acceleration_defaults_to_auto_and_is_absent_from_legacy_json() {
+        assert_eq!(
+            AppSettings::default().gpu_acceleration,
+            GpuAcceleration::Auto
+        );
+        assert_eq!(AppSettings::default().gpu_device_index, None);
+        assert!(!GpuAcceleration::Auto.is_off());
+        assert!(GpuAcceleration::Off.is_off());
+
+        // Pre-GPU settings JSON lacks both keys; serde fills Auto / None so
+        // existing installs transparently start using the GPU.
+        let mut json = serde_json::to_value(AppSettings::default()).unwrap();
+        let object = json.as_object_mut().unwrap();
+        object.remove("gpuAcceleration");
+        object.remove("gpuDeviceIndex");
+        let settings: AppSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(settings.gpu_acceleration, GpuAcceleration::Auto);
+        assert_eq!(settings.gpu_device_index, None);
+
+        // Round-trips as snake_case.
+        assert_eq!(
+            serde_json::to_string(&GpuAcceleration::Off).unwrap(),
+            "\"off\""
+        );
     }
 
     #[test]

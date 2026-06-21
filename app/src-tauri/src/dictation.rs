@@ -234,6 +234,8 @@ fn transcribe_recording_inner(
                     vocabulary_prompt: settings.vocabulary_prompt.clone(),
                     // FILLER: gate from settings (None = off, unchanged path).
                     filler: crate::filler::FillerConfig::from_settings(&settings),
+                    gpu: settings.gpu_acceleration,
+                    gpu_device_index: settings.gpu_device_index,
                 },
             )
         }

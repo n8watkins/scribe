@@ -26,6 +26,12 @@ pub struct WhisperRequest {
     /// (`--output-json-full` -> parse -> pause-aware filler removal). `None`
     /// leaves the plain-text path byte-for-byte unchanged.
     pub filler: Option<crate::filler::FillerConfig>,
+    /// GPU (Vulkan) acceleration preference. `Off` appends `--no-gpu`; otherwise
+    /// the Vulkan-enabled binaries use the GPU when present (with CPU fallback).
+    pub gpu: crate::settings::GpuAcceleration,
+    /// Vulkan device to pin via `GGML_VK_VISIBLE_DEVICES` (None = ggml's default
+    /// device, normally the discrete card). Ignored when `gpu` is `Off`.
+    pub gpu_device_index: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,7 +79,7 @@ pub(crate) fn transcribe_with_output_prefix(
 ) -> Result<WhisperTranscription, CommandError> {
     let executable = resolve_bundled_executable(app, "whisper-cli.exe")?;
     let output_txt_path = output_prefix.with_extension("txt");
-    let args = whisper_args(
+    let mut args = whisper_args(
         &request.model_path,
         &request.wav_path,
         &request.language,
@@ -82,8 +88,13 @@ pub(crate) fn transcribe_with_output_prefix(
         &request.vocabulary_prompt,
         request.filler.is_some(), // FILLER: word timestamps only when needed
     );
+    push_gpu_args(&mut args, request.gpu.is_off());
     let started = Instant::now();
-    let output = run_whisper_command(&executable, &args)?;
+    let output = run_whisper_command(
+        &executable,
+        &args,
+        gpu_visible_devices_env(request.gpu, request.gpu_device_index),
+    )?;
     let latency_ms = started.elapsed().as_millis().min(u32::MAX as u128) as u32;
 
     // FILLER: the word-timestamp path writes <prefix>.json; the plain path .txt.
@@ -155,6 +166,27 @@ pub(crate) fn resolve_bundled_executable(
     Ok(executable)
 }
 
+/// Appends `--no-gpu` when GPU acceleration is off. Shared so the CLI path and
+/// the warm-server path honor the setting identically.
+pub(crate) fn push_gpu_args(args: &mut Vec<String>, gpu_off: bool) {
+    if gpu_off {
+        args.push("--no-gpu".to_string());
+    }
+}
+
+/// The `GGML_VK_VISIBLE_DEVICES` value used to pin a specific Vulkan device:
+/// `Some("<index>")` only when the GPU is on AND a device is pinned; otherwise
+/// `None`, so ggml selects its default device (normally the discrete card).
+pub(crate) fn gpu_visible_devices_env(
+    gpu: crate::settings::GpuAcceleration,
+    device_index: Option<u32>,
+) -> Option<String> {
+    if gpu.is_off() {
+        return None;
+    }
+    device_index.map(|index| index.to_string())
+}
+
 fn whisper_args(
     model_path: &Path,
     wav_path: &Path,
@@ -224,9 +256,15 @@ pub(crate) fn suppress_console_window(command: &mut Command) {
 fn run_whisper_command(
     executable: &Path,
     args: &[String],
+    vk_visible_devices: Option<String>,
 ) -> Result<std::process::Output, CommandError> {
     let mut command = Command::new(executable);
     command.args(args);
+    // Pin a specific Vulkan device for this run (multi-GPU machines); absent
+    // means ggml picks its default device.
+    if let Some(devices) = vk_visible_devices {
+        command.env("GGML_VK_VISIBLE_DEVICES", devices);
+    }
     suppress_console_window(&mut command);
 
     command.output().map_err(|error| {
@@ -630,6 +668,36 @@ mod tests {
         assert_eq!(
             normalize_transcript_text("\n Hello local dictation.\n\nSecond line. \n"),
             "Hello local dictation. Second line."
+        );
+    }
+
+    #[test]
+    fn no_gpu_arg_appended_only_when_off() {
+        use crate::settings::GpuAcceleration;
+        let mut auto = vec!["-m".to_string()];
+        push_gpu_args(&mut auto, GpuAcceleration::Auto.is_off());
+        assert!(!auto.iter().any(|arg| arg == "--no-gpu"));
+
+        let mut off = vec!["-m".to_string()];
+        push_gpu_args(&mut off, GpuAcceleration::Off.is_off());
+        assert!(off.iter().any(|arg| arg == "--no-gpu"));
+    }
+
+    #[test]
+    fn vk_visible_devices_env_respects_off_and_pin() {
+        use crate::settings::GpuAcceleration;
+        // Off => never pin (CPU only).
+        assert_eq!(gpu_visible_devices_env(GpuAcceleration::Off, Some(1)), None);
+        // On without a pin => let ggml choose its default device.
+        assert_eq!(gpu_visible_devices_env(GpuAcceleration::Auto, None), None);
+        // On with a pin => exactly that index, as a string.
+        assert_eq!(
+            gpu_visible_devices_env(GpuAcceleration::Auto, Some(0)),
+            Some("0".to_string())
+        );
+        assert_eq!(
+            gpu_visible_devices_env(GpuAcceleration::Auto, Some(1)),
+            Some("1".to_string())
         );
     }
 }

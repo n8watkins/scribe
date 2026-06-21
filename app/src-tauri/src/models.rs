@@ -216,6 +216,17 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_sha1: Some("e050f7970618a659205450ad97eb95a18d69c9ee"),
             multilingual: true,
         },
+        // Full-precision (fp16) large-v3-turbo: the most accurate model offered.
+        // ~3x the q5_0 size and slow on CPU, so it's really meant for the GPU
+        // (Vulkan) path — kept after the q5_0 default, which stays recommended.
+        CatalogModel {
+            id: "large-v3-turbo",
+            name: "Large v3 Turbo (Multilingual, max accuracy)",
+            filename: "ggml-large-v3-turbo.bin",
+            disk_size_label: "1.6 GiB",
+            expected_sha1: None,
+            multilingual: true,
+        },
     ]
 }
 
@@ -257,6 +268,22 @@ mod tests {
             catalog_model("large-v3-turbo-q5_0").unwrap().multilingual,
             "large-v3-turbo is multilingual"
         );
+        assert!(
+            catalog_model("large-v3-turbo").unwrap().multilingual,
+            "full large-v3-turbo is multilingual"
+        );
+    }
+
+    #[test]
+    fn full_large_turbo_is_offered_alongside_the_quantized_one() {
+        // Both the recommended q5_0 and the full-precision fp16 turbo are in the
+        // catalog, with distinct ids and filenames.
+        let q5 = catalog_model("large-v3-turbo-q5_0").unwrap();
+        let full = catalog_model("large-v3-turbo").unwrap();
+        assert_eq!(q5.filename, "ggml-large-v3-turbo-q5_0.bin");
+        assert_eq!(full.filename, "ggml-large-v3-turbo.bin");
+        // The full one has no fabricated checksum (HF publishes none that matches).
+        assert!(full.expected_sha1.is_none());
     }
 
     #[test]
