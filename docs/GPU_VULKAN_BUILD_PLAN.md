@@ -56,6 +56,12 @@ A Vulkan-enabled ggml build **still contains the CPU backend and auto-selects it
 at runtime when no Vulkan device is present.** That makes a Vulkan build a
 *superset* of the CPU build, which gives us two shapes:
 
+> ⚠️ **The fallback direction is the easy one. The real risk is the opposite:**
+> getting Vulkan to *actually engage* on AMD/Windows instead of silently running
+> on CPU. The whisper.cpp v1.8.x line has a known AMD-GPU-not-detected regression
+> and several silent-CPU-fallback reports — see the researched risk table in
+> **§5b**, which is now the most important part of this plan.
+
 ### Option A — Single Vulkan build replaces the CPU set *(recommended, simplest)*
 Ship the Vulkan-enabled `whisper-server.exe`/`whisper-cli.exe` + `ggml-vulkan.dll`
 as the *only* binary set. ggml picks the GPU when available, CPU otherwise. No
@@ -83,11 +89,16 @@ size or the no-loader risk proves unacceptable.
 ## 4. Workstreams
 
 ### WS1 — Produce the Vulkan binaries (CI) · required for both options
-Build whisper.cpp `v1.8.6` with `-DGGML_VULKAN=ON` (cmake) on a Windows runner,
-or consume a published Vulkan asset if one exists for the pinned version. Output
-the GPU `whisper-server.exe`/`whisper-cli.exe` + `ggml-vulkan.dll` (keep
-`ggml-cpu.dll` for fallback). Add this as a step in `release.yml` (and surface a
-checksum). Pin the Vulkan SDK/headers version used to build.
+Build whisper.cpp from source with `-DGGML_VULKAN=ON` (cmake) on a Windows
+runner — **there is no official prebuilt Vulkan Windows binary** (releases ship
+CPU + CUDA only; the request to add one is open, #3673), so this is build-from-
+source, not fetch. Install the Vulkan SDK on the runner; output the GPU
+`whisper-server.exe`/`whisper-cli.exe` + `ggml-vulkan.dll`, keep the shared/DLL
+layout (so `ggml-cpu.dll` stays present for fallback and we dodge the static-link
+registration bug #3750 — see §5b), add it as a `release.yml` step, surface a
+checksum. **Do not assume `v1.8.6` works on AMD** (regression #3455) — the chosen
+version must be the one validated by the spike in §5b. Pin both the whisper.cpp
+ref and the Vulkan SDK version.
 
 ### WS2 — Optional-download mechanism *(Option B only)*
 Mirror `model_manager`: a registry entry for the "vulkan-pack", download with
@@ -139,8 +150,33 @@ redesign — matches the existing model-download rows.
 - Confirm the Vulkan build's CPU fallback matches CPU-build accuracy (same model,
   same flags) so output doesn't change based on backend.
 
+## 5b. Known whisper.cpp Vulkan risks (researched 2026-06)
+
+Searching the whisper.cpp issue tracker turned up real, current problems that
+reshape the risk profile. **Vulkan-on-Windows in the v1.8.x line is fragile, and
+the dominant failure mode is silently running on CPU — not crashing.** The plan
+must be driven by this section, not by §1's optimism.
+
+| Risk | Evidence | Disposition for Scribe |
+|---|---|---|
+| **AMD GPU not detected in the v1.8.x line.** A user built v1.8.0 with Vulkan and their AMD GPU wasn't detected; reverting to v1.7.6 worked. | ggml-org/whisper.cpp#3455 (open, AMD reporter) | **Blocks pinning `v1.8.6` on faith.** A spike must confirm the chosen version detects the RX 7800 XT, else pin a known-good ref (try v1.7.6 / latest v1.9.x). **This is the #1 gate — settle it before WS1.** |
+| **Vulkan backend silently fails to register on Windows MSVC *static* builds** (swallowed C++ exception in the static-init constructor → CPU-only). | #3750 | **Likely does NOT affect Scribe** — we bundle the standalone `whisper-server.exe`/`whisper-cli.exe` + DLLs (shared/dynamic), not static FFI linking (`whisper-rs-sys`). Keeping the shared/DLL layout sidesteps it. The good news of this review. |
+| **Silent CPU fallback even *with* a working GPU** — bundled Vulkan whisper-cli observed transcribing on CPU, no GPU activity. | chidiwilliams/buzz#1443 | Acceptance must **hard-verify the GPU engaged** (`ggml_vulkan: Found N devices` in the log + actual GPU utilization), not infer it from latency. |
+| **No CLI flag to pick a preferred device** historically in whisper examples. | #3205 | The multi-adapter pick (WS4) may need the `GGML_VK_VISIBLE_DEVICES` env filter rather than a whisper flag — or a small patch. Verify what the chosen ref's server/cli exposes. |
+| **AMD-specific Vulkan crashes exist** (RDNA1 buffer-init crash). | #3611 | RDNA3 (7800 XT) is newer and likely fine, but AMD Vulkan isn't bulletproof — real-hardware testing on the 7800 XT is mandatory. |
+| **No official prebuilt Vulkan Windows binary** (CPU + CUDA only; request open). | #3673 | Confirms **WS1 builds from source**. Community zips (jerryshell/whisper.cpp-windows-vulkan-bin) and the `Whisper.net.Runtime.Vulkan` NuGet exist but aren't a trustworthy pinned supply chain. |
+
+**Net effect:** Option A's "runtime unchanged, it just works" is the *destination*,
+not the *path*. The path runs through a version-compatibility spike on the actual
+7800 XT. Do that spike first; everything else is cheap once a version reliably
+detects and uses the GPU.
+
 ## 6. Acceptance criteria
 
+- **The GPU is provably engaged** (`ggml_vulkan: Found N Vulkan devices` + the
+  device shows in the per-op log, and GPU utilization rises during transcription)
+  — not inferred from latency alone, because silent CPU fallback is a known mode
+  (§5b).
 - On a GPU machine, `large-v3-turbo` transcription latency drops materially vs the
   CPU build (measure stop-to-text on a fixed clip).
 - On a machine with **no** GPU/driver, dictation still works (CPU), with no crash
@@ -153,15 +189,24 @@ redesign — matches the existing model-download rows.
 
 ## 7. Effort
 
-- **Option A:** ~1–1.5 days — mostly WS1 (CI build) + WS4/WS5 + the no-GPU
-  verification. Little-to-no runtime code if the single-build fallback holds.
-- **Option B:** ~3–4 days — adds WS2 (download) + WS3 (binary-set switching) +
+Revised up after the §5b research — the earlier estimates assumed Vulkan "just
+works" on the pinned version, which the AMD regression (#3455) makes unsafe.
+
+- **Spike (do first):** ~0.5–1 day — build/grab a Vulkan whisper for a couple of
+  candidate refs and confirm one actually detects + uses the 7800 XT. Gates
+  everything; if no ref works cleanly on AMD/Windows, the feature is parked.
+- **Option A:** ~2–3 days *after a green spike* — WS1 (build-from-source CI, incl.
+  Vulkan SDK) + WS4 device selection + WS5 + the GPU-engaged verification.
+- **Option B:** ~4–5 days — adds WS2 (download) + WS3 (binary-set switching) +
   more UI.
 
 ## 8. Open questions
 
-1. Does the Vulkan build load & run on a no-GPU machine (decides A vs B)?
-2. Base-installer size budget — is +a few MB for Option A acceptable?
-3. Is `large-v3-turbo` the target model, or also `medium`/multilingual large?
-4. Build Vulkan binaries ourselves in CI, or is there a trustworthy pinned
-   upstream Vulkan asset for `v1.8.6`?
+1. **(Gating) Which whisper.cpp ref reliably detects + uses the RX 7800 XT via
+   Vulkan on Windows?** `v1.8.6` is suspect (#3455). Answer via the §5b spike
+   before any other work.
+2. Does the Vulkan build load & run on a no-GPU machine (decides A vs B)?
+3. Base-installer size budget — is +a few MB for Option A acceptable?
+4. Is `large-v3-turbo` the target model, or also `medium`/multilingual large?
+5. ~~Build ourselves or fetch a published asset?~~ **Answered:** no official
+   prebuilt Vulkan Windows binary exists (#3673) — build from source in CI.
