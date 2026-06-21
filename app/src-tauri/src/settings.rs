@@ -6,7 +6,15 @@ use serde::{Deserialize, Serialize};
 pub const CURRENT_DEFAULTS_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+// Container-level `default` (risk R3): any field missing from the stored JSON
+// falls back to that field's value in the `Default` impl below, instead of
+// failing the whole deserialize. This keeps a future field add/rename — or any
+// of the older fields that predate per-field `#[serde(default)]` — from tripping
+// the blunt corrupt-settings reset in `db::get_settings` (which discards ALL of
+// the user's customization). Field-level `#[serde(default …)]` still takes
+// precedence, so `defaults_version` keeps deserializing to 0 (the type default)
+// when absent — preserving the one-time defaults migrations.
+#[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
     /// Version of the shipped defaults already applied to these settings.
     /// Missing in pre-versioning DBs, which deserialize as 0.
@@ -1016,6 +1024,45 @@ mod tests {
         assert!(!settings.github_sync_all_transcripts);
         assert_eq!(settings.github_repo, "");
         assert_eq!(settings.github_account_login, "");
+    }
+
+    #[test]
+    fn missing_non_defaulted_fields_degrade_to_defaults_instead_of_failing() {
+        // R3: a stored blob that omits fields which never carried a per-field
+        // serde default (a future rename, a downgrade to an older binary, a
+        // hand-edited DB) must still load by degrading those fields to the
+        // Default impl — NOT fail the whole deserialize and trip the blunt
+        // corrupt-settings reset that discards every customization.
+        let mut json = serde_json::to_value(AppSettings::default()).unwrap();
+        let object = json.as_object_mut().unwrap();
+        // Drop a representative spread of previously-required base fields.
+        object.remove("minRecordingMs");
+        object.remove("historyRetentionDays");
+        object.remove("selectedModelId");
+        object.remove("recordingMode");
+        object.remove("outputMode");
+        object.remove("hotkeys");
+
+        let settings: AppSettings = serde_json::from_value(json).unwrap();
+        // Each fell back to its Default impl value (not the bare type default).
+        assert_eq!(settings.min_recording_ms, 300);
+        assert_eq!(settings.history_retention_days, Some(30));
+        assert_eq!(settings.selected_model_id, Some("small.en-q5_1".to_string()));
+        assert_eq!(settings.recording_mode, RecordingMode::Both);
+        assert_eq!(settings.output_mode, OutputMode::AutoPaste);
+        assert_eq!(settings.hotkeys, HotkeySettings::default());
+    }
+
+    #[test]
+    fn absent_defaults_version_still_reads_as_zero_so_migrations_run() {
+        // The container `default` must NOT shadow the field-level `#[serde(default)]`
+        // on defaults_version: a pre-versioning DB omits it and MUST deserialize as
+        // 0 (the u32 type default) — not the Default impl's CURRENT_DEFAULTS_VERSION
+        // — so migrate_defaults still runs on those installs.
+        let mut json = serde_json::to_value(AppSettings::default()).unwrap();
+        json.as_object_mut().unwrap().remove("defaultsVersion");
+        let settings: AppSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(settings.defaults_version, 0);
     }
 
     #[test]
