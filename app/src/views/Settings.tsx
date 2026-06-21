@@ -958,13 +958,15 @@ function replacementsEqual(a: TextReplacement[], b: TextReplacement[]): boolean 
   );
 }
 
-// FILLER: parse the comma/newline-separated filler list into a clean,
-// lowercased, de-duplicated array. Split only on commas/newlines so multi-word
-// fillers ("you know") survive.
+// FILLER: parse the filler list into a clean, lowercased, de-duplicated array of
+// single words. Split on commas, newlines, AND spaces, so "um, uh" and "um uh"
+// both work. Matching is one transcribed word at a time, so multi-word entries
+// ("you know") can't match — they're split into separate words here instead of
+// silently stored as dead config.
 function parseFillerWords(raw: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const part of raw.split(/[,\n]+/)) {
+  for (const part of raw.split(/[\s,]+/)) {
     const word = part.trim().toLowerCase();
     if (word && !seen.has(word)) {
       seen.add(word);

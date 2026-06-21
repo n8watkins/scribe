@@ -32,9 +32,12 @@ impl FillerConfig {
         })
     }
 
-    /// Apply the pause-aware removal to a parsed, timed word list.
+    /// Apply the pause-aware removal to a parsed, timed word list and return the
+    /// final, normalized transcript text. Folding the normalize in here keeps the
+    /// CLI and warm-server call sites from diverging (both must run it).
     pub fn apply(&self, words: &[TimedWord]) -> String {
-        suppress_fillers(words, &self.words, self.pause_threshold_ms)
+        let kept = suppress_fillers(words, &self.words, self.pause_threshold_ms);
+        crate::whisper::normalize_transcript_text(&kept)
     }
 }
 
@@ -177,6 +180,20 @@ mod tests {
     #[test]
     fn removes_a_lone_filler_utterance() {
         assert_eq!(suppress_fillers(&[TimedWord::new("Um.", 0, 300)], &fillers(), 300), "");
+    }
+
+    #[test]
+    fn consecutive_fillers_each_judged_by_their_own_audio_gap() {
+        // "um <800ms> uh okay": the gap is an AUDIO property — "uh" was genuinely
+        // preceded by 800ms of silence in the recording, so it's a hesitation
+        // regardless of "um" being dropped from the output. Both go. (Guards
+        // against "fixing" this to keep "uh okay".)
+        let words = vec![
+            TimedWord::new("um", 0, 200),
+            TimedWord::new("uh", 1000, 1200),
+            TimedWord::new("okay", 1210, 1400),
+        ];
+        assert_eq!(suppress_fillers(&words, &fillers(), 300), "okay");
     }
 
     #[test]

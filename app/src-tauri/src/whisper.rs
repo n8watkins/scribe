@@ -116,7 +116,7 @@ pub(crate) fn transcribe_with_output_prefix(
             if words.is_empty() {
                 parse_output_text(&output_txt_path, &output.stdout)?
             } else {
-                normalize_transcript_text(&config.apply(&words))
+                config.apply(&words) // normalizes internally
             }
         }
         None => parse_output_text(&output_txt_path, &output.stdout)?,
@@ -286,9 +286,11 @@ pub(crate) fn parse_cli_words(json_full: &str) -> Vec<crate::filler::TimedWord> 
 
             match words.last_mut() {
                 // Continuation sub-word/punctuation: append, extend the end time.
+                // max() guards a stray token whose `to` is stale/zero from
+                // shrinking the word's end below its start (negative duration).
                 Some(last) if !starts_word => {
                     last.text.push_str(trimmed);
-                    last.end_ms = to;
+                    last.end_ms = to.max(last.end_ms);
                 }
                 _ => words.push(TimedWord::new(trimmed.to_string(), from, to)),
             }

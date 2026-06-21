@@ -334,7 +334,7 @@ impl WarmTranscriber {
         if let Some(config) = &request.filler {
             let words = parse_server_words(&body);
             if !words.is_empty() {
-                return Ok(whisper::normalize_transcript_text(&config.apply(&words)));
+                return Ok(config.apply(&words)); // normalizes internally
             }
         }
 

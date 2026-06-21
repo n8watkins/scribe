@@ -123,6 +123,25 @@ filter run first, and hand a clean string onward.
 - **Windows-gated.** The transcription path is the Windows surface — needs real
   on-device testing + the CI `cargo check`.
 
+## 6b. Known limitations (from the code review)
+
+- **Incremental segment boundaries.** Suppression runs per-segment, and the
+  segmenter cuts at pauses (the silence lands in the *prior* segment). So a
+  hesitation filler that *starts* a new segment has no in-segment neighbour
+  before it (`gap_before = None`) and, if tight to the next word, is **kept** —
+  even though the audio had a pause. The same filler on the single-clip CLI/file
+  path is removed. Conversely a filler at a *hard length-cap* cut (≈25 s of
+  continuous speech, no pause) is treated as edge-flanked and may be **removed**
+  despite no pause. Fixing properly needs cross-segment timing; acceptable for v1
+  (off by default, conservative word list).
+- **CLI vs. warm-server word boundaries.** The CLI path reconstructs words by
+  merging sub-word tokens; the server path uses whisper's own `words[]`. For the
+  same audio the two can produce slightly different word end-times (hence gaps),
+  so a borderline filler could differ between the warm path and the CLI fallback.
+- **Single-word matching only.** Each transcribed word is matched on its own;
+  multi-word entries ("you know") can't match, so the UI splits the list into
+  single words.
+
 ## 7. Acceptance criteria
 
 - "I went **um** to the store" (um flanked by a pause) → "I went to the store".
