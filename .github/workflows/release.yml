@@ -18,7 +18,10 @@ permissions:
   contents: write
 
 env:
-  WHISPER_CPP_VERSION: v1.8.6
+  # Built from source with Vulkan GPU support — upstream ships no prebuilt
+  # Vulkan-Windows binary (CPU + CUDA only, ggml-org/whisper.cpp#3673). v1.9.1
+  # was validated on the RX 7800 XT (detects + engages); see GPU_VULKAN_SPIKE.md.
+  WHISPER_CPP_VERSION: v1.9.1
 
 jobs:
   build-windows:
@@ -38,21 +41,48 @@ jobs:
         with:
           workspaces: app/src-tauri
 
-      - name: Fetch whisper.cpp binaries
+      - name: Install Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@v1.5.5
+        with:
+          vulkan_version: 1.4.350.0
+          install_runtime: true
+          cache: true
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build whisper.cpp from source with Vulkan
         shell: pwsh
         run: |
-          $zip = "$env:RUNNER_TEMP\whisper-bin-x64.zip"
-          $extract = "$env:RUNNER_TEMP\whisper-bin"
-          Invoke-WebRequest -Uri "https://github.com/ggml-org/whisper.cpp/releases/download/$env:WHISPER_CPP_VERSION/whisper-bin-x64.zip" -OutFile $zip
-          Expand-Archive -Path $zip -DestinationPath $extract
+          $src = "$env:RUNNER_TEMP\wcpp"
+          git clone --depth 1 --branch "$env:WHISPER_CPP_VERSION" https://github.com/ggml-org/whisper.cpp $src
+          Push-Location $src
+          cmake -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DGGML_VULKAN=ON `
+            -DGGML_NATIVE=OFF `
+            -DBUILD_SHARED_LIBS=ON `
+            -DWHISPER_BUILD_EXAMPLES=ON `
+            -DWHISPER_BUILD_TESTS=OFF `
+            -DWHISPER_BUILD_SERVER=ON
+          cmake --build build -j
+          Pop-Location
+          $cli = Get-ChildItem -Path "$src\build" -Recurse -Filter whisper-cli.exe | Select-Object -First 1
+          if (-not $cli) { throw "whisper-cli.exe not found after the Vulkan build" }
+          $bin = Split-Path $cli.FullName
           $dest = "app/src-tauri/resources/bin/windows"
-          $needed = @("whisper-cli.exe", "whisper-server.exe", "whisper.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll")
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          # Same set the app bundles, plus the Vulkan backend DLL. ggml-cpu.dll
+          # stays present so the build still runs on machines with no GPU.
+          $needed = @("whisper-cli.exe", "whisper-server.exe", "whisper.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll", "ggml-vulkan.dll")
           foreach ($name in $needed) {
-            $file = Get-ChildItem -Path $extract -Recurse -Filter $name | Select-Object -First 1
-            if (-not $file) { throw "Missing $name in whisper.cpp release zip" }
+            $file = Get-ChildItem -Path $bin -Recurse -Filter $name | Select-Object -First 1
+            if (-not $file) { throw "Missing $name in the Vulkan build output" }
             Copy-Item $file.FullName -Destination $dest
           }
-          Get-ChildItem $dest
+          Get-ChildItem $dest | Select-Object Name,Length
 
       - name: Install frontend dependencies
         working-directory: app

@@ -49,6 +49,9 @@ export function ModelsView({
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [busyModelId, setBusyModelId] = useState<string | null>(null);
   const [catalogOpen, setCatalogOpen] = useState(false);
+  const [langFilter, setLangFilter] = useState<
+    "all" | "english" | "multilingual"
+  >("all");
   // Auto-expand the catalog once on first load if nothing is downloaded yet, so
   // a fresh user immediately sees models to download. Manual toggles win after.
   const autoExpandedRef = useRef(false);
@@ -180,6 +183,17 @@ export function ModelsView({
       })
       .map((entry) => entry.model);
   }, [models, effectiveStatus]);
+
+  // English-only vs multilingual filter for the catalog browser (QoL).
+  const filteredModels = useMemo(() => {
+    if (langFilter === "all") {
+      return orderedModels;
+    }
+    const wantMultilingual = langFilter === "multilingual";
+    return orderedModels.filter(
+      (model) => model.multilingual === wantMultilingual,
+    );
+  }, [orderedModels, langFilter]);
 
   const downloadedCount = useMemo(
     () => models.filter((model) => isModelDownloaded(effectiveStatus(model))).length,
@@ -313,9 +327,34 @@ export function ModelsView({
               <EmptyState message="No Whisper models are available from the local catalog." />
             ) : null}
             {models.length > 0 ? (
+              <div className="control-grid single">
+                <label>
+                  Show
+                  <select
+                    onChange={(event) =>
+                      setLangFilter(
+                        event.currentTarget.value as
+                          | "all"
+                          | "english"
+                          | "multilingual",
+                      )
+                    }
+                    value={langFilter}
+                  >
+                    <option value="all">All models</option>
+                    <option value="english">English-only</option>
+                    <option value="multilingual">Multilingual</option>
+                  </select>
+                </label>
+              </div>
+            ) : null}
+            {models.length > 0 && filteredModels.length === 0 ? (
+              <EmptyState message="No models match this filter." />
+            ) : null}
+            {filteredModels.length > 0 ? (
               <div className="model-scroll">
                 <div className="model-table">
-                  {orderedModels.map((model) => {
+                  {filteredModels.map((model) => {
                     const progress = progressByModel[model.id];
                     const status = effectiveStatus(model);
                     const percent = progressPercent(model, progress);

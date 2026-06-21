@@ -28,6 +28,10 @@ export type RecordingMode = "hold" | "toggle" | "both";
  * load. See SUPPORTED_LANGUAGES for the curated picker set. */
 export type Language = string;
 
+/** GPU (Vulkan) acceleration preference. "auto" uses the GPU when a usable
+ * Vulkan device is present (with automatic CPU fallback); "off" forces CPU. */
+export type GpuAcceleration = "auto" | "off";
+
 /** Auto-detect sentinel value for `AppSettings.language`. */
 export const LANGUAGE_AUTO = "auto";
 
@@ -161,6 +165,12 @@ export type AppSettings = {
   /** Run Whisper's translate task: emit English for any spoken language.
    * Requires a multilingual model. Defaults false. */
   translateToEnglish: boolean;
+  /** GPU (Vulkan) acceleration: "auto" uses the GPU when present (CPU fallback),
+   * "off" forces CPU. Defaults "auto". */
+  gpuAcceleration: GpuAcceleration;
+  /** Pinned Vulkan device index for multi-GPU machines; null = ggml's default
+   * device (usually the discrete card). */
+  gpuDeviceIndex: number | null;
   vocabularyPrompt: string;
   textReplacements: TextReplacement[];
   outputMode: OutputMode;
@@ -743,6 +753,32 @@ export type LlmStatus = {
  * back as `reachable: false`, not a rejection. */
 export function llmStatus(endpoint?: string): Promise<LlmStatus> {
   return invoke("llm_status", { endpoint });
+}
+
+/** A Vulkan GPU detected by whisper.cpp's ggml backend. */
+export type VulkanDevice = {
+  /** ggml device index — the value pinned via GGML_VK_VISIBLE_DEVICES. */
+  index: number;
+  name: string;
+  /** Integrated GPU (shares system memory). Used to recommend the discrete card. */
+  integrated: boolean;
+};
+
+export type GpuProbe = {
+  /** At least one Vulkan device was detected. */
+  available: boolean;
+  devices: VulkanDevice[];
+  /** The probe actually ran (model present + binary resolved). When false the UI
+   * shows "couldn't detect" rather than "no GPU". */
+  probed: boolean;
+  /** Index the UI should suggest pinning (first discrete device), or null. */
+  recommendedIndex: number | null;
+};
+
+/** Detects the Vulkan GPU(s) available for transcription. Best-effort: returns
+ * an empty list (probed:false) on any failure or on non-Windows. */
+export function probeGpuDevices(): Promise<GpuProbe> {
+  return invoke("probe_gpu_devices");
 }
 
 export type GithubStatus = {

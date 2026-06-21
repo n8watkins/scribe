@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Mic, Play, RefreshCw } from "lucide-react";
+import { Cpu, Mic, Play, RefreshCw } from "lucide-react";
 import {
   commandErrorMessage,
   getTestClipAudio,
   listMicrophones,
+  probeGpuDevices,
   recordTestClip,
   type AppSettings,
   type AppStateSnapshot,
   type AudioLevelEvent,
+  type GpuProbe,
   type MicrophoneInfo,
   type RecordingErrorEvent,
 } from "../backend";
@@ -34,6 +36,23 @@ export function AudioView({
   const [hasTestClip, setHasTestClip] = useState(false);
   const [playingTestClip, setPlayingTestClip] = useState(false);
   const [testClipError, setTestClipError] = useState<string | null>(null);
+  const [gpuProbe, setGpuProbe] = useState<GpuProbe | null>(null);
+  const [gpuProbing, setGpuProbing] = useState(true);
+
+  const loadGpuProbe = useCallback(async () => {
+    setGpuProbing(true);
+    try {
+      setGpuProbe(await probeGpuDevices());
+    } catch {
+      setGpuProbe(null);
+    } finally {
+      setGpuProbing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadGpuProbe();
+  }, [loadGpuProbe]);
 
   const loadMicrophones = useCallback(async () => {
     setMicrophonesLoading(true);
@@ -391,6 +410,84 @@ export function AudioView({
               }
             />
           </SettingRow>
+        </SectionPanel>
+        <SectionPanel
+          icon={
+            <span
+              className={
+                gpuProbing
+                  ? "pill pending"
+                  : gpuProbe?.available
+                    ? "pill ready"
+                    : "pill preserve"
+              }
+            >
+              {gpuProbing
+                ? "Detecting"
+                : gpuProbe?.available
+                  ? "GPU"
+                  : "CPU"}
+            </span>
+          }
+          title="GPU acceleration"
+        >
+          <SettingRow
+            description="Use your GPU (Vulkan) to transcribe — a big speedup on the large models. Falls back to CPU automatically if the GPU is unavailable."
+            label="Use GPU acceleration"
+          >
+            <Toggle
+              checked={settings.gpuAcceleration !== "off"}
+              disabled={actions.savingSettings}
+              label="Use GPU acceleration"
+              onChange={(on) =>
+                actions.updateSettings({ gpuAcceleration: on ? "auto" : "off" })
+              }
+            />
+          </SettingRow>
+          <p
+            className="muted"
+            style={{ display: "flex", alignItems: "center", gap: 6 }}
+          >
+            <Cpu aria-hidden="true" size={14} />
+            {gpuProbing
+              ? "Detecting GPU…"
+              : !gpuProbe?.probed
+                ? "Couldn't detect — download a model to check your GPU."
+                : !gpuProbe.available
+                  ? "No Vulkan GPU found — transcription runs on CPU."
+                  : `Detected: ${gpuProbe.devices
+                      .map((device) => device.name)
+                      .join(", ")}`}
+          </p>
+          {gpuProbe && gpuProbe.devices.length > 1 ? (
+            <div className="control-grid single">
+              <label>
+                GPU device
+                <select
+                  disabled={
+                    actions.savingSettings || settings.gpuAcceleration === "off"
+                  }
+                  onChange={(event) =>
+                    actions.updateSettings({
+                      gpuDeviceIndex:
+                        event.currentTarget.value === "auto"
+                          ? null
+                          : Number(event.currentTarget.value),
+                    })
+                  }
+                  value={settings.gpuDeviceIndex ?? "auto"}
+                >
+                  <option value="auto">Automatic (recommended)</option>
+                  {gpuProbe.devices.map((device) => (
+                    <option key={device.index} value={device.index}>
+                      {device.name}
+                      {device.integrated ? " (integrated)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : null}
         </SectionPanel>
         <SectionPanel
           icon={
