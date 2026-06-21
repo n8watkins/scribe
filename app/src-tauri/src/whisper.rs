@@ -227,82 +227,41 @@ pub(crate) fn normalize_transcript_text(raw_text: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     let tidy = tidy_punctuation_spacing(&joined);
-    // Drop transcripts that are entirely Whisper's silence-hallucinated YouTube
-    // filler ("be sure to subscribe", "thanks for watching") — common on a
-    // mic-disconnect's dead-air salvage — so the junk is never pasted. An empty
-    // result is treated as "no speech" by the dictation flow (no paste).
-    if is_pure_hallucination(&tidy) {
-        return String::new();
-    }
-    tidy
+    // Remove sentences that are nothing but a known Whisper outro hallucination.
+    // A transcript that was only such junk collapses to "" and is treated as no
+    // speech (no paste).
+    strip_hallucinated_sentences(&tidy)
 }
 
 /// Whisper, trained heavily on captioned video, hallucinates YouTube-style outro
-/// filler on silence or near-silent audio — "thanks for watching", "be sure to
-/// subscribe to our channel", "(laughs)". A mic unplugged mid-recording salvages
-/// mostly dead air, so that junk gets transcribed and pasted.
+/// lines on silence — "thanks for watching", "be sure to subscribe to our
+/// channel". This is a deliberately tiny, unambiguous denylist: it drops any
+/// SENTENCE that is exactly one of these phrases (ignoring a leading "and/so/…"
+/// and surrounding punctuation), and leaves every other sentence untouched.
 ///
-/// Returns true only when the WHOLE transcript is such filler. Conservative by
-/// construction: it fires only if *every* sentence is a known filler phrase AND
-/// at least one is a "strong" phrase that is never legitimately dictated. So any
-/// real content keeps the transcript, and a lone "Thank you." / "Bye." that a
-/// user might actually say is kept (those are "weak" phrases).
-fn is_pure_hallucination(text: &str) -> bool {
-    // Strong: unmistakable video outro; never normal dictation, even alone.
-    const STRONG: &[&str] = &[
+/// Kept small on purpose — only phrases that are effectively never real
+/// dictation — so it's a plain remove filter with no false positives on real
+/// speech. Short ambiguous words ("you", "bye", "thanks") are intentionally NOT
+/// listed; the disconnect-salvage no-paste path handles the dead-air case where
+/// those show up.
+fn strip_hallucinated_sentences(text: &str) -> String {
+    const JUNK: &[&str] = &[
         "thanks for watching",
         "thank you for watching",
-        "thank you for watching this video",
         "be sure to subscribe",
         "be sure to subscribe to our channel",
         "subscribe to our channel",
-        "subscribe to my channel",
         "please subscribe",
-        "please subscribe to my channel",
-        "dont forget to subscribe",
         "like and subscribe",
-        "please like and subscribe",
-        "like comment and subscribe",
         "see you in the next one",
-        "see you in the next video",
-        "see you next time",
-        "well see you next time",
-        "ill see you in the next one",
     ];
-    // Weak: plausibly real on their own, so they count as filler only alongside a
-    // strong phrase in an otherwise all-filler transcript.
-    const WEAK: &[&str] = &[
-        "thank you",
-        "thanks",
-        "thank you very much",
-        "thank you so much",
-        "bye",
-        "bye bye",
-        "goodbye",
-        "good bye",
-        "the end",
-        "okay",
-        "ok",
-        "you",
-        "oh",
-        "ooh",
-        "uh",
-        "um",
-        "so",
-        "hmm",
-        "yeah",
-        "right",
-        "see you",
-    ];
-    // Connectives Whisper tacks onto a hallucinated phrase ("and be sure to ...").
-    const LEADING: &[&str] = &[
-        "and", "so", "okay", "ok", "oh", "well", "but", "um", "uh", "now",
-    ];
+    const LEADING: &[&str] = &["and", "so", "okay", "ok", "oh", "well", "but", "now"];
 
-    let mut saw_any = false;
-    let mut saw_strong = false;
-    for sentence in text.split(|c| matches!(c, '.' | '!' | '?')) {
-        let mut words: Vec<String> = sentence
+    let mut out = String::with_capacity(text.len());
+    // split_inclusive keeps each sentence's trailing . ! ? so kept sentences are
+    // rejoined verbatim; only the matched junk sentences are dropped.
+    for piece in text.split_inclusive(|c| matches!(c, '.' | '!' | '?')) {
+        let mut words: Vec<String> = piece
             .split_whitespace()
             .map(|word| {
                 word.chars()
@@ -318,19 +277,13 @@ fn is_pure_hallucination(text: &str) -> bool {
         {
             words.remove(0);
         }
-        if words.is_empty() {
+        let phrase = words.join(" ");
+        if !phrase.is_empty() && JUNK.contains(&phrase.as_str()) {
             continue;
         }
-        saw_any = true;
-        let phrase = words.join(" ");
-        if STRONG.contains(&phrase.as_str()) {
-            saw_strong = true;
-        } else if !WEAK.contains(&phrase.as_str()) {
-            // A real sentence -> not pure hallucination; keep the transcript.
-            return false;
-        }
+        out.push_str(piece);
     }
-    saw_any && saw_strong
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Whisper renders speech pauses as an ellipsis ("..." or the "…" character).
@@ -525,33 +478,33 @@ mod tests {
     }
 
     #[test]
-    fn drops_whole_transcript_of_youtube_hallucinations() {
-        // The exact mic-disconnect junk: every sentence is filler and several are
-        // the unmistakable subscribe outro -> the whole thing is dropped.
-        assert_eq!(
-            normalize_transcript_text(
-                "Ooh. (laughs) And be sure to subscribe. And the end. And be sure to subscribe to our channel."
-            ),
-            ""
-        );
+    fn removes_youtube_outro_sentences() {
+        // A transcript that's only outro junk collapses to nothing.
         assert_eq!(normalize_transcript_text("Thanks for watching!"), "");
         assert_eq!(
             normalize_transcript_text("Be sure to subscribe to our channel."),
             ""
         );
-        // All filler, and a strong outro phrase is present -> dropped.
+        // A leading connective ("and") is ignored when matching.
+        assert_eq!(normalize_transcript_text("And be sure to subscribe."), "");
+        // Only the junk sentence is removed; real content is kept verbatim.
+        assert_eq!(
+            normalize_transcript_text("Here are the build notes. Thanks for watching!"),
+            "Here are the build notes."
+        );
+        // Non-listed sentences survive even next to a removed one.
         assert_eq!(
             normalize_transcript_text("Thank you. Please subscribe. Bye."),
-            ""
+            "Thank you. Bye."
         );
     }
 
     #[test]
     fn keeps_real_dictation_near_filler_words() {
-        // A lone weak phrase a user might actually dictate is kept (no strong outro).
+        // Short ambiguous phrases are NOT on the denylist, so they're kept.
         assert_eq!(normalize_transcript_text("Thank you."), "Thank you.");
         assert_eq!(normalize_transcript_text("Thank you. Bye."), "Thank you. Bye.");
-        // Real content that merely mentions a filler word is never dropped.
+        // Real content that merely mentions a listed word is never dropped.
         assert_eq!(
             normalize_transcript_text("Please subscribe to my newsletter."),
             "Please subscribe to my newsletter."
