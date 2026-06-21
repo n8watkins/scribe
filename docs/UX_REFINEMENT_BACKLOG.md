@@ -25,12 +25,27 @@
 
 ## B. Local-LLM hosting (key decision)
 
-- **B1.** Want: can Scribe **run a local LLM itself** so LM Studio doesn't have to
-  stay open? What are the options?
-- **B2.** Idea: Scribe bundles/manages a small model (he named **Gemma 3 4B**) for
-  basic tasks instead of depending on LM Studio.
-- **B3.** Decide: external (LM Studio/Ollama) vs Scribe-managed. (Recommendation
-  in §"Answers".)
+- **B1.** Want: Scribe **runs a local LLM itself** so no separate app (LM Studio)
+  has to stay open.
+- **B2.** Idea: Scribe bundles/manages a small model (e.g. **Gemma 3 4B**) for the
+  notes/transform tasks.
+- **B3.** Three tiers of support:
+  1. **BYO LM Studio** — external server, already works (endpoint default).
+  2. **BYO Ollama** — *also already works today* (OpenAI-compatible at
+     `http://localhost:11434/v1`); it is **still an external app/daemon**, NOT
+     "inside the app". Swapping LM Studio → Ollama doesn't remove the external
+     dependency.
+  3. **Scribe-managed `llama-server`** — the real "inside the app" path:
+     llama.cpp's server (same ggml family as whisper.cpp), spawned by Scribe like
+     it already spawns `whisper-server`, **GPU-accelerated via the Vulkan we
+     shipped in 0.6.0**, OpenAI-compatible so `note_analysis`/`transform` clients
+     need no changes. Ollama can't be embedded this way (bigger Go runtime + own
+     model store); llama-server is the natural fit.
+- **B4. Recommendation:** build tier 3 (managed `llama-server` + download-on-enable
+  GGUF, mirroring the Whisper model catalog/warm-server). Keep tiers 1–2 as the
+  "bring your own server" option for power users. **Spike first** (prove
+  llama-server runs GPU-accelerated on the 7800 XT, exactly like the GPU spike)
+  before wiring it in.
 
 ## C. Dictation cleanup — REMOVE (decided, emphatic)
 
@@ -203,13 +218,13 @@
 
 ## Execution plan (multi-step — check off as we go)
 
-### Phase 0 — fold into the 0.6.0 GPU release (small, decided)
-- [ ] **C** Remove dictation cleanup (toggle + Cleanup style + custom prompt; keep
-  LLM for Notes/Transform).
-- [ ] **D2** Make the GPU device probe cheap (cache + async + smallest Whisper
-  model) so Audio doesn't hitch.
-- [ ] **Q** Silence → empty: skip the model on effectively-silent audio.
-- [ ] Ship **0.6.0** (GPU + the above).
+### Phase 0 — ✅ SHIPPED in v0.6.0 (2026-06-21)
+- [x] **GPU acceleration (Vulkan)** — ~16× faster, on by default + CPU fallback +
+  device picker. (WS1/4/5/6 + full large-v3-turbo + English/Multilingual filter.)
+- [x] **C** Removed dictation cleanup (kept LLM for Notes/Transform).
+- [x] **D2** GPU device probe made cheap (cache + async + smallest Whisper model).
+- [x] **Q** Silence → empty (skip the model on silent audio).
+- [x] Shipped **v0.6.0** — published green with installer assets.
 
 ### Phase 1 — Integrations architecture
 - [ ] **A1–A6** "Integrations" sidebar section; move Sync (GitHub) + Local LLM (LM
