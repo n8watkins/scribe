@@ -119,14 +119,13 @@ detected / not found". whisper.cpp's `--no-gpu` flag forces CPU when `Off`.
 
 **Multi-adapter selection (required, not optional).** Many machines expose more
 than one Vulkan device — the owner's box has *two*: the discrete Radeon RX 7800
-XT **and** the CPU's integrated Radeon Graphics. ggml/whisper picks a device
-index by default and can land on the weak iGPU. The build must enumerate the
-Vulkan devices and target the **discrete** one (pick by device index — e.g.
-whisper's `--gpu-device N` / ggml's main-gpu, or the `GGML_VK_VISIBLE_DEVICES`
-env filter — and prefer the device with the most VRAM / a non-integrated type).
-Surface the chosen device name in the UI, and ideally let the user pick when more
-than one is present. Getting this wrong silently runs on the iGPU and looks like
-"GPU acceleration barely helped."
+XT **and** the CPU's integrated Radeon Graphics. ggml picks a device index by
+default and can land on the weak iGPU. The mechanism is settled (see §5b): set
+the **`GGML_VK_VISIBLE_DEVICES`** env var on the spawned `whisper-server.exe` to
+pin the discrete card (commonly index 1; enumerate once to confirm and prefer the
+non-integrated / largest-VRAM device). Surface the chosen device name in the UI,
+and ideally let the user pick when more than one is present. Getting this wrong
+silently runs on the iGPU and looks like "GPU acceleration barely helped."
 
 ### WS5 — Fallback hardening
 GPU init failure (driver crash, OOM on a huge model) must fall back to CPU, not
@@ -159,10 +158,10 @@ must be driven by this section, not by §1's optimism.
 
 | Risk | Evidence | Disposition for Scribe |
 |---|---|---|
-| **AMD GPU not detected in the v1.8.x line.** A user built v1.8.0 with Vulkan and their AMD GPU wasn't detected; reverting to v1.7.6 worked. | ggml-org/whisper.cpp#3455 (open, AMD reporter) | **Blocks pinning `v1.8.6` on faith.** A spike must confirm the chosen version detects the RX 7800 XT, else pin a known-good ref (try v1.7.6 / latest v1.9.x). **This is the #1 gate — settle it before WS1.** |
+| **AMD GPU not detected in the v1.8.x line.** v1.8.0 + Vulkan didn't detect the reporter's AMD GPU; v1.7.6 worked. Resolution **could not be confirmed** either way, and AMD+Vulkan has a cluster of ongoing issues (#3611, #2828, 2026 discussions). **Caveat found on re-check:** that reporter ran *integrated* AMD graphics + ROCm, **not** a discrete RDNA3 card — so this is a reason to **test**, not a confirmed blocker for the 7800 XT. | #3455 (AMD reporter) | **Don't pin `v1.8.6` on faith — verify empirically.** The spike confirms detection on the actual discrete 7800 XT across a couple of refs (e.g. v1.7.6 vs latest **v1.9.1**). Still the #1 gate before WS1. |
 | **Vulkan backend silently fails to register on Windows MSVC *static* builds** (swallowed C++ exception in the static-init constructor → CPU-only). | #3750 | **Likely does NOT affect Scribe** — we bundle the standalone `whisper-server.exe`/`whisper-cli.exe` + DLLs (shared/dynamic), not static FFI linking (`whisper-rs-sys`). Keeping the shared/DLL layout sidesteps it. The good news of this review. |
-| **Silent CPU fallback even *with* a working GPU** — bundled Vulkan whisper-cli observed transcribing on CPU, no GPU activity. | chidiwilliams/buzz#1443 | Acceptance must **hard-verify the GPU engaged** (`ggml_vulkan: Found N devices` in the log + actual GPU utilization), not infer it from latency. |
-| **No CLI flag to pick a preferred device** historically in whisper examples. | #3205 | The multi-adapter pick (WS4) may need the `GGML_VK_VISIBLE_DEVICES` env filter rather than a whisper flag — or a small patch. Verify what the chosen ref's server/cli exposes. |
+| **Silent CPU fallback even *with* a working GPU** — downstream app saw a Vulkan whisper-cli run on CPU. | chidiwilliams/buzz#1443 | **Reframed on re-check:** whisper auto-uses the GPU once built with Vulkan (no runtime flag), so this is a *symptom*, not an independent flaw — it traces to a root cause: registration failure (#3750, static builds → Scribe likely immune) or non-detection (#3455). The risks therefore **consolidate to one gate: version+hardware detection.** The "verify GPU engaged" acceptance check still applies. |
+| **No CLI flag to pick a preferred device** in whisper's examples. | #3205 | **Solved without a patch (validated).** `GGML_VK_VISIBLE_DEVICES` is a confirmed, ecosystem-standard ggml-vulkan env var (shared by llama.cpp/Ollama/whisper) — set it on the spawned `whisper-server.exe` to pick the discrete card (the dGPU is commonly index 1). WS4 is just "set an env var", not a code patch. |
 | **AMD-specific Vulkan crashes exist** (RDNA1 buffer-init crash). | #3611 | RDNA3 (7800 XT) is newer and likely fine, but AMD Vulkan isn't bulletproof — real-hardware testing on the 7800 XT is mandatory. |
 | **No official prebuilt Vulkan Windows binary** (CPU + CUDA only; request open). | #3673 | Confirms **WS1 builds from source**. Community zips (jerryshell/whisper.cpp-windows-vulkan-bin) and the `Whisper.net.Runtime.Vulkan` NuGet exist but aren't a trustworthy pinned supply chain. |
 
