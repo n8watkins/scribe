@@ -164,19 +164,6 @@ pub struct AppSettings {
     /// which on LM Studio is whatever model is loaded.
     #[serde(default)]
     pub notes_analysis_model: String,
-    /// Polish each finished dictation with the local LLM before it is saved or
-    /// pasted (strip filler, fix punctuation/casing, light formatting). Off by
-    /// default; non-blocking with a raw-text fallback (see `dictation_cleanup.rs`).
-    /// Reuses the same `notes_analysis_endpoint` / `notes_analysis_model` server.
-    #[serde(default)]
-    pub dictation_cleanup_enabled: bool,
-    /// Which built-in cleanup style to apply (or Custom to use the prompt below).
-    #[serde(default = "default_dictation_cleanup_mode")]
-    pub dictation_cleanup_mode: DictationCleanupMode,
-    /// The system prompt used only when `dictation_cleanup_mode` is `Custom`.
-    /// Blank falls back to the Standard prompt.
-    #[serde(default)]
-    pub dictation_cleanup_prompt: String,
     /// Deterministic, pause-aware filler removal: strip a `filler_words` entry
     /// from a transcript only when Whisper's word timestamps show an adjacent
     /// silence >= `filler_pause_threshold_ms`, so fluent uses ("oh no") survive.
@@ -499,28 +486,6 @@ pub enum PasteMethod {
     ClipboardPaste,
 }
 
-/// How an LLM cleanup pass should reshape a finished dictation. The mode
-/// selects a built-in system prompt (see `dictation_cleanup.rs`); `Custom`
-/// uses the user's own `dictation_cleanup_prompt`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum DictationCleanupMode {
-    /// Punctuation/capitalization fixes + filler removal, wording faithful.
-    Standard,
-    /// Standard cleanup, then format as a polite email body.
-    Email,
-    /// Standard cleanup, condensed into a concise casual chat message.
-    Chat,
-    /// Standard cleanup, phrased/formatted as a code comment.
-    Code,
-    /// Use the user's `dictation_cleanup_prompt` verbatim.
-    Custom,
-}
-
-fn default_dictation_cleanup_mode() -> DictationCleanupMode {
-    DictationCleanupMode::Standard
-}
-
 /// GPU (Vulkan) acceleration preference for transcription. Kept deliberately to
 /// two states: whisper.cpp has no "force GPU or fail" mode — when built with
 /// Vulkan it already uses the GPU if one is present and otherwise runs on CPU —
@@ -714,9 +679,6 @@ impl Default for AppSettings {
             notes_analysis_prompt: default_notes_analysis_prompt(),
             notes_analysis_endpoint: default_notes_analysis_endpoint(),
             notes_analysis_model: String::new(),
-            dictation_cleanup_enabled: false,
-            dictation_cleanup_mode: default_dictation_cleanup_mode(),
-            dictation_cleanup_prompt: String::new(),
             filler_suppression_enabled: false,
             filler_words: default_filler_words(),
             filler_pause_threshold_ms: default_filler_pause_threshold_ms(),
@@ -970,13 +932,6 @@ mod tests {
         assert!(!settings.notes_analysis_prompt.is_empty());
         assert_eq!(settings.notes_analysis_endpoint, "http://127.0.0.1:1234/v1");
         assert_eq!(settings.notes_analysis_model, "");
-        // Dictation cleanup is opt-in and defaults to the Standard style.
-        assert!(!settings.dictation_cleanup_enabled);
-        assert_eq!(
-            settings.dictation_cleanup_mode,
-            DictationCleanupMode::Standard
-        );
-        assert_eq!(settings.dictation_cleanup_prompt, "");
         assert!(!settings.developer_settings_enabled);
         assert!(!settings.dev_hotkeys_seeded);
         // The default theme equals the historical look so installs are unchanged.

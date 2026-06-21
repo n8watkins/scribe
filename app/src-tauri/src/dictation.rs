@@ -268,32 +268,16 @@ fn transcribe_recording_inner(
     // `whisper_result.text`, so doing it here covers both. (The file-transcribe
     // path is intentionally left untouched.) An empty replacements list returns
     // the text unchanged.
-    let mut final_text =
+    let final_text =
         crate::text_replace::apply(&whisper_result.text, &settings.text_replacements);
 
     // A voice Transform Selection recording: the transcribed text is the user's
     // spoken *instruction*, not dictation. Route it to the transform engine —
     // rewrite the selection captured when the recording started, paste it back
-    // in place — and skip the normal cleanup / save / paste path entirely.
+    // in place — and skip the normal save / paste path entirely.
     #[cfg(windows)]
     if recording.is_transform {
         return finish_selection_transform(app, &settings, &final_text);
-    }
-
-    // Optional local-LLM polish (filler removal, punctuation/casing, light
-    // formatting) before the text is saved or pasted. Non-blocking with a
-    // raw-text fallback: cleanup() returns the original text on any
-    // error/timeout, so a slow or offline LLM never stalls or blanks the
-    // dictation. Replacements run first so the LLM also sees the corrected
-    // wording. (The file-transcribe path is intentionally left untouched.)
-    if settings.dictation_cleanup_enabled {
-        final_text = crate::dictation_cleanup::cleanup(
-            &final_text,
-            settings.dictation_cleanup_mode,
-            &settings.dictation_cleanup_prompt,
-            &settings.notes_analysis_endpoint,
-            &settings.notes_analysis_model,
-        );
     }
 
     // Empty or whitespace-only text is a benign outcome, not an error (e.g.
