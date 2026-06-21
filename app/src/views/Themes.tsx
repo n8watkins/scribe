@@ -47,9 +47,9 @@ const THEMES: ThemeOption[] = [
   },
   {
     key: "daylight",
-    name: "Daylight",
-    description: "A clean light theme: soft off-white surfaces and a deep-blue accent.",
-    swatches: ["#e2e8f0", "#f9fbfd", "#0369a1", "#075985", "#0f172a"],
+    name: "Pewter",
+    description: "A calm, muted light theme — soft pewter-gray surfaces, easy on the eyes.",
+    swatches: ["#d6dadf", "#e8ebef", "#075985", "#0c4a6e", "#1f2937"],
   },
 ];
 

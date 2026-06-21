@@ -239,50 +239,47 @@
   --scribe-text-faint: #8b80b4;
 }
 
-/* Daylight — a light theme: soft off-white surfaces, dark text, a blue accent.
- *
- * Contrast verified against the surface each tone actually sits on (ratios are
- * WCAG; body/label text targets ≥ 4.5:1, large headings/icons ≥ 3:1). Surfaces
- * are the off-white card (#f9fbfd) and the softer page ground (#e7ecf3):
- *   - text #0f172a            on card / page / rows : 15.0–17.2 : 1
- *   - text-secondary #334155  on card / page        :  8.7–10.0 : 1
- *   - text-muted #475569      on card / page / rows  :  6.4–7.3 : 1
- *   - text-faint #576473      on card / page / rows  :  5.1–5.8 : 1
- *   - accent #0369a1 (button bg) with on-accent white :  5.67 : 1
- *   - accent #0369a1 as a text/icon tint on card/page :  5.0–5.7 : 1
- *   - accent-bright #0284c7 (large/icon tint) on card :  3.95 : 1
- * Islands stay light so no row reads as a dark box; the floating tooltip is the
- * one deliberate exception — its face stays dark (surface-raised) with the
- * existing light label, which pops cleanly over the light page. */
+/* Pewter — a calm, muted LIGHT theme: soft pewter-gray surfaces, dark slate
+ * text, a deep-blue accent. Deliberately mellow (dimmer than a white theme) and
+ * FULLY light — no dark panels anywhere. `--scribe-surface-raised` is light, and
+ * the tooltip uses --scribe-text (dark here, light in dark themes), so nothing
+ * reads as a black box. (Kept the data-theme key "daylight" for back-compat with
+ * existing saved settings; only the look and display name changed.)
+ * Contrast (WCAG; on page #d6dadf / cards #e8ebef):
+ *   - text #1f2937            : 10.5–12.3 : 1
+ *   - text-secondary #374151  :  7.3 : 1
+ *   - text-muted #4b5563      :  5.4–6.3 : 1
+ *   - text-faint #525c6a      :  4.8–5.7 : 1
+ *   - accent #075985          :  5.4–6.3 : 1   on-accent #f8fafc : 7.2 : 1
+ *   - accent-bright #0369a1 (large/icon tint) : 4.2 : 1 (≥ 3) */
 :root[data-theme="daylight"] {
-  --scribe-bg: #e2e8f0;
-  --scribe-bg-elevated: #f9fbfd;
-  --scribe-sidebar-bg: rgba(248, 250, 252, 0.92);
-  --scribe-card-gradient-top: rgba(255, 255, 255, 0.96);
-  --scribe-card-gradient-bottom: rgba(241, 245, 249, 0.96);
-  --scribe-glow-1: rgba(14, 165, 233, 0.08);
-  --scribe-glow-2: rgba(139, 92, 246, 0.06);
-  --scribe-border: rgba(15, 23, 42, 0.14);
-  /* Light inset surfaces (slate-200 tint over the card) + a few solid faces. */
-  --scribe-surface-rgb: 226, 232, 240;
-  --scribe-surface-solid: #e2e8f0; /* secondary button face */
-  --scribe-surface-strong: #94a3b8; /* toggle track (off) — keeps the white knob visible */
-  --scribe-surface-sunken: #f1f5f9; /* modal/combine panel */
-  --scribe-surface-raised: #1e293b; /* tooltip stays dark for pop */
-  --scribe-surface-kbd: #f1f5f9; /* kbd key face */
-  --scribe-accent: #0369a1;
-  --scribe-accent-strong: #075985;
-  --scribe-accent-bright: #0284c7;
+  --scribe-bg: #d6dadf;
+  --scribe-bg-elevated: #e8ebef;
+  --scribe-sidebar-bg: rgba(232, 235, 239, 0.92);
+  --scribe-card-gradient-top: rgba(255, 255, 255, 0.7);
+  --scribe-card-gradient-bottom: rgba(232, 235, 239, 0.9);
+  --scribe-glow-1: rgba(7, 89, 133, 0.06);
+  --scribe-glow-2: rgba(71, 85, 105, 0.05);
+  --scribe-border: rgba(31, 41, 55, 0.14);
+  --scribe-surface-rgb: 214, 218, 223;
+  --scribe-surface-solid: #cdd2d8; /* secondary button face */
+  --scribe-surface-strong: #9aa3ad; /* toggle track (off) — keeps the white knob visible */
+  --scribe-surface-sunken: #ccd1d7; /* modal/combine panel */
+  --scribe-surface-raised: #eef1f4; /* LIGHT: tooltip/raised panels stay light */
+  --scribe-surface-kbd: #e2e6ea; /* kbd key face */
+  --scribe-accent: #075985;
+  --scribe-accent-strong: #0c4a6e;
+  --scribe-accent-bright: #0369a1;
   --scribe-accent-on: #f8fafc;
-  --scribe-accent-soft: rgba(3, 105, 161, 0.2);
-  --scribe-accent-glow: rgba(3, 105, 161, 0.08);
-  --scribe-accent-ring: rgba(3, 105, 161, 0.16);
-  --scribe-scrollbar-thumb: rgba(3, 105, 161, 0.34);
-  --scribe-scrollbar-thumb-hover: rgba(3, 105, 161, 0.55);
-  --scribe-text: #0f172a;
-  --scribe-text-secondary: #334155;
-  --scribe-text-muted: #475569;
-  --scribe-text-faint: #576473;
+  --scribe-accent-soft: rgba(7, 89, 133, 0.18);
+  --scribe-accent-glow: rgba(7, 89, 133, 0.08);
+  --scribe-accent-ring: rgba(7, 89, 133, 0.16);
+  --scribe-scrollbar-thumb: rgba(7, 89, 133, 0.32);
+  --scribe-scrollbar-thumb-hover: rgba(7, 89, 133, 0.55);
+  --scribe-text: #1f2937;
+  --scribe-text-secondary: #374151;
+  --scribe-text-muted: #4b5563;
+  --scribe-text-faint: #525c6a;
 }
 
 /* Flip native controls (the <select> popup, the date picker, scrollbars) to
@@ -2008,9 +2005,9 @@ textarea {
   left: 50%;
   z-index: 50;
   padding: 3px 8px;
-  color: #e2e8f0;
+  color: var(--scribe-text);
   background: var(--scribe-surface-raised);
-  border: 1px solid rgba(148, 163, 184, 0.28);
+  border: 1px solid var(--scribe-border);
   border-radius: 5px;
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
   font-size: 10.5px;
