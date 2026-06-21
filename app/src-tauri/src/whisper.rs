@@ -311,64 +311,7 @@ pub(crate) fn normalize_transcript_text(raw_text: &str) -> String {
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
-    let tidy = tidy_punctuation_spacing(&joined);
-    // Remove sentences that are nothing but a known Whisper outro hallucination.
-    // A transcript that was only such junk collapses to "" and is treated as no
-    // speech (no paste).
-    strip_hallucinated_sentences(&tidy)
-}
-
-/// Whisper, trained heavily on captioned video, hallucinates YouTube-style outro
-/// lines on silence — "thanks for watching", "be sure to subscribe to our
-/// channel". This is a deliberately tiny, unambiguous denylist: it drops any
-/// SENTENCE that is exactly one of these phrases (ignoring a leading "and/so/…"
-/// and surrounding punctuation), and leaves every other sentence untouched.
-///
-/// Kept small on purpose — only phrases that are effectively never real
-/// dictation — so it's a plain remove filter with no false positives on real
-/// speech. Short ambiguous words ("you", "bye", "thanks") are intentionally NOT
-/// listed; the disconnect-salvage no-paste path handles the dead-air case where
-/// those show up.
-fn strip_hallucinated_sentences(text: &str) -> String {
-    const JUNK: &[&str] = &[
-        "thanks for watching",
-        "thank you for watching",
-        "be sure to subscribe",
-        "be sure to subscribe to our channel",
-        "subscribe to our channel",
-        "please subscribe",
-        "like and subscribe",
-        "see you in the next one",
-    ];
-    const LEADING: &[&str] = &["and", "so", "okay", "ok", "oh", "well", "but", "now"];
-
-    let mut out = String::with_capacity(text.len());
-    // split_inclusive keeps each sentence's trailing . ! ? so kept sentences are
-    // rejoined verbatim; only the matched junk sentences are dropped.
-    for piece in text.split_inclusive(|c| matches!(c, '.' | '!' | '?')) {
-        let mut words: Vec<String> = piece
-            .split_whitespace()
-            .map(|word| {
-                word.chars()
-                    .filter(|c| c.is_alphanumeric())
-                    .flat_map(|c| c.to_lowercase())
-                    .collect::<String>()
-            })
-            .filter(|word| !word.is_empty())
-            .collect();
-        while words
-            .first()
-            .is_some_and(|word| LEADING.contains(&word.as_str()))
-        {
-            words.remove(0);
-        }
-        let phrase = words.join(" ");
-        if !phrase.is_empty() && JUNK.contains(&phrase.as_str()) {
-            continue;
-        }
-        out.push_str(piece);
-    }
-    out.split_whitespace().collect::<Vec<_>>().join(" ")
+    tidy_punctuation_spacing(&joined)
 }
 
 /// Whisper renders speech pauses as an ellipsis ("..." or the "…" character).
@@ -592,40 +535,17 @@ mod tests {
     }
 
     #[test]
-    fn removes_youtube_outro_sentences() {
-        // A transcript that's only outro junk collapses to nothing.
-        assert_eq!(normalize_transcript_text("Thanks for watching!"), "");
-        assert_eq!(
-            normalize_transcript_text("Be sure to subscribe to our channel."),
-            ""
-        );
-        // A leading connective ("and") is ignored when matching.
-        assert_eq!(normalize_transcript_text("And be sure to subscribe."), "");
-        // Only the junk sentence is removed; real content is kept verbatim.
-        assert_eq!(
-            normalize_transcript_text("Here are the build notes. Thanks for watching!"),
-            "Here are the build notes."
-        );
-        // Non-listed sentences survive even next to a removed one.
-        assert_eq!(
-            normalize_transcript_text("Thank you. Please subscribe. Bye."),
-            "Thank you. Bye."
-        );
-    }
-
-    #[test]
-    fn keeps_real_dictation_near_filler_words() {
-        // Short ambiguous phrases are NOT on the denylist, so they're kept.
-        assert_eq!(normalize_transcript_text("Thank you."), "Thank you.");
-        assert_eq!(normalize_transcript_text("Thank you. Bye."), "Thank you. Bye.");
-        // Real content that merely mentions a listed word is never dropped.
+    fn real_outro_like_dictation_is_kept_verbatim() {
+        // No more hallucination denylist: these are returned untouched. Custom
+        // phrase removal is the dictionary replacements feature's job.
+        assert_eq!(normalize_transcript_text("Thanks for watching!"), "Thanks for watching!");
         assert_eq!(
             normalize_transcript_text("Please subscribe to my newsletter."),
             "Please subscribe to my newsletter."
         );
         assert_eq!(
-            normalize_transcript_text("Okay, let's ship the build."),
-            "Okay, let's ship the build."
+            normalize_transcript_text("Thank you. Please subscribe. Bye."),
+            "Thank you. Please subscribe. Bye."
         );
     }
 

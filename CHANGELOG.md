@@ -29,10 +29,10 @@ A reliability, text-quality, and polish pass.
   "uh", … — but only when there's a real pause around them, so fluent uses ("oh
   no", "like this") are kept. Editable word list and tunable pause threshold;
   runs on the warm transcription server, so there's no speed cost.
-- **Stops pasting Whisper's silence hallucinations.** `--suppress-nst` on both
-  transcription paths, plus a small denylist that drops video-outro junk ("be
-  sure to subscribe", "thanks for watching") when a transcript is nothing but
-  that.
+- **Fewer Whisper artifacts.** `--suppress-nst` on both transcription paths
+  suppresses non-speech tokens (e.g. `(laughs)`, `[Music]`) at the source. (The
+  main fix for dead-air junk is the disconnect-salvage no-paste above; there is
+  no built-in phrase denylist — use the dictionary replacements for that.)
 - **Tunable pause-to-split** for live transcription — fewer stray periods/commas
   when you pause mid-sentence.
 
