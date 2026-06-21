@@ -378,6 +378,44 @@ struct InferenceResponse {
     text: String,
 }
 
+/// FILLER: reconstruct timed words from whisper-server `verbose_json`. Each
+/// segment carries a `words` array of `{word, start, end}` (start/end in
+/// seconds). Returns empty on any parse problem, so the caller falls back to the
+/// plain-text `text` field — a hiccup never loses the dictation.
+fn parse_server_words(body: &str) -> Vec<crate::filler::TimedWord> {
+    use crate::filler::TimedWord;
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return Vec::new();
+    };
+    let Some(segments) = value.get("segments").and_then(|s| s.as_array()) else {
+        return Vec::new();
+    };
+    let mut words = Vec::new();
+    for segment in segments {
+        let Some(arr) = segment.get("words").and_then(|w| w.as_array()) else {
+            continue;
+        };
+        for word in arr {
+            let text = word
+                .get("word")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if text.is_empty() {
+                continue;
+            }
+            let start = word.get("start").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let end = word.get("end").and_then(|v| v.as_f64()).unwrap_or(start);
+            words.push(TimedWord::new(
+                text.to_string(),
+                (start * 1000.0).round() as i64,
+                (end * 1000.0).round() as i64,
+            ));
+        }
+    }
+    words
+}
+
 fn http_client(inner: &mut Inner) -> Result<reqwest::blocking::Client, String> {
     if inner.http.is_none() {
         let client = reqwest::blocking::Client::builder()
@@ -590,6 +628,33 @@ mod tests {
         assert!(port > 0);
         // The listener was dropped, so the port must be bindable again.
         TcpListener::bind((SERVER_HOST, port)).expect("allocated port should be bindable");
+    }
+
+    #[test]
+    fn parses_server_verbose_json_words() {
+        // Mirrors the real whisper-server verbose_json: segments each with a
+        // words[] of {word, start, end} (seconds, word text space-prefixed).
+        let body = r#"{"text":" has a stack","segments":[
+            {"text":" has a","words":[
+                {"word":" has","start":3.47,"end":3.52,"probability":0.66},
+                {"word":" a","start":3.52,"end":3.60}
+            ]},
+            {"text":" stack","words":[
+                {"word":" stack","start":3.60,"end":3.90}
+            ]}
+        ]}"#;
+        let words = parse_server_words(body);
+        assert_eq!(words.len(), 3);
+        assert_eq!(words[0].text, "has"); // trimmed
+        assert_eq!((words[0].start_ms, words[0].end_ms), (3470, 3520)); // s -> ms
+        assert_eq!(words[2].text, "stack");
+        assert_eq!((words[2].start_ms, words[2].end_ms), (3600, 3900));
+    }
+
+    #[test]
+    fn parse_server_words_empty_without_segments() {
+        assert!(parse_server_words(r#"{"text":"hi"}"#).is_empty());
+        assert!(parse_server_words("garbage").is_empty());
     }
 
     #[test]
