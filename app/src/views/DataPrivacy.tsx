@@ -14,8 +14,10 @@ import {
   clearTranscriptHistory,
   commandErrorMessage,
   getDataDir,
+  getFailedRecordingsDir,
   getLogsDir,
   openDataFolder,
+  openFailedRecordingsFolder,
   openLogsFolder,
   openModelsFolder,
   saveWindowSize,
@@ -41,6 +43,7 @@ export function DataPrivacyView({
   const [dataError, setDataError] = useState<string | null>(null);
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [logsDir, setLogsDir] = useState<string | null>(null);
+  const [failedDir, setFailedDir] = useState<string | null>(null);
   const [savingWindowSize, setSavingWindowSize] = useState(false);
   const [windowSizeSaved, setWindowSizeSaved] = useState(false);
   const [foldersOpen, setFoldersOpen] = useState(true);
@@ -64,6 +67,14 @@ export function DataPrivacyView({
       setLogsDir(await getLogsDir());
     } catch {
       setLogsDir(null);
+    }
+    // The failed-recordings folder is the app-data dir's `failed/` subfolder
+    // (where audio is kept when a transcription fails). Fetch it separately for
+    // the same reason as the logs dir.
+    try {
+      setFailedDir(await getFailedRecordingsDir());
+    } catch {
+      setFailedDir(null);
     }
   }, []);
 
@@ -235,6 +246,13 @@ export function DataPrivacyView({
               note="Rotating diagnostic logs for bug reports."
               onOpen={() => void handleOpenFolder(openLogsFolder)}
               path={logsDir}
+            />
+            <hr className="local-data-divider" />
+            <FolderRow
+              label="Failed recordings folder"
+              note="Audio kept when a transcription fails, so it isn't lost."
+              onOpen={() => void handleOpenFolder(openFailedRecordingsFolder)}
+              path={failedDir}
             />
           </div>
         ) : null}

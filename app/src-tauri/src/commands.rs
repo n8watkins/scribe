@@ -699,6 +699,38 @@ pub fn get_logs_dir(app: tauri::AppHandle) -> Result<String, CommandError> {
     Ok(logs_dir(&app)?.to_string_lossy().into_owned())
 }
 
+/// The folder where audio from a dictation whose transcription failed is
+/// quarantined so it isn't lost. This deliberately mirrors the location used by
+/// dictation::quarantine_failed_recording — the OS app-data dir's `failed/`
+/// subfolder, *not* the custom data_dir — so "Open" always lands on the real
+/// quarantine folder rather than an empty one.
+fn failed_recordings_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandError> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("failed"))
+        .map_err(|error| {
+            CommandError::new(
+                "app_data_dir_unavailable",
+                format!("Could not locate the Scribe app data directory. {}", error),
+            )
+        })
+}
+
+/// Opens the folder that holds audio from dictations whose transcription failed,
+/// so a user can recover the recording from disk (risk R2 follow-up to Fix E).
+#[tauri::command]
+pub fn open_failed_recordings_folder(app: tauri::AppHandle) -> Result<(), CommandError> {
+    let dir = failed_recordings_dir(&app)?;
+    open_folder(&app, dir)
+}
+
+/// Returns the failed-recordings directory as a display string for the Data &
+/// Privacy view, mirroring get_logs_dir.
+#[tauri::command]
+pub fn get_failed_recordings_dir(app: tauri::AppHandle) -> Result<String, CommandError> {
+    Ok(failed_recordings_dir(&app)?.to_string_lossy().into_owned())
+}
+
 /// Reads the main window's current inner size and persists it as the default
 /// window size, mirroring how the pill stores its position. The saved size is
 /// restored on the next launch (see lib.rs setup).

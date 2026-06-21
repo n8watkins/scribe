@@ -439,6 +439,8 @@ pub fn run() {
             commands::open_models_folder,
             commands::open_logs_folder,
             commands::get_logs_dir,
+            commands::open_failed_recordings_folder,
+            commands::get_failed_recordings_dir,
             commands::get_data_dir,
             commands::pick_data_dir,
             commands::save_window_size,

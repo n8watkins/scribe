@@ -664,6 +664,18 @@ export function getLogsDir(): Promise<string> {
   return invoke("get_logs_dir");
 }
 
+/** Opens the folder holding audio from dictations whose transcription failed,
+ * so the user can recover the recording from disk. */
+export function openFailedRecordingsFolder(): Promise<void> {
+  return invoke("open_failed_recordings_folder");
+}
+
+/** The folder where audio is kept when a transcription fails (the `failed/`
+ * quarantine subfolder of the app-data dir). */
+export function getFailedRecordingsDir(): Promise<string> {
+  return invoke("get_failed_recordings_dir");
+}
+
 /** Opens a native folder picker for the data directory; resolves to the chosen
  * absolute path, or null when the user cancels. Persist the choice with
  * updateSettings({ dataDir }). */
