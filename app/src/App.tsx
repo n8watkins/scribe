@@ -184,7 +184,10 @@ function TitleBar({ isDev }: { isDev: boolean }) {
 // mic-disconnect notice immediately followed by the stop notice) — each shown
 // for TOAST_DURATION_MS before it auto-dismisses.
 const MAX_TOASTS = 2;
+// Info/success notices auto-dismiss after TOAST_DURATION_MS; errors linger
+// longer (TOAST_ERROR_DURATION_MS) since they often need to be read and acted on.
 const TOAST_DURATION_MS = 5000;
+const TOAST_ERROR_DURATION_MS = 9000;
 
 // When the mic is unplugged mid-recording the backend salvages + transcribes
 // what it captured, which would fire the normal "Transcript ready." and paste
@@ -354,9 +357,11 @@ function App() {
   const pushToast = useCallback((notice: Omit<ToastNotice, "id">) => {
     const id = (toastIdRef.current += 1);
     setToasts((prev) => [...prev, { ...notice, id }].slice(-MAX_TOASTS));
+    const duration =
+      notice.tone === "error" ? TOAST_ERROR_DURATION_MS : TOAST_DURATION_MS;
     window.setTimeout(() => {
       setToasts((prev) => prev.filter((existing) => existing.id !== id));
-    }, TOAST_DURATION_MS);
+    }, duration);
   }, []);
 
   const showNotice = useCallback(
