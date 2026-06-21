@@ -40,21 +40,22 @@ predates the AMD fix). **Build from source in CI** is confirmed as the path (WS1
 **CI-first split (the "test in CI" answer).** What CI on `windows-latest` can and
 cannot prove:
 
-- ✅ **WS1 build-from-source** with `-DGGML_VULKAN=ON` — CI's job; retires the
-  "can we even build it" risk.
-- ✅ **Vulkan backend actually engages + output parity** — validated against a
-  **Lavapipe** software Vulkan device installed on the runner (hosted runners have
-  no discrete GPU). Proves the Vulkan *code path* runs end-to-end and the
-  transcript matches the CPU path — directly attacks the "silent CPU fallback"
-  worry at the code level.
-- ✅ **Forced-CPU + no-GPU fallback** — `--no-gpu` and the 0-device path both
-  exercised; modern Windows ships `vulkan-1.dll`, so the realistic no-GPU machine
-  is "loader present, 0 devices → CPU," which CI covers.
+- ✅ **WS1 build-from-source** with `-DGGML_VULKAN=ON` — **done & green** (run
+  `27905040000`). Retires the "can we even build it" risk; the artifact
+  `whisper-vulkan-windows-v1.9.1` (incl. `ggml-vulkan.dll`) is ready to download.
+- ✅ **Forced-CPU + no-GPU fallback** — **proven**. With no Vulkan device,
+  whisper-cli falls back to CPU, transcribes correctly, no crash, no missing-DLL.
+  This is the Option A no-GPU-machine gate.
+- ⚠️ **Vulkan backend *engages* (in CI)** — attempted via a **Lavapipe** software
+  device but **could not be demonstrated**: `ggml_vulkan: No devices found` even
+  with `VK_DRIVER_FILES` pointed at the registered ICD. Software Vulkan doesn't
+  come up as a usable device on a hosted runner. Not a build problem — folded into
+  the hardware test below. (A self-hosted runner on the Windows box would close
+  this "in CI".)
 - ❌ **Discrete 7800 XT detection / engagement / speed** — hosted runners have no
-  Radeon or Adrenalin ICD. The *only* hardware-bound step. Closed by downloading
-  the CI-built artifact and running [`GPU_VULKAN_SPIKE.md`](GPU_VULKAN_SPIKE.md)
-  on the box (~5 min, no local build). Or: register the Windows box as a
-  self-hosted runner to do it "in CI."
+  Radeon or Adrenalin ICD. The *only* hardware-bound step, and now also the
+  Vulkan-engages proof. Closed by downloading the CI-built artifact and running
+  [`GPU_VULKAN_SPIKE.md`](GPU_VULKAN_SPIKE.md) on the box (~5 min, no local build).
 
 **Revised recommended path:** (1) CI builds the Vulkan binaries + proves
 build/engage/parity/fallback overnight (workflow `gpu-spike.yml`); (2) maintainer
