@@ -214,6 +214,57 @@ fn parse_output_text(output_txt_path: &Path, stdout: &[u8]) -> Result<String, Co
     Ok(normalize_transcript_text(&raw_text))
 }
 
+/// Reconstructs words (with millisecond timing) from whisper-cli
+/// `--output-json-full` output, for pause-aware filler suppression. Whisper emits
+/// sub-word tokens; a token whose text starts with a space begins a new word, and
+/// continuation tokens (incl. trailing punctuation) extend the current word. The
+/// special tokens it interleaves (`[_BEG_]`, `[_TT_123]`, …) are skipped. Returns
+/// an empty vec on any parse problem, so the caller can fall back to plain text.
+pub(crate) fn parse_cli_words(json_full: &str) -> Vec<crate::filler::TimedWord> {
+    use crate::filler::TimedWord;
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json_full) else {
+        return Vec::new();
+    };
+    let Some(segments) = value.get("transcription").and_then(|t| t.as_array()) else {
+        return Vec::new();
+    };
+
+    let mut words: Vec<TimedWord> = Vec::new();
+    for segment in segments {
+        let Some(tokens) = segment.get("tokens").and_then(|t| t.as_array()) else {
+            continue;
+        };
+        for token in tokens {
+            let raw = token.get("text").and_then(|t| t.as_str()).unwrap_or("");
+            let starts_word = raw.starts_with(' ');
+            let trimmed = raw.trim();
+            // Skip whisper's special tokens ([_BEG_], [_TT_..], [_EOT_], …).
+            if trimmed.is_empty() || trimmed.starts_with("[_") {
+                continue;
+            }
+            let offsets = token.get("offsets");
+            let from = offsets
+                .and_then(|o| o.get("from"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let to = offsets
+                .and_then(|o| o.get("to"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(from);
+
+            match words.last_mut() {
+                // Continuation sub-word/punctuation: append, extend the end time.
+                Some(last) if !starts_word => {
+                    last.text.push_str(trimmed);
+                    last.end_ms = to;
+                }
+                _ => words.push(TimedWord::new(trimmed.to_string(), from, to)),
+            }
+        }
+    }
+    words
+}
+
 /// Shared transcript normalization so the warm-server path and the CLI path
 /// produce identically trimmed text. Whisper's non-speech annotations are
 /// removed: silent audio otherwise types literal "[BLANK_AUDIO]" markers.
@@ -375,6 +426,32 @@ fn strip_noise_annotations(line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_words_with_timing_from_json_full() {
+        // Shape mirrors real whisper-cli --output-json-full: a [_BEG_] special
+        // token, space-prefixed word starts, a sub-word continuation, and
+        // trailing punctuation as its own token.
+        let json = r#"{"transcription":[{"text":" Activity cards.","tokens":[
+            {"text":"[_BEG_]","offsets":{"from":0,"to":0}},
+            {"text":" Activ","offsets":{"from":0,"to":300}},
+            {"text":"ity","offsets":{"from":300,"to":650}},
+            {"text":" cards","offsets":{"from":1100,"to":1320}},
+            {"text":",","offsets":{"from":1320,"to":1320}}
+        ]}]}"#;
+        let words = parse_cli_words(json);
+        assert_eq!(words.len(), 2);
+        assert_eq!(words[0].text, "Activity"); // sub-word tokens merged
+        assert_eq!((words[0].start_ms, words[0].end_ms), (0, 650));
+        assert_eq!(words[1].text, "cards,"); // punctuation attached
+        assert_eq!((words[1].start_ms, words[1].end_ms), (1100, 1320));
+    }
+
+    #[test]
+    fn parse_cli_words_is_empty_on_garbage() {
+        assert!(parse_cli_words("not json").is_empty());
+        assert!(parse_cli_words(r#"{"transcription":[]}"#).is_empty());
+    }
 
     #[test]
     fn builds_whisper_args_without_shell_concatenation() {
