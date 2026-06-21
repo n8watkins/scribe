@@ -57,11 +57,16 @@ jobs:
           git clone --depth 1 --branch "$env:WHISPER_REF" https://github.com/ggml-org/whisper.cpp wcpp
           Push-Location wcpp; Write-Host "HEAD: $(git rev-parse HEAD)"; Pop-Location
 
-      - name: Configure + build (Vulkan, shared libs)
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure + build (Vulkan, Ninja, shared libs)
         shell: pwsh
         working-directory: wcpp
         run: |
-          cmake -B build -G "Visual Studio 17 2022" -A x64 `
+          cmake -B build -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
             -DGGML_VULKAN=ON `
             -DGGML_NATIVE=OFF `
@@ -69,9 +74,13 @@ jobs:
             -DWHISPER_BUILD_EXAMPLES=ON `
             -DWHISPER_BUILD_TESTS=OFF `
             -DWHISPER_BUILD_SERVER=ON
-          cmake --build build --config Release -j
-          Write-Host "--- build/bin/Release ---"
-          Get-ChildItem build/bin/Release | Select-Object Name,Length
+          cmake --build build -j
+          $cli = Get-ChildItem -Path build -Recurse -Filter whisper-cli.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $cli) { throw "whisper-cli.exe not found after build" }
+          $bin = Split-Path $cli.FullName
+          Write-Host "--- $bin ---"
+          Get-ChildItem $bin | Select-Object Name,Length
+          "WHISPER_BIN=$bin" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Download model
         shell: pwsh
@@ -100,7 +109,7 @@ jobs:
         shell: pwsh
         working-directory: wcpp
         run: |
-          $bin = "build/bin/Release"
+          $bin = $env:WHISPER_BIN
           $icd = "${{ steps.icd.outputs.path }}"
           if ($icd) { $env:VK_DRIVER_FILES = $icd; $env:VK_ICD_FILENAMES = $icd }
           Write-Host "VK_DRIVER_FILES=$env:VK_DRIVER_FILES"
@@ -115,7 +124,7 @@ jobs:
         shell: pwsh
         working-directory: wcpp
         run: |
-          $bin = "build/bin/Release"
+          $bin = $env:WHISPER_BIN
           & "$bin/whisper-cli.exe" -m "ggml-$env:MODEL.bin" -f samples/jfk.wav -nt --no-gpu 1>cpu.txt 2>cpu.err
           Write-Host "===== backend/device lines (stderr) ====="
           Select-String -Path cpu.err -Pattern 'Found .*Vulkan devices|using Vulkan|whisper_backend_init|use gpu|system_info' | ForEach-Object { $_.Line }
@@ -140,7 +149,7 @@ jobs:
         shell: pwsh
         working-directory: wcpp
         run: |
-          $bin = "build/bin/Release"
+          $bin = $env:WHISPER_BIN
           $out = "vulkan-bin"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           # Match Scribe's bundled layout + the Vulkan backend DLL.
