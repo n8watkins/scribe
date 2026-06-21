@@ -668,6 +668,23 @@ fn resolve_model_file(
     Ok(None)
 }
 
+/// Path of the smallest downloaded model, for cheap operations that only need
+/// *a* model loaded rather than the user's selected one — e.g. the GPU device
+/// probe, where device enumeration is model-independent so loading a multi-GB
+/// model would be pure waste. Returns `None` when nothing is downloaded.
+pub fn smallest_downloaded_model_path(app: &AppHandle) -> Option<PathBuf> {
+    crate::models::catalog()
+        .iter()
+        .filter_map(|model| {
+            resolve_model_file(app, *model)
+                .ok()
+                .flatten()
+                .map(|resolved| (resolved.size_bytes, resolved.path))
+        })
+        .min_by_key(|(size, _)| *size)
+        .map(|(_, path)| path)
+}
+
 fn model_file_candidates(
     app: &AppHandle,
     catalog_model: CatalogModel,

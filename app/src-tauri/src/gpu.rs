@@ -140,14 +140,37 @@ fn write_silent_wav(path: &std::path::Path) -> std::io::Result<()> {
     std::fs::write(path, buf)
 }
 
+/// Session cache for a *successful* probe. The detected GPU set doesn't change
+/// within a run, so we enumerate once and reuse it — opening the Audio tab again
+/// never re-loads a model. A failed/not-probed result (e.g. no model downloaded
+/// yet) is deliberately NOT cached, so it retries once a model exists.
+static PROBE_CACHE: std::sync::Mutex<Option<GpuProbe>> = std::sync::Mutex::new(None);
+
+/// Probe the Vulkan GPUs, using the session cache. Blocking (loads a model);
+/// callers should run it off the main thread.
+pub fn probe(app: &AppHandle) -> GpuProbe {
+    if let Ok(guard) = PROBE_CACHE.lock() {
+        if let Some(cached) = guard.as_ref() {
+            return cached.clone();
+        }
+    }
+    let result = probe_uncached(app);
+    if result.probed {
+        if let Ok(mut guard) = PROBE_CACHE.lock() {
+            *guard = Some(result.clone());
+        }
+    }
+    result
+}
+
 /// Runs the bundled whisper-cli against a sliver of silence and parses the
 /// Vulkan device listing from its stderr. Windows-only (the bundled binaries are
 /// Windows); elsewhere it reports "not probed".
 #[cfg(windows)]
-pub fn probe(app: &AppHandle) -> GpuProbe {
+fn probe_uncached(app: &AppHandle) -> GpuProbe {
     use std::process::Command;
 
-    let model_path = match resolve_probe_model(app) {
+    let model_path = match crate::model_manager::smallest_downloaded_model_path(app) {
         Some(path) => path,
         None => return probe_from_stderr("", false),
     };
@@ -183,31 +206,21 @@ pub fn probe(app: &AppHandle) -> GpuProbe {
 }
 
 #[cfg(not(windows))]
-pub fn probe(_app: &AppHandle) -> GpuProbe {
+fn probe_uncached(_app: &AppHandle) -> GpuProbe {
     // The bundled whisper binaries are Windows-only, so there's nothing to probe
     // on other platforms (dev/CI on Linux).
     probe_from_stderr("", false)
 }
 
-/// The model to load for the probe: the currently-selected one. It's the model
-/// the warm server already loads, so the OS file cache usually makes this cheap;
-/// we only need ggml to reach backend init and log its device list.
-#[cfg(windows)]
-fn resolve_probe_model(app: &AppHandle) -> Option<std::path::PathBuf> {
-    use crate::commands::BackendState;
-    use tauri::Manager;
-
-    let state = app.state::<BackendState>();
-    let db = state.db().ok()?;
-    crate::model_manager::selected_model_path(app, &db)
-        .ok()
-        .map(|(_, path)| path)
-}
-
-/// Tauri command: probe the Vulkan GPUs available for transcription.
+/// Tauri command: probe the Vulkan GPUs available for transcription. Runs the
+/// (blocking, model-loading) probe on a worker thread so it never hitches the UI
+/// / IPC thread, and returns instantly from the session cache after the first
+/// successful probe.
 #[tauri::command]
-pub fn probe_gpu_devices(app: AppHandle) -> Result<GpuProbe, CommandError> {
-    Ok(probe(&app))
+pub async fn probe_gpu_devices(app: AppHandle) -> Result<GpuProbe, CommandError> {
+    tauri::async_runtime::spawn_blocking(move || probe(&app))
+        .await
+        .map_err(|error| CommandError::new("gpu_probe_failed", error.to_string()))
 }
 
 #[cfg(test)]
