@@ -804,116 +804,147 @@ pub fn open_release_page(app: tauri::AppHandle, url: Option<String>) -> Result<(
         .map_err(|error| CommandError::new("open_url_failed", error.to_string()))
 }
 
-/// Sign-in / configuration status for the Settings → Integrations panel.
+/// Connection / configuration status for the Settings → Sync panel.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GoogleStatus {
-    /// This build has a real OAuth client baked in (not the placeholder).
+pub struct GithubStatus {
+    /// This build ships a real GitHub OAuth client id (device flow available).
     pub configured: bool,
-    /// A refresh token is present in the keychain and an email is on record.
-    pub signed_in: bool,
-    /// The signed-in account email (empty when signed out).
-    pub email: String,
+    /// An access token is present in the keyring.
+    pub connected: bool,
+    /// The connected GitHub login (empty when not connected).
+    pub username: String,
+    /// The configured target repo ("owner/name", empty when unset).
+    pub repo: String,
 }
 
 #[tauri::command]
-pub fn google_status(
+pub fn github_status(
     app: tauri::AppHandle,
     state: tauri::State<'_, BackendState>,
-) -> Result<GoogleStatus, CommandError> {
-    let email = state.db()?.get_settings()?.drive_account_email;
+) -> Result<GithubStatus, CommandError> {
+    let settings = state.db()?.get_settings()?;
     let service = app.config().identifier.clone();
-    Ok(GoogleStatus {
-        configured: crate::google_oauth::is_configured(),
-        // A stored refresh token is the source of truth for "signed in"; the
-        // email is just for display and may be empty on older tokens.
-        signed_in: crate::google_oauth::has_stored_token(&service),
-        email,
+    Ok(GithubStatus {
+        configured: crate::github_oauth::is_configured(),
+        // A stored access token is the source of truth for "connected"; the
+        // login is just for display.
+        connected: crate::github_oauth::has_stored_token(&service),
+        username: settings.github_account_login,
+        repo: settings.github_repo,
     })
 }
 
-/// Runs the interactive Google sign-in (opens the browser, catches the loopback
-/// redirect, stores the refresh token in the keychain) and records the
-/// signed-in email in settings. Returns the updated settings so the frontend
-/// adopts the email without a clobbering round-trip.
+/// The device-flow payload the UI shows the user to authorize. The frontend
+/// passes `deviceCode` + `intervalSecs` back into `github_device_poll`.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubDeviceStart {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_in_secs: u64,
+    pub interval_secs: u64,
+}
+
+/// Step 1 of the GitHub device flow: requests a device + user code, opens the
+/// verification URL in the browser, and returns the code for the UI to show.
+/// Does NOT block on polling — the frontend then calls `github_device_poll`.
 #[tauri::command]
-pub async fn google_sign_in(app: tauri::AppHandle) -> Result<AppSettings, CommandError> {
-    let service = app.config().identifier.clone();
+pub async fn github_device_start(
+    app: tauri::AppHandle,
+) -> Result<GithubDeviceStart, CommandError> {
     let opener_app = app.clone();
-    let email = tauri::async_runtime::spawn_blocking(move || {
-        crate::google_oauth::authorize(&service, |url| {
-            opener_app
-                .opener()
-                .open_url(url.to_string(), None::<&str>)
-                .map_err(|error| CommandError::new("open_url_failed", error.to_string()))
-        })
+    let device = tauri::async_runtime::spawn_blocking(crate::github_oauth::request_device_code)
+        .await
+        .map_err(|error| CommandError::new("github_auth_failed", error.to_string()))??;
+
+    // Best-effort: open the verification page so the user just types the code.
+    let _ = opener_app
+        .opener()
+        .open_url(device.verification_uri.clone(), None::<&str>);
+
+    Ok(GithubDeviceStart {
+        device_code: device.device_code,
+        user_code: device.user_code,
+        verification_uri: device.verification_uri,
+        expires_in_secs: device.expires_in,
+        interval_secs: device.interval,
+    })
+}
+
+/// Step 2 of the GitHub device flow: polls until the user authorizes (or the
+/// code expires / is denied), stores the token in the keyring, records the
+/// connected login in settings, and returns the updated settings. Long-running.
+#[tauri::command]
+pub async fn github_device_poll(
+    app: tauri::AppHandle,
+    device_code: String,
+    interval: u64,
+) -> Result<AppSettings, CommandError> {
+    let service = app.config().identifier.clone();
+    let poll_service = service.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let token = crate::github_oauth::poll_for_token(&device_code, interval)?;
+        crate::github_oauth::store_token(&poll_service, &token)
     })
     .await
-    .map_err(|error| CommandError::new("google_auth_failed", error.to_string()))??;
+    .map_err(|error| CommandError::new("github_auth_failed", error.to_string()))??;
+
+    // Fetch the login for display (best-effort: an empty login is fine).
+    let login_service = service.clone();
+    let login = tauri::async_runtime::spawn_blocking(move || {
+        crate::github_oauth::fetch_login(&login_service)
+    })
+    .await
+    .map_err(|error| CommandError::new("github_auth_failed", error.to_string()))?
+    .unwrap_or_default();
 
     let state = app.state::<BackendState>();
     let mut settings = state.db()?.get_settings()?;
-    settings.drive_account_email = email;
+    settings.github_account_login = login;
     state.db()?.save_settings(&settings)?;
     Ok(settings)
 }
 
-/// Clears the stored Google refresh token and turns Drive sync off. Returns the
-/// updated settings.
+/// Clears the stored GitHub token and turns GitHub sync off. Returns the updated
+/// settings.
 #[tauri::command]
-pub async fn google_sign_out(app: tauri::AppHandle) -> Result<AppSettings, CommandError> {
+pub async fn github_disconnect(app: tauri::AppHandle) -> Result<AppSettings, CommandError> {
     let service = app.config().identifier.clone();
-    tauri::async_runtime::spawn_blocking(move || crate::google_oauth::sign_out(&service))
+    tauri::async_runtime::spawn_blocking(move || crate::github_oauth::sign_out(&service))
         .await
-        .map_err(|error| CommandError::new("google_auth_failed", error.to_string()))??;
+        .map_err(|error| CommandError::new("github_auth_failed", error.to_string()))??;
 
     let state = app.state::<BackendState>();
     let mut settings = state.db()?.get_settings()?;
-    settings.drive_account_email = String::new();
-    settings.drive_sync_enabled = false;
+    settings.github_account_login = String::new();
+    settings.github_sync_enabled = false;
     state.db()?.save_settings(&settings)?;
     Ok(settings)
 }
 
-/// Pushes the current notes (is_note=1 only) to Google Drive as dated Markdown,
-/// creating the folder structure as needed. The daily files are regenerated
-/// from the DB, so this is safe to run repeatedly. This is the notes log only;
-/// the separate full-history transcript backup (`drive_sync_all_transcripts`)
-/// runs from the auto-sync worker on its own trigger, not from this command.
+/// Pushes the current notes (is_note=1 only) to the configured GitHub repo as
+/// dated Markdown, creating the repo when needed. The daily files are
+/// regenerated from the DB, so this is safe to run repeatedly. This is the notes
+/// log only; the separate full-history transcript backup
+/// (`github_sync_all_transcripts`) runs from the auto-sync worker on its own
+/// trigger, not from this command.
 #[tauri::command]
-pub async fn drive_sync_now(
+pub async fn github_sync_now(
     app: tauri::AppHandle,
-) -> Result<crate::google_drive::SyncReport, CommandError> {
+) -> Result<crate::github_backup::SyncReport, CommandError> {
     let service = app.config().identifier.clone();
     tauri::async_runtime::spawn_blocking(move || crate::note_sync::collect_and_sync(&app, &service))
         .await
-        .map_err(|error| CommandError::new("drive_sync_failed", error.to_string()))?
-}
-
-/// Runs the end-of-day organize pass now for the given local calendar day (or
-/// today when omitted), for manual testing. Reorganizes that day's notes with
-/// the local LLM and writes `{day}-organized.md` to Drive. Returns true when a
-/// file was written, false when the day had no notes. Async because the local
-/// inference can be slow.
-#[tauri::command]
-pub async fn drive_organize_now(
-    app: tauri::AppHandle,
-    day: Option<String>,
-) -> Result<bool, CommandError> {
-    let service = app.config().identifier.clone();
-    let day = day.unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::note_sync::organize_day(&app, &service, &day)
-    })
-    .await
-    .map_err(|error| CommandError::new("drive_organize_failed", error.to_string()))?
+        .map_err(|error| CommandError::new("github_sync_failed", error.to_string()))?
 }
 
 /// Exports transcripts to a local file the user picks via a native save dialog.
 /// `scope` selects which rows ("all" | "notes" | "dictation"); `format` selects
 /// the renderer ("markdown" | "csv" | "json"). Returns the saved absolute path,
-/// or None when the user cancels the dialog. Unlike the Drive backup this needs
-/// no Google account — it is a purely local save.
+/// or None when the user cancels the dialog. Unlike the GitHub backup this needs
+/// no connected account — it is a purely local save.
 #[tauri::command]
 pub fn export_transcripts(
     app: tauri::AppHandle,

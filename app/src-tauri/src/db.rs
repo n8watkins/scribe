@@ -222,7 +222,7 @@ impl Database {
 
     /// Fetches DICTATION transcripts only (`is_note = 0`), newest-first,
     /// paginated by `limit`/`offset`. The mirror of the `notes_only` path on
-    /// `search_transcripts`, used by the all-transcripts Drive backup (notes
+    /// `search_transcripts`, used by the all-transcripts GitHub backup (notes
     /// sync via the separate notes log, so they are excluded here).
     pub fn search_dictation_transcripts(
         &self,

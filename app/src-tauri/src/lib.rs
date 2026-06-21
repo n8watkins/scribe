@@ -7,9 +7,8 @@ pub mod dictation_cleanup;
 pub mod error;
 pub mod export;
 pub mod file_transcribe;
-pub mod google_drive;
-pub mod google_oauth;
-mod google_secrets;
+pub mod github_backup;
+pub mod github_oauth;
 pub mod hotkeys;
 pub mod incremental;
 pub mod model_manager;
@@ -180,8 +179,8 @@ fn copy_dir_skip_existing(from: &std::path::Path, to: &std::path::Path) -> std::
 /// Routes panics into the app log in addition to the default stderr behavior.
 ///
 /// Several subsystems run on spawned threads (the audio worker, the timeout
-/// thread, the hotkey chord/toggle watchers, and the Drive sync/organize
-/// workers). A panic on one of those threads is only observed where a `join()`
+/// thread, the hotkey chord/toggle watchers, and the GitHub note-sync
+/// worker). A panic on one of those threads is only observed where a `join()`
 /// exists; everywhere else it dies silently with nothing in the log file,
 /// which makes field diagnosis from a user's logs nearly impossible. Chaining
 /// the previous hook keeps the standard stderr backtrace while also emitting an
@@ -349,13 +348,8 @@ pub fn run() {
             }
             app.manage(BackendState::new(db, audio_temp_dir));
             app.manage(whisper_server::WarmTranscriber::new());
-            // Background worker that debounces note saves into Drive auto-syncs.
-            app.manage(note_sync::DriveSyncWorker::spawn(app.handle().clone()));
-            // Scheduler that runs the end-of-day organize pass at the configured
-            // hour (local LLM reorganizes the previous day's notes to Drive).
-            app.manage(note_sync::DriveOrganizeScheduler::spawn(
-                app.handle().clone(),
-            ));
+            // Background worker that debounces note saves into GitHub auto-syncs.
+            app.manage(note_sync::NoteSyncWorker::spawn(app.handle().clone()));
             hotkeys::setup(app.handle(), &settings.hotkeys)?;
             tray::setup(app.handle())?;
             // Restore the user's saved default window size (physical pixels),
@@ -466,11 +460,11 @@ pub fn run() {
             commands::select_model,
             commands::check_for_update,
             commands::open_release_page,
-            commands::google_status,
-            commands::google_sign_in,
-            commands::google_sign_out,
-            commands::drive_sync_now,
-            commands::drive_organize_now,
+            commands::github_status,
+            commands::github_device_start,
+            commands::github_device_poll,
+            commands::github_disconnect,
+            commands::github_sync_now,
             commands::export_transcripts
         ])
         .build(tauri::generate_context!())

@@ -148,36 +148,24 @@ pub struct AppSettings {
     /// Blank falls back to the Standard prompt.
     #[serde(default)]
     pub dictation_cleanup_prompt: String,
-    /// Sync dictated notes to Google Drive as dated Markdown files. Off until
-    /// the user signs in and enables it. The OAuth refresh token lives in the
-    /// OS keychain (see `google_oauth.rs`), never in this JSON.
+    /// Back up dictated notes as dated Markdown to a private GitHub repo via the
+    /// Contents API. Off until the user connects GitHub (device flow) and turns
+    /// this on. The OAuth access token lives in the OS keyring (see
+    /// `github_oauth.rs`), never in this JSON.
     #[serde(default)]
-    pub drive_sync_enabled: bool,
-    /// Also back up every transcript (not just notes) as text. Default off;
-    /// text is tiny (~40 MB/yr) but the owner opts in explicitly.
+    pub github_sync_enabled: bool,
+    /// Target repo in "owner/name" form (e.g. "alice/scribe-notes"). Empty until
+    /// set.
     #[serde(default)]
-    pub drive_sync_all_transcripts: bool,
-    /// Hour of day (0-23, local time) the end-of-day organize / weekly passes
-    /// run. Used from Phase 3 on; stored now so the setting is stable.
-    #[serde(default = "default_drive_organize_hour")]
-    pub drive_organize_hour: u32,
-    /// Run the end-of-day pass: at `drive_organize_hour`, the local LLM
-    /// reorganizes the previous day's notes into a `{day}-organized.md` Drive
-    /// file. Opt-in (needs the local LLM running).
+    pub github_repo: String,
+    /// Also back up every transcript (not just notes) as Markdown to a separate
+    /// `transcripts/` folder in the repo, for a full-history backup. Default off.
     #[serde(default)]
-    pub drive_organize_enabled: bool,
-    /// Instruction sent to the local LLM as the system prompt for the
-    /// end-of-day organize pass (the day's notes are the user message).
-    #[serde(default = "default_drive_organize_prompt")]
-    pub drive_organize_prompt: String,
-    /// The last local calendar day (YYYY-MM-DD) already organized, so the
-    /// scheduler doesn't redo it. Empty until the first pass runs.
+    pub github_sync_all_transcripts: bool,
+    /// GitHub login of the connected account, for display only. Empty when not
+    /// connected. The token itself lives in the OS keyring.
     #[serde(default)]
-    pub drive_last_organized_date: String,
-    /// Email of the signed-in Google account, for display only. Empty when
-    /// signed out. The tokens themselves live in the OS keychain.
-    #[serde(default)]
-    pub drive_account_email: String,
+    pub github_account_login: String,
     /// Saved floating pill window position (physical pixels). None means the
     /// frontend places the pill at its bottom-center default.
     #[serde(default)]
@@ -278,19 +266,6 @@ fn default_notes_analysis_prompt() -> String {
 fn default_notes_analysis_endpoint() -> String {
     // LM Studio's local server default.
     "http://127.0.0.1:1234/v1".to_string()
-}
-
-fn default_drive_organize_hour() -> u32 {
-    // 3 AM: late enough that the day's notes are in, unlikely to clash with
-    // gaming/VRAM use.
-    3
-}
-
-fn default_drive_organize_prompt() -> String {
-    "You are organizing a day's worth of short voice notes. Group the related \
-     notes under clear category headings (e.g. Tasks, Ideas, Follow-ups), \
-     tighten the wording, and keep it concise. Output Markdown only."
-        .to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -621,13 +596,10 @@ impl Default for AppSettings {
             dictation_cleanup_enabled: false,
             dictation_cleanup_mode: default_dictation_cleanup_mode(),
             dictation_cleanup_prompt: String::new(),
-            drive_sync_enabled: false,
-            drive_sync_all_transcripts: false,
-            drive_organize_hour: default_drive_organize_hour(),
-            drive_organize_enabled: false,
-            drive_organize_prompt: default_drive_organize_prompt(),
-            drive_last_organized_date: String::new(),
-            drive_account_email: String::new(),
+            github_sync_enabled: false,
+            github_repo: String::new(),
+            github_sync_all_transcripts: false,
+            github_account_login: String::new(),
             pill_x: None,
             pill_y: None,
             pill_color_normal: default_pill_color_normal(),
@@ -782,6 +754,28 @@ impl AppSettings {
             }
         }
 
+        if self.github_sync_enabled {
+            let repo = self.github_repo.trim();
+            let mut parts = repo.split('/');
+            let owner = parts.next().unwrap_or("");
+            let name = parts.next().unwrap_or("");
+            let extra = parts.next();
+            let ok = !owner.is_empty()
+                && !name.is_empty()
+                && extra.is_none()
+                && owner
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.');
+            if !ok {
+                return Err(SettingsValidationError::new(
+                    "githubRepo must be in \"owner/name\" form when GitHub sync is enabled.",
+                ));
+            }
+        }
+
         Ok(())
     }
 }
@@ -855,6 +849,57 @@ mod tests {
         assert_eq!(settings.theme, "midnight");
         assert_eq!(settings.pill_color_normal, "#fbbf24");
         assert_eq!(settings.pill_color_note, "#38bdf8");
+    }
+
+    #[test]
+    fn github_defaults_off_and_legacy_drive_keys_still_deserialize() {
+        // Old DB JSON carrying stale drive_* keys (which no longer exist on the
+        // struct) must still load — AppSettings has no deny_unknown_fields, so
+        // unknown keys are ignored — and the new github_* fields default
+        // off/empty when absent.
+        // Start from a serialized default (so all required base fields are
+        // present), then graft on the stale drive_* keys an older build wrote.
+        let mut json = serde_json::to_value(AppSettings::default()).unwrap();
+        let object = json.as_object_mut().unwrap();
+        // Remove the new github_* keys so this looks like pre-GitHub JSON.
+        object.remove("githubSyncEnabled");
+        object.remove("githubRepo");
+        object.remove("githubSyncAllTranscripts");
+        object.remove("githubAccountLogin");
+        // And add the stale drive_* keys that no longer exist on the struct.
+        object.insert("driveSyncEnabled".into(), serde_json::json!(true));
+        object.insert("driveSyncAllTranscripts".into(), serde_json::json!(true));
+        object.insert("driveAccountEmail".into(), serde_json::json!("x@y.com"));
+        object.insert("driveOrganizeEnabled".into(), serde_json::json!(true));
+
+        let settings: AppSettings = serde_json::from_value(json).unwrap();
+        assert!(!settings.github_sync_enabled);
+        assert_eq!(settings.github_repo, "");
+        assert!(!settings.github_sync_all_transcripts);
+        assert_eq!(settings.github_account_login, "");
+    }
+
+    #[test]
+    fn validates_github_repo_when_sync_enabled() {
+        // Enabled + a well-formed slug is OK.
+        let mut settings = AppSettings::default();
+        settings.github_sync_enabled = true;
+        settings.github_repo = "owner/name".to_string();
+        assert!(settings.validate().is_ok());
+
+        // Enabled + a malformed slug is an error.
+        for bad in ["", "bad", "a/b/c", "/name", "owner/"] {
+            settings.github_repo = bad.to_string();
+            assert!(
+                settings.validate().is_err(),
+                "github_repo {bad:?} should be rejected when sync is on"
+            );
+        }
+
+        // Disabled: any junk repo is fine (the rule only fires when enabled).
+        settings.github_sync_enabled = false;
+        settings.github_repo = "totally bogus".to_string();
+        assert!(settings.validate().is_ok());
     }
 
     #[test]

@@ -348,19 +348,19 @@ fn transcribe_recording_inner(
         return Err(error);
     }
 
-    // A saved transcript flows to Google Drive automatically when a relevant
-    // Drive backup is on: notes go to the curated notes log (drive_sync_enabled),
-    // and ordinary dictations go to the transcript backup
-    // (drive_sync_all_transcripts). The worker debounces and uploads off this
+    // A saved transcript flows to GitHub automatically when a relevant backup
+    // is on: notes go to the curated notes log (github_sync_enabled), and
+    // ordinary dictations go to the transcript backup
+    // (github_sync_all_transcripts). The worker debounces and uploads off this
     // thread, so it never delays the dictation result; it re-checks the settings
     // itself and runs only the backups that apply.
-    let notify_drive = if transcript.is_note {
-        settings.drive_sync_enabled
+    let notify_sync = if transcript.is_note {
+        settings.github_sync_enabled
     } else {
-        settings.drive_sync_all_transcripts
+        settings.github_sync_all_transcripts
     };
-    if notify_drive {
-        if let Some(worker) = app.try_state::<crate::note_sync::DriveSyncWorker>() {
+    if notify_sync {
+        if let Some(worker) = app.try_state::<crate::note_sync::NoteSyncWorker>() {
             worker.notify();
         }
     }
