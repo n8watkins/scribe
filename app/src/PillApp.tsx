@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
+  availableMonitors,
   currentMonitor,
   getCurrentWindow,
   LogicalSize,
@@ -125,6 +126,33 @@ function pillLayout(
 /** Maps raw mic RMS to a 0..1 perceptual level that visibly animates bars. */
 function perceptualLevel(rms: number) {
   return Math.sqrt(Math.min(1, Math.max(0, rms) / RMS_CEILING));
+}
+
+/**
+ * True when the physical point (x, y) lands within some connected monitor's
+ * bounds. Windows parks a minimized or hidden window at (-32000, -32000), and
+ * unplugging a monitor leaves saved coordinates pointing at nothing; in both
+ * cases the pill would be restored off-screen and look like it vanished. We use
+ * this to refuse to persist — or restore to — a position the pill could never
+ * be seen at. Defaults to true when monitor info is unavailable (e.g. outside
+ * Tauri) so it never blocks a legitimate position.
+ */
+async function positionOnScreen(x: number, y: number): Promise<boolean> {
+  try {
+    const monitors = await availableMonitors();
+    if (monitors.length === 0) {
+      return true;
+    }
+    return monitors.some(
+      ({ position, size }) =>
+        x >= position.x &&
+        y >= position.y &&
+        x < position.x + size.width &&
+        y < position.y + size.height,
+    );
+  } catch {
+    return true;
+  }
 }
 
 function pillTone(status: AppStatus) {
@@ -396,16 +424,24 @@ function PillApp() {
         }
         const { x, y } = event.payload;
         timer = window.setTimeout(() => {
-          const current = settingsRef.current;
-          if (!current || (current.pillX === x && current.pillY === y)) {
-            return;
-          }
-          const next = { ...current, pillX: x, pillY: y };
-          settingsRef.current = next;
-          setSettings(next);
-          void updateSettings(next).catch(() => {
-            // Position persistence is best-effort.
-          });
+          void (async () => {
+            const current = settingsRef.current;
+            if (!current || (current.pillX === x && current.pillY === y)) {
+              return;
+            }
+            // Never persist an off-screen position: Windows reports
+            // (-32000, -32000) for a minimized/hidden window, which would
+            // restore the pill where it can never be seen.
+            if (!(await positionOnScreen(x, y))) {
+              return;
+            }
+            const next = { ...current, pillX: x, pillY: y };
+            settingsRef.current = next;
+            setSettings(next);
+            void updateSettings(next).catch(() => {
+              // Position persistence is best-effort.
+            });
+          })();
         }, MOVE_PERSIST_DEBOUNCE_MS);
       })
       .then((stop) => {
@@ -484,9 +520,14 @@ function PillApp() {
         }
         if (!positionedRef.current) {
           positionedRef.current = true;
-          if (typeof pillX === "number" && typeof pillY === "number") {
-            await pillWindow.setPosition(new PhysicalPosition(pillX, pillY));
+          const hasSaved =
+            typeof pillX === "number" && typeof pillY === "number";
+          if (hasSaved && (await positionOnScreen(pillX!, pillY!))) {
+            await pillWindow.setPosition(new PhysicalPosition(pillX!, pillY!));
           } else {
+            // No saved position, or a stale one left off-screen (unplugged
+            // monitor, Windows minimize sentinel): fall back to centering so
+            // the pill self-heals instead of staying invisible.
             const monitor = await currentMonitor();
             if (monitor) {
               const size = await pillWindow.outerSize();
