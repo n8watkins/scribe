@@ -632,6 +632,8 @@ fn schedule_error_recovery(app: &AppHandle, entered_at: DateTime<Utc>) {
 
 fn emit_state_snapshot(app: &AppHandle, snapshot: &AppStateSnapshot) {
     let _ = app.emit("scribe:app-state", snapshot);
+    // Mirror the state to the on-disk status file for a second app (T-Hub).
+    crate::status_file::publish(app, snapshot);
 }
 
 /// Permanent home of saved dictation clips: app_data_dir/clips/{id}.wav.

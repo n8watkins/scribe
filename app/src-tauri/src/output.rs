@@ -484,6 +484,8 @@ pub fn emit_output_failed(app: &AppHandle, transcript_id: String, error: &Comman
 
 fn emit_state_snapshot(app: &AppHandle, snapshot: &AppStateSnapshot) {
     let _ = app.emit("scribe:app-state", snapshot);
+    // Mirror the state to the on-disk status file for a second app (T-Hub).
+    crate::status_file::publish(app, snapshot);
 }
 
 fn no_last_transcript() -> CommandError {

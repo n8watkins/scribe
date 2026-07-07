@@ -787,6 +787,8 @@ fn stop_recording_with_reason(
 
 fn emit_state_snapshot(app: &AppHandle, snapshot: &AppStateSnapshot) {
     let _ = app.emit("scribe:app-state", snapshot);
+    // Mirror the state to the on-disk status file for a second app (T-Hub).
+    crate::status_file::publish(app, snapshot);
 }
 
 #[cfg(windows)]
