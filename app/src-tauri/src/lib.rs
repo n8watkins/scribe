@@ -20,6 +20,7 @@ pub mod output;
 pub mod selection_transform;
 pub mod settings;
 pub mod stats;
+pub mod status_file;
 pub mod text_replace;
 pub mod transcript;
 pub mod tray;
@@ -378,6 +379,11 @@ pub fn run() {
                 style_native_titlebar(&window);
             }
 
+            // Seed the on-disk status file with the startup (Idle) state so a
+            // second app (T-Hub) always has a file to read, even before the
+            // first dictation.
+            status_file::publish_idle(app.handle());
+
             log::info!("Scribe setup complete");
             Ok(())
         })
@@ -477,6 +483,9 @@ pub fn run() {
             // Tear down the resident whisper-server process so no orphan
             // survives app quit (shutdown is safe to call multiple times).
             if let tauri::RunEvent::Exit = event {
+                // Leave the status file reflecting a not-listening app so a
+                // reader isn't stranded on a stale Recording/Stopping state.
+                status_file::publish_idle(app);
                 if let Some(warm) = app.try_state::<whisper_server::WarmTranscriber>() {
                     warm.shutdown();
                 }
