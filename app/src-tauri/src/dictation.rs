@@ -10,9 +10,10 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::{
-    app_state::{AppEvent, AppStateSnapshot, AppStatus},
+    app_state::{AppEvent, AppStatus},
     audio::{RecordingResult, RecordingResultStatus},
     commands::BackendState,
+    dictation_state::emit_state_snapshot,
     error::CommandError,
     incremental::{self, SessionHandle},
     model_manager, output,
@@ -628,12 +629,6 @@ fn schedule_error_recovery(app: &AppHandle, entered_at: DateTime<Utc>) {
         emit_state_snapshot(&app, &snapshot);
         tray::update_tray_status(&app, snapshot.status.clone());
     });
-}
-
-fn emit_state_snapshot(app: &AppHandle, snapshot: &AppStateSnapshot) {
-    let _ = app.emit("scribe:app-state", snapshot);
-    // Mirror the state to the on-disk status file for a second app (T-Hub).
-    crate::status_file::publish(app, snapshot);
 }
 
 /// Permanent home of saved dictation clips: app_data_dir/clips/{id}.wav.

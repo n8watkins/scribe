@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::{
-    app_state::{AppEvent, AppStateSnapshot, AppStatus},
+    app_state::{AppEvent, AppStatus},
     commands::BackendState,
+    dictation_state::emit_state_snapshot,
     error::CommandError,
     settings::{AppSettings, OutputMode, PasteMethod},
     transcript::Transcript,
@@ -480,12 +481,6 @@ pub fn emit_output_failed(app: &AppHandle, transcript_id: String, error: &Comman
             message: error.message.clone(),
         },
     );
-}
-
-fn emit_state_snapshot(app: &AppHandle, snapshot: &AppStateSnapshot) {
-    let _ = app.emit("scribe:app-state", snapshot);
-    // Mirror the state to the on-disk status file for a second app (T-Hub).
-    crate::status_file::publish(app, snapshot);
 }
 
 fn no_last_transcript() -> CommandError {

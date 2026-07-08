@@ -11,6 +11,7 @@
 //! half-written or truncated payload.
 
 use crate::app_state::{AppStatus, AppStateSnapshot};
+use crate::dictation_state::{self, SCHEMA_VERSION};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::path::Path;
@@ -18,15 +19,30 @@ use tauri::{AppHandle, Manager};
 
 /// The on-disk payload. `rename_all = "camelCase"` keeps the JSON keys aligned
 /// with the rest of Scribe's IPC surface (e.g. `updatedAt`).
+///
+/// This is a superset of the canonical snapshot in the dictation-state wire
+/// contract; the derivation of `dictating` / `busy` lives in `dictation_state`
+/// so this file and the HTTP transport cannot disagree.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StatusFile {
+    /// File-format version, matching the snapshot `schemaVersion` in the wire
+    /// contract.
+    schema_version: u32,
+    /// Constant `"scribe"`, so a reader can confirm which producer wrote this.
+    app: &'static str,
+    /// Scribe's semver, for reader diagnostics / feature-gating.
+    app_version: &'static str,
     /// Current state-machine status, serialized exactly as the webview sees it
     /// (PascalCase: "Idle", "Recording", ...).
     status: AppStatus,
-    /// True only while the user is actively talking. Deriving this here - in
-    /// the app that owns the state machine - keeps the what-counts-as-talking
-    /// decision out of the reader.
+    /// Narrow flag: the microphone is actively capturing (mirrors the HTTP
+    /// snapshot's `dictating`). Derived once, in `dictation_state`.
+    dictating: bool,
+    /// Broad flag: the user is anywhere inside the capture-to-insert cycle.
+    busy: bool,
+    /// DEPRECATED alias of `dictating`, kept for one release so existing readers
+    /// (T-Hub) keep working while they migrate. Remove in a future version.
     listening: bool,
     /// When the current status was entered (the state machine's `updated_at`).
     since: DateTime<Utc>,
@@ -37,18 +53,18 @@ struct StatusFile {
     pid: u32,
 }
 
-/// Scribe is "listening" - the user is actively talking - only while the state
-/// machine is Recording, or briefly Stopping as the audio stream flushes.
-fn is_listening(status: &AppStatus) -> bool {
-    matches!(status, AppStatus::Recording | AppStatus::Stopping)
-}
-
 /// Build the on-disk payload from a state snapshot. `now` is the file's write
 /// time; `since` comes from the snapshot's `updated_at`.
 fn build(snapshot: &AppStateSnapshot, now: DateTime<Utc>, pid: u32) -> StatusFile {
+    let dictating = dictation_state::is_dictating(&snapshot.status);
     StatusFile {
+        schema_version: SCHEMA_VERSION,
+        app: dictation_state::APP_NAME,
+        app_version: dictation_state::app_version(),
         status: snapshot.status.clone(),
-        listening: is_listening(&snapshot.status),
+        dictating,
+        busy: dictation_state::is_busy(&snapshot.status),
+        listening: dictating,
         since: snapshot.updated_at,
         updated_at: now,
         pid,
@@ -123,39 +139,34 @@ mod tests {
     }
 
     #[test]
-    fn listening_is_true_only_while_talking() {
-        assert!(is_listening(&AppStatus::Recording));
-        assert!(is_listening(&AppStatus::Stopping));
-        for status in [
-            AppStatus::Idle,
-            AppStatus::Transcribing,
-            AppStatus::Pasting,
-            AppStatus::Ready,
-            AppStatus::Error,
-            AppStatus::Paused,
-        ] {
-            assert!(
-                !is_listening(&status),
-                "{:?} must not count as listening",
-                status
-            );
-        }
-    }
-
-    #[test]
-    fn build_derives_listening_and_carries_since() {
+    fn build_derives_flags_and_carries_since() {
         let snap = snapshot(AppStatus::Recording);
         let now = Utc::now();
         let payload = build(&snap, now, 4242);
-        assert!(payload.listening);
+        assert!(payload.dictating);
+        assert!(payload.busy);
+        // `listening` stays a faithful alias of `dictating` for one release.
+        assert_eq!(payload.listening, payload.dictating);
         assert_eq!(payload.since, snap.updated_at);
         assert_eq!(payload.updated_at, now);
         assert_eq!(payload.pid, 4242);
     }
 
     #[test]
-    fn build_marks_idle_not_listening() {
+    fn build_marks_idle_not_dictating_or_busy() {
         let payload = build(&snapshot(AppStatus::Idle), Utc::now(), 1);
+        assert!(!payload.dictating);
+        assert!(!payload.busy);
+        assert!(!payload.listening);
+    }
+
+    #[test]
+    fn build_marks_transcribing_busy_but_not_dictating() {
+        // The broad flag must cover the whole cycle: mid-transcription, the mic
+        // is closed but output would still collide with the pending result.
+        let payload = build(&snapshot(AppStatus::Transcribing), Utc::now(), 1);
+        assert!(!payload.dictating);
+        assert!(payload.busy);
         assert!(!payload.listening);
     }
 
@@ -163,7 +174,12 @@ mod tests {
     fn payload_serializes_with_camelcase_keys() {
         let payload = build(&snapshot(AppStatus::Recording), Utc::now(), 7);
         let value: serde_json::Value = serde_json::to_value(&payload).unwrap();
+        assert_eq!(value["schemaVersion"], 1);
+        assert_eq!(value["app"], "scribe");
+        assert!(value.get("appVersion").is_some(), "appVersion must be present");
         assert_eq!(value["status"], "Recording");
+        assert_eq!(value["dictating"], true);
+        assert_eq!(value["busy"], true);
         assert_eq!(value["listening"], true);
         assert!(value.get("since").is_some());
         assert!(
@@ -184,6 +200,7 @@ mod tests {
         let contents = std::fs::read_to_string(dir.join("status.json")).unwrap();
         let value: serde_json::Value = serde_json::from_str(&contents).unwrap();
         assert_eq!(value["status"], "Stopping");
+        assert_eq!(value["dictating"], true);
         assert_eq!(value["listening"], true);
 
         // A successful write leaves no staging file behind.
