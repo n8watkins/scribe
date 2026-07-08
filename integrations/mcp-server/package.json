@@ -1,0 +1,34 @@
+{
+  "name": "@scribe/mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone MCP server facade over Scribe's dictation-state HTTP+SSE wire contract (v1). Generic: any MCP host can query and subscribe to Scribe's live dictation state.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "scribe-mcp-server": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "node --import tsx --test test/*.test.ts",
+    "smoke": "npm run build && node --import tsx scripts/smoke.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "~5.8.3"
+  }
+}
