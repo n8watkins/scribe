@@ -1,0 +1,37 @@
+[package]
+name = "scribe-cli"
+version = "0.1.0"
+description = "Thin standalone client for Scribe's dictation-state interface (scribe status / scribe watch)."
+authors = ["Nat Atkins"]
+license = "MIT"
+edition = "2021"
+
+# A dedicated binary named `scribe`. The crate is intentionally standalone: it is
+# NOT a member of the Tauri app's build and pulls in none of its GUI dependencies.
+# It speaks only the frozen HTTP+SSE wire contract, so it builds and ships in
+# isolation on any platform.
+[[bin]]
+name = "scribe"
+path = "src/main.rs"
+
+[lib]
+name = "scribe_cli"
+path = "src/lib.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["serde", "clock", "std"] }
+# Same stack the Scribe app already uses: blocking reqwest over rustls. No async
+# runtime is needed for a thin request/stream client.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_Foundation"] }
+
+[dev-dependencies]
+tempfile = "3"
