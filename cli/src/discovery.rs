@@ -164,12 +164,12 @@ mod tests {
           "schemaVersion":1,"app":"scribe","appVersion":"0.7.0","pid":1234,
           "transport":"http-sse","baseUrl":"http://127.0.0.1:52431",
           "endpoints":{"status":"/v1/status","events":"/v1/events"},
-          "readToken":"c3b54f25-7df6-4cfa-9ae2-342dd8d548c6",
+          "readToken":"00000000-0000-0000-0000-000000000000",
           "updatedAt":"2026-07-08T12:34:56.000Z"
         }"#;
         let cf: ControlFile = serde_json::from_str(raw).unwrap();
         assert_eq!(cf.base_url, "http://127.0.0.1:52431");
-        assert_eq!(cf.read_token, "c3b54f25-7df6-4cfa-9ae2-342dd8d548c6");
+        assert_eq!(cf.read_token, "00000000-0000-0000-0000-000000000000");
         assert_eq!(cf.pid, Some(1234));
         assert_eq!(
             cf.endpoint_url(&cf.endpoints.status),
