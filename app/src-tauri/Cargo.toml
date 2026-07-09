@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.6.1"
+version = "0.7.0"
 description = "Private local dictation for Windows."
 authors = ["Nat Atkins"]
 license = "MIT"
@@ -40,6 +40,12 @@ sha1 = "0.10"
 arboard = "3.4"
 base64 = "0.22"
 keyring = { version = "3", features = ["windows-native"] }
+# Small synchronous HTTP server for the in-process dictation-state interface
+# (GET /v1/status + the /v1/events SSE stream). Chosen over axum/hyper because
+# the app is std::thread/blocking throughout and has no tokio runtime of its
+# own; tiny_http fits that model on a dedicated thread with hand-written SSE
+# framing, and pulls in almost no transitive dependencies.
+tiny_http = "0.12"
 
 [target.'cfg(windows)'.dependencies]
 cpal = "0.15"

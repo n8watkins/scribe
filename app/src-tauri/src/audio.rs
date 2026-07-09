@@ -27,8 +27,9 @@ use std::{
 };
 
 use crate::{
-    app_state::{AppEvent, AppStateSnapshot, AppStatus},
+    app_state::{AppEvent, AppStatus},
     commands::BackendState,
+    dictation_state::emit_state_snapshot,
     error::CommandError,
     settings::AppSettings,
 };
@@ -783,12 +784,6 @@ fn stop_recording_with_reason(
     }
 
     Ok(result)
-}
-
-fn emit_state_snapshot(app: &AppHandle, snapshot: &AppStateSnapshot) {
-    let _ = app.emit("scribe:app-state", snapshot);
-    // Mirror the state to the on-disk status file for a second app (T-Hub).
-    crate::status_file::publish(app, snapshot);
 }
 
 #[cfg(windows)]

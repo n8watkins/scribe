@@ -3,6 +3,7 @@ pub mod audio;
 pub mod commands;
 pub mod db;
 pub mod dictation;
+pub mod dictation_state;
 pub mod error;
 pub mod export;
 pub mod file_transcribe;
@@ -19,6 +20,7 @@ pub mod note_sync;
 pub mod output;
 pub mod selection_transform;
 pub mod settings;
+pub mod state_server;
 pub mod stats;
 pub mod status_file;
 pub mod text_replace;
@@ -350,6 +352,18 @@ pub fn run() {
             }
             app.manage(BackendState::new(db, audio_temp_dir));
             app.manage(whisper_server::WarmTranscriber::new());
+            // Offer Scribe's live dictation state to external tools over an
+            // in-process loopback HTTP+SSE server. Additive and best-effort: a
+            // bind failure must never block the app, so log and carry on.
+            match state_server::start(app.handle()) {
+                Ok(server) => {
+                    log::info!("Dictation-state interface on {}", server.base_url());
+                    app.manage(server);
+                }
+                Err(error) => {
+                    log::warn!("Could not start dictation-state server: {}", error);
+                }
+            }
             // Background worker that debounces note saves into GitHub auto-syncs.
             app.manage(note_sync::NoteSyncWorker::spawn(app.handle().clone()));
             hotkeys::setup(app.handle(), &settings.hotkeys)?;
@@ -486,6 +500,13 @@ pub fn run() {
                 // Leave the status file reflecting a not-listening app so a
                 // reader isn't stranded on a stale Recording/Stopping state.
                 status_file::publish_idle(app);
+                // Stop the dictation-state server, close live SSE streams, and
+                // remove the ~/.scribe discovery file so a consumer sees Scribe
+                // is gone (stream EOF and a missing control file both resolve to
+                // not-dictating).
+                if let Some(server) = app.try_state::<state_server::DictationServer>() {
+                    server.shutdown();
+                }
                 if let Some(warm) = app.try_state::<whisper_server::WarmTranscriber>() {
                     warm.shutdown();
                 }
