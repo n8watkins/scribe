@@ -167,7 +167,7 @@ A consumer finds the running server by reading a well-known file in the user's h
   "transport": "http-sse",
   "baseUrl": "http://127.0.0.1:52431",
   "endpoints": { "status": "/v1/status", "events": "/v1/events" },
-  "readToken": "c3b54f25-7df6-4cfa-9ae2-342dd8d548c6",
+  "readToken": "00000000-0000-0000-0000-000000000000",
   "updatedAt": "2026-07-08T12:34:56.000Z"
 }
 ```
