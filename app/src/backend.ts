@@ -817,6 +817,11 @@ export function githubDevicePoll(
   return invoke("github_device_poll", { deviceCode, interval });
 }
 
+/** Stops an active device-flow poll and prevents credential persistence. */
+export function githubDeviceCancel(deviceCode: string): Promise<void> {
+  return invoke("github_device_cancel", { deviceCode });
+}
+
 /** Clears the stored GitHub token; returns the updated settings
  * (githubSyncEnabled false). */
 export function githubDisconnect(): Promise<AppSettings> {

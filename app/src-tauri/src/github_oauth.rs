@@ -13,6 +13,9 @@
 //! the SQLite DB. GitHub OAuth-App device-flow tokens do not expire/rotate by
 //! default, so there is no refresh-token dance.
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::error::CommandError;
@@ -39,6 +42,55 @@ const KEYCHAIN_USER: &str = "github-access-token";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 /// Device codes expire after ~15 minutes; stop polling a little after that.
 const POLL_TIMEOUT: Duration = Duration::from_secs(900);
+
+/// Active device-flow polls keyed by GitHub's opaque device code.
+///
+/// The cancellation flag is shared with the blocking HTTP poll so a frontend
+/// cancel request stops both network polling and credential persistence.
+#[derive(Default)]
+pub struct DeviceFlowRegistry {
+    attempts: Mutex<HashMap<String, Arc<AtomicBool>>>,
+}
+
+impl DeviceFlowRegistry {
+    pub fn start(&self, device_code: &str) -> Arc<AtomicBool> {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        self.attempts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(device_code.to_string(), cancelled.clone());
+        cancelled
+    }
+
+    pub fn get(&self, device_code: &str) -> Option<Arc<AtomicBool>> {
+        self.attempts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(device_code)
+            .cloned()
+    }
+
+    pub fn cancel(&self, device_code: &str) -> bool {
+        let attempt = self
+            .attempts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(device_code);
+        if let Some(cancelled) = attempt {
+            cancelled.store(true, Ordering::SeqCst);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn finish(&self, device_code: &str) {
+        self.attempts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(device_code);
+    }
+}
 
 /// What the UI needs to show the user to complete the device flow.
 #[derive(Debug, Clone)]
@@ -107,18 +159,24 @@ pub fn request_device_code() -> Result<DeviceCode, CommandError> {
 ///
 /// CRITICAL: GitHub returns HTTP 200 even when authorization is still pending,
 /// so this branches on the JSON `error` field, not the status code.
-pub fn poll_for_token(device_code: &str, interval_secs: u64) -> Result<String, CommandError> {
+pub fn poll_for_token(
+    device_code: &str,
+    interval_secs: u64,
+    cancelled: &AtomicBool,
+) -> Result<String, CommandError> {
     let client = http_client()?;
     let deadline = Instant::now() + POLL_TIMEOUT;
     let mut interval = interval_secs.max(1);
 
     loop {
+        ensure_attempt_active(cancelled)?;
         if Instant::now() >= deadline {
             return Err(failure(
                 "Timed out waiting for GitHub authorization. Please try again.",
             ));
         }
         std::thread::sleep(Duration::from_secs(interval));
+        ensure_attempt_active(cancelled)?;
 
         let body = format!(
             "client_id={}&device_code={}&grant_type=urn:ietf:params:oauth:grant-type:device_code",
@@ -147,6 +205,7 @@ pub fn poll_for_token(device_code: &str, interval_secs: u64) -> Result<String, C
             .and_then(|v| v.as_str())
             .filter(|v| !v.is_empty())
         {
+            ensure_attempt_active(cancelled)?;
             return Ok(token.to_string());
         }
 
@@ -177,6 +236,17 @@ pub fn poll_for_token(device_code: &str, interval_secs: u64) -> Result<String, C
                 )))
             }
         }
+    }
+}
+
+pub fn ensure_attempt_active(cancelled: &AtomicBool) -> Result<(), CommandError> {
+    if cancelled.load(Ordering::SeqCst) {
+        Err(CommandError::new(
+            "github_auth_cancelled",
+            "GitHub sign-in was cancelled.",
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -346,6 +416,25 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+
+    #[test]
+    fn device_flow_registry_cancels_and_reaps_an_attempt() {
+        let registry = DeviceFlowRegistry::default();
+        let cancelled = registry.start("device-1");
+        assert!(!cancelled.load(Ordering::SeqCst));
+
+        assert!(registry.cancel("device-1"));
+        assert!(cancelled.load(Ordering::SeqCst));
+        assert!(registry.get("device-1").is_none());
+        assert!(!registry.cancel("device-1"));
+    }
+
+    #[test]
+    fn cancelled_poll_stops_before_contacting_github() {
+        let cancelled = AtomicBool::new(true);
+        let error = poll_for_token("unused", 1, &cancelled).unwrap_err();
+        assert_eq!(error.code, "github_auth_cancelled");
+    }
 
     /// Sequential HTTP mock: serves `responses` (status, body) in order,
     /// capturing each request. Mirrors the sequential-mock harness used in the

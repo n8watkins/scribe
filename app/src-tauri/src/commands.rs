@@ -25,6 +25,7 @@ pub struct BackendState {
     db: Mutex<Database>,
     model_downloads: DownloadRegistry,
     incremental: crate::incremental::Registry,
+    github_device_flows: crate::github_oauth::DeviceFlowRegistry,
     /// Serializes GitHub note/transcript syncs so the debounce worker and a
     /// manual "Sync now" can never PUT the same daily file concurrently. The
     /// `()` payload is irrelevant — it's a plain mutual-exclusion latch.
@@ -43,6 +44,7 @@ impl BackendState {
             db: Mutex::new(db),
             model_downloads: DownloadRegistry::default(),
             incremental: crate::incremental::Registry::default(),
+            github_device_flows: crate::github_oauth::DeviceFlowRegistry::default(),
             github_sync_lock: Mutex::new(()),
             #[cfg(windows)]
             pending_transform: Mutex::new(None),
@@ -90,6 +92,10 @@ impl BackendState {
 
     pub fn model_downloads(&self) -> &DownloadRegistry {
         &self.model_downloads
+    }
+
+    pub fn github_device_flows(&self) -> &crate::github_oauth::DeviceFlowRegistry {
+        &self.github_device_flows
     }
 
     /// Acquires the GitHub-sync mutex, held for the duration of one sync entry
@@ -903,6 +909,10 @@ pub async fn github_device_start(app: tauri::AppHandle) -> Result<GithubDeviceSt
         .opener()
         .open_url(device.verification_uri.clone(), None::<&str>);
 
+    app.state::<BackendState>()
+        .github_device_flows()
+        .start(&device.device_code);
+
     Ok(GithubDeviceStart {
         device_code: device.device_code,
         user_code: device.user_code,
@@ -921,14 +931,31 @@ pub async fn github_device_poll(
     device_code: String,
     interval: u64,
 ) -> Result<AppSettings, CommandError> {
+    let cancelled = app
+        .state::<BackendState>()
+        .github_device_flows()
+        .get(&device_code)
+        .ok_or_else(|| {
+            CommandError::new(
+                "github_auth_cancelled",
+                "This GitHub sign-in attempt is no longer active.",
+            )
+        })?;
     let service = app.config().identifier.clone();
     let poll_service = service.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let token = crate::github_oauth::poll_for_token(&device_code, interval)?;
+    let poll_device_code = device_code.clone();
+    let poll_result = tauri::async_runtime::spawn_blocking(move || {
+        let token =
+            crate::github_oauth::poll_for_token(&poll_device_code, interval, cancelled.as_ref())?;
+        crate::github_oauth::ensure_attempt_active(cancelled.as_ref())?;
         crate::github_oauth::store_token(&poll_service, &token)
     })
     .await
-    .map_err(|error| CommandError::new("github_auth_failed", error.to_string()))??;
+    .map_err(|error| CommandError::new("github_auth_failed", error.to_string()))?;
+    app.state::<BackendState>()
+        .github_device_flows()
+        .finish(&device_code);
+    poll_result?;
 
     // Fetch the login for display (best-effort: an empty login is fine).
     let login_service = service.clone();
@@ -944,6 +971,17 @@ pub async fn github_device_poll(
     settings.github_account_login = login;
     state.db()?.save_settings(&settings)?;
     Ok(settings)
+}
+
+/// Cancels an active GitHub device flow and prevents its token from being
+/// persisted if authorization completes after the user cancels.
+#[tauri::command]
+pub fn github_device_cancel(
+    state: tauri::State<'_, BackendState>,
+    device_code: String,
+) -> Result<(), CommandError> {
+    state.github_device_flows().cancel(&device_code);
+    Ok(())
 }
 
 /// Clears the stored GitHub token and fully resets the GitHub backup settings:

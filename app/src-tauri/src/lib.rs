@@ -492,6 +492,7 @@ pub fn run() {
             commands::github_status,
             commands::github_device_start,
             commands::github_device_poll,
+            commands::github_device_cancel,
             commands::github_disconnect,
             commands::github_sync_now,
             commands::export_transcripts

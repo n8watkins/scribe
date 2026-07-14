@@ -3,6 +3,7 @@ import { Cloud, CloudOff, Download, GitBranch, RefreshCw } from "lucide-react";
 import {
   commandErrorMessage,
   exportTranscripts,
+  githubDeviceCancel,
   githubDevicePoll,
   githubDeviceStart,
   githubDisconnect,
@@ -107,15 +108,16 @@ export function SyncView({
     }
   }, [actions, reloadStatus]);
 
-  // Back out of an in-progress sign-in. The orphaned backend poll keeps running
-  // until GitHub's device code expires (~15 min) and then stops on its own;
-  // bumping the epoch makes its eventual result a no-op.
+  // Back out of an in-progress sign-in in both the UI and the backend poll.
   const handleCancelConnect = useCallback(() => {
     connectEpoch.current += 1;
+    if (device) {
+      void githubDeviceCancel(device.deviceCode);
+    }
     setDevice(null);
     setBusy(false);
     setNotice("GitHub sign-in cancelled.");
-  }, []);
+  }, [device]);
 
   const handleDisconnect = useCallback(async () => {
     setBusy(true);
