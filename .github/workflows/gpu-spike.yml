@@ -36,7 +36,7 @@ jobs:
       MODEL: ${{ github.event.inputs.model || 'tiny.en' }}
     steps:
       - name: Install Vulkan SDK + Lavapipe (software Vulkan device)
-        uses: jakoch/install-vulkan-sdk-action@b394a1abed9cb019d8e637eeadac93d73e0853da # v1.5.5
+        uses: jakoch/install-vulkan-sdk-action@37effcfa045411f8bfbbda26df2fd1b3bf3436fa # v1.6.0
         with:
           vulkan_version: 1.4.350.0
           install_runtime: true
