@@ -1,13 +1,5 @@
 name: CI
 
-# Fast, compile-only checks on every push / PR. The Release workflow only runs
-# on tags, so until now nothing type-checked the Windows-only (`#[cfg(windows)]`)
-# code between releases — the dev box is Linux/WSL, where that whole surface
-# (WASAPI capture, Win32 paste/clipboard, global hotkeys) compiles to no-op
-# stubs. This catches a broken Windows-only path on push instead of at
-# install-build time. (See OVERNIGHT_REPORT risk R1: Fix D shipped never having
-# been compiled on Windows.)
-
 on:
   push:
     branches: ["**"]
@@ -18,43 +10,113 @@ permissions:
   contents: read
 
 jobs:
-  windows-check:
-    name: Windows compile check
+  desktop-backend:
+    name: Desktop backend (Windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          components: clippy, rustfmt
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: app/src-tauri
 
-      # `cargo check` only — no binary, no installer, no tests run. On a Windows
-      # runner the default target is x86_64-pc-windows-msvc, so this compiles
-      # every #[cfg(windows)] block (including the ones inside test modules via
-      # --all-targets). No whisper.cpp binaries are fetched: those are bundled at
-      # `tauri build`, not needed to type-check the Rust.
-      - name: cargo check (all targets, Windows)
+      - name: Check formatting
         working-directory: app/src-tauri
-        run: cargo check --all-targets
+        run: cargo fmt --check
 
-  frontend-typecheck:
-    name: Frontend typecheck
+      - name: Run clippy
+        working-directory: app/src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Run backend tests
+        working-directory: app/src-tauri
+        run: cargo test --locked
+
+  desktop-frontend:
+    name: Desktop frontend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: app/package-lock.json
 
-      - name: Install frontend dependencies
+      - name: Install dependencies
         working-directory: app
         run: npm ci
 
-      - name: tsc --noEmit
+      - name: Audit dependencies
         working-directory: app
-        run: npx tsc --noEmit
+        run: npm audit
+
+      - name: Build frontend
+        working-directory: app
+        run: npm run build
+
+  cli:
+    name: CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: cli
+
+      - name: Check formatting
+        working-directory: cli
+        run: cargo fmt --check
+
+      - name: Run clippy
+        working-directory: cli
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Run tests
+        working-directory: cli
+        run: cargo test --locked
+
+  mcp-server:
+    name: MCP server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: integrations/mcp-server/package-lock.json
+
+      - name: Install dependencies
+        working-directory: integrations/mcp-server
+        run: npm ci
+
+      - name: Audit dependencies
+        working-directory: integrations/mcp-server
+        run: npm audit
+
+      - name: Test, typecheck, and build
+        working-directory: integrations/mcp-server
+        run: npm test && npm run typecheck && npm run build
+
+  rust-security:
+    name: Rust dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: app/src-tauri
