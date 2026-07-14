@@ -1,6 +1,7 @@
 # Scribe
 
-Scribe is a private, local-first Windows dictation app built with Tauri, React, TypeScript, Rust, SQLite, and whisper.cpp. Beyond push-to-talk transcription it adds quick notes, an optional local-LLM layer (dictation cleanup, note analysis, selected-text transform), a dictionary, searchable history with export, Google Drive sync, and a signed auto-updater.
+Scribe is a private, local-first Windows dictation app built with Tauri, React, TypeScript, Rust, SQLite, and whisper.cpp.
+Beyond push-to-talk transcription it adds quick notes, an optional local-LLM layer (dictation cleanup, note analysis, selected-text transform), a dictionary, searchable history with export, optional private GitHub backups, and an integrity-checked auto-updater.
 
 This is the app subproject. For the full user-facing overview and install/build instructions, see the [root README](../README.md).
 
@@ -38,6 +39,7 @@ Rust and the Tauri OS prerequisites are required for desktop builds.
 GitHub backup uses a GitHub App device flow and does not embed a client secret.
 Set `SCRIBE_GITHUB_APP_CLIENT_ID` while compiling the Tauri backend to the app's public client ID, which starts with `Iv`.
 Builds reject OAuth App client IDs that start with `Ov` so they cannot request the classic account-wide `repo` scope.
+Release builds read this value from the GitHub Actions repository variable named `SCRIBE_GITHUB_APP_CLIENT_ID` and fail before compiling when it is missing or invalid.
 
 The GitHub App must have Device Flow enabled.
 It should request only repository Contents read and write access, plus Administration read and write only if Scribe will continue creating the private backup repository automatically.

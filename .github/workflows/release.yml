@@ -38,6 +38,8 @@ jobs:
       - name: Validate release metadata
         id: metadata
         shell: pwsh
+        env:
+          SCRIBE_GITHUB_APP_CLIENT_ID: ${{ vars.SCRIBE_GITHUB_APP_CLIENT_ID }}
         run: |
           $packageVersion = (Get-Content app/package.json -Raw | ConvertFrom-Json).version
           $tauriVersion = (Get-Content app/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
@@ -47,6 +49,9 @@ jobs:
           }
           if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne "v$packageVersion") {
             throw "Tag ${{ github.ref_name }} does not match configured version v$packageVersion"
+          }
+          if ($env:SCRIBE_GITHUB_APP_CLIENT_ID -notmatch '^Iv[0-9A-Za-z]+$') {
+            throw "Repository variable SCRIBE_GITHUB_APP_CLIENT_ID must contain the GitHub App client ID (Iv...)."
           }
           $flavor = "${{ inputs.flavor || 'stable' }}"
           "version=$packageVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
@@ -164,6 +169,7 @@ jobs:
         working-directory: app
         shell: pwsh
         env:
+          SCRIBE_GITHUB_APP_CLIENT_ID: ${{ vars.SCRIBE_GITHUB_APP_CLIENT_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
