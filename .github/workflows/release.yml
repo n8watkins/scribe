@@ -124,6 +124,7 @@ jobs:
           npm ci
           npm audit
           npm run lint
+          npm test
           npm run build
 
       - name: Validate Rust backend
