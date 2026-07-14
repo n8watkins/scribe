@@ -590,7 +590,7 @@ function App() {
       window.clearInterval(interval);
       window.removeEventListener("focus", onFocus);
     };
-  }, [maybeRunLaunchInstall]);
+  }, [maybeRunLaunchInstall, pushToast]);
 
   useEffect(() => {
     let refreshTimer: number | null = null;

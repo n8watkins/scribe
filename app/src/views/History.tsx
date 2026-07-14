@@ -170,7 +170,6 @@ export function HistoryView({
   // (which also raced and could read a stale `offset`).
   useEffect(() => {
     void loadHistoryRef.current(offset);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.lastTranscript?.id, data.stats.dictationsToday, offset]);
 
   const refreshAfterMutation = useCallback(async () => {

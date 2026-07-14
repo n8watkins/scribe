@@ -56,6 +56,10 @@ jobs:
         working-directory: app
         run: npm audit
 
+      - name: Lint frontend
+        working-directory: app
+        run: npm run lint
+
       - name: Build frontend
         working-directory: app
         run: npm run build
