@@ -58,6 +58,59 @@
   gap: 4px;
 }
 
+.sync-device-flow {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.sync-health-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sync-health-item {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--scribe-border);
+  border-radius: 8px;
+  background: rgba(var(--scribe-surface-rgb), 0.34);
+}
+
+.sync-health-item span {
+  color: var(--scribe-text-faint);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.sync-health-item strong {
+  overflow: hidden;
+  color: var(--scribe-text-secondary);
+  font-size: 11.5px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+}
+
+.sync-health-item .sync-health-success {
+  color: var(--scribe-success);
+}
+
+.sync-health-item .sync-health-warning {
+  color: var(--scribe-warning);
+}
+
+.sync-health-item .sync-health-error {
+  color: var(--scribe-danger);
+}
+
+.sync-inline-hint {
+  margin: 0;
+}
+
 /* Organize-prompt field: a label/description block stacked above the textarea,
    mirroring SettingRow's left column but full width so the prompt has room. */
 .sync-prompt-field {
@@ -99,4 +152,10 @@
 .sync-more-note {
   margin: 2px 0 0;
   text-align: center;
+}
+
+@media (max-width: 760px) {
+  .sync-health-grid {
+    grid-template-columns: 1fr;
+  }
 }

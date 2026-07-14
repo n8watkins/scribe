@@ -31,6 +31,7 @@ import {
   type Transcript,
   type TranscriptSort,
 } from "../backend";
+import { rememberSyncError, rememberSyncSuccess } from "../lib/syncActivity";
 import type { ViewActions } from "../types";
 import { EmptyState, InlineError } from "../components/feedback";
 import { ConfirmDialog } from "../components/modal";
@@ -447,12 +448,16 @@ export function HistoryView({
                   setSyncNotice(null);
                   setHistoryError(null);
                   githubSyncNow()
-                    .then((report) =>
+                    .then((report) => {
+                      rememberSyncSuccess(report);
                       setSyncNotice(
                         `Synced ${report.syncedNotes} note(s) to GitHub.`,
-                      ),
-                    )
-                    .catch((cause) => setHistoryError(commandErrorMessage(cause)))
+                      );
+                    })
+                    .catch((cause) => {
+                      rememberSyncError();
+                      setHistoryError(commandErrorMessage(cause));
+                    })
                     .finally(() => setSyncingToGithub(false));
                 }}
                 type="button"
@@ -574,7 +579,10 @@ export function HistoryView({
           </span>
         </div>
         {historyError ? (
-          <InlineError message={historyError} onRetry={() => loadHistory(offset)} />
+          <InlineError
+            message={historyError}
+            onRetry={() => loadHistory(offset)}
+          />
         ) : null}
         {!settings.historyEnabled ? (
           <EmptyState message="History is disabled. Existing records remain available until you delete them." />
@@ -660,7 +668,9 @@ export function HistoryView({
           >
             <div className="section-heading compact">
               <h2>Combined transcript</h2>
-              <span className="muted">{selectedCount} selected, oldest first</span>
+              <span className="muted">
+                {selectedCount} selected, oldest first
+              </span>
             </div>
             <textarea
               className="combine-preview"

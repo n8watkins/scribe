@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Cloud, CloudOff, Download, GitBranch, RefreshCw } from "lucide-react";
+import {
+  CheckCircle2,
+  Cloud,
+  CloudOff,
+  Download,
+  GitBranch,
+  RefreshCw,
+  TriangleAlert,
+} from "lucide-react";
 import {
   commandErrorMessage,
   exportTranscripts,
@@ -14,8 +22,18 @@ import {
   type ExportScope,
   type GithubDeviceCode,
   type GithubStatus,
-  type GithubSyncReport,
 } from "../backend";
+import {
+  backupCoverage,
+  backupReadiness,
+  clearSyncActivity,
+  formatActivity,
+  formatCount,
+  loadSyncActivity,
+  rememberSyncError,
+  rememberSyncSuccess,
+  type SyncActivity,
+} from "../lib/syncActivity";
 import type { ViewActions } from "../types";
 import { SectionPanel, SettingRow } from "../components/layout";
 import { Toggle } from "../components/primitives";
@@ -37,7 +55,9 @@ export function SyncView({
   const [status, setStatus] = useState<GithubStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [device, setDevice] = useState<GithubDeviceCode | null>(null);
-  const [lastReport, setLastReport] = useState<GithubSyncReport | null>(null);
+  const [lastActivity, setLastActivity] = useState<SyncActivity | null>(
+    loadSyncActivity,
+  );
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("markdown");
@@ -68,6 +88,9 @@ export function SyncView({
   const repoValid = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(
     settings.githubRepo.trim(),
   );
+  const backupSelected =
+    settings.githubSyncEnabled || settings.githubSyncAllTranscripts;
+  const syncReady = connected && repoValid && backupSelected;
 
   // A monotonic epoch for connect attempts. handleConnect snapshots the current
   // epoch at its start; Cancel (and any new attempt) bumps it. A late-resolving
@@ -90,7 +113,10 @@ export function SyncView({
       }
       // Show the code immediately, THEN block on the (long-running) poll.
       setDevice(code);
-      const updated = await githubDevicePoll(code.deviceCode, code.intervalSecs);
+      const updated = await githubDevicePoll(
+        code.deviceCode,
+        code.intervalSecs,
+      );
       if (connectEpoch.current !== myEpoch) {
         return;
       }
@@ -123,7 +149,8 @@ export function SyncView({
     setBusy(true);
     setError(null);
     setNotice(null);
-    setLastReport(null);
+    setLastActivity(null);
+    clearSyncActivity();
 
     try {
       const updated = await githubDisconnect();
@@ -143,11 +170,12 @@ export function SyncView({
 
     try {
       const report = await githubSyncNow();
-      setLastReport(report);
+      setLastActivity(rememberSyncSuccess(report));
       setNotice(
-        `Synced ${report.syncedNotes} notes into ${report.filesWritten} file(s).`,
+        `Backed up ${formatCount(report.syncedNotes, "item")} into ${formatCount(report.filesWritten, "file")}.`,
       );
     } catch (cause) {
+      setLastActivity(rememberSyncError());
       setError(commandErrorMessage(cause));
       // A github_unauthorized error has already cleared the dead token in the
       // backend; refresh status so the Connected pill flips to Not connected.
@@ -213,7 +241,7 @@ export function SyncView({
             This build isn't configured for GitHub sync.
           </p>
         ) : device != null ? (
-          <div className="setting-control" style={{ flexDirection: "column", alignItems: "flex-start" }}>
+          <div className="setting-control sync-device-flow">
             <p className="muted vocab-hint">
               Go to <strong>{device.verificationUri}</strong> and enter this
               code:
@@ -290,6 +318,10 @@ export function SyncView({
                 // rejects an empty-repo-with-sync-on save (and we'd keep
                 // pushing to nowhere). A non-empty value saves as-is.
                 const trimmed = githubRepo.trim();
+                if (trimmed !== settings.githubRepo.trim()) {
+                  clearSyncActivity();
+                  setLastActivity(null);
+                }
                 actions.updateSettings(
                   trimmed.length === 0
                     ? {
@@ -340,7 +372,7 @@ export function SyncView({
           <div className="setting-control">
             <button
               className="secondary-button"
-              disabled={busy}
+              disabled={busy || !syncReady}
               onClick={() => void handleSyncNow()}
               type="button"
             >
@@ -348,6 +380,47 @@ export function SyncView({
               {busy ? "Syncing…" : "Sync now"}
             </button>
           </div>
+          {!backupSelected ? (
+            <p className="muted vocab-hint sync-inline-hint">
+              Choose at least one backup type to run a manual backup.
+            </p>
+          ) : null}
+        </SectionPanel>
+      ) : null}
+
+      {connected && !unconfigured ? (
+        <SectionPanel
+          icon={
+            lastActivity?.outcome === "error" ? (
+              <TriangleAlert aria-hidden="true" size={16} />
+            ) : (
+              <CheckCircle2 aria-hidden="true" size={16} />
+            )
+          }
+          title="Backup status"
+        >
+          <div className="sync-health-grid">
+            <SyncHealthItem
+              label="Readiness"
+              tone={syncReady ? "success" : "warning"}
+              value={
+                syncReady
+                  ? "Ready to back up"
+                  : backupReadiness(settings, repoValid)
+              }
+            />
+            <SyncHealthItem label="Coverage" value={backupCoverage(settings)} />
+            <SyncHealthItem
+              label="Last manual attempt"
+              tone={lastActivity?.outcome === "error" ? "error" : undefined}
+              value={formatActivity(lastActivity)}
+            />
+          </div>
+          <p className="muted vocab-hint sync-inline-hint">
+            This status covers backups started with Sync now on this device.
+            Automatic backup history will appear after the backend begins
+            recording background outcomes.
+          </p>
         </SectionPanel>
       ) : null}
 
@@ -404,11 +477,9 @@ export function SyncView({
         </div>
       </SectionPanel>
 
-      {notice ? <p className="muted vocab-hint sync-status-line">{notice}</p> : null}
-      {!notice && lastReport ? (
-        <p className="muted vocab-hint sync-status-line">
-          Last sync: {lastReport.syncedNotes} notes, {lastReport.filesWritten}{" "}
-          file(s).
+      {notice ? (
+        <p aria-live="polite" className="muted vocab-hint sync-status-line">
+          {notice}
         </p>
       ) : null}
       {error ? (
@@ -422,6 +493,25 @@ export function SyncView({
         syncs to GitHub.
       </p>
     </section>
+  );
+}
+
+function SyncHealthItem({
+  label,
+  tone,
+  value,
+}: {
+  label: string;
+  tone?: "error" | "success" | "warning";
+  value: string;
+}) {
+  return (
+    <div className="sync-health-item">
+      <span>{label}</span>
+      <strong className={tone ? `sync-health-${tone}` : undefined}>
+        {value}
+      </strong>
+    </div>
   );
 }
 
