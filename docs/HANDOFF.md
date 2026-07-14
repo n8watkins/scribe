@@ -1,4 +1,11 @@
-# Scribe — Session Handoff
+# Scribe - Session Handoff
+
+> **Archived handoff notice, 2026-07-14:** This document records the 0.5.x and 0.6.0 work and must not be used as current operating instructions.
+> Current builds use optional private GitHub backup rather than Google Drive, check for updates every six hours rather than every minute, and do not include the removed local-LLM dictation cleanup path.
+> The Authenticode and SignPath plan was deliberately dropped; only updater artifacts are cryptographically signed.
+> Multilingual transcription and Vulkan acceleration have shipped.
+> The release workflow now validates exact versions, dependencies, checksums, SBOM output, and both Windows installers before publishing.
+> See the [root README](../README.md), [app README](../app/README.md), and active workflow files for current instructions.
 
 > **Current as of 2026-06-21, version 0.6.0.** For the running feature log read
 > [`CHANGELOG.md`](../CHANGELOG.md); for the **active roadmap** (phased, checkbox

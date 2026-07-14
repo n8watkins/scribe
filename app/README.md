@@ -1,7 +1,7 @@
 # Scribe
 
 Scribe is a private, local-first Windows dictation app built with Tauri, React, TypeScript, Rust, SQLite, and whisper.cpp.
-Beyond push-to-talk transcription it adds quick notes, an optional local-LLM layer (dictation cleanup, note analysis, selected-text transform), a dictionary, searchable history with export, optional private GitHub backups, and an integrity-checked auto-updater.
+Beyond push-to-talk transcription it adds quick notes, optional local-LLM note analysis and selected-text transform, a dictionary, searchable history with export, optional private GitHub backups, and an integrity-checked auto-updater.
 
 This is the app subproject. For the full user-facing overview and install/build instructions, see the [root README](../README.md).
 

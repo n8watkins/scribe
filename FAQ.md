@@ -12,7 +12,7 @@ The app icon **is** the Scribe mic logo in every build. If the **window** icon l
 
 Yes to both.
 
-- **Notification:** Scribe polls GitHub for new releases shortly after launch, on a timer, and whenever you refocus the window. When one is found you get an **OS notification** (even when minimized) plus an **"Update available"** chip in the top-right.
+- **Notification:** Scribe checks for new releases shortly after launch, every six hours, and whenever you refocus the window. When one is found you get an **OS notification** (even when minimized) plus an **"Update available"** chip in the top-right.
 - **Install from the app:** **About → "Check for updates"**, then click the **"Install update"** button that appears — *that* one downloads, installs, and restarts. ("Check for updates" alone only checks.)
 - **Don't want it?** The top-right chip has **"View"** (opens the release notes) and a **dismiss "✕"** — dismissing hides it (you can still update later from About) and it stays dismissed for that version until a newer one ships.
 - **If the in-app install ever fails:** grab the installer from the [latest release](https://github.com/n8watkins/scribe/releases/latest) and run it.
@@ -41,4 +41,6 @@ Two reasons, both addressed in 0.5.13+:
 - **Timing.** A new release only exists once CI finishes publishing it. If you were running an older build *before* the new one was published, there was correctly nothing to notify about until then. The check also used to run only every 2 hours.
 - **Reach.** The old alert was an in-app topbar button + toast, which you can't see while Scribe is minimized to the tray.
 
-From 0.5.13 the app checks ~5s after launch, every 30 minutes, **and whenever you refocus the window**, and it fires a real **OS notification** (even when minimized) the first time it sees a new version. To update: **About → Check for updates → Install update**. If the in-app installer ever fails to apply, you can always grab the installer directly from the [latest release](https://github.com/n8watkins/scribe/releases/latest).
+Current builds check about five seconds after launch, every six hours, **and whenever you refocus the window**, and they fire a real **OS notification** (even when minimized) the first time they see a new version.
+To update, use **About → Check for updates → Install update**.
+If the in-app installer ever fails to apply, you can always grab the installer directly from the [latest release](https://github.com/n8watkins/scribe/releases/latest).
