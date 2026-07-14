@@ -363,9 +363,8 @@ pub(crate) fn store_credential(
         })
 }
 
-/// GET `/user` to learn the connected account's `login` (for display and to gate
-/// org repo auto-create). api.github.com requires a User-Agent header, which the
-/// shared `http_client()` builder sets.
+/// GET `/user` to learn the connected account's `login` for display.
+/// api.github.com requires a User-Agent header, which the shared `http_client()` builder sets.
 pub fn fetch_login(service: &str) -> Result<String, CommandError> {
     let token = access_token(service)?;
     let client = http_client()?;
