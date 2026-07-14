@@ -80,6 +80,9 @@ describe("SyncView backup status", () => {
     render(<SyncView actions={actions} settings={settings} />);
 
     expect(await screen.findByText("Ready to back up")).toBeInTheDocument();
+    expect(
+      screen.getByText(/existing private repo installed for Scribe Local Backup/),
+    ).toBeInTheDocument();
     expect(screen.getByText("Notes and dictations")).toBeInTheDocument();
     expect(
       screen.getByText("Not run for this repository"),

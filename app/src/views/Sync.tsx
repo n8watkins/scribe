@@ -370,7 +370,7 @@ export function SyncView({
             automatically as you go, and you can force one any time.
           </p>
           <SettingRow
-            description="The private repo to write notes to, as owner/name (e.g. alice/scribe-notes). Created automatically if it's yours and missing."
+            description="An existing private repo installed for Scribe Local Backup, as owner/name (e.g. alice/scribe-notes)."
             label="Repository"
           >
             <RepoInput

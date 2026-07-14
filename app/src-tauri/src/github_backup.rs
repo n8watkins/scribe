@@ -141,10 +141,9 @@ impl GitHubBackup {
         })
     }
 
-    /// Ensures the target repo exists. GET the repo; 200 → Ok. On 404, create it
-    /// (private, auto-init) but ONLY when `owner` is the authenticated user —
-    /// otherwise we'd land it in the wrong account, so we return a clear error
-    /// asking the user to create `owner/name` manually.
+    /// Ensures the target repo exists and is private. GitHub App installations
+    /// deliberately have Contents access without repository-administration
+    /// access, so a missing or unselected repository must be prepared on GitHub.
     pub fn ensure_repo(&self) -> Result<(), CommandError> {
         let url = format!("{}/repos/{}/{}", self.api, self.owner, self.repo);
         let (status, json) = self.get_json(&url)?;
@@ -171,51 +170,15 @@ impl GitHubBackup {
             )));
         }
 
-        // 404: create it under the authenticated user, if that's the owner.
-        let login = self.fetch_login()?;
-        if login.trim().is_empty() {
-            // Without a confirmed login we can't tell whose account to create the
-            // repo under, so don't guess (and don't print a nonsense "owned by X,
-            // not your account \"\"" message). Ask the user to create it manually.
-            return Err(failure(format!(
-                "Could not confirm your GitHub username to safely auto-create {}/{}. \
-                 Create it on GitHub first, then retry.",
+        Err(CommandError::new(
+            "github_repo_missing",
+            format!(
+                "The private repository {}/{} was not found or is not installed for \
+                 Scribe Local Backup. Create it on GitHub, grant the app access to it, \
+                 then retry.",
                 self.owner, self.repo
-            )));
-        }
-        if !login.eq_ignore_ascii_case(&self.owner) {
-            return Err(failure(format!(
-                "The repository {}/{} does not exist and could not be created automatically \
-                 (it is owned by \"{}\", not your account \"{}\"). Create it on GitHub first.",
-                self.owner, self.repo, self.owner, login
-            )));
-        }
-
-        let create_url = format!("{}/user/repos", self.api);
-        let body = json!({ "name": self.repo, "private": true, "auto_init": true });
-        let response = self
-            .client
-            .post(&create_url)
-            .timeout(TIMEOUT)
-            .header("Authorization", self.bearer())
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .body(body.to_string())
-            .send()
-            .map_err(|error| failure(format!("Could not reach GitHub. {error}")))?;
-        let status = response.status();
-        let text = response
-            .text()
-            .map_err(|error| failure(format!("Could not read GitHub's response. {error}")))?;
-        if !status.is_success() {
-            return Err(failure(format!(
-                "GitHub returned HTTP {status} creating the repository {}/{}. {}",
-                self.owner,
-                self.repo,
-                truncate(&text, 300)
-            )));
-        }
-        Ok(())
+            ),
+        ))
     }
 
     /// GET the file's blob sha (None on 404), then PUT the new content (base64,
@@ -305,21 +268,6 @@ impl GitHubBackup {
             "GitHub returned HTTP {status} writing {path}. {}",
             truncate(&text, 300)
         )))
-    }
-
-    fn fetch_login(&self) -> Result<String, CommandError> {
-        let url = format!("{}/user", self.api);
-        let (status, json) = self.get_json(&url)?;
-        if !status.is_success() {
-            return Err(failure(format!(
-                "GitHub returned HTTP {status} reading the authenticated account."
-            )));
-        }
-        Ok(json
-            .get("login")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string())
     }
 
     /// GET a URL with the GitHub headers, returning (status, parsed-json). A
@@ -741,6 +689,23 @@ mod tests {
         // Only the one GET happened — we never reached a create/PUT.
         let requests = handle.join().unwrap();
         assert_eq!(requests.len(), 1);
+    }
+
+    #[test]
+    fn ensure_repo_explains_missing_or_unselected_repo() {
+        let (base, handle) = mock_server(vec![(
+            404,
+            serde_json::json!({ "message": "Not Found" }).to_string(),
+        )]);
+
+        let backup = GitHubBackup::with_base("tok", "alice", "scribe-notes", &base);
+        let error = backup.ensure_repo().unwrap_err();
+        assert_eq!(error.code, "github_repo_missing");
+        assert!(error.message.contains("grant the app access"));
+        assert!(error.message.contains("alice/scribe-notes"));
+
+        let requests = handle.join().unwrap();
+        assert_eq!(requests.len(), 1, "Scribe must not request repo creation");
     }
 
     #[test]
