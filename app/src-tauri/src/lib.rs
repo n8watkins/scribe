@@ -12,6 +12,7 @@ pub mod github_backup;
 pub mod github_oauth;
 pub mod gpu;
 pub mod hotkeys;
+pub mod import;
 pub mod incremental;
 pub mod model_manager;
 pub mod models;
@@ -23,6 +24,7 @@ pub mod settings;
 pub mod state_server;
 pub mod stats;
 pub mod status_file;
+pub mod sync_history;
 pub mod text_replace;
 pub mod transcript;
 pub mod tray;
@@ -196,7 +198,12 @@ fn install_panic_logger() {
         let location = info
             .location()
             .map(|location| {
-                format!("{}:{}:{}", location.file(), location.line(), location.column())
+                format!(
+                    "{}:{}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                )
             })
             .unwrap_or_else(|| "unknown location".to_string());
         let message = info
@@ -487,9 +494,13 @@ pub fn run() {
             commands::github_status,
             commands::github_device_start,
             commands::github_device_poll,
+            commands::github_device_cancel,
             commands::github_disconnect,
             commands::github_sync_now,
-            commands::export_transcripts
+            commands::github_sync_activity,
+            commands::export_transcripts,
+            commands::preview_transcript_import,
+            commands::restore_transcript_import
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

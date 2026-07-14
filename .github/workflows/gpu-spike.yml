@@ -36,7 +36,7 @@ jobs:
       MODEL: ${{ github.event.inputs.model || 'tiny.en' }}
     steps:
       - name: Install Vulkan SDK + Lavapipe (software Vulkan device)
-        uses: jakoch/install-vulkan-sdk-action@v1.5.5
+        uses: jakoch/install-vulkan-sdk-action@b394a1abed9cb019d8e637eeadac93d73e0853da # v1.5.5
         with:
           vulkan_version: 1.4.350.0
           install_runtime: true
@@ -58,7 +58,7 @@ jobs:
           Push-Location wcpp; Write-Host "HEAD: $(git rev-parse HEAD)"; Pop-Location
 
       - name: Set up MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
         with:
           arch: x64
 
@@ -162,14 +162,14 @@ jobs:
           Get-ChildItem $out | Select-Object Name,Length
 
       - name: Upload Vulkan binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: whisper-vulkan-windows-${{ github.event.inputs.whisper_ref || 'v1.9.1' }}
           path: wcpp/vulkan-bin/**
 
       - name: Upload probe logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: spike-logs
           path: |

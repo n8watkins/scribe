@@ -10,7 +10,7 @@
 //! same discipline the reader (T-Hub) uses, so a reader never observes a
 //! half-written or truncated payload.
 
-use crate::app_state::{AppStatus, AppStateSnapshot};
+use crate::app_state::{AppStateSnapshot, AppStatus};
 use crate::dictation_state::{self, SCHEMA_VERSION};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -176,7 +176,10 @@ mod tests {
         let value: serde_json::Value = serde_json::to_value(&payload).unwrap();
         assert_eq!(value["schemaVersion"], 1);
         assert_eq!(value["app"], "scribe");
-        assert!(value.get("appVersion").is_some(), "appVersion must be present");
+        assert!(
+            value.get("appVersion").is_some(),
+            "appVersion must be present"
+        );
         assert_eq!(value["status"], "Recording");
         assert_eq!(value["dictating"], true);
         assert_eq!(value["busy"], true);
@@ -191,10 +194,13 @@ mod tests {
 
     #[test]
     fn write_atomic_writes_valid_json_and_leaves_no_temp() {
-        let dir =
-            std::env::temp_dir().join(format!("scribe-status-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("scribe-status-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let payload = build(&snapshot(AppStatus::Stopping), Utc::now(), std::process::id());
+        let payload = build(
+            &snapshot(AppStatus::Stopping),
+            Utc::now(),
+            std::process::id(),
+        );
         write_atomic(&dir, &payload).unwrap();
 
         let contents = std::fs::read_to_string(dir.join("status.json")).unwrap();

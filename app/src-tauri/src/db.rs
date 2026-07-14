@@ -5,9 +5,11 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::{
     error::CommandError,
+    import::ImportReport,
     models::{ModelRecord, ModelStatus},
     settings::AppSettings,
     stats::BasicStats,
+    sync_history::GitHubSyncActivity,
     transcript::{metadata_for_text, Transcript, TranscriptSearchResult, TranscriptSort},
 };
 
@@ -21,6 +23,7 @@ const SETTINGS_KEY: &str = "app_settings";
 const CORRUPT_SETTINGS_KEY: &str = "app_settings_corrupt";
 const LAST_TRANSCRIPT_ID_KEY: &str = "last_transcript_id";
 const LAST_TRANSCRIPT_BUFFER_KEY: &str = "last_transcript_buffer";
+const GITHUB_SYNC_ACTIVITY_KEY: &str = "github_sync_activity";
 
 pub struct Database {
     conn: Connection,
@@ -100,6 +103,67 @@ impl Database {
         Ok(())
     }
 
+    pub fn save_settings_and_clear_github_activity(
+        &mut self,
+        settings: &AppSettings,
+    ) -> Result<(), CommandError> {
+        settings
+            .validate()
+            .map_err(CommandError::invalid_settings)?;
+        let transaction = self.conn.transaction().map_err(CommandError::database)?;
+        transaction
+            .execute(
+                "INSERT INTO settings (key, value, updated_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at",
+                params![
+                    SETTINGS_KEY,
+                    serde_json::to_string(settings)?,
+                    Utc::now().to_rfc3339()
+                ],
+            )
+            .map_err(CommandError::database)?;
+        transaction
+            .execute(
+                "DELETE FROM settings WHERE key = ?1",
+                [GITHUB_SYNC_ACTIVITY_KEY],
+            )
+            .map_err(CommandError::database)?;
+        transaction.commit().map_err(CommandError::database)
+    }
+
+    pub fn get_github_sync_activity(&self) -> Result<Option<GitHubSyncActivity>, CommandError> {
+        let Some(value) = self.get_setting_value(GITHUB_SYNC_ACTIVITY_KEY)? else {
+            return Ok(None);
+        };
+        match serde_json::from_str(&value) {
+            Ok(activity) => Ok(Some(activity)),
+            Err(error) => {
+                log::warn!("Ignoring corrupt GitHub sync activity: {error}");
+                Ok(None)
+            }
+        }
+    }
+
+    pub fn save_github_sync_activity(
+        &self,
+        activity: &GitHubSyncActivity,
+    ) -> Result<(), CommandError> {
+        self.upsert_setting(GITHUB_SYNC_ACTIVITY_KEY, &serde_json::to_string(activity)?)
+    }
+
+    pub fn clear_github_sync_activity(&self) -> Result<(), CommandError> {
+        self.conn
+            .execute(
+                "DELETE FROM settings WHERE key = ?1",
+                [GITHUB_SYNC_ACTIVITY_KEY],
+            )
+            .map_err(CommandError::database)?;
+        Ok(())
+    }
+
     pub fn list_recent_transcripts(&self, limit: u32) -> Result<Vec<Transcript>, CommandError> {
         let mut stmt = self
             .conn
@@ -126,6 +190,9 @@ impl Database {
     /// sort, paginated by `limit`/`offset`. All user-supplied values are passed
     /// as bound params; only the fixed WHERE fragments and the constant ORDER BY
     /// column list are interpolated, so user text can never reach the SQL string.
+    // This mirrors the public search contract and keeps all optional filters
+    // explicit at call sites.
+    #[allow(clippy::too_many_arguments)]
     pub fn search_transcripts(
         &self,
         query: Option<&str>,
@@ -287,7 +354,7 @@ impl Database {
             ));
         }
 
-        found.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        found.sort_by_key(|transcript| transcript.created_at);
         let merged = found
             .iter()
             .map(|transcript| transcript.text.as_str())
@@ -380,6 +447,73 @@ impl Database {
         }
         self.upsert_setting(LAST_TRANSCRIPT_ID_KEY, &transcript.id)?;
         Ok(())
+    }
+
+    pub fn count_existing_transcripts(
+        &self,
+        transcripts: &[Transcript],
+    ) -> Result<u32, CommandError> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT 1 FROM transcripts WHERE id = ?1 LIMIT 1")
+            .map_err(CommandError::database)?;
+        let mut count = 0_u32;
+        for transcript in transcripts {
+            let exists = statement
+                .query_row([&transcript.id], |_| Ok(()))
+                .optional()
+                .map_err(CommandError::database)?
+                .is_some();
+            count += u32::from(exists);
+        }
+        Ok(count)
+    }
+
+    /// Restores prepared transcripts in one transaction. Existing ids are
+    /// skipped by default. Explicit replacement updates transcript metadata
+    /// while preserving any local audio path already attached to that row.
+    pub fn restore_transcripts(
+        &mut self,
+        transcripts: &[Transcript],
+        replace_existing: bool,
+    ) -> Result<ImportReport, CommandError> {
+        let transaction = self.conn.transaction().map_err(CommandError::database)?;
+        let mut imported = 0_u32;
+        let mut skipped = 0_u32;
+        let mut replaced = 0_u32;
+
+        for transcript in transcripts {
+            let exists = transaction
+                .query_row(
+                    "SELECT 1 FROM transcripts WHERE id = ?1 LIMIT 1",
+                    [&transcript.id],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(CommandError::database)?
+                .is_some();
+            if exists && !replace_existing {
+                skipped += 1;
+                continue;
+            }
+
+            if exists {
+                write_restored_transcript(&transaction, transcript, true)
+                    .map_err(CommandError::database)?;
+                replaced += 1;
+            } else {
+                write_restored_transcript(&transaction, transcript, false)
+                    .map_err(CommandError::database)?;
+                imported += 1;
+            }
+        }
+
+        transaction.commit().map_err(CommandError::database)?;
+        Ok(ImportReport {
+            imported,
+            skipped,
+            replaced,
+        })
     }
 
     pub fn list_model_records(&self) -> Result<Vec<ModelRecord>, CommandError> {
@@ -703,10 +837,7 @@ impl Database {
     /// the notes counterpart to `enforce_history_retention`. Notes default to
     /// no retention (kept forever); this is a no-op unless the user opted into
     /// a notes window. The two retentions never touch each other's rows.
-    pub fn enforce_notes_retention(
-        &self,
-        retention_days: Option<u16>,
-    ) -> Result<(), CommandError> {
+    pub fn enforce_notes_retention(&self, retention_days: Option<u16>) -> Result<(), CommandError> {
         let Some(retention_days) = retention_days else {
             return Ok(());
         };
@@ -833,6 +964,56 @@ fn transcript_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Transcript> 
     })
 }
 
+fn write_restored_transcript(
+    connection: &Connection,
+    transcript: &Transcript,
+    replace: bool,
+) -> rusqlite::Result<usize> {
+    let sql = if replace {
+        "UPDATE transcripts SET
+            text = ?2, created_at = ?3, duration_ms = ?4,
+            word_count = ?5, character_count = ?6, model_id = ?7,
+            language = ?8, output_mode = ?9, paste_method = ?10,
+            transcription_latency_ms = ?11, is_note = ?12,
+            analysis = ?13, analysis_model = ?14,
+            analysis_created_at = ?15
+         WHERE id = ?1"
+    } else {
+        "INSERT INTO transcripts (
+            id, text, created_at, duration_ms, word_count,
+            character_count, model_id, language, output_mode,
+            paste_method, transcription_latency_ms, audio_path,
+            is_note, analysis, analysis_model, analysis_created_at
+         ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+            NULL, ?12, ?13, ?14, ?15
+         )"
+    };
+    connection.execute(
+        sql,
+        params![
+            &transcript.id,
+            &transcript.text,
+            transcript.created_at.to_rfc3339(),
+            transcript.duration_ms,
+            transcript.word_count,
+            transcript.character_count,
+            transcript.model_id.as_deref(),
+            transcript.language.as_deref(),
+            transcript.output_mode.as_ref().map(enum_to_json_string),
+            transcript.paste_method.as_ref().map(enum_to_json_string),
+            transcript.transcription_latency_ms,
+            transcript.is_note,
+            transcript.analysis.as_deref(),
+            transcript.analysis_model.as_deref(),
+            transcript
+                .analysis_created_at
+                .as_ref()
+                .map(|date| date.to_rfc3339()),
+        ],
+    )
+}
+
 fn model_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ModelRecord> {
     let status: String = row.get(5)?;
     let downloaded_at: Option<String> = row.get(8)?;
@@ -895,6 +1076,7 @@ fn average_for(total: Option<i64>, count: u32) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sync_history::{GitHubSyncActivity, SyncOutcome, SyncSource};
     use crate::transcript::Transcript;
     use chrono::Duration;
 
@@ -906,6 +1088,83 @@ mod tests {
             Some("en".to_string()),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn github_sync_activity_round_trips_and_corruption_is_non_fatal() {
+        let db = Database::in_memory().unwrap();
+        let activity = GitHubSyncActivity {
+            completed_at: Utc::now(),
+            outcome: SyncOutcome::Error,
+            source: SyncSource::Automatic,
+            repo: "alice/notes".into(),
+            synced_items: 2,
+            files_written: 1,
+            error_code: Some("github_sync_failed".into()),
+            error_message: Some("Network unavailable".into()),
+        };
+
+        db.save_github_sync_activity(&activity).unwrap();
+        assert_eq!(db.get_github_sync_activity().unwrap(), Some(activity));
+
+        db.clear_github_sync_activity().unwrap();
+        assert_eq!(db.get_github_sync_activity().unwrap(), None);
+
+        db.upsert_setting(GITHUB_SYNC_ACTIVITY_KEY, "not json")
+            .unwrap();
+        assert_eq!(db.get_github_sync_activity().unwrap(), None);
+    }
+
+    #[test]
+    fn restore_skips_conflicts_and_inserts_new_rows_atomically() {
+        let mut db = Database::in_memory().unwrap();
+        let existing = transcript_with_text("local copy");
+        db.save_last_transcript(&existing).unwrap();
+        let mut conflicting = existing.clone();
+        conflicting.text = "backup copy".into();
+        let new = transcript_with_text("new from backup");
+
+        assert_eq!(
+            db.count_existing_transcripts(&[conflicting.clone(), new.clone()])
+                .unwrap(),
+            1
+        );
+        let report = db
+            .restore_transcripts(&[conflicting, new.clone()], false)
+            .unwrap();
+
+        assert_eq!(
+            report,
+            ImportReport {
+                imported: 1,
+                skipped: 1,
+                replaced: 0,
+            }
+        );
+        assert_eq!(
+            db.get_transcript_by_id(&existing.id).unwrap(),
+            Some(existing)
+        );
+        assert_eq!(db.get_transcript_by_id(&new.id).unwrap(), Some(new));
+    }
+
+    #[test]
+    fn explicit_restore_replacement_preserves_local_audio() {
+        let mut db = Database::in_memory().unwrap();
+        let mut existing = transcript_with_text("local copy");
+        existing.audio_path = Some("C:\\local\\clip.wav".into());
+        db.save_last_transcript(&existing).unwrap();
+        let mut replacement = existing.clone();
+        replacement.text = "backup copy".into();
+        replacement.audio_path = None;
+
+        let report = db.restore_transcripts(&[replacement], true).unwrap();
+        let restored = db.get_transcript_by_id(&existing.id).unwrap().unwrap();
+
+        assert_eq!(report.imported, 0);
+        assert_eq!(report.replaced, 1);
+        assert_eq!(restored.text, "backup copy");
+        assert_eq!(restored.audio_path, existing.audio_path);
     }
 
     #[test]
@@ -972,7 +1231,10 @@ mod tests {
         let remaining = db
             .search_transcripts(None, false, None, None, TranscriptSort::default(), 10, 0)
             .unwrap();
-        assert_eq!(remaining.total, 1, "note must survive clear_transcript_history");
+        assert_eq!(
+            remaining.total, 1,
+            "note must survive clear_transcript_history"
+        );
         assert!(remaining.transcripts[0].is_note);
 
         // clear_notes then removes the note.
@@ -1094,8 +1356,10 @@ mod tests {
     #[test]
     fn settings_round_trip_through_database() {
         let db = Database::in_memory().unwrap();
-        let mut settings = AppSettings::default();
-        settings.notifications_enabled = false;
+        let settings = AppSettings {
+            notifications_enabled: false,
+            ..AppSettings::default()
+        };
 
         db.save_settings(&settings).unwrap();
 

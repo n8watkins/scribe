@@ -170,7 +170,6 @@ export function HistoryView({
   // (which also raced and could read a stale `offset`).
   useEffect(() => {
     void loadHistoryRef.current(offset);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.lastTranscript?.id, data.stats.dictationsToday, offset]);
 
   const refreshAfterMutation = useCallback(async () => {
@@ -448,12 +447,14 @@ export function HistoryView({
                   setSyncNotice(null);
                   setHistoryError(null);
                   githubSyncNow()
-                    .then((report) =>
+                    .then((report) => {
                       setSyncNotice(
-                        `Synced ${report.syncedNotes} note(s) to GitHub.`,
-                      ),
+                        `Backed up ${report.syncedNotes} item(s) to GitHub.`,
+                      );
+                    })
+                    .catch((cause) =>
+                      setHistoryError(commandErrorMessage(cause)),
                     )
-                    .catch((cause) => setHistoryError(commandErrorMessage(cause)))
                     .finally(() => setSyncingToGithub(false));
                 }}
                 type="button"
@@ -575,7 +576,10 @@ export function HistoryView({
           </span>
         </div>
         {historyError ? (
-          <InlineError message={historyError} onRetry={() => loadHistory(offset)} />
+          <InlineError
+            message={historyError}
+            onRetry={() => loadHistory(offset)}
+          />
         ) : null}
         {!settings.historyEnabled ? (
           <EmptyState message="History is disabled. Existing records remain available until you delete them." />
@@ -661,7 +665,9 @@ export function HistoryView({
           >
             <div className="section-heading compact">
               <h2>Combined transcript</h2>
-              <span className="muted">{selectedCount} selected, oldest first</span>
+              <span className="muted">
+                {selectedCount} selected, oldest first
+              </span>
             </div>
             <textarea
               className="combine-preview"

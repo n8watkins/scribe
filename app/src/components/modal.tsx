@@ -1,10 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import "./modal.css";
 
 export function ConfirmDialog({
   busy = false,
   cancelLabel = "Cancel",
+  children,
   confirmLabel = "Confirm",
   danger = false,
   message,
@@ -15,6 +16,7 @@ export function ConfirmDialog({
 }: {
   busy?: boolean;
   cancelLabel?: string;
+  children?: ReactNode;
   confirmLabel?: string;
   danger?: boolean;
   message: string;
@@ -24,6 +26,7 @@ export function ConfirmDialog({
   title: string;
 }) {
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const titleId = useId();
 
   // Close on Escape while open; move focus to the confirm button so the dialog
   // is keyboard-operable the moment it appears.
@@ -60,17 +63,22 @@ export function ConfirmDialog({
       role="presentation"
     >
       <div
+        aria-labelledby={titleId}
         aria-modal="true"
         className={danger ? "modal-panel danger" : "modal-panel"}
         role="dialog"
       >
         <div className="modal-heading">
-          <span className={danger ? "modal-icon danger" : "modal-icon"} aria-hidden="true">
+          <span
+            className={danger ? "modal-icon danger" : "modal-icon"}
+            aria-hidden="true"
+          >
             <AlertTriangle size={16} />
           </span>
-          <h2>{title}</h2>
+          <h2 id={titleId}>{title}</h2>
         </div>
         <p className="modal-message">{message}</p>
+        {children}
         <div className="modal-actions">
           <button
             className="ghost-button"

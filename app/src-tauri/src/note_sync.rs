@@ -11,6 +11,7 @@ use tauri::{AppHandle, Manager};
 use crate::commands::BackendState;
 use crate::error::CommandError;
 use crate::github_backup::{GitHubBackup, SyncReport};
+use crate::sync_history::{GitHubSyncActivity, SyncSource};
 
 /// Quiet period after the last note save before a sync fires, so rapid notes
 /// collapse into one upload.
@@ -141,6 +142,83 @@ pub fn collect_and_sync_all_transcripts(
     clear_token_if_unauthorized(service, result)
 }
 
+#[derive(Debug)]
+pub struct SyncAttempt {
+    pub repo: String,
+    pub report: SyncReport,
+    pub error: Option<CommandError>,
+}
+
+impl SyncAttempt {
+    pub fn into_result(self) -> Result<SyncReport, CommandError> {
+        match self.error {
+            Some(error) => Err(error),
+            None => Ok(self.report),
+        }
+    }
+}
+
+/// Runs both configured backup paths so one destination can still succeed when
+/// the other fails. The first failure is returned while successful progress is
+/// retained for persisted health reporting.
+pub fn collect_sync_attempt(app: &AppHandle, service: &str) -> SyncAttempt {
+    let repo = app
+        .state::<BackendState>()
+        .db()
+        .and_then(|db| db.get_settings())
+        .map(|settings| settings.github_repo)
+        .unwrap_or_default();
+    combine_sync_results(
+        repo,
+        collect_and_sync(app, service),
+        collect_and_sync_all_transcripts(app, service),
+    )
+}
+
+pub fn record_sync_attempt(app: &AppHandle, source: SyncSource, attempt: &SyncAttempt) {
+    let state = app.state::<BackendState>();
+    let save = (|| -> Result<(), CommandError> {
+        let db = state.db()?;
+        let activity = GitHubSyncActivity::from_attempt(
+            source,
+            attempt.repo.clone(),
+            &attempt.report,
+            attempt.error.as_ref(),
+        );
+        db.save_github_sync_activity(&activity)
+    })();
+    if let Err(error) = save {
+        log::warn!("Could not save GitHub backup status: {}", error.message);
+    }
+}
+
+fn combine_sync_results(
+    repo: String,
+    notes: Result<SyncReport, CommandError>,
+    transcripts: Result<SyncReport, CommandError>,
+) -> SyncAttempt {
+    let mut report = SyncReport {
+        synced_notes: 0,
+        files_written: 0,
+    };
+    let mut first_error = None;
+    for result in [notes, transcripts] {
+        match result {
+            Ok(next) => {
+                report.synced_notes += next.synced_notes;
+                report.files_written += next.files_written;
+            }
+            Err(error) if first_error.is_none() => first_error = Some(error),
+            Err(_) => {}
+        }
+    }
+    SyncAttempt {
+        repo,
+        report,
+        error: first_error,
+    }
+}
+
 /// Owns the channel that note-save events are pushed onto. Held in Tauri's
 /// managed state; dropping it (on app exit) ends the worker thread.
 pub struct NoteSyncWorker {
@@ -187,34 +265,56 @@ fn worker_loop(app: AppHandle, service: String, rx: Receiver<()>) {
         let _guard = state.github_sync_lock();
 
         // A github_unauthorized error has already cleared the dead token inside
-        // collect_*, so by the time we log here the connection state is clean.
-        match collect_and_sync(&app, &service) {
-            Ok(report) => log::info!(
-                "Auto-synced {} note(s) into {} GitHub file(s)",
-                report.synced_notes,
-                report.files_written
-            ),
-            Err(error) => {
-                log::warn!("Auto-sync to GitHub failed: {}", error.message)
-            }
-        }
-
-        // When "back up all transcripts" is on, also push the dictation
-        // transcripts to their own folder. Gated inside
-        // collect_and_sync_all_transcripts on the setting, and kept resilient:
-        // a GitHub error here is logged, never propagated, so it can't take the
-        // worker thread down (the note sync above already succeeded).
-        match collect_and_sync_all_transcripts(&app, &service) {
-            Ok(report) if report.files_written > 0 => log::info!(
-                "Auto-backed-up {} transcript(s) into {} GitHub file(s)",
-                report.synced_notes,
-                report.files_written
-            ),
-            Ok(_) => {}
-            Err(error) => log::warn!(
-                "Auto-backup of all transcripts to GitHub failed: {}",
+        // collect_*, so by the time we record this attempt connection state is
+        // clean. Both configured paths run even if one fails.
+        let attempt = collect_sync_attempt(&app, &service);
+        record_sync_attempt(&app, SyncSource::Automatic, &attempt);
+        if let Some(error) = &attempt.error {
+            log::warn!(
+                "Automatic GitHub backup failed after syncing {} item(s) into {} file(s): {}",
+                attempt.report.synced_notes,
+                attempt.report.files_written,
                 error.message
-            ),
+            );
+        } else {
+            log::info!(
+                "Automatically backed up {} item(s) into {} GitHub file(s)",
+                attempt.report.synced_notes,
+                attempt.report.files_written
+            );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn report(items: u32, files: u32) -> Result<SyncReport, CommandError> {
+        Ok(SyncReport {
+            synced_notes: items,
+            files_written: files,
+        })
+    }
+
+    #[test]
+    fn combines_successful_note_and_transcript_progress() {
+        let attempt = combine_sync_results("alice/notes".into(), report(2, 1), report(3, 2));
+        assert_eq!(attempt.repo, "alice/notes");
+        assert_eq!(attempt.report.synced_notes, 5);
+        assert_eq!(attempt.report.files_written, 3);
+        assert!(attempt.error.is_none());
+    }
+
+    #[test]
+    fn keeps_partial_progress_and_first_error() {
+        let attempt = combine_sync_results(
+            "alice/notes".into(),
+            Err(CommandError::new("notes_failed", "notes failed")),
+            report(3, 2),
+        );
+        assert_eq!(attempt.report.synced_notes, 3);
+        assert_eq!(attempt.report.files_written, 2);
+        assert_eq!(attempt.error.unwrap().code, "notes_failed");
     }
 }

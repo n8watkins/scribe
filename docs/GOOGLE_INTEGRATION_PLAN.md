@@ -1,7 +1,12 @@
-# Scribe — Google Drive Sync Plan (Gemini PINNED)
+# Scribe - Google Drive Sync Plan (superseded)
 
-Status: PLANNED (not started). Written 2026-06-12, refined same day with owner
-decisions. Read `docs/HANDOFF.md` for current project state.
+> **Superseded on 2026-06-21.**
+> Scribe now uses optional private GitHub repository backup instead of Google Drive.
+> This file preserves the rejected Drive design and its historical product decisions; it is not an implementation plan or a description of current behavior.
+> Current backup behavior is documented in the [root README](../README.md), and current GitHub App build configuration is documented in the [app README](../app/README.md).
+
+Status: SUPERSEDED (not to be implemented).
+Written 2026-06-12 and refined the same day with owner decisions.
 
 ## Scope right now
 

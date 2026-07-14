@@ -15,7 +15,6 @@ Private, local-first dictation for Windows. Hold a hotkey, talk, release — you
 
 **Make the text better**
 
-- **AI dictation cleanup (optional):** polish each dictation with a local LLM before it's saved/pasted — strips filler ("um/uh/like"), fixes punctuation and casing, light formatting. Built-in modes (Standard / Email / Chat / Code) or a custom prompt. Off by default; non-blocking with a raw-text fallback so a slow or offline LLM never stalls your dictation.
 - **Selected-text transform:** highlight text in any app, tap a hotkey, and speak (or type) an instruction — "make this concise", "translate to Spanish", "fix grammar" — and Scribe rewrites the selection in place. An inline AI editor driven by your local LLM.
 - **Dictionary:** a **context hint** that primes Whisper toward your jargon/names (better recognition), plus a deterministic **replacements** table ("say X → get Y", e.g. "my email" → your address, fix "clawed" → "Claude") applied to every transcript.
 
@@ -31,14 +30,14 @@ Private, local-first dictation for Windows. Hold a hotkey, talk, release — you
 
 **Sync, back up, export**
 
-- **Google Drive sync (optional, your account):** push dictated notes to your own Drive as dated Markdown, and optionally back up every transcript. An end-of-day pass can have your local LLM reorganize the day's notes. Text-only, comfortably inside the free Drive tier.
+- **GitHub backup (optional, your account):** push dictated notes as dated Markdown to a private repository you control, and optionally back up every transcript.
 - **Export:** export transcripts to **Markdown / CSV / JSON** locally — no account needed.
 
 **Stays out of your way**
 
 - **All hotkeys rebindable** from the Hotkeys tab, with per-bind **press / release** triggers and inline conflict reporting.
 - **Model manager:** download and switch between curated Whisper models (tiny → large-v3-turbo) from the Models tab; they run entirely offline after the one-time download.
-- **Auto-updates:** Scribe checks GitHub for new releases (on launch, on refocus, and on a timer), fires an OS notification when one is found, and installs it in-app. The updater artifact is cryptographically signed. Can be turned off.
+- **Auto-updates:** Scribe checks GitHub for new releases shortly after launch, on refocus, and every six hours, fires an OS notification when one is found, and installs it in-app. The updater artifact is cryptographically signed. Automatic checks can be turned off.
 - **Tray app:** closing the window minimizes to the tray; dictation hotkeys keep working. Quit from the tray icon.
 
 Windows 10/11 x64 only, by design. There are no plans to over-build this for other platforms.
@@ -52,7 +51,8 @@ Windows 10/11 x64 only, by design. There are no plans to over-build this for oth
 3. Open the **Audio** tab, pick your microphone, and use **Record test** / **Play test** to confirm it hears you.
 4. Put your cursor in any app, hold `Ctrl+Win`, and talk.
 
-To use AI cleanup, selected-text transform, or note analysis, run a local OpenAI-compatible LLM server ([LM Studio](https://lmstudio.ai/) or [Ollama](https://ollama.com/)) and point Scribe at it in Settings (default `http://127.0.0.1:1234/v1`). These features are optional and off by default — core dictation needs no LLM.
+To use selected-text transform or note analysis, run a local OpenAI-compatible LLM server ([LM Studio](https://lmstudio.ai/) or [Ollama](https://ollama.com/)) and point Scribe at it in Settings (default `http://127.0.0.1:1234/v1`).
+These features are optional and off by default; core dictation needs no LLM.
 
 ### Default hotkeys
 
@@ -70,7 +70,11 @@ If a hotkey conflicts with another app, rebind it in the **Hotkeys** tab — con
 
 ### Privacy
 
-Audio is captured to a temp folder, transcribed locally, and the temp audio is deleted. Transcripts live in a local SQLite database under `%APPDATA%\com.natkins.scribe\` (the **Data & Privacy** tab can open the folder, clear history, or disable history entirely). Nothing is uploaded anywhere unless you turn on Google Drive sync (to your own account). The only built-in network access is the one-time model download you trigger yourself and the update check against GitHub. The optional LLM features talk only to the local server you configure.
+Audio is captured to a temp folder, transcribed locally, and the temp audio is deleted.
+Transcripts live in a local SQLite database under `%APPDATA%\com.natkins.scribe\` (the **Data & Privacy** tab can open the folder, clear history, or disable history entirely).
+Core dictation does not upload your audio or transcripts.
+Network access is used for model downloads you trigger, update checks against GitHub, the GitHub authorization flow, and optional GitHub backup when you enable it.
+Optional LLM features send their prompts to the OpenAI-compatible server URL you configure, which defaults to a local LM Studio endpoint.
 
 ## Building from source
 
@@ -116,9 +120,9 @@ Contributions and issue reports are welcome.
 
 [MIT](LICENSE)
 
-## Code signing
+## Release integrity
 
-Windows releases of Scribe are code-signed through the [SignPath Foundation](https://signpath.org/)'s
-free code-signing program for open-source projects (signing infrastructure by
-[SignPath.io](https://signpath.io/)). The code-signing certificate is issued in the name of the
-SignPath Foundation.
+Scribe's Windows executables and installers are intentionally not Authenticode-signed, so Windows SmartScreen can show an unrecognized-app warning on first install.
+Authenticode code signing is not on the roadmap.
+This is separate from Tauri updater signing: update metadata and updater artifacts are cryptographically signed so the installed app can reject tampered updates.
+Release automation also publishes SHA-256 checksums and a software bill of materials, then smoke-tests both the NSIS and MSI installers before publication.

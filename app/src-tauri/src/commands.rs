@@ -1,5 +1,6 @@
 use std::sync::Mutex;
 
+use serde::Serialize;
 use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
 
@@ -11,6 +12,7 @@ use crate::{
     error::CommandError,
     file_transcribe::{self, TranscribeFileResult},
     hotkeys::{self, HotkeyStatus},
+    import::{ImportReport, PreparedImport, MAX_IMPORT_BYTES},
     model_manager::{self, DownloadRegistry},
     models::ModelInfo,
     output::{self, OutputResult},
@@ -25,6 +27,7 @@ pub struct BackendState {
     db: Mutex<Database>,
     model_downloads: DownloadRegistry,
     incremental: crate::incremental::Registry,
+    github_device_flows: crate::github_oauth::DeviceFlowRegistry,
     /// Serializes GitHub note/transcript syncs so the debounce worker and a
     /// manual "Sync now" can never PUT the same daily file concurrently. The
     /// `()` payload is irrelevant — it's a plain mutual-exclusion latch.
@@ -43,6 +46,7 @@ impl BackendState {
             db: Mutex::new(db),
             model_downloads: DownloadRegistry::default(),
             incremental: crate::incremental::Registry::default(),
+            github_device_flows: crate::github_oauth::DeviceFlowRegistry::default(),
             github_sync_lock: Mutex::new(()),
             #[cfg(windows)]
             pending_transform: Mutex::new(None),
@@ -55,10 +59,7 @@ impl BackendState {
     /// transform recording — ordinary dictation never consults it — so it can
     /// never be misapplied.
     #[cfg(windows)]
-    pub fn set_pending_transform(
-        &self,
-        captured: crate::selection_transform::CapturedSelection,
-    ) {
+    pub fn set_pending_transform(&self, captured: crate::selection_transform::CapturedSelection) {
         if let Ok(mut slot) = self.pending_transform.lock() {
             *slot = Some(captured);
         }
@@ -66,9 +67,7 @@ impl BackendState {
 
     /// Takes the pending transform selection, if any (consumed exactly once).
     #[cfg(windows)]
-    pub fn take_pending_transform(
-        &self,
-    ) -> Option<crate::selection_transform::CapturedSelection> {
+    pub fn take_pending_transform(&self) -> Option<crate::selection_transform::CapturedSelection> {
         self.pending_transform
             .lock()
             .ok()
@@ -95,6 +94,10 @@ impl BackendState {
 
     pub fn model_downloads(&self) -> &DownloadRegistry {
         &self.model_downloads
+    }
+
+    pub fn github_device_flows(&self) -> &crate::github_oauth::DeviceFlowRegistry {
+        &self.github_device_flows
     }
 
     /// Acquires the GitHub-sync mutex, held for the duration of one sync entry
@@ -155,7 +158,14 @@ pub fn update_settings(
         hotkey_failures = hotkeys::replace_hotkeys(&app, &previous.hotkeys, &settings.hotkeys)?;
     }
 
-    if let Err(error) = state.db()?.save_settings(&settings) {
+    let save_result = if previous.github_repo != settings.github_repo {
+        state
+            .db()?
+            .save_settings_and_clear_github_activity(&settings)
+    } else {
+        state.db()?.save_settings(&settings)
+    };
+    if let Err(error) = save_result {
         if previous.hotkeys != settings.hotkeys {
             let _ = hotkeys::replace_hotkeys(&app, &settings.hotkeys, &previous.hotkeys);
         }
@@ -231,6 +241,9 @@ pub fn list_recent_transcripts(
 }
 
 #[tauri::command]
+// Tauri maps these flat parameters directly from the stable frontend command
+// payload, so grouping them would be a breaking IPC contract change.
+#[allow(clippy::too_many_arguments)]
 pub fn search_transcripts(
     state: tauri::State<'_, BackendState>,
     query: Option<String>,
@@ -753,11 +766,7 @@ pub fn save_window_size(
     settings.window_width = Some(size.width as i32);
     settings.window_height = Some(size.height as i32);
     state.db()?.save_settings(&settings)?;
-    log::info!(
-        "Saved default window size {}x{}",
-        size.width,
-        size.height
-    );
+    log::info!("Saved default window size {}x{}", size.width, size.height);
     Ok(settings)
 }
 
@@ -855,7 +864,7 @@ pub fn open_release_page(app: tauri::AppHandle, url: Option<String>) -> Result<(
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GithubStatus {
-    /// This build ships a real GitHub OAuth client id (device flow available).
+    /// This build ships a valid GitHub App client id (device flow available).
     pub configured: bool,
     /// An access token is present in the keyring.
     pub connected: bool,
@@ -898,9 +907,7 @@ pub struct GithubDeviceStart {
 /// verification URL in the browser, and returns the code for the UI to show.
 /// Does NOT block on polling — the frontend then calls `github_device_poll`.
 #[tauri::command]
-pub async fn github_device_start(
-    app: tauri::AppHandle,
-) -> Result<GithubDeviceStart, CommandError> {
+pub async fn github_device_start(app: tauri::AppHandle) -> Result<GithubDeviceStart, CommandError> {
     let opener_app = app.clone();
     let device = tauri::async_runtime::spawn_blocking(crate::github_oauth::request_device_code)
         .await
@@ -910,6 +917,10 @@ pub async fn github_device_start(
     let _ = opener_app
         .opener()
         .open_url(device.verification_uri.clone(), None::<&str>);
+
+    app.state::<BackendState>()
+        .github_device_flows()
+        .start(&device.device_code);
 
     Ok(GithubDeviceStart {
         device_code: device.device_code,
@@ -929,14 +940,31 @@ pub async fn github_device_poll(
     device_code: String,
     interval: u64,
 ) -> Result<AppSettings, CommandError> {
+    let cancelled = app
+        .state::<BackendState>()
+        .github_device_flows()
+        .get(&device_code)
+        .ok_or_else(|| {
+            CommandError::new(
+                "github_auth_cancelled",
+                "This GitHub sign-in attempt is no longer active.",
+            )
+        })?;
     let service = app.config().identifier.clone();
     let poll_service = service.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let token = crate::github_oauth::poll_for_token(&device_code, interval)?;
-        crate::github_oauth::store_token(&poll_service, &token)
+    let poll_device_code = device_code.clone();
+    let poll_result = tauri::async_runtime::spawn_blocking(move || {
+        let credential =
+            crate::github_oauth::poll_for_token(&poll_device_code, interval, cancelled.as_ref())?;
+        crate::github_oauth::ensure_attempt_active(cancelled.as_ref())?;
+        crate::github_oauth::store_credential(&poll_service, &credential)
     })
     .await
-    .map_err(|error| CommandError::new("github_auth_failed", error.to_string()))??;
+    .map_err(|error| CommandError::new("github_auth_failed", error.to_string()))?;
+    app.state::<BackendState>()
+        .github_device_flows()
+        .finish(&device_code);
+    poll_result?;
 
     // Fetch the login for display (best-effort: an empty login is fine).
     let login_service = service.clone();
@@ -952,6 +980,17 @@ pub async fn github_device_poll(
     settings.github_account_login = login;
     state.db()?.save_settings(&settings)?;
     Ok(settings)
+}
+
+/// Cancels an active GitHub device flow and prevents its token from being
+/// persisted if authorization completes after the user cancels.
+#[tauri::command]
+pub fn github_device_cancel(
+    state: tauri::State<'_, BackendState>,
+    device_code: String,
+) -> Result<(), CommandError> {
+    state.github_device_flows().cancel(&device_code);
+    Ok(())
 }
 
 /// Clears the stored GitHub token and fully resets the GitHub backup settings:
@@ -971,7 +1010,9 @@ pub async fn github_disconnect(app: tauri::AppHandle) -> Result<AppSettings, Com
     settings.github_sync_enabled = false;
     settings.github_sync_all_transcripts = false;
     settings.github_repo = String::new();
-    state.db()?.save_settings(&settings)?;
+    state
+        .db()?
+        .save_settings_and_clear_github_activity(&settings)?;
     Ok(settings)
 }
 
@@ -992,15 +1033,23 @@ pub async fn github_sync_now(
         // lock (the guarded value is `()`).
         let state = app.state::<BackendState>();
         let _guard = state.github_sync_lock();
-        let notes = crate::note_sync::collect_and_sync(&app, &service)?;
-        let transcripts = crate::note_sync::collect_and_sync_all_transcripts(&app, &service)?;
-        Ok(crate::github_backup::SyncReport {
-            synced_notes: notes.synced_notes + transcripts.synced_notes,
-            files_written: notes.files_written + transcripts.files_written,
-        })
+        let attempt = crate::note_sync::collect_sync_attempt(&app, &service);
+        crate::note_sync::record_sync_attempt(
+            &app,
+            crate::sync_history::SyncSource::Manual,
+            &attempt,
+        );
+        attempt.into_result()
     })
     .await
     .map_err(|error| CommandError::new("github_sync_failed", error.to_string()))?
+}
+
+#[tauri::command]
+pub fn github_sync_activity(
+    state: tauri::State<'_, BackendState>,
+) -> Result<Option<crate::sync_history::GitHubSyncActivity>, CommandError> {
+    state.db()?.get_github_sync_activity()
 }
 
 /// Exports transcripts to a local file the user picks via a native save dialog.
@@ -1048,7 +1097,10 @@ pub fn export_transcripts(
         other => {
             return Err(CommandError::new(
                 "invalid_export_scope",
-                format!("Unknown export scope \"{}\". Expected all, notes, or dictation.", other),
+                format!(
+                    "Unknown export scope \"{}\". Expected all, notes, or dictation.",
+                    other
+                ),
             ));
         }
     };
@@ -1061,7 +1113,10 @@ pub fn export_transcripts(
         other => {
             return Err(CommandError::new(
                 "invalid_export_format",
-                format!("Unknown export format \"{}\". Expected markdown, csv, or json.", other),
+                format!(
+                    "Unknown export format \"{}\". Expected markdown, csv, or json.",
+                    other
+                ),
             ));
         }
     };
@@ -1100,6 +1155,128 @@ pub fn export_transcripts(
             "The export save dialog is only available in the Windows build.",
         ))
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptImportPreview {
+    pub path: String,
+    pub file_name: String,
+    pub total: u32,
+    pub notes: u32,
+    pub dictations: u32,
+    pub conflicts: u32,
+    pub audio_paths_removed: u32,
+    pub metadata_corrected: u32,
+    pub fingerprint: String,
+}
+
+struct LoadedTranscriptImport {
+    prepared: PreparedImport,
+    fingerprint: String,
+}
+
+/// Opens a native picker and validates a Scribe JSON export without changing
+/// the database. The returned counts drive the explicit confirmation UI.
+#[tauri::command]
+pub fn preview_transcript_import(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, BackendState>,
+) -> Result<Option<TranscriptImportPreview>, CommandError> {
+    #[cfg(windows)]
+    {
+        let start = effective_data_dir(&app).unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let picked = rfd::FileDialog::new()
+            .set_title("Restore Scribe backup")
+            .set_directory(&start)
+            .add_filter("Scribe JSON export", &["json"])
+            .pick_file();
+        let Some(path) = picked else {
+            return Ok(None);
+        };
+        let loaded = load_transcript_import(&path)?;
+        let conflicts = state
+            .db()?
+            .count_existing_transcripts(&loaded.prepared.transcripts)?;
+        Ok(Some(TranscriptImportPreview {
+            path: path.to_string_lossy().into_owned(),
+            file_name: path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Scribe backup.json")
+                .to_string(),
+            total: loaded.prepared.total,
+            notes: loaded.prepared.notes,
+            dictations: loaded.prepared.dictations,
+            conflicts,
+            audio_paths_removed: loaded.prepared.audio_paths_removed,
+            metadata_corrected: loaded.prepared.metadata_corrected,
+            fingerprint: loaded.fingerprint,
+        }))
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (app, state);
+        Err(CommandError::new(
+            "open_dialog_unsupported",
+            "The restore file picker is only available in the Windows build.",
+        ))
+    }
+}
+
+/// Revalidates the selected export, then imports every row in one database
+/// transaction. Re-reading at confirmation time prevents a stale preview from
+/// bypassing validation if the source file changed while the dialog was open.
+#[tauri::command]
+pub fn restore_transcript_import(
+    state: tauri::State<'_, BackendState>,
+    path: String,
+    replace_existing: bool,
+    expected_fingerprint: String,
+) -> Result<ImportReport, CommandError> {
+    let loaded = load_transcript_import(std::path::Path::new(&path))?;
+    crate::import::verify_fingerprint(&loaded.fingerprint, &expected_fingerprint)?;
+    state
+        .db()?
+        .restore_transcripts(&loaded.prepared.transcripts, replace_existing)
+}
+
+fn load_transcript_import(path: &std::path::Path) -> Result<LoadedTranscriptImport, CommandError> {
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+    {
+        return Err(CommandError::new(
+            "invalid_import_file",
+            "Choose a .json file exported by Scribe.",
+        ));
+    }
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        CommandError::new(
+            "import_read_failed",
+            format!("Could not read {}. {error}", path.display()),
+        )
+    })?;
+    if metadata.len() > MAX_IMPORT_BYTES {
+        return Err(CommandError::new(
+            "import_too_large",
+            "The backup is larger than the 100 MB restore limit.",
+        ));
+    }
+    let contents = std::fs::read(path).map_err(|error| {
+        CommandError::new(
+            "import_read_failed",
+            format!("Could not read {}. {error}", path.display()),
+        )
+    })?;
+    let fingerprint = crate::import::sha256_fingerprint(&contents);
+    let prepared = crate::import::prepare_json(&contents)?;
+    Ok(LoadedTranscriptImport {
+        prepared,
+        fingerprint,
+    })
 }
 
 fn open_folder(app: &tauri::AppHandle, dir: std::path::PathBuf) -> Result<(), CommandError> {
@@ -1212,7 +1389,10 @@ fn transform_selection_blocking(
     let (endpoint, model) = {
         let state = app.state::<BackendState>();
         let settings = state.db()?.get_settings()?;
-        (settings.notes_analysis_endpoint, settings.notes_analysis_model)
+        (
+            settings.notes_analysis_endpoint,
+            settings.notes_analysis_model,
+        )
     };
 
     // 1. Copy the current selection out of the focused app, remembering the

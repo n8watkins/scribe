@@ -1,11 +1,18 @@
-# Scribe — Competitive Analysis & Gap Review
+# Scribe - Competitive Analysis & Gap Review
 
-Status: Reference / strategy doc
+Status: Historical strategy snapshot
 Date: 2026-06-14
 Scope: Scribe **0.5.18** vs. the local/private dictation field
 Method: feature audit of the Scribe codebase (`app/src`, `app/src-tauri/src`) +
 web research on competitors (June 2026). Competitor pricing and feature splits
 shift often — verify on each vendor's site before quoting externally.
+
+> **Current-state correction, 2026-07-14:** This analysis remains useful as a dated market snapshot, but its Scribe feature rows and priorities are not the current roadmap.
+> Google Drive was replaced by optional private GitHub backup.
+> Multilingual transcription, translate-to-English, and Vulkan GPU acceleration shipped after this snapshot.
+> Local-LLM dictation cleanup was removed, while on-demand note analysis and selected-text transform remain.
+> Authenticode code signing was deliberately dropped, so recommendations to pursue it below are superseded.
+> The updater remains cryptographically signed, but Windows executables and installers are not Authenticode-signed.
 
 ---
 

@@ -11,8 +11,7 @@ use std::time::Duration;
 use crate::error::CommandError;
 
 pub const RELEASES_PAGE_URL: &str = "https://github.com/n8watkins/scribe/releases/latest";
-const LATEST_RELEASE_API: &str =
-    "https://api.github.com/repos/n8watkins/scribe/releases/latest";
+const LATEST_RELEASE_API: &str = "https://api.github.com/repos/n8watkins/scribe/releases/latest";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

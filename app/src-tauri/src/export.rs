@@ -5,6 +5,7 @@
 //! them pure makes the formatting trivially unit-testable.
 
 use crate::transcript::Transcript;
+use std::borrow::Cow;
 
 /// Renders the transcripts as a single Markdown document: an H1 title, then one
 /// section per transcript with a local-time heading, a small metadata line, the
@@ -19,7 +20,11 @@ pub fn to_markdown(transcripts: &[Transcript]) -> String {
 
     for transcript in transcripts {
         out.push_str("\n---\n\n");
-        let kind = if transcript.is_note { "Note" } else { "Dictation" };
+        let kind = if transcript.is_note {
+            "Note"
+        } else {
+            "Dictation"
+        };
         out.push_str(&format!(
             "## {} — {}\n\n",
             kind,
@@ -45,9 +50,8 @@ pub fn to_markdown(transcripts: &[Transcript]) -> String {
 }
 
 /// Renders the transcripts as RFC-4180 CSV with a header row. Every field is
-/// run through `csv_field`, which quotes and escapes any value containing a
-/// comma, double-quote, or newline, so the output round-trips through any
-/// spreadsheet importer.
+/// run through `csv_field`, which neutralizes spreadsheet formulas and quotes
+/// values as needed so the output imports safely.
 pub fn to_csv(transcripts: &[Transcript]) -> String {
     let mut out = String::new();
     // RFC 4180 uses CRLF line endings throughout, including after the header.
@@ -84,14 +88,23 @@ pub fn to_json(transcripts: &[Transcript]) -> String {
     serde_json::to_string_pretty(transcripts).unwrap_or_else(|_| "[]".to_string())
 }
 
-/// Quotes and escapes a single CSV field per RFC 4180: a field is wrapped in
-/// double quotes when it contains a comma, double-quote, or CR/LF, and any
-/// embedded double-quote is doubled.
+/// Neutralizes formula-like spreadsheet cells, then quotes and escapes a field
+/// per RFC 4180. A leading apostrophe tells spreadsheet applications to treat
+/// the value as text and is preserved by plain CSV readers.
 fn csv_field(value: &str) -> String {
-    if value.contains([',', '"', '\n', '\r']) {
-        format!("\"{}\"", value.replace('"', "\"\""))
+    let candidate = value.trim_start_matches([' ', '\t', '\r', '\n']);
+    let starts_with_control = matches!(value.chars().next(), Some('\t' | '\r' | '\n'));
+    let starts_with_formula = candidate.starts_with(['=', '+', '-', '@']);
+    let safe_value = if starts_with_control || starts_with_formula {
+        Cow::Owned(format!("'{value}"))
     } else {
-        value.to_string()
+        Cow::Borrowed(value)
+    };
+
+    if safe_value.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", safe_value.replace('"', "\"\""))
+    } else {
+        safe_value.into_owned()
     }
 }
 
@@ -156,10 +169,7 @@ mod tests {
 
     #[test]
     fn csv_has_header_and_quotes_special_characters() {
-        let rows = vec![
-            note("tx_note", "a note", "did stuff"),
-            gnarly(),
-        ];
+        let rows = vec![note("tx_note", "a note", "did stuff"), gnarly()];
         let csv = to_csv(&rows);
 
         let mut lines = csv.split("\r\n");
@@ -195,6 +205,16 @@ mod tests {
         assert_eq!(csv_field("line1\rline2"), "\"line1\rline2\"");
         // Empty stays empty (an absent optional column).
         assert_eq!(csv_field(""), "");
+    }
+
+    #[test]
+    fn csv_fields_neutralize_spreadsheet_formulas() {
+        assert_eq!(csv_field("=1+1"), "'=1+1");
+        assert_eq!(csv_field("+SUM(A1:A2)"), "'+SUM(A1:A2)");
+        assert_eq!(csv_field("-2+3"), "'-2+3");
+        assert_eq!(csv_field("@SUM(A1:A2)"), "'@SUM(A1:A2)");
+        assert_eq!(csv_field("  =1+1"), "'  =1+1");
+        assert_eq!(csv_field("ordinary text"), "ordinary text");
     }
 
     #[test]

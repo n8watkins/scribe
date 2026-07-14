@@ -1,22 +1,46 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Cloud, CloudOff, Download, GitBranch, RefreshCw } from "lucide-react";
+import {
+  CheckCircle2,
+  Cloud,
+  CloudOff,
+  Download,
+  FileJson,
+  GitBranch,
+  RefreshCw,
+  TriangleAlert,
+  Upload,
+} from "lucide-react";
 import {
   commandErrorMessage,
   exportTranscripts,
+  githubDeviceCancel,
   githubDevicePoll,
   githubDeviceStart,
   githubDisconnect,
   githubStatus,
+  githubSyncActivity,
   githubSyncNow,
+  previewTranscriptImport,
+  restoreTranscriptImport,
   type AppSettings,
   type ExportFormat,
   type ExportScope,
   type GithubDeviceCode,
+  type GithubSyncActivity,
   type GithubStatus,
-  type GithubSyncReport,
+  type TranscriptImportPreview,
+  type TranscriptImportReport,
 } from "../backend";
+import {
+  backupCoverage,
+  backupReadiness,
+  formatActivity,
+  formatCount,
+  syncActivityError,
+} from "../lib/syncActivity";
 import type { ViewActions } from "../types";
 import { SectionPanel, SettingRow } from "../components/layout";
+import { ConfirmDialog } from "../components/modal";
 import { Toggle } from "../components/primitives";
 import "./sync.css";
 
@@ -36,12 +60,17 @@ export function SyncView({
   const [status, setStatus] = useState<GithubStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [device, setDevice] = useState<GithubDeviceCode | null>(null);
-  const [lastReport, setLastReport] = useState<GithubSyncReport | null>(null);
+  const [lastActivity, setLastActivity] =
+    useState<GithubSyncActivity | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("markdown");
   const [exportScope, setExportScope] = useState<ExportScope>("all");
   const [exporting, setExporting] = useState(false);
+  const [importPreview, setImportPreview] =
+    useState<TranscriptImportPreview | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [replaceExisting, setReplaceExisting] = useState(false);
 
   const reloadStatus = useCallback(async () => {
     try {
@@ -52,9 +81,18 @@ export function SyncView({
     }
   }, []);
 
+  const reloadActivity = useCallback(async () => {
+    try {
+      setLastActivity(await githubSyncActivity());
+    } catch (cause) {
+      setError(commandErrorMessage(cause));
+    }
+  }, []);
+
   useEffect(() => {
     void reloadStatus();
-  }, [reloadStatus]);
+    void reloadActivity();
+  }, [reloadActivity, reloadStatus]);
 
   // Source of truth is a stored token (status.connected).
   const connected = status?.connected ?? false;
@@ -66,6 +104,15 @@ export function SyncView({
   // (e.g. a bare "notes") must not arm the toggles.
   const repoValid = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(
     settings.githubRepo.trim(),
+  );
+  const backupSelected =
+    settings.githubSyncEnabled || settings.githubSyncAllTranscripts;
+  const syncReady = connected && repoValid && backupSelected;
+  const currentActivity =
+    lastActivity?.repo === settings.githubRepo ? lastActivity : null;
+  const lastActivityError = syncActivityError(
+    currentActivity,
+    settings.githubRepo,
   );
 
   // A monotonic epoch for connect attempts. handleConnect snapshots the current
@@ -89,7 +136,10 @@ export function SyncView({
       }
       // Show the code immediately, THEN block on the (long-running) poll.
       setDevice(code);
-      const updated = await githubDevicePoll(code.deviceCode, code.intervalSecs);
+      const updated = await githubDevicePoll(
+        code.deviceCode,
+        code.intervalSecs,
+      );
       if (connectEpoch.current !== myEpoch) {
         return;
       }
@@ -107,25 +157,26 @@ export function SyncView({
     }
   }, [actions, reloadStatus]);
 
-  // Back out of an in-progress sign-in. The orphaned backend poll keeps running
-  // until GitHub's device code expires (~15 min) and then stops on its own;
-  // bumping the epoch makes its eventual result a no-op.
+  // Back out of an in-progress sign-in in both the UI and the backend poll.
   const handleCancelConnect = useCallback(() => {
     connectEpoch.current += 1;
+    if (device) {
+      void githubDeviceCancel(device.deviceCode);
+    }
     setDevice(null);
     setBusy(false);
     setNotice("GitHub sign-in cancelled.");
-  }, []);
+  }, [device]);
 
   const handleDisconnect = useCallback(async () => {
     setBusy(true);
     setError(null);
     setNotice(null);
-    setLastReport(null);
 
     try {
       const updated = await githubDisconnect();
       actions.updateSettings(updated);
+      setLastActivity(null);
       await reloadStatus();
     } catch (cause) {
       setError(commandErrorMessage(cause));
@@ -141,9 +192,8 @@ export function SyncView({
 
     try {
       const report = await githubSyncNow();
-      setLastReport(report);
       setNotice(
-        `Synced ${report.syncedNotes} notes into ${report.filesWritten} file(s).`,
+        `Backed up ${formatCount(report.syncedNotes, "item")} into ${formatCount(report.filesWritten, "file")}.`,
       );
     } catch (cause) {
       setError(commandErrorMessage(cause));
@@ -151,9 +201,10 @@ export function SyncView({
       // backend; refresh status so the Connected pill flips to Not connected.
       void reloadStatus();
     } finally {
+      await reloadActivity();
       setBusy(false);
     }
-  }, [reloadStatus]);
+  }, [reloadActivity, reloadStatus]);
 
   const handleExport = useCallback(async () => {
     setExporting(true);
@@ -172,6 +223,47 @@ export function SyncView({
       setExporting(false);
     }
   }, [exportFormat, exportScope]);
+
+  const handlePreviewImport = useCallback(async () => {
+    setImporting(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const preview = await previewTranscriptImport();
+      if (preview) {
+        setImportPreview(preview);
+        setReplaceExisting(false);
+      }
+    } catch (cause) {
+      setError(commandErrorMessage(cause));
+    } finally {
+      setImporting(false);
+    }
+  }, []);
+
+  const handleRestore = useCallback(async () => {
+    if (!importPreview) {
+      return;
+    }
+    setImporting(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const report = await restoreTranscriptImport(
+        importPreview.path,
+        replaceExisting,
+        importPreview.fingerprint,
+      );
+      setNotice(formatImportReport(report));
+      setImportPreview(null);
+      setReplaceExisting(false);
+      await actions.refresh();
+    } catch (cause) {
+      setError(commandErrorMessage(cause));
+    } finally {
+      setImporting(false);
+    }
+  }, [actions, importPreview, replaceExisting]);
 
   return (
     <section className="view-grid">
@@ -211,7 +303,7 @@ export function SyncView({
             This build isn't configured for GitHub sync.
           </p>
         ) : device != null ? (
-          <div className="setting-control" style={{ flexDirection: "column", alignItems: "flex-start" }}>
+          <div className="setting-control sync-device-flow">
             <p className="muted vocab-hint">
               Go to <strong>{device.verificationUri}</strong> and enter this
               code:
@@ -278,7 +370,7 @@ export function SyncView({
             automatically as you go, and you can force one any time.
           </p>
           <SettingRow
-            description="The private repo to write notes to, as owner/name (e.g. alice/scribe-notes). Created automatically if it's yours and missing."
+            description="An existing private repo installed for Scribe Local Backup, as owner/name (e.g. alice/scribe-notes)."
             label="Repository"
           >
             <RepoInput
@@ -288,6 +380,9 @@ export function SyncView({
                 // rejects an empty-repo-with-sync-on save (and we'd keep
                 // pushing to nowhere). A non-empty value saves as-is.
                 const trimmed = githubRepo.trim();
+                if (trimmed !== settings.githubRepo.trim()) {
+                  setLastActivity(null);
+                }
                 actions.updateSettings(
                   trimmed.length === 0
                     ? {
@@ -338,7 +433,7 @@ export function SyncView({
           <div className="setting-control">
             <button
               className="secondary-button"
-              disabled={busy}
+              disabled={busy || !syncReady}
               onClick={() => void handleSyncNow()}
               type="button"
             >
@@ -346,6 +441,48 @@ export function SyncView({
               {busy ? "Syncing…" : "Sync now"}
             </button>
           </div>
+          {!backupSelected ? (
+            <p className="muted vocab-hint sync-inline-hint">
+              Choose at least one backup type to run a manual backup.
+            </p>
+          ) : null}
+        </SectionPanel>
+      ) : null}
+
+      {connected && !unconfigured ? (
+        <SectionPanel
+          icon={
+            currentActivity?.outcome === "error" ? (
+              <TriangleAlert aria-hidden="true" size={16} />
+            ) : (
+              <CheckCircle2 aria-hidden="true" size={16} />
+            )
+          }
+          title="Backup status"
+        >
+          <div className="sync-health-grid">
+            <SyncHealthItem
+              label="Readiness"
+              tone={syncReady ? "success" : "warning"}
+              value={
+                syncReady
+                  ? "Ready to back up"
+                  : backupReadiness(settings, repoValid)
+              }
+            />
+            <SyncHealthItem label="Coverage" value={backupCoverage(settings)} />
+            <SyncHealthItem
+              label="Last backup attempt"
+              tone={currentActivity?.outcome === "error" ? "error" : undefined}
+              value={formatActivity(currentActivity, settings.githubRepo)}
+            />
+          </div>
+          {lastActivityError ? (
+            <p className="sync-persisted-error">{lastActivityError}</p>
+          ) : null}
+          <p className="muted vocab-hint sync-inline-hint">
+            Includes both automatic backups and Sync now attempts.
+          </p>
         </SectionPanel>
       ) : null}
 
@@ -402,11 +539,33 @@ export function SyncView({
         </div>
       </SectionPanel>
 
-      {notice ? <p className="muted vocab-hint sync-status-line">{notice}</p> : null}
-      {!notice && lastReport ? (
-        <p className="muted vocab-hint sync-status-line">
-          Last sync: {lastReport.syncedNotes} notes, {lastReport.filesWritten}{" "}
-          file(s).
+      <SectionPanel
+        icon={<Upload aria-hidden="true" size={16} />}
+        title="Restore from a backup"
+      >
+        <p className="muted vocab-hint">
+          Restore a JSON file previously exported by Scribe. The file is
+          validated and previewed before local history changes.
+        </p>
+        <SettingRow
+          description="Existing transcripts are skipped by default. Audio file paths from another device are never imported."
+          label="Scribe JSON export"
+        >
+          <button
+            className="secondary-button"
+            disabled={importing}
+            onClick={() => void handlePreviewImport()}
+            type="button"
+          >
+            <FileJson aria-hidden="true" size={15} />
+            {importing && !importPreview ? "Checking…" : "Choose backup…"}
+          </button>
+        </SettingRow>
+      </SectionPanel>
+
+      {notice ? (
+        <p aria-live="polite" className="muted vocab-hint sync-status-line">
+          {notice}
         </p>
       ) : null}
       {error ? (
@@ -419,7 +578,96 @@ export function SyncView({
         More backup &amp; export destinations are coming. For now, everything
         syncs to GitHub.
       </p>
+
+      <ConfirmDialog
+        busy={importing}
+        confirmLabel={replaceExisting ? "Restore and replace" : "Restore"}
+        message={importPreviewMessage(importPreview)}
+        onCancel={() => {
+          setImportPreview(null);
+          setReplaceExisting(false);
+        }}
+        onConfirm={() => void handleRestore()}
+        open={importPreview != null}
+        title="Restore Scribe backup?"
+      >
+        {importPreview ? (
+          <div className="sync-import-preview">
+            <span>
+              <strong>{importPreview.notes}</strong> notes
+            </span>
+            <span>
+              <strong>{importPreview.dictations}</strong> dictations
+            </span>
+            <span>
+              <strong>{importPreview.conflicts}</strong> existing
+            </span>
+          </div>
+        ) : null}
+        {importPreview && importPreview.conflicts > 0 ? (
+          <label className="sync-replace-option">
+            <input
+              checked={replaceExisting}
+              disabled={importing}
+              onChange={(event) =>
+                setReplaceExisting(event.currentTarget.checked)
+              }
+              type="checkbox"
+            />
+            <span>
+              <strong>Replace existing transcript data</strong>
+              <small>Local audio attachments are preserved.</small>
+            </span>
+          </label>
+        ) : null}
+      </ConfirmDialog>
     </section>
+  );
+}
+
+function importPreviewMessage(preview: TranscriptImportPreview | null): string {
+  if (!preview) {
+    return "Review the selected backup before restoring it.";
+  }
+  const conflictNote =
+    preview.conflicts === 0
+      ? "No existing transcript ids conflict."
+      : `${formatCount(preview.conflicts, "existing transcript")} will be skipped unless replacement is selected.`;
+  return `${preview.fileName} contains ${formatCount(preview.total, "transcript")}. ${conflictNote}`;
+}
+
+function formatImportReport(report: TranscriptImportReport): string {
+  const restored = report.imported + report.replaced;
+  const parts = [`Restored ${formatCount(restored, "transcript")}.`];
+  if (report.replaced > 0) {
+    parts.push(
+      `Replaced ${formatCount(report.replaced, "existing transcript")}.`,
+    );
+  }
+  if (report.skipped > 0) {
+    parts.push(
+      `Skipped ${formatCount(report.skipped, "existing transcript")}.`,
+    );
+  }
+  return parts.join(" ");
+}
+
+function SyncHealthItem({
+  label,
+  tone,
+  value,
+}: {
+  label: string;
+  tone?: "error" | "success" | "warning";
+  value: string;
+}) {
+  return (
+    <div className="sync-health-item">
+      <span>{label}</span>
+      <strong className={tone ? `sync-health-${tone}` : undefined}>
+        {value}
+      </strong>
+    </div>
   );
 }
 

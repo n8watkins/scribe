@@ -1077,7 +1077,10 @@ mod tests {
         // Each fell back to its Default impl value (not the bare type default).
         assert_eq!(settings.min_recording_ms, 300);
         assert_eq!(settings.history_retention_days, Some(30));
-        assert_eq!(settings.selected_model_id, Some("small.en-q5_1".to_string()));
+        assert_eq!(
+            settings.selected_model_id,
+            Some("small.en-q5_1".to_string())
+        );
         assert_eq!(settings.recording_mode, RecordingMode::Both);
         assert_eq!(settings.output_mode, OutputMode::AutoPaste);
         assert_eq!(settings.hotkeys, HotkeySettings::default());
@@ -1098,16 +1101,26 @@ mod tests {
     #[test]
     fn validates_github_repo_when_sync_enabled() {
         // Enabled + a well-formed slug is OK.
-        let mut settings = AppSettings::default();
-        settings.github_sync_enabled = true;
-        settings.github_repo = "owner/name".to_string();
+        let mut settings = AppSettings {
+            github_sync_enabled: true,
+            github_repo: "owner/name".to_string(),
+            ..AppSettings::default()
+        };
         assert!(settings.validate().is_ok());
 
         // Enabled + a malformed slug is an error. Includes dot-name segments
         // ("." / ".." / a leading-dot name) which must be rejected even though
         // '.' is otherwise an allowed character.
         for bad in [
-            "", "bad", "a/b/c", "/name", "owner/", "owner/..", "owner/.", "owner/.git", "../name",
+            "",
+            "bad",
+            "a/b/c",
+            "/name",
+            "owner/",
+            "owner/..",
+            "owner/.",
+            "owner/.git",
+            "../name",
             "./name",
         ] {
             settings.github_repo = bad.to_string();
@@ -1141,7 +1154,10 @@ mod tests {
         assert_eq!(en.code(), "en");
 
         // And they serialize back to the same bare strings (transparent repr).
-        assert_eq!(serde_json::to_string(&Language::auto()).unwrap(), "\"auto\"");
+        assert_eq!(
+            serde_json::to_string(&Language::auto()).unwrap(),
+            "\"auto\""
+        );
         assert_eq!(
             serde_json::to_string(&Language::english()).unwrap(),
             "\"en\""
@@ -1233,8 +1249,10 @@ mod tests {
 
     #[test]
     fn notes_analysis_validation_only_applies_when_enabled() {
-        let mut settings = AppSettings::default();
-        settings.notes_analysis_endpoint = "not a url".to_string();
+        let mut settings = AppSettings {
+            notes_analysis_endpoint: "not a url".to_string(),
+            ..AppSettings::default()
+        };
         assert!(settings.validate().is_ok());
 
         settings.notes_analysis_enabled = true;
@@ -1249,17 +1267,21 @@ mod tests {
 
     #[test]
     fn validates_history_retention_options() {
-        let mut settings = AppSettings::default();
-        settings.history_retention_days = Some(14);
+        let settings = AppSettings {
+            history_retention_days: Some(14),
+            ..AppSettings::default()
+        };
 
         assert!(settings.validate().is_err());
     }
 
     #[test]
     fn validates_notes_retention_options() {
-        let mut settings = AppSettings::default();
         // Same allowed set as transcripts; an off-list value is rejected.
-        settings.notes_retention_days = Some(14);
+        let mut settings = AppSettings {
+            notes_retention_days: Some(14),
+            ..AppSettings::default()
+        };
         assert!(settings.validate().is_err());
 
         for ok in [None, Some(7), Some(30), Some(90), Some(365)] {
@@ -1282,8 +1304,10 @@ mod tests {
 
     #[test]
     fn validates_filler_pause_threshold_range() {
-        let mut settings = AppSettings::default();
-        settings.filler_pause_threshold_ms = 99;
+        let mut settings = AppSettings {
+            filler_pause_threshold_ms: 99,
+            ..AppSettings::default()
+        };
         assert!(settings.validate().is_err());
         settings.filler_pause_threshold_ms = 100;
         assert!(settings.validate().is_ok());
@@ -1295,9 +1319,10 @@ mod tests {
 
     #[test]
     fn validates_silence_auto_stop_ms_range() {
-        let mut settings = AppSettings::default();
-
-        settings.silence_auto_stop_ms = 499;
+        let mut settings = AppSettings {
+            silence_auto_stop_ms: 499,
+            ..AppSettings::default()
+        };
         assert!(settings.validate().is_err());
 
         settings.silence_auto_stop_ms = 500;
@@ -1312,10 +1337,11 @@ mod tests {
 
     #[test]
     fn validates_segment_pause_and_max_ranges() {
-        let mut settings = AppSettings::default();
-
         // Pause threshold: 200..=10000 ms.
-        settings.segment_pause_ms = 199;
+        let mut settings = AppSettings {
+            segment_pause_ms: 199,
+            ..AppSettings::default()
+        };
         assert!(settings.validate().is_err());
         settings.segment_pause_ms = 200;
         assert!(settings.validate().is_ok());

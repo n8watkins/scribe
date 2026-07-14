@@ -1716,7 +1716,10 @@ mod tests {
         // A silent clip → no speech (so transcription is skipped).
         let silent = std::env::temp_dir().join(format!("scribe-silent-{}.wav", Uuid::new_v4()));
         write_wav(&silent, &vec![0.0_f32; 16_000]).unwrap();
-        assert!(!wav_has_speech(&silent), "all-silence WAV must report no speech");
+        assert!(
+            !wav_has_speech(&silent),
+            "all-silence WAV must report no speech"
+        );
         let _ = fs::remove_file(&silent);
 
         // A loud clip (well above AUTO_STOP_SPEECH_RMS) → speech present.

@@ -796,6 +796,17 @@ export type GithubSyncReport = {
   filesWritten: number;
 };
 
+export type GithubSyncActivity = {
+  completedAt: string;
+  outcome: "success" | "error";
+  source: "manual" | "automatic";
+  repo: string;
+  syncedItems: number;
+  filesWritten: number;
+  errorCode: string | null;
+  errorMessage: string | null;
+};
+
 /** Reports whether this build is configured for GitHub sync, the current
  * connection state, the connected username, and the configured repo. */
 export function githubStatus(): Promise<GithubStatus> {
@@ -817,6 +828,11 @@ export function githubDevicePoll(
   return invoke("github_device_poll", { deviceCode, interval });
 }
 
+/** Stops an active device-flow poll and prevents credential persistence. */
+export function githubDeviceCancel(deviceCode: string): Promise<void> {
+  return invoke("github_device_cancel", { deviceCode });
+}
+
 /** Clears the stored GitHub token; returns the updated settings
  * (githubSyncEnabled false). */
 export function githubDisconnect(): Promise<AppSettings> {
@@ -826,6 +842,11 @@ export function githubDisconnect(): Promise<AppSettings> {
 /** Backs up notes (and optionally all transcripts) to the configured repo now. */
 export function githubSyncNow(): Promise<GithubSyncReport> {
   return invoke("github_sync_now");
+}
+
+/** Returns the most recent persisted manual or automatic backup attempt. */
+export function githubSyncActivity(): Promise<GithubSyncActivity | null> {
+  return invoke("github_sync_activity");
 }
 
 /** Which transcripts a local export includes. */
@@ -841,6 +862,42 @@ export function exportTranscripts(
   format: ExportFormat,
 ): Promise<string | null> {
   return invoke("export_transcripts", { scope, format });
+}
+
+export type TranscriptImportPreview = {
+  path: string;
+  fileName: string;
+  total: number;
+  notes: number;
+  dictations: number;
+  conflicts: number;
+  audioPathsRemoved: number;
+  metadataCorrected: number;
+  fingerprint: string;
+};
+
+export type TranscriptImportReport = {
+  imported: number;
+  skipped: number;
+  replaced: number;
+};
+
+/** Opens and validates a Scribe JSON export without changing local data. */
+export function previewTranscriptImport(): Promise<TranscriptImportPreview | null> {
+  return invoke("preview_transcript_import");
+}
+
+/** Revalidates and atomically restores a previously previewed JSON export. */
+export function restoreTranscriptImport(
+  path: string,
+  replaceExisting: boolean,
+  expectedFingerprint: string,
+): Promise<TranscriptImportReport> {
+  return invoke("restore_transcript_import", {
+    path,
+    replaceExisting,
+    expectedFingerprint,
+  });
 }
 
 export function openReleasePage(url?: string): Promise<void> {

@@ -7,12 +7,16 @@
 - Do not ship with a placeholder executable.
 - Confirm Whisper models download to the backend-resolved app data `models` directory.
 
-## Installer and signing
+## Installer and release integrity
 
 - Build on Windows with `cd app && npm run tauri build`.
 - Verify NSIS current-user install.
 - Verify MSI install and upgrade behavior.
-- Add production code signing before external distribution.
+- Confirm the unsigned NSIS and MSI installers produce the expected Windows SmartScreen warning; Authenticode code signing is intentionally out of scope.
+- Verify the updater signature before publishing release metadata.
+- Verify `SHA256SUMS` against every staged release asset.
+- Verify the release software bill of materials is present.
+- Smoke-test clean NSIS and MSI installs, launch, uninstall, and removal before publishing the release.
 - Record the stable MSI upgrade code before publishing updates.
 
 ## Manual acceptance
@@ -29,7 +33,10 @@
 - Confirm the floating pill appears for recording, transcribing, ready, and error states.
 - Confirm in-app notifications follow the Notifications setting.
 
-## Remaining polish
+## Historical V1 polish notes
+
+The items below describe the original V1 state and are retained only as historical acceptance context.
+They are not current gaps.
 
 - Native OS notifications are not wired in V1; current feedback is in-app toast plus floating pill.
 - Launch-at-startup requires adding and wiring the Tauri autostart plugin.

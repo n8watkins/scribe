@@ -532,7 +532,7 @@ function App() {
     maybeRunLaunchInstall();
   }, [maybeRunLaunchInstall, dashboardData]);
 
-  // Update check: ~5s after launch, every minute (iteration cadence), and
+  // Update check: ~5s after launch, every six hours, and
   // whenever the window regains focus. The first time a given version is seen we
   // fire an in-app toast AND an OS notification (the latter reaches the user even
   // when minimized to the tray). Honors the "automatically check for updates"
@@ -580,12 +580,9 @@ function App() {
     };
 
     const timer = window.setTimeout(() => runCheck(true), 5000);
-    // Poll every 60s while testing so detection is immediate. Detection now uses
-    // the updater's latest.json (a release CDN file) rather than the GitHub REST
-    // API, so this no longer trips the API's ~60/hr rate limit (which a 1-min
-    // poll did, returning 403 to every check). For production ~6h is plenty —
-    // the on-launch and on-focus checks already make a new release feel instant.
-    const interval = window.setInterval(() => runCheck(false), 60 * 1000);
+    // On-launch and on-focus checks keep releases timely without polling the
+    // updater CDN unnecessarily while the app stays open for long sessions.
+    const interval = window.setInterval(() => runCheck(false), 6 * 60 * 60 * 1000);
     const onFocus = () => runCheck(false);
     window.addEventListener("focus", onFocus);
     return () => {
@@ -593,7 +590,7 @@ function App() {
       window.clearInterval(interval);
       window.removeEventListener("focus", onFocus);
     };
-  }, [maybeRunLaunchInstall]);
+  }, [maybeRunLaunchInstall, pushToast]);
 
   useEffect(() => {
     let refreshTimer: number | null = null;

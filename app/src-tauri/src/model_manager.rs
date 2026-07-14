@@ -12,7 +12,7 @@ use std::{
 
 use chrono::Utc;
 use serde::Serialize;
-use sha1::{Digest, Sha1};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::{
@@ -208,7 +208,7 @@ pub fn delete_model(
         local_path: None,
         size_bytes: None,
         status: ModelStatus::NotDownloaded,
-        checksum: catalog_model.expected_sha1.map(ToOwned::to_owned),
+        checksum: Some(catalog_model.expected_sha256.to_owned()),
         selected: false,
         downloaded_at: None,
     };
@@ -258,7 +258,7 @@ pub fn select_model(
         local_path: Some(path.to_string_lossy().to_string()),
         size_bytes: Some(resolved.size_bytes),
         status: ModelStatus::Selected,
-        checksum: catalog_model.expected_sha1.map(ToOwned::to_owned),
+        checksum: Some(catalog_model.expected_sha256.to_owned()),
         selected: true,
         downloaded_at: Some(Utc::now()),
     };
@@ -318,7 +318,7 @@ fn download_model_inner(
         local_path: Some(final_path.to_string_lossy().to_string()),
         size_bytes: None,
         status: ModelStatus::Downloading,
-        checksum: catalog_model.expected_sha1.map(ToOwned::to_owned),
+        checksum: Some(catalog_model.expected_sha256.to_owned()),
         selected: db.get_settings()?.selected_model_id.as_deref() == Some(catalog_model.id),
         downloaded_at: None,
     };
@@ -409,13 +409,24 @@ fn stream_download(
         })?;
 
     let total_bytes = response.content_length();
+    if let Some(total_bytes) = total_bytes {
+        if total_bytes != catalog_model.expected_size_bytes {
+            return Err(CommandError::new(
+                "model_download_failed",
+                format!(
+                    "Download size for {} did not match the reviewed model. Expected {} bytes, got {} bytes.",
+                    catalog_model.name, catalog_model.expected_size_bytes, total_bytes
+                ),
+            ));
+        }
+    }
     let mut file = fs::File::create(part_path).map_err(|error| {
         CommandError::new(
             "model_download_failed",
             format!("Could not create partial model file. {}", error),
         )
     })?;
-    let mut hasher = Sha1::new();
+    let mut hasher = Sha256::new();
     let mut bytes_downloaded = 0_u64;
     let mut buffer = [0_u8; 1024 * 128];
 
@@ -457,6 +468,15 @@ fn stream_download(
         })?;
         hasher.update(&buffer[..bytes_read]);
         bytes_downloaded += bytes_read as u64;
+        if bytes_downloaded > catalog_model.expected_size_bytes {
+            return Err(CommandError::new(
+                "model_download_failed",
+                format!(
+                    "Download for {} exceeded the reviewed size of {} bytes.",
+                    catalog_model.name, catalog_model.expected_size_bytes
+                ),
+            ));
+        }
         emit_progress(
             app,
             catalog_model.id,
@@ -485,17 +505,25 @@ fn stream_download(
         }
     }
 
-    if let Some(expected_sha1) = catalog_model.expected_sha1 {
-        let actual_sha1 = format!("{:x}", hasher.finalize());
-        if actual_sha1 != expected_sha1 {
-            return Err(CommandError::new(
-                "model_checksum_mismatch",
-                format!(
-                    "Downloaded {} did not match the expected checksum. Retry the download.",
-                    catalog_model.name
-                ),
-            ));
-        }
+    if bytes_downloaded != catalog_model.expected_size_bytes {
+        return Err(CommandError::new(
+            "model_download_failed",
+            format!(
+                "Downloaded size for {} did not match the reviewed model. Expected {} bytes, got {} bytes.",
+                catalog_model.name, catalog_model.expected_size_bytes, bytes_downloaded
+            ),
+        ));
+    }
+
+    let actual_sha256 = format!("{:x}", hasher.finalize());
+    if actual_sha256 != catalog_model.expected_sha256 {
+        return Err(CommandError::new(
+            "model_checksum_mismatch",
+            format!(
+                "Downloaded {} did not match the expected checksum. Retry the download.",
+                catalog_model.name
+            ),
+        ));
     }
 
     Ok(DownloadedModel {
@@ -508,17 +536,29 @@ fn verify_model_file_checksum(
     catalog_model: CatalogModel,
     path: &Path,
 ) -> Result<(), CommandError> {
-    let Some(expected_sha1) = catalog_model.expected_sha1 else {
-        return Ok(());
-    };
-
     let mut file = fs::File::open(path).map_err(|error| {
         CommandError::new(
             "whisper_model_missing",
             format!("Could not read {}. {}", path.display(), error),
         )
     })?;
-    let mut hasher = Sha1::new();
+    let metadata = file.metadata().map_err(|error| {
+        CommandError::new(
+            "model_checksum_mismatch",
+            format!("Could not inspect {}. {}", catalog_model.name, error),
+        )
+    })?;
+    if metadata.len() != catalog_model.expected_size_bytes {
+        return Err(CommandError::new(
+            "model_checksum_mismatch",
+            format!(
+                "{} did not match the expected size. Re-download the model.",
+                catalog_model.name
+            ),
+        ));
+    }
+
+    let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 1024 * 128];
 
     loop {
@@ -536,8 +576,8 @@ fn verify_model_file_checksum(
         hasher.update(&buffer[..bytes_read]);
     }
 
-    let actual_sha1 = format!("{:x}", hasher.finalize());
-    if actual_sha1 != expected_sha1 {
+    let actual_sha256 = format!("{:x}", hasher.finalize());
+    if actual_sha256 != catalog_model.expected_sha256 {
         return Err(CommandError::new(
             "model_checksum_mismatch",
             format!(
@@ -639,10 +679,7 @@ fn app_data_dir(app: &AppHandle) -> Result<PathBuf, CommandError> {
     app.path().app_data_dir().map_err(|error| {
         CommandError::new(
             "app_data_dir_unavailable",
-            format!(
-                "Could not locate Scribe app data directory. {}",
-                error
-            ),
+            format!("Could not locate Scribe app data directory. {}", error),
         )
     })
 }

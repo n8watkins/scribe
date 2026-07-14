@@ -417,7 +417,11 @@ fn strip_noise_annotations(line: &str) -> String {
     let mut result = String::with_capacity(line.len());
     let mut rest = line;
     while let Some(start) = rest.find(['[', '(']) {
-        let close = if rest.as_bytes()[start] == b'[' { ']' } else { ')' };
+        let close = if rest.as_bytes()[start] == b'[' {
+            ']'
+        } else {
+            ')'
+        };
         result.push_str(&rest[..start]);
         let after = &rest[start + 1..];
         match after.find(close) {
@@ -576,7 +580,10 @@ mod tests {
     fn real_outro_like_dictation_is_kept_verbatim() {
         // No more hallucination denylist: these are returned untouched. Custom
         // phrase removal is the dictionary replacements feature's job.
-        assert_eq!(normalize_transcript_text("Thanks for watching!"), "Thanks for watching!");
+        assert_eq!(
+            normalize_transcript_text("Thanks for watching!"),
+            "Thanks for watching!"
+        );
         assert_eq!(
             normalize_transcript_text("Please subscribe to my newsletter."),
             "Please subscribe to my newsletter."

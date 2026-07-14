@@ -351,10 +351,8 @@ mod tests {
             "data": [{ "id": "loaded-model" }, { "id": "other" }],
         })
         .to_string();
-        let (endpoint, handle) = mock_server(vec![
-            models,
-            completion_response("ok", "loaded-model"),
-        ]);
+        let (endpoint, handle) =
+            mock_server(vec![models, completion_response("ok", "loaded-model")]);
 
         let outcome = analyze_text(&endpoint, "  ", "p", "n").unwrap();
         assert_eq!(outcome.model, "loaded-model");
@@ -366,8 +364,7 @@ mod tests {
 
     #[test]
     fn empty_model_list_is_a_clear_error() {
-        let (endpoint, handle) =
-            mock_server(vec![serde_json::json!({ "data": [] }).to_string()]);
+        let (endpoint, handle) = mock_server(vec![serde_json::json!({ "data": [] }).to_string()]);
 
         let error = analyze_text(&endpoint, "", "p", "n").unwrap_err();
         assert!(error.to_string().contains("lists no models"));
@@ -376,8 +373,7 @@ mod tests {
 
     #[test]
     fn blank_completion_content_is_an_error() {
-        let (endpoint, handle) =
-            mock_server(vec![completion_response("   ", "m")]);
+        let (endpoint, handle) = mock_server(vec![completion_response("   ", "m")]);
 
         let error = analyze_text(&endpoint, "m", "p", "n").unwrap_err();
         assert!(error.to_string().contains("no analysis text"));
@@ -413,8 +409,7 @@ mod tests {
 
     #[test]
     fn check_status_reachable_with_empty_model_list() {
-        let (endpoint, handle) =
-            mock_server(vec![serde_json::json!({ "data": [] }).to_string()]);
+        let (endpoint, handle) = mock_server(vec![serde_json::json!({ "data": [] }).to_string()]);
 
         let status = check_status(&endpoint);
         assert!(status.reachable);
@@ -430,11 +425,7 @@ mod tests {
         assert!(!status.reachable);
         assert!(status.models.is_empty());
         assert_eq!(status.endpoint, "http://127.0.0.1:59997/v1");
-        assert!(status
-            .error
-            .as_deref()
-            .unwrap()
-            .contains("127.0.0.1:59997"));
+        assert!(status.error.as_deref().unwrap().contains("127.0.0.1:59997"));
     }
 
     #[test]

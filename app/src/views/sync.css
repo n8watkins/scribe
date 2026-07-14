@@ -58,6 +58,123 @@
   gap: 4px;
 }
 
+.sync-device-flow {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.sync-health-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sync-health-item {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--scribe-border);
+  border-radius: 8px;
+  background: rgba(var(--scribe-surface-rgb), 0.34);
+}
+
+.sync-health-item span {
+  color: var(--scribe-text-faint);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.sync-health-item strong {
+  overflow: hidden;
+  color: var(--scribe-text-secondary);
+  font-size: 11.5px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+}
+
+.sync-health-item .sync-health-success {
+  color: var(--scribe-success);
+}
+
+.sync-health-item .sync-health-warning {
+  color: var(--scribe-warning);
+}
+
+.sync-health-item .sync-health-error {
+  color: var(--scribe-danger);
+}
+
+.sync-inline-hint {
+  margin: 0;
+}
+
+.sync-persisted-error {
+  margin: 0;
+  padding: 9px 10px;
+  border-left: 2px solid rgba(239, 68, 68, 0.44);
+  border-radius: 0 6px 6px 0;
+  color: var(--scribe-danger);
+  background: rgba(239, 68, 68, 0.07);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.sync-import-preview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sync-import-preview span {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid var(--scribe-border);
+  border-radius: 7px;
+  color: var(--scribe-text-faint);
+  background: rgba(var(--scribe-surface-rgb), 0.34);
+  font-size: 10.5px;
+  text-align: center;
+}
+
+.sync-import-preview strong {
+  color: var(--scribe-text);
+  font-size: 13px;
+}
+
+.sync-replace-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  border-radius: 7px;
+  background: rgba(251, 191, 36, 0.07);
+  cursor: pointer;
+}
+
+.sync-replace-option input {
+  margin-top: 2px;
+}
+
+.sync-replace-option span {
+  display: grid;
+  gap: 2px;
+}
+
+.sync-replace-option strong {
+  color: var(--scribe-warning);
+  font-size: 11.5px;
+}
+
+.sync-replace-option small {
+  color: var(--scribe-text-faint);
+  font-size: 10.5px;
+}
+
 /* Organize-prompt field: a label/description block stacked above the textarea,
    mirroring SettingRow's left column but full width so the prompt has room. */
 .sync-prompt-field {
@@ -99,4 +216,10 @@
 .sync-more-note {
   margin: 2px 0 0;
   text-align: center;
+}
+
+@media (max-width: 760px) {
+  .sync-health-grid {
+    grid-template-columns: 1fr;
+  }
 }

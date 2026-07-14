@@ -96,7 +96,10 @@ impl GitHubBackup {
             synced_notes += day_notes.len() as u32;
         }
 
-        Ok(SyncReport { synced_notes, files_written })
+        Ok(SyncReport {
+            synced_notes,
+            files_written,
+        })
     }
 
     /// Backs up *every* supplied transcript into a DISTINCT `transcripts/`
@@ -132,13 +135,15 @@ impl GitHubBackup {
             synced_notes += day_items.len() as u32;
         }
 
-        Ok(SyncReport { synced_notes, files_written })
+        Ok(SyncReport {
+            synced_notes,
+            files_written,
+        })
     }
 
-    /// Ensures the target repo exists. GET the repo; 200 → Ok. On 404, create it
-    /// (private, auto-init) but ONLY when `owner` is the authenticated user —
-    /// otherwise we'd land it in the wrong account, so we return a clear error
-    /// asking the user to create `owner/name` manually.
+    /// Ensures the target repo exists and is private. GitHub App installations
+    /// deliberately have Contents access without repository-administration
+    /// access, so a missing or unselected repository must be prepared on GitHub.
     pub fn ensure_repo(&self) -> Result<(), CommandError> {
         let url = format!("{}/repos/{}/{}", self.api, self.owner, self.repo);
         let (status, json) = self.get_json(&url)?;
@@ -165,51 +170,15 @@ impl GitHubBackup {
             )));
         }
 
-        // 404: create it under the authenticated user, if that's the owner.
-        let login = self.fetch_login()?;
-        if login.trim().is_empty() {
-            // Without a confirmed login we can't tell whose account to create the
-            // repo under, so don't guess (and don't print a nonsense "owned by X,
-            // not your account \"\"" message). Ask the user to create it manually.
-            return Err(failure(format!(
-                "Could not confirm your GitHub username to safely auto-create {}/{}. \
-                 Create it on GitHub first, then retry.",
+        Err(CommandError::new(
+            "github_repo_missing",
+            format!(
+                "The private repository {}/{} was not found or is not installed for \
+                 Scribe Local Backup. Create it on GitHub, grant the app access to it, \
+                 then retry.",
                 self.owner, self.repo
-            )));
-        }
-        if !login.eq_ignore_ascii_case(&self.owner) {
-            return Err(failure(format!(
-                "The repository {}/{} does not exist and could not be created automatically \
-                 (it is owned by \"{}\", not your account \"{}\"). Create it on GitHub first.",
-                self.owner, self.repo, self.owner, login
-            )));
-        }
-
-        let create_url = format!("{}/user/repos", self.api);
-        let body = json!({ "name": self.repo, "private": true, "auto_init": true });
-        let response = self
-            .client
-            .post(&create_url)
-            .timeout(TIMEOUT)
-            .header("Authorization", self.bearer())
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .body(body.to_string())
-            .send()
-            .map_err(|error| failure(format!("Could not reach GitHub. {error}")))?;
-        let status = response.status();
-        let text = response
-            .text()
-            .map_err(|error| failure(format!("Could not read GitHub's response. {error}")))?;
-        if !status.is_success() {
-            return Err(failure(format!(
-                "GitHub returned HTTP {status} creating the repository {}/{}. {}",
-                self.owner,
-                self.repo,
-                truncate(&text, 300)
-            )));
-        }
-        Ok(())
+            ),
+        ))
     }
 
     /// GET the file's blob sha (None on 404), then PUT the new content (base64,
@@ -301,24 +270,12 @@ impl GitHubBackup {
         )))
     }
 
-    fn fetch_login(&self) -> Result<String, CommandError> {
-        let url = format!("{}/user", self.api);
-        let (status, json) = self.get_json(&url)?;
-        if !status.is_success() {
-            return Err(failure(format!(
-                "GitHub returned HTTP {status} reading the authenticated account."
-            )));
-        }
-        Ok(json
-            .get("login")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string())
-    }
-
     /// GET a URL with the GitHub headers, returning (status, parsed-json). A
     /// non-2xx status is NOT an error here so callers can inspect 404/409/422.
-    fn get_json(&self, url: &str) -> Result<(reqwest::StatusCode, serde_json::Value), CommandError> {
+    fn get_json(
+        &self,
+        url: &str,
+    ) -> Result<(reqwest::StatusCode, serde_json::Value), CommandError> {
         let response = self
             .client
             .get(url)
@@ -499,7 +456,9 @@ mod tests {
 
     /// Sequential HTTP mock: serves `(status, body)` pairs in order, capturing
     /// each request. Mirrors the sequential-mock harness in note_analysis.rs.
-    fn mock_server(responses: Vec<(u16, String)>) -> (String, std::thread::JoinHandle<Vec<String>>) {
+    fn mock_server(
+        responses: Vec<(u16, String)>,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let handle = std::thread::spawn(move || {
@@ -554,8 +513,14 @@ mod tests {
         // GET contents → 404 (new file), then PUT (no sha, create). We hit
         // put_day_file directly to avoid the ensure_repo() GET.
         let (base, handle) = mock_server(vec![
-            (404, serde_json::json!({ "message": "Not Found" }).to_string()),
-            (201, serde_json::json!({ "content": { "sha": "newsha" } }).to_string()),
+            (
+                404,
+                serde_json::json!({ "message": "Not Found" }).to_string(),
+            ),
+            (
+                201,
+                serde_json::json!({ "content": { "sha": "newsha" } }).to_string(),
+            ),
         ]);
 
         let backup = GitHubBackup::with_base("tok", "alice", "scribe-notes", &base);
@@ -566,14 +531,16 @@ mod tests {
         let requests = handle.join().unwrap();
         assert_eq!(requests.len(), 2, "GET-then-PUT");
         assert!(requests.iter().all(|r| r.contains("Bearer tok")));
-        assert!(requests[0]
-            .starts_with("GET /repos/alice/scribe-notes/contents/2026-06/2026-06-12.md"));
-        assert!(requests[1]
-            .starts_with("PUT /repos/alice/scribe-notes/contents/2026-06/2026-06-12.md"));
+        assert!(
+            requests[0].starts_with("GET /repos/alice/scribe-notes/contents/2026-06/2026-06-12.md")
+        );
+        assert!(
+            requests[1].starts_with("PUT /repos/alice/scribe-notes/contents/2026-06/2026-06-12.md")
+        );
         // The PUT body carries base64 of the content and, since the file is new,
         // NO sha field.
-        let expected_b64 =
-            base64::engine::general_purpose::STANDARD.encode("# June 12, 2026\n\nhello\n".as_bytes());
+        let expected_b64 = base64::engine::general_purpose::STANDARD
+            .encode("# June 12, 2026\n\nhello\n".as_bytes());
         assert!(requests[1].contains(&expected_b64));
         assert!(!requests[1].contains("\"sha\""));
         // Header names are lowercased on the wire by reqwest; match lowercased.
@@ -587,7 +554,10 @@ mod tests {
         // GET contents → 200 with an existing sha, then PUT carries that sha.
         let (base, handle) = mock_server(vec![
             (200, serde_json::json!({ "sha": "oldsha123" }).to_string()),
-            (200, serde_json::json!({ "content": { "sha": "newsha" } }).to_string()),
+            (
+                200,
+                serde_json::json!({ "content": { "sha": "newsha" } }).to_string(),
+            ),
         ]);
 
         let backup = GitHubBackup::with_base("tok", "alice", "scribe-notes", &base);
@@ -598,13 +568,17 @@ mod tests {
         let requests = handle.join().unwrap();
         assert_eq!(requests.len(), 2);
         assert!(requests[1].starts_with("PUT /repos/alice/scribe-notes/contents/"));
-        assert!(requests[1].contains("oldsha123"), "update PUT carries the sha");
+        assert!(
+            requests[1].contains("oldsha123"),
+            "update PUT carries the sha"
+        );
     }
 
     #[test]
     fn sync_notes_ensures_repo_then_writes_path() {
         // ensure_repo GET (200), then GET-contents (404) + PUT for the one day.
-        let (base, handle) = mock_server(vec![
+        let (base, handle) =
+            mock_server(vec![
             (
                 200,
                 serde_json::json!({ "id": 1, "full_name": "alice/scribe-notes", "private": true })
@@ -615,11 +589,22 @@ mod tests {
         ]);
 
         let at = Utc.with_ymd_and_hms(2026, 6, 12, 18, 30, 0).unwrap();
-        let notes = vec![note("tx_1", "buy milk and call Sam", Some("Summary: errands"), at)];
+        let notes = vec![note(
+            "tx_1",
+            "buy milk and call Sam",
+            Some("Summary: errands"),
+            at,
+        )];
 
         let backup = GitHubBackup::with_base("tok", "alice", "scribe-notes", &base);
         let report = backup.sync_notes(&notes).unwrap();
-        assert_eq!(report, SyncReport { synced_notes: 1, files_written: 1 });
+        assert_eq!(
+            report,
+            SyncReport {
+                synced_notes: 1,
+                files_written: 1
+            }
+        );
 
         let requests = handle.join().unwrap();
         assert_eq!(requests.len(), 3);
@@ -645,9 +630,18 @@ mod tests {
     #[test]
     fn sync_all_transcripts_uses_transcripts_path() {
         let (base, handle) = mock_server(vec![
-            (200, serde_json::json!({ "id": 1, "private": true }).to_string()),
-            (404, serde_json::json!({ "message": "Not Found" }).to_string()),
-            (201, serde_json::json!({ "content": { "sha": "s" } }).to_string()),
+            (
+                200,
+                serde_json::json!({ "id": 1, "private": true }).to_string(),
+            ),
+            (
+                404,
+                serde_json::json!({ "message": "Not Found" }).to_string(),
+            ),
+            (
+                201,
+                serde_json::json!({ "content": { "sha": "s" } }).to_string(),
+            ),
         ]);
 
         let at = Utc.with_ymd_and_hms(2026, 6, 12, 18, 30, 0).unwrap();
@@ -670,7 +664,10 @@ mod tests {
 
     #[test]
     fn sync_report_serializes_camel_case() {
-        let report = SyncReport { synced_notes: 3, files_written: 2 };
+        let report = SyncReport {
+            synced_notes: 3,
+            files_written: 2,
+        };
         let json = serde_json::to_value(&report).unwrap();
         assert_eq!(json["syncedNotes"], 3);
         assert_eq!(json["filesWritten"], 2);
@@ -695,12 +692,32 @@ mod tests {
     }
 
     #[test]
+    fn ensure_repo_explains_missing_or_unselected_repo() {
+        let (base, handle) = mock_server(vec![(
+            404,
+            serde_json::json!({ "message": "Not Found" }).to_string(),
+        )]);
+
+        let backup = GitHubBackup::with_base("tok", "alice", "scribe-notes", &base);
+        let error = backup.ensure_repo().unwrap_err();
+        assert_eq!(error.code, "github_repo_missing");
+        assert!(error.message.contains("grant the app access"));
+        assert!(error.message.contains("alice/scribe-notes"));
+
+        let requests = handle.join().unwrap();
+        assert_eq!(requests.len(), 1, "Scribe must not request repo creation");
+    }
+
+    #[test]
     fn put_contents_422_is_an_error_not_a_silent_retry() {
         // GET sha → 404 (new file), then PUT → 422 (a validation error, e.g. the
         // file exceeds the 1 MB Contents-API limit). This is NOT a stale-sha
         // conflict, so put_day_file must surface an Err — never re-GET and loop.
         let (base, handle) = mock_server(vec![
-            (404, serde_json::json!({ "message": "Not Found" }).to_string()),
+            (
+                404,
+                serde_json::json!({ "message": "Not Found" }).to_string(),
+            ),
             (
                 422,
                 serde_json::json!({ "message": "size 2000000 exceeds 1048576" }).to_string(),

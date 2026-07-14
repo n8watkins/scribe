@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.7.0"
+version = "0.8.0"
 description = "Private local dictation for Windows."
 authors = ["Nat Atkins"]
 license = "MIT"
@@ -36,7 +36,7 @@ crossbeam-channel = "0.5"
 hound = "3.5"
 rubato = "0.15"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "multipart"] }
-sha1 = "0.10"
+sha2 = "0.10"
 arboard = "3.4"
 base64 = "0.22"
 keyring = { version = "3", features = ["windows-native"] }
@@ -58,6 +58,8 @@ windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
     "Win32_Media_Audio",
+    "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",

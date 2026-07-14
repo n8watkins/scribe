@@ -91,8 +91,7 @@ fn transcribe_recording_checked(
     })?);
     let cleanup = WavCleanup::new(wav_path.clone());
 
-    let result =
-        transcribe_recording_inner(app, recording, wav_path.clone(), incremental, stopped);
+    let result = transcribe_recording_inner(app, recording, wav_path.clone(), incremental, stopped);
     match &result {
         Ok(_) => cleanup.remove(),
         Err(error) => {
@@ -104,8 +103,7 @@ fn transcribe_recording_checked(
             // can be recovered/inspected from disk. Fully best-effort: on any
             // quarantine problem fall back to the normal delete, so we never
             // leak temp files and never change the result.
-            if !quarantine_failed_recording(app, &wav_path, &recording.session_id, &error.message)
-            {
+            if !quarantine_failed_recording(app, &wav_path, &recording.session_id, &error.message) {
                 cleanup.remove();
             }
         }
@@ -283,8 +281,7 @@ fn transcribe_recording_inner(
     // `whisper_result.text`, so doing it here covers both. (The file-transcribe
     // path is intentionally left untouched.) An empty replacements list returns
     // the text unchanged.
-    let final_text =
-        crate::text_replace::apply(&whisper_result.text, &settings.text_replacements);
+    let final_text = crate::text_replace::apply(&whisper_result.text, &settings.text_replacements);
 
     // A voice Transform Selection recording: the transcribed text is the user's
     // spoken *instruction*, not dictation. Route it to the transform engine —
@@ -636,10 +633,7 @@ fn clips_dir(app: &AppHandle) -> Result<PathBuf, CommandError> {
     let dir = app.path().app_data_dir().map_err(|error| {
         CommandError::new(
             "app_data_dir_unavailable",
-            format!(
-                "Could not locate Scribe app data directory. {}",
-                error
-            ),
+            format!("Could not locate Scribe app data directory. {}", error),
         )
     })?;
     Ok(dir.join("clips"))
@@ -700,7 +694,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     fn unique_temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("scribe-test-{}-{}", tag, uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("scribe-test-{}-{}", tag, uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }

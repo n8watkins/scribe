@@ -10,7 +10,7 @@
 //! The wire contract these types implement is frozen in
 //! `docs/integrations/dictation-state-contract.md`.
 
-use crate::app_state::{AppStatus, AppStateSnapshot};
+use crate::app_state::{AppStateSnapshot, AppStatus};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -49,10 +49,7 @@ pub fn is_dictating(status: &AppStatus) -> bool {
 pub fn is_busy(status: &AppStatus) -> bool {
     matches!(
         status,
-        AppStatus::Recording
-            | AppStatus::Stopping
-            | AppStatus::Transcribing
-            | AppStatus::Pasting
+        AppStatus::Recording | AppStatus::Stopping | AppStatus::Transcribing | AppStatus::Pasting
     )
 }
 
@@ -184,7 +181,11 @@ mod tests {
             AppStatus::Error,
             AppStatus::Paused,
         ] {
-            assert!(!is_dictating(&status), "{:?} was not legacy listening", status);
+            assert!(
+                !is_dictating(&status),
+                "{:?} was not legacy listening",
+                status
+            );
         }
     }
 
@@ -209,8 +210,14 @@ mod tests {
         // camelCase timestamps, and `since` tracks the state's own updated_at
         // while `updatedAt` is the snapshot production time.
         assert!(value.get("since").is_some());
-        assert!(value.get("updatedAt").is_some(), "updatedAt must be camelCase");
-        assert!(value.get("updated_at").is_none(), "snake_case must not leak");
+        assert!(
+            value.get("updatedAt").is_some(),
+            "updatedAt must be camelCase"
+        );
+        assert!(
+            value.get("updated_at").is_none(),
+            "snake_case must not leak"
+        );
     }
 
     #[test]

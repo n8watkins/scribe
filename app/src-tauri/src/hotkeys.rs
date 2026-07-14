@@ -9,13 +9,17 @@ use std::{
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 #[cfg(windows)]
 use tauri_plugin_global_shortcut::Code;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 
 use crate::{
-    app_state::AppStatus, audio, commands::BackendState, error::CommandError,
-    settings::{HotkeySettings, TriggerEdge}, tray,
+    app_state::AppStatus,
+    audio,
+    commands::BackendState,
+    error::CommandError,
+    settings::{HotkeySettings, TriggerEdge},
+    tray,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -451,9 +455,7 @@ pub fn handle_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEven
     // The native toggle watcher owns the toggle key when it could be
     // mapped to a pollable virtual key; the plugin registration only exists
     // to suppress the keystroke then.
-    if action == HotkeyAction::ToggleDictation
-        && runtime.toggle_watched.load(Ordering::SeqCst)
-    {
+    if action == HotkeyAction::ToggleDictation && runtime.toggle_watched.load(Ordering::SeqCst) {
         return;
     }
 

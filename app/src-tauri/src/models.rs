@@ -2,7 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_MODEL_ID: &str = "small.en-q5_1";
-const HUGGING_FACE_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+const HUGGING_FACE_REVISION: &str = "5359861c739e955e79d9a303bcbc70fb988958b1";
+const HUGGING_FACE_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -45,7 +46,7 @@ impl ModelStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ChecksumKind {
-    Sha1,
+    Sha256,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,7 +69,8 @@ pub struct CatalogModel {
     pub name: &'static str,
     pub filename: &'static str,
     pub disk_size_label: &'static str,
-    pub expected_sha1: Option<&'static str>,
+    pub expected_sha256: &'static str,
+    pub expected_size_bytes: u64,
     /// Whether this Whisper model can transcribe languages other than English
     /// (and translate to English). The `.en` Whisper builds are English-only;
     /// the plain (non-`.en`) builds and `large-v3-turbo` are multilingual. The
@@ -79,13 +81,16 @@ pub struct CatalogModel {
 
 impl CatalogModel {
     pub fn download_url(self) -> String {
-        format!("{}/{}", HUGGING_FACE_BASE_URL, self.filename)
+        format!(
+            "{}/{}/{}",
+            HUGGING_FACE_BASE_URL, HUGGING_FACE_REVISION, self.filename
+        )
     }
 
     pub fn checksum(self) -> Option<ModelChecksum> {
-        self.expected_sha1.map(|value| ModelChecksum {
-            kind: ChecksumKind::Sha1,
-            value: value.to_string(),
+        Some(ModelChecksum {
+            kind: ChecksumKind::Sha256,
+            value: self.expected_sha256.to_string(),
         })
     }
 }
@@ -132,7 +137,8 @@ pub fn catalog() -> &'static [CatalogModel] {
             name: "Tiny English",
             filename: "ggml-tiny.en.bin",
             disk_size_label: "75 MiB",
-            expected_sha1: Some("c78c86eb1a8faa21b369bcd33207cc90d64ae9df"),
+            expected_sha256: "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
+            expected_size_bytes: 77_704_715,
             multilingual: false,
         },
         CatalogModel {
@@ -140,7 +146,8 @@ pub fn catalog() -> &'static [CatalogModel] {
             name: "Base English",
             filename: "ggml-base.en.bin",
             disk_size_label: "142 MiB",
-            expected_sha1: Some("137c40403d78fd54d454da0f9bd998f78703390c"),
+            expected_sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+            expected_size_bytes: 147_964_211,
             multilingual: false,
         },
         CatalogModel {
@@ -148,7 +155,8 @@ pub fn catalog() -> &'static [CatalogModel] {
             name: "Small English",
             filename: "ggml-small.en.bin",
             disk_size_label: "466 MiB",
-            expected_sha1: Some("db8a495a91d927739e50b3fc1cc4c6b8f6c2d022"),
+            expected_sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
+            expected_size_bytes: 487_614_201,
             multilingual: false,
         },
         CatalogModel {
@@ -156,7 +164,8 @@ pub fn catalog() -> &'static [CatalogModel] {
             name: "Small English Q5_1",
             filename: "ggml-small.en-q5_1.bin",
             disk_size_label: "181 MiB",
-            expected_sha1: Some("20f54878d608f94e4a8ee3ae56016571d47cba34"),
+            expected_sha256: "bfdff4894dcb76bbf647d56263ea2a96645423f1669176f4844a1bf8e478ad30",
+            expected_size_bytes: 190_098_681,
             multilingual: false,
         },
         CatalogModel {
@@ -164,24 +173,22 @@ pub fn catalog() -> &'static [CatalogModel] {
             name: "Medium English",
             filename: "ggml-medium.en.bin",
             disk_size_label: "1.5 GiB",
-            expected_sha1: Some("8c30f0e44ce9560643ebd10bbe50cd20eafd3723"),
+            expected_sha256: "cc37e93478338ec7700281a7ac30a10128929eb8f427dda2e865faa8f6da4356",
+            expected_size_bytes: 1_533_774_781,
             multilingual: false,
         },
         // Multilingual Whisper builds. These transcribe ~99 languages and can
         // translate any of them to English (the Translate-to-English setting).
-        // No plain-content SHA1 is published for these by upstream anymore (the
-        // download-ggml-model.sh script dropped its checksum table, and the
-        // HuggingFace repo only exposes git blob OIDs / LFS SHA256, neither of
-        // which matches the plain SHA1 this app verifies). Rather than invent a
-        // value that would fail verification, the checksum is left None — the
-        // schema allows it, and downloads still come over HTTPS from the same
-        // trusted HuggingFace repo as the entries above.
+        // Every download is pinned to a reviewed repository revision and checked
+        // against the plain-content SHA-256 and byte size published in its LFS
+        // metadata.
         CatalogModel {
             id: "tiny",
             name: "Tiny (Multilingual)",
             filename: "ggml-tiny.bin",
             disk_size_label: "75 MiB",
-            expected_sha1: None,
+            expected_sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+            expected_size_bytes: 77_691_713,
             multilingual: true,
         },
         CatalogModel {
@@ -189,7 +196,8 @@ pub fn catalog() -> &'static [CatalogModel] {
             name: "Base (Multilingual)",
             filename: "ggml-base.bin",
             disk_size_label: "142 MiB",
-            expected_sha1: None,
+            expected_sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+            expected_size_bytes: 147_951_465,
             multilingual: true,
         },
         CatalogModel {
@@ -197,7 +205,8 @@ pub fn catalog() -> &'static [CatalogModel] {
             name: "Small (Multilingual)",
             filename: "ggml-small.bin",
             disk_size_label: "466 MiB",
-            expected_sha1: None,
+            expected_sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+            expected_size_bytes: 487_601_967,
             multilingual: true,
         },
         CatalogModel {
@@ -205,7 +214,8 @@ pub fn catalog() -> &'static [CatalogModel] {
             name: "Medium (Multilingual)",
             filename: "ggml-medium.bin",
             disk_size_label: "1.5 GiB",
-            expected_sha1: None,
+            expected_sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+            expected_size_bytes: 1_533_763_059,
             multilingual: true,
         },
         CatalogModel {
@@ -213,7 +223,8 @@ pub fn catalog() -> &'static [CatalogModel] {
             name: "Large v3 Turbo Q5_0 (Multilingual)",
             filename: "ggml-large-v3-turbo-q5_0.bin",
             disk_size_label: "547 MiB",
-            expected_sha1: Some("e050f7970618a659205450ad97eb95a18d69c9ee"),
+            expected_sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+            expected_size_bytes: 574_041_195,
             multilingual: true,
         },
         // Full-precision (fp16) large-v3-turbo: the most accurate model offered.
@@ -224,7 +235,8 @@ pub fn catalog() -> &'static [CatalogModel] {
             name: "Large v3 Turbo (Multilingual, max accuracy)",
             filename: "ggml-large-v3-turbo.bin",
             disk_size_label: "1.6 GiB",
-            expected_sha1: None,
+            expected_sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+            expected_size_bytes: 1_624_555_275,
             multilingual: true,
         },
     ]
@@ -241,24 +253,35 @@ mod tests {
     #[test]
     fn default_model_is_present_and_english_only() {
         let default = catalog_model(DEFAULT_MODEL_ID).expect("default model in catalog");
-        assert!(!default.multilingual, "the default model stays English-only");
+        assert!(
+            !default.multilingual,
+            "the default model stays English-only"
+        );
     }
 
     #[test]
     fn catalog_includes_multilingual_base_and_small() {
         for id in ["tiny", "base", "small", "medium"] {
-            let model = catalog_model(id).unwrap_or_else(|| panic!("{id} should be in the catalog"));
+            let model =
+                catalog_model(id).unwrap_or_else(|| panic!("{id} should be in the catalog"));
             assert!(model.multilingual, "{id} must be flagged multilingual");
-            // The plain (non-`.en`) builds resolve to the matching HuggingFace
-            // file and have no fabricated checksum.
+            // The plain (non-`.en`) builds resolve to the matching Hugging Face
+            // file and have a full content hash plus an exact size bound.
             assert_eq!(model.filename, format!("ggml-{id}.bin"));
-            assert!(model.expected_sha1.is_none());
+            assert_eq!(model.expected_sha256.len(), 64);
+            assert!(model.expected_size_bytes > 0);
         }
     }
 
     #[test]
     fn en_builds_are_english_only_and_large_turbo_is_multilingual() {
-        for id in ["tiny.en", "base.en", "small.en", "small.en-q5_1", "medium.en"] {
+        for id in [
+            "tiny.en",
+            "base.en",
+            "small.en",
+            "small.en-q5_1",
+            "medium.en",
+        ] {
             assert!(
                 !catalog_model(id).unwrap().multilingual,
                 "{id} is an English-only build"
@@ -282,8 +305,9 @@ mod tests {
         let full = catalog_model("large-v3-turbo").unwrap();
         assert_eq!(q5.filename, "ggml-large-v3-turbo-q5_0.bin");
         assert_eq!(full.filename, "ggml-large-v3-turbo.bin");
-        // The full one has no fabricated checksum (HF publishes none that matches).
-        assert!(full.expected_sha1.is_none());
+        assert_eq!(q5.expected_sha256.len(), 64);
+        assert_eq!(full.expected_sha256.len(), 64);
+        assert!(full.expected_size_bytes > q5.expected_size_bytes);
     }
 
     #[test]
@@ -291,7 +315,24 @@ mod tests {
         let small = catalog_model("small").unwrap();
         assert_eq!(
             small.download_url(),
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small.bin"
         );
+    }
+
+    #[test]
+    fn every_catalog_download_has_a_sha256_and_size_bound() {
+        for model in catalog() {
+            assert_eq!(model.expected_sha256.len(), 64, "{} hash", model.id);
+            assert!(
+                model
+                    .expected_sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit()),
+                "{} hash must be hexadecimal",
+                model.id
+            );
+            assert!(model.expected_size_bytes > 0, "{} size", model.id);
+            assert_eq!(model.checksum().unwrap().kind, ChecksumKind::Sha256);
+        }
     }
 }

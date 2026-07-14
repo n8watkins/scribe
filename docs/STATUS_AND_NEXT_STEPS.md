@@ -1,33 +1,27 @@
 # Scribe - Status and Next Steps
 
-> This doc keeps the longer project history. The sections below the "Where
-> things stand" summary are a historical record of the early V1 push
-> (2026-06-10 → 06-11) and are intentionally left as-shipped; for the
-> day-to-day feature record see [`CHANGELOG.md`](../CHANGELOG.md), and for a
-> competitive review + prioritized gap list see
-> [`docs/COMPETITIVE-ANALYSIS.md`](COMPETITIVE-ANALYSIS.md).
+> This document keeps the longer project history.
+> The sections below the "Where things stand" summary are a historical record of the early V1 push from 2026-06-10 through 2026-06-11 and are intentionally left as shipped.
+> For the day-to-day feature record, see [`CHANGELOG.md`](../CHANGELOG.md).
+> The competitive analysis is also a dated strategy snapshot and now carries a current-state correction notice.
 
-Status: Shipping (public, MIT open-source) — current version **0.5.22**  
-Last updated: 2026-06-15  
-Repository: `https://github.com/n8watkins/scribe` (public)  
-Releases: signed installers published per tag via CI (see the GitHub Releases page)
+Status: Shipping (public, MIT open-source); the source tree is currently versioned **0.8.0**.
+
+Last updated: 2026-07-14
+
+Repository: `https://github.com/n8watkins/scribe` (public)
+
+Releases: unsigned Windows installers plus cryptographically signed updater artifacts are published per tag via CI
 
 ## Where things stand
 
-Scribe is a mature local dictation app the owner uses daily on Windows 11. Core
-loop: hold `Ctrl+Win` (or tap `` ` ``), talk, and text is inserted at your
-cursor by a locally running whisper.cpp model (warm `whisper-server` with a
-`whisper-cli` fallback), with live/incremental transcription so stop-to-text is
-near-instant. On top of dictation it now ships **quick notes** (`~`+Q) with
-on-demand local-LLM analysis, **AI dictation cleanup**, **selected-text
-transform** (an inline AI editor), a **dictionary** (context hint +
-replacements), **searchable history** with date-range search and combine,
-**separate transcript/notes retention**, **Google Drive sync + Markdown/CSV/JSON
-export**, a configurable **floating pill**, fully **rebindable hotkeys** with
-per-bind press/release triggers, a **model manager**, and a **signed
-auto-updater** with OS notifications. The backend test suite (~160 tests) and
-the frontend both build clean; the audio/hotkey/paste paths are Windows-gated
-and verified on the Windows toolchain.
+Scribe is a mature local dictation app the owner uses daily on Windows 11.
+The core loop is to hold `Ctrl+Win` or tap `` ` ``, talk, and have text inserted at the cursor by a locally running whisper.cpp model with a warm `whisper-server` and `whisper-cli` fallback.
+Live incremental transcription keeps stop-to-text latency low, and Vulkan acceleration is available with automatic CPU fallback.
+On top of dictation, Scribe ships **quick notes** with on-demand local-LLM analysis, **selected-text transform**, a **dictionary**, **searchable history**, **separate transcript and note retention**, optional **private GitHub backup**, **Markdown/CSV/JSON export**, a configurable **floating pill**, fully **rebindable hotkeys**, multilingual transcription and translation, and a **signed auto-updater** with OS notifications.
+Local-LLM dictation cleanup was removed because it duplicated deterministic cleanup and added latency.
+The Windows installers themselves are not Authenticode-signed, and that signing plan was deliberately dropped.
+Automatic update checks run shortly after launch, on window refocus, and every six hours.
 
 The "What was done" sections below are the original V1 launch log (2026-06-10 →
 06-11) and predate almost all of the above — read them as history, not current
@@ -60,13 +54,9 @@ state.
 
 ## What to do next (priority order)
 
-Shipped since the original V1 list: incremental/live transcription, tag-triggered
-CI release workflow, launch at startup, Notes (`~`+Q) + on-demand analysis,
-**signed auto-updater** with OS notifications, AI dictation cleanup, selected-text
-transform, the dictionary (context hint + replacements), history date-range
-search + combine, separate transcript/notes retention, Google Drive sync +
-Markdown/CSV/JSON export, configurable pill, repo flipped public. The
-auto-updater carry-over is done; the items below remain.
+Shipped since the original V1 list: incremental/live transcription, tag-triggered CI release workflow, launch at startup, Notes (`~`+Q) with on-demand analysis, a **signed auto-updater** with OS notifications, selected-text transform, the dictionary, history date-range search and combine, separate transcript and note retention, private GitHub backup, Markdown/CSV/JSON export, a configurable pill, multilingual transcription, and Vulkan acceleration.
+Google Drive backup was replaced by GitHub backup, and local-LLM dictation cleanup was later removed.
+The auto-updater carry-over is done, and the items below remain.
 
 For a researched, prioritized "build next to be competitive" list (with rough
 effort), see [`docs/COMPETITIVE-ANALYSIS.md`](COMPETITIVE-ANALYSIS.md). Short
