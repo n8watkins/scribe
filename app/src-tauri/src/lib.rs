@@ -196,7 +196,12 @@ fn install_panic_logger() {
         let location = info
             .location()
             .map(|location| {
-                format!("{}:{}:{}", location.file(), location.line(), location.column())
+                format!(
+                    "{}:{}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                )
             })
             .unwrap_or_else(|| "unknown location".to_string());
         let message = info

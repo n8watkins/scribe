@@ -177,8 +177,17 @@ mod platform {
     /// Same modifier set the paste path force-releases: every key whose held
     /// state would otherwise combine with the injected Ctrl+C.
     const MODIFIER_KEYS: [VIRTUAL_KEY; 11] = [
-        VK_CONTROL, VK_LCONTROL, VK_RCONTROL, VK_MENU, VK_LMENU, VK_RMENU, VK_SHIFT, VK_LSHIFT,
-        VK_RSHIFT, VK_LWIN, VK_RWIN,
+        VK_CONTROL,
+        VK_LCONTROL,
+        VK_RCONTROL,
+        VK_MENU,
+        VK_LMENU,
+        VK_RMENU,
+        VK_SHIFT,
+        VK_LSHIFT,
+        VK_RSHIFT,
+        VK_LWIN,
+        VK_RWIN,
     ];
 
     /// Force-release any physically-held modifier so the synthetic Ctrl+C
@@ -345,8 +354,7 @@ mod tests {
 
     #[test]
     fn transform_round_trips_selection_and_instruction_and_trims() {
-        let (endpoint, handle) =
-            mock_server(vec![completion_response("  HELLO WORLD  \n")]);
+        let (endpoint, handle) = mock_server(vec![completion_response("  HELLO WORLD  \n")]);
 
         let result = transform(
             "hello world",
@@ -372,13 +380,7 @@ mod tests {
     fn transform_surfaces_llm_errors() {
         // A port from the dynamic range with nothing listening: the underlying
         // analyze_text error (mentioning the endpoint) propagates out.
-        let error = transform(
-            "text",
-            "instruction",
-            "http://127.0.0.1:59998/v1",
-            "m",
-        )
-        .unwrap_err();
+        let error = transform("text", "instruction", "http://127.0.0.1:59998/v1", "m").unwrap_err();
         assert!(error.to_string().contains("127.0.0.1:59998"));
     }
 }

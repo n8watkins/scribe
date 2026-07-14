@@ -241,13 +241,17 @@ mod tests {
     #[test]
     fn default_model_is_present_and_english_only() {
         let default = catalog_model(DEFAULT_MODEL_ID).expect("default model in catalog");
-        assert!(!default.multilingual, "the default model stays English-only");
+        assert!(
+            !default.multilingual,
+            "the default model stays English-only"
+        );
     }
 
     #[test]
     fn catalog_includes_multilingual_base_and_small() {
         for id in ["tiny", "base", "small", "medium"] {
-            let model = catalog_model(id).unwrap_or_else(|| panic!("{id} should be in the catalog"));
+            let model =
+                catalog_model(id).unwrap_or_else(|| panic!("{id} should be in the catalog"));
             assert!(model.multilingual, "{id} must be flagged multilingual");
             // The plain (non-`.en`) builds resolve to the matching HuggingFace
             // file and have no fabricated checksum.
@@ -258,7 +262,13 @@ mod tests {
 
     #[test]
     fn en_builds_are_english_only_and_large_turbo_is_multilingual() {
-        for id in ["tiny.en", "base.en", "small.en", "small.en-q5_1", "medium.en"] {
+        for id in [
+            "tiny.en",
+            "base.en",
+            "small.en",
+            "small.en-q5_1",
+            "medium.en",
+        ] {
             assert!(
                 !catalog_model(id).unwrap().multilingual,
                 "{id} is an English-only build"

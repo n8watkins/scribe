@@ -94,7 +94,10 @@ pub fn request_device_code() -> Result<DeviceCode, CommandError> {
         device_code: json_str(&json, "device_code")?,
         user_code: json_str(&json, "user_code")?,
         verification_uri: json_str(&json, "verification_uri")?,
-        expires_in: json.get("expires_in").and_then(|v| v.as_u64()).unwrap_or(900),
+        expires_in: json
+            .get("expires_in")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(900),
         interval: json.get("interval").and_then(|v| v.as_u64()).unwrap_or(5),
     })
 }
@@ -159,9 +162,7 @@ pub fn poll_for_token(device_code: &str, interval_secs: u64) -> Result<String, C
                     "The GitHub sign-in code expired before you authorized it. Please try again.",
                 ))
             }
-            Some("access_denied") => {
-                return Err(failure("GitHub sign-in was denied."))
-            }
+            Some("access_denied") => return Err(failure("GitHub sign-in was denied.")),
             Some(other) => {
                 let detail = json
                     .get("error_description")
@@ -192,7 +193,9 @@ pub fn sign_out(service: &str) -> Result<(), CommandError> {
     match entry.delete_credential() {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()),
-        Err(error) => Err(failure(format!("Could not clear the saved GitHub token. {error}"))),
+        Err(error) => Err(failure(format!(
+            "Could not clear the saved GitHub token. {error}"
+        ))),
     }
 }
 
@@ -211,7 +214,11 @@ pub fn has_stored_token(service: &str) -> bool {
 pub fn store_token(service: &str, token: &str) -> Result<(), CommandError> {
     keychain_entry(service)?
         .set_password(token)
-        .map_err(|error| failure(format!("Could not save the GitHub token to the keychain. {error}")))
+        .map_err(|error| {
+            failure(format!(
+                "Could not save the GitHub token to the keychain. {error}"
+            ))
+        })
 }
 
 /// GET `/user` to learn the connected account's `login` (for display and to gate
@@ -267,7 +274,9 @@ fn load_token(service: &str) -> Result<String, CommandError> {
             "github_not_signed_in",
             "Not signed in to GitHub. Open Settings → Sync and connect GitHub.",
         )),
-        Err(error) => Err(failure(format!("Could not read the saved GitHub token. {error}"))),
+        Err(error) => Err(failure(format!(
+            "Could not read the saved GitHub token. {error}"
+        ))),
     }
 }
 
@@ -341,7 +350,9 @@ mod tests {
     /// Sequential HTTP mock: serves `responses` (status, body) in order,
     /// capturing each request. Mirrors the sequential-mock harness used in the
     /// other network modules' tests.
-    fn mock_server(responses: Vec<(u16, String)>) -> (String, std::thread::JoinHandle<Vec<String>>) {
+    fn mock_server(
+        responses: Vec<(u16, String)>,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let handle = std::thread::spawn(move || {
@@ -433,8 +444,15 @@ mod tests {
         // against the mock to prove the error-field branching, since the real
         // function hard-codes the github.com URL.
         let (base, handle) = mock_server(vec![
-            (200, serde_json::json!({ "error": "authorization_pending" }).to_string()),
-            (200, serde_json::json!({ "access_token": "ghs_secret", "token_type": "bearer" }).to_string()),
+            (
+                200,
+                serde_json::json!({ "error": "authorization_pending" }).to_string(),
+            ),
+            (
+                200,
+                serde_json::json!({ "access_token": "ghs_secret", "token_type": "bearer" })
+                    .to_string(),
+            ),
         ]);
 
         let client = reqwest::blocking::Client::new();

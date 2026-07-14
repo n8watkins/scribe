@@ -55,10 +55,7 @@ impl BackendState {
     /// transform recording — ordinary dictation never consults it — so it can
     /// never be misapplied.
     #[cfg(windows)]
-    pub fn set_pending_transform(
-        &self,
-        captured: crate::selection_transform::CapturedSelection,
-    ) {
+    pub fn set_pending_transform(&self, captured: crate::selection_transform::CapturedSelection) {
         if let Ok(mut slot) = self.pending_transform.lock() {
             *slot = Some(captured);
         }
@@ -66,9 +63,7 @@ impl BackendState {
 
     /// Takes the pending transform selection, if any (consumed exactly once).
     #[cfg(windows)]
-    pub fn take_pending_transform(
-        &self,
-    ) -> Option<crate::selection_transform::CapturedSelection> {
+    pub fn take_pending_transform(&self) -> Option<crate::selection_transform::CapturedSelection> {
         self.pending_transform
             .lock()
             .ok()
@@ -231,6 +226,9 @@ pub fn list_recent_transcripts(
 }
 
 #[tauri::command]
+// Tauri maps these flat parameters directly from the stable frontend command
+// payload, so grouping them would be a breaking IPC contract change.
+#[allow(clippy::too_many_arguments)]
 pub fn search_transcripts(
     state: tauri::State<'_, BackendState>,
     query: Option<String>,
@@ -753,11 +751,7 @@ pub fn save_window_size(
     settings.window_width = Some(size.width as i32);
     settings.window_height = Some(size.height as i32);
     state.db()?.save_settings(&settings)?;
-    log::info!(
-        "Saved default window size {}x{}",
-        size.width,
-        size.height
-    );
+    log::info!("Saved default window size {}x{}", size.width, size.height);
     Ok(settings)
 }
 
@@ -898,9 +892,7 @@ pub struct GithubDeviceStart {
 /// verification URL in the browser, and returns the code for the UI to show.
 /// Does NOT block on polling — the frontend then calls `github_device_poll`.
 #[tauri::command]
-pub async fn github_device_start(
-    app: tauri::AppHandle,
-) -> Result<GithubDeviceStart, CommandError> {
+pub async fn github_device_start(app: tauri::AppHandle) -> Result<GithubDeviceStart, CommandError> {
     let opener_app = app.clone();
     let device = tauri::async_runtime::spawn_blocking(crate::github_oauth::request_device_code)
         .await
@@ -1048,7 +1040,10 @@ pub fn export_transcripts(
         other => {
             return Err(CommandError::new(
                 "invalid_export_scope",
-                format!("Unknown export scope \"{}\". Expected all, notes, or dictation.", other),
+                format!(
+                    "Unknown export scope \"{}\". Expected all, notes, or dictation.",
+                    other
+                ),
             ));
         }
     };
@@ -1061,7 +1056,10 @@ pub fn export_transcripts(
         other => {
             return Err(CommandError::new(
                 "invalid_export_format",
-                format!("Unknown export format \"{}\". Expected markdown, csv, or json.", other),
+                format!(
+                    "Unknown export format \"{}\". Expected markdown, csv, or json.",
+                    other
+                ),
             ));
         }
     };
@@ -1212,7 +1210,10 @@ fn transform_selection_blocking(
     let (endpoint, model) = {
         let state = app.state::<BackendState>();
         let settings = state.db()?.get_settings()?;
-        (settings.notes_analysis_endpoint, settings.notes_analysis_model)
+        (
+            settings.notes_analysis_endpoint,
+            settings.notes_analysis_model,
+        )
     };
 
     // 1. Copy the current selection out of the focused app, remembering the

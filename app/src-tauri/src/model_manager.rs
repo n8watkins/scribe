@@ -639,10 +639,7 @@ fn app_data_dir(app: &AppHandle) -> Result<PathBuf, CommandError> {
     app.path().app_data_dir().map_err(|error| {
         CommandError::new(
             "app_data_dir_unavailable",
-            format!(
-                "Could not locate Scribe app data directory. {}",
-                error
-            ),
+            format!("Could not locate Scribe app data directory. {}", error),
         )
     })
 }

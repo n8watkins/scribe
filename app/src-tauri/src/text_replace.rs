@@ -42,7 +42,7 @@ pub fn apply(text: &str, replacements: &[TextReplacement]) -> String {
         .iter()
         .filter(|r| !r.from.trim().is_empty())
         .collect();
-    ordered.sort_by(|a, b| b.from.chars().count().cmp(&a.from.chars().count()));
+    ordered.sort_by_key(|replacement| std::cmp::Reverse(replacement.from.chars().count()));
 
     let mut result = text.to_string();
     for replacement in ordered {
@@ -145,10 +145,7 @@ mod tests {
 
     #[test]
     fn replaces_standalone_word() {
-        assert_eq!(
-            apply("I don't no", &[rep("no", "know")]),
-            "I don't know"
-        );
+        assert_eq!(apply("I don't no", &[rep("no", "know")]), "I don't know");
     }
 
     #[test]
@@ -186,10 +183,7 @@ mod tests {
 
     #[test]
     fn replaces_all_occurrences() {
-        assert_eq!(
-            apply("no no no", &[rep("no", "know")]),
-            "know know know"
-        );
+        assert_eq!(apply("no no no", &[rep("no", "know")]), "know know know");
     }
 
     #[test]
@@ -221,10 +215,7 @@ mod tests {
     fn multibyte_from_is_matched_on_word_boundaries() {
         // A multibyte `from` ("café") is matched case-insensitively as a whole
         // word and left alone inside a larger word ("cafés" is not "café").
-        assert_eq!(
-            apply("CAFÉ time", &[rep("café", "coffee")]),
-            "coffee time"
-        );
+        assert_eq!(apply("CAFÉ time", &[rep("café", "coffee")]), "coffee time");
         assert_eq!(apply("cafés", &[rep("café", "coffee")]), "cafés");
     }
 

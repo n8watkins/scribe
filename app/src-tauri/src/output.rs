@@ -412,8 +412,7 @@ fn clipboard_paste(
             clipboard_restored: Some(false),
             clipboard_preservation: ClipboardPreservation::RestoreFailed,
             clipboard_restore_error: Some(error.message),
-            message: "Pasted transcript, but couldn't restore your previous clipboard."
-                .to_string(),
+            message: "Pasted transcript, but couldn't restore your previous clipboard.".to_string(),
         }),
     }
 }
@@ -575,8 +574,17 @@ mod platform {
     /// (`VK_LCONTROL`/`VK_RCONTROL`) virtual keys so an explicit key-up is
     /// emitted for whichever one Windows is actually tracking.
     const MODIFIER_KEYS: [VIRTUAL_KEY; 11] = [
-        VK_CONTROL, VK_LCONTROL, VK_RCONTROL, VK_MENU, VK_LMENU, VK_RMENU, VK_SHIFT, VK_LSHIFT,
-        VK_RSHIFT, VK_LWIN, VK_RWIN,
+        VK_CONTROL,
+        VK_LCONTROL,
+        VK_RCONTROL,
+        VK_MENU,
+        VK_LMENU,
+        VK_RMENU,
+        VK_SHIFT,
+        VK_LSHIFT,
+        VK_RSHIFT,
+        VK_LWIN,
+        VK_RWIN,
     ];
     use windows::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW,
@@ -869,7 +877,10 @@ mod platform {
             let hglobal = unsafe { GlobalAlloc(GMEM_MOVEABLE, alloc_size) }.map_err(|error| {
                 CommandError::new(
                     "clipboard_alloc_failed",
-                    format!("Could not allocate memory to restore the clipboard. {}", error),
+                    format!(
+                        "Could not allocate memory to restore the clipboard. {}",
+                        error
+                    ),
                 )
             })?;
 
@@ -1088,8 +1099,7 @@ mod tests {
             clipboard_restored: Some(false),
             clipboard_preservation: ClipboardPreservation::RestoreFailed,
             clipboard_restore_error: Some("clipboard write failed".to_string()),
-            message: "Pasted transcript, but couldn't restore your previous clipboard."
-                .to_string(),
+            message: "Pasted transcript, but couldn't restore your previous clipboard.".to_string(),
         };
 
         assert_eq!(

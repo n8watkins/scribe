@@ -94,7 +94,7 @@ pub fn suppress_fillers(words: &[TimedWord], filler_words: &[String], threshold_
     let mut kept: Vec<&str> = Vec::with_capacity(words.len());
     for (i, word) in words.iter().enumerate() {
         let normalized = normalize_word(&word.text);
-        let is_filler = !normalized.is_empty() && fillers.iter().any(|f| *f == normalized);
+        let is_filler = !normalized.is_empty() && fillers.contains(&normalized);
         if is_filler {
             // Only existing neighbours count — a *missing* neighbour is NOT a
             // pause, or "oh no" (oh at the start, tight after) would lose its
@@ -137,7 +137,10 @@ mod tests {
             TimedWord::new("the", 1610, 1700),
             TimedWord::new("store", 1710, 2000),
         ];
-        assert_eq!(suppress_fillers(&words, &fillers(), 300), "I went to the store");
+        assert_eq!(
+            suppress_fillers(&words, &fillers(), 300),
+            "I went to the store"
+        );
     }
 
     #[test]
@@ -156,7 +159,10 @@ mod tests {
             TimedWord::new("like", 440, 600),
             TimedWord::new("this", 610, 850),
         ];
-        assert_eq!(suppress_fillers(&fluent, &fillers(), 300), "I want it like this");
+        assert_eq!(
+            suppress_fillers(&fluent, &fillers(), 300),
+            "I want it like this"
+        );
     }
 
     #[test]
@@ -179,7 +185,10 @@ mod tests {
 
     #[test]
     fn removes_a_lone_filler_utterance() {
-        assert_eq!(suppress_fillers(&[TimedWord::new("Um.", 0, 300)], &fillers(), 300), "");
+        assert_eq!(
+            suppress_fillers(&[TimedWord::new("Um.", 0, 300)], &fillers(), 300),
+            ""
+        );
     }
 
     #[test]

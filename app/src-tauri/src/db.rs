@@ -126,6 +126,9 @@ impl Database {
     /// sort, paginated by `limit`/`offset`. All user-supplied values are passed
     /// as bound params; only the fixed WHERE fragments and the constant ORDER BY
     /// column list are interpolated, so user text can never reach the SQL string.
+    // This mirrors the public search contract and keeps all optional filters
+    // explicit at call sites.
+    #[allow(clippy::too_many_arguments)]
     pub fn search_transcripts(
         &self,
         query: Option<&str>,
@@ -287,7 +290,7 @@ impl Database {
             ));
         }
 
-        found.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        found.sort_by_key(|transcript| transcript.created_at);
         let merged = found
             .iter()
             .map(|transcript| transcript.text.as_str())
@@ -703,10 +706,7 @@ impl Database {
     /// the notes counterpart to `enforce_history_retention`. Notes default to
     /// no retention (kept forever); this is a no-op unless the user opted into
     /// a notes window. The two retentions never touch each other's rows.
-    pub fn enforce_notes_retention(
-        &self,
-        retention_days: Option<u16>,
-    ) -> Result<(), CommandError> {
+    pub fn enforce_notes_retention(&self, retention_days: Option<u16>) -> Result<(), CommandError> {
         let Some(retention_days) = retention_days else {
             return Ok(());
         };
@@ -972,7 +972,10 @@ mod tests {
         let remaining = db
             .search_transcripts(None, false, None, None, TranscriptSort::default(), 10, 0)
             .unwrap();
-        assert_eq!(remaining.total, 1, "note must survive clear_transcript_history");
+        assert_eq!(
+            remaining.total, 1,
+            "note must survive clear_transcript_history"
+        );
         assert!(remaining.transcripts[0].is_note);
 
         // clear_notes then removes the note.
@@ -1094,8 +1097,10 @@ mod tests {
     #[test]
     fn settings_round_trip_through_database() {
         let db = Database::in_memory().unwrap();
-        let mut settings = AppSettings::default();
-        settings.notifications_enabled = false;
+        let settings = AppSettings {
+            notifications_enabled: false,
+            ..AppSettings::default()
+        };
 
         db.save_settings(&settings).unwrap();
 

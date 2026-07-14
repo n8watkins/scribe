@@ -351,7 +351,7 @@ impl WorkerLink {
         let mut normalized =
             audio::normalize_to_whisper_wav_samples(&samples, self.segmenter.sample_rate);
         let pad_samples = (audio::TARGET_SAMPLE_RATE as u64 * SEGMENT_TAIL_PAD_MS / 1_000) as usize;
-        normalized.extend(std::iter::repeat(0.0).take(pad_samples));
+        normalized.extend(std::iter::repeat_n(0.0, pad_samples));
         let path = self.temp_dir.join(format!(
             "{}-segment-{}.wav",
             self.session_id, self.next_segment
@@ -660,7 +660,10 @@ mod tests {
 
         let segments = feed(&mut segmenter, &audio);
 
-        assert!(segments.is_empty(), "pause-disabled must not cut on silence");
+        assert!(
+            segments.is_empty(),
+            "pause-disabled must not cut on silence"
+        );
         let tail = segmenter.take_tail().expect("tail contains speech");
         // The whole thing — speech and the long pause — stays one segment.
         assert_eq!(tail.len(), RATE as usize * 4);
@@ -761,10 +764,7 @@ mod tests {
     #[test]
     fn prompt_combines_vocabulary_and_context_tail() {
         assert_eq!(prompt_with_context("", ""), "");
-        assert_eq!(
-            prompt_with_context(" Scribe, Tauri ", ""),
-            "Scribe, Tauri"
-        );
+        assert_eq!(prompt_with_context(" Scribe, Tauri ", ""), "Scribe, Tauri");
         assert_eq!(prompt_with_context("", "previous text"), "previous text");
         assert_eq!(
             prompt_with_context("Scribe", "previous text"),
