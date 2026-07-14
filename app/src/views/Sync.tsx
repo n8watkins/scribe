@@ -18,6 +18,7 @@ import {
   githubDeviceStart,
   githubDisconnect,
   githubStatus,
+  githubSyncActivity,
   githubSyncNow,
   previewTranscriptImport,
   restoreTranscriptImport,
@@ -25,6 +26,7 @@ import {
   type ExportFormat,
   type ExportScope,
   type GithubDeviceCode,
+  type GithubSyncActivity,
   type GithubStatus,
   type TranscriptImportPreview,
   type TranscriptImportReport,
@@ -32,13 +34,9 @@ import {
 import {
   backupCoverage,
   backupReadiness,
-  clearSyncActivity,
   formatActivity,
   formatCount,
-  loadSyncActivity,
-  rememberSyncError,
-  rememberSyncSuccess,
-  type SyncActivity,
+  syncActivityError,
 } from "../lib/syncActivity";
 import type { ViewActions } from "../types";
 import { SectionPanel, SettingRow } from "../components/layout";
@@ -62,9 +60,8 @@ export function SyncView({
   const [status, setStatus] = useState<GithubStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [device, setDevice] = useState<GithubDeviceCode | null>(null);
-  const [lastActivity, setLastActivity] = useState<SyncActivity | null>(
-    loadSyncActivity,
-  );
+  const [lastActivity, setLastActivity] =
+    useState<GithubSyncActivity | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("markdown");
@@ -84,9 +81,18 @@ export function SyncView({
     }
   }, []);
 
+  const reloadActivity = useCallback(async () => {
+    try {
+      setLastActivity(await githubSyncActivity());
+    } catch (cause) {
+      setError(commandErrorMessage(cause));
+    }
+  }, []);
+
   useEffect(() => {
     void reloadStatus();
-  }, [reloadStatus]);
+    void reloadActivity();
+  }, [reloadActivity, reloadStatus]);
 
   // Source of truth is a stored token (status.connected).
   const connected = status?.connected ?? false;
@@ -102,6 +108,12 @@ export function SyncView({
   const backupSelected =
     settings.githubSyncEnabled || settings.githubSyncAllTranscripts;
   const syncReady = connected && repoValid && backupSelected;
+  const currentActivity =
+    lastActivity?.repo === settings.githubRepo ? lastActivity : null;
+  const lastActivityError = syncActivityError(
+    currentActivity,
+    settings.githubRepo,
+  );
 
   // A monotonic epoch for connect attempts. handleConnect snapshots the current
   // epoch at its start; Cancel (and any new attempt) bumps it. A late-resolving
@@ -160,12 +172,11 @@ export function SyncView({
     setBusy(true);
     setError(null);
     setNotice(null);
-    setLastActivity(null);
-    clearSyncActivity();
 
     try {
       const updated = await githubDisconnect();
       actions.updateSettings(updated);
+      setLastActivity(null);
       await reloadStatus();
     } catch (cause) {
       setError(commandErrorMessage(cause));
@@ -181,20 +192,19 @@ export function SyncView({
 
     try {
       const report = await githubSyncNow();
-      setLastActivity(rememberSyncSuccess(report));
       setNotice(
         `Backed up ${formatCount(report.syncedNotes, "item")} into ${formatCount(report.filesWritten, "file")}.`,
       );
     } catch (cause) {
-      setLastActivity(rememberSyncError());
       setError(commandErrorMessage(cause));
       // A github_unauthorized error has already cleared the dead token in the
       // backend; refresh status so the Connected pill flips to Not connected.
       void reloadStatus();
     } finally {
+      await reloadActivity();
       setBusy(false);
     }
-  }, [reloadStatus]);
+  }, [reloadActivity, reloadStatus]);
 
   const handleExport = useCallback(async () => {
     setExporting(true);
@@ -371,7 +381,6 @@ export function SyncView({
                 // pushing to nowhere). A non-empty value saves as-is.
                 const trimmed = githubRepo.trim();
                 if (trimmed !== settings.githubRepo.trim()) {
-                  clearSyncActivity();
                   setLastActivity(null);
                 }
                 actions.updateSettings(
@@ -443,7 +452,7 @@ export function SyncView({
       {connected && !unconfigured ? (
         <SectionPanel
           icon={
-            lastActivity?.outcome === "error" ? (
+            currentActivity?.outcome === "error" ? (
               <TriangleAlert aria-hidden="true" size={16} />
             ) : (
               <CheckCircle2 aria-hidden="true" size={16} />
@@ -463,15 +472,16 @@ export function SyncView({
             />
             <SyncHealthItem label="Coverage" value={backupCoverage(settings)} />
             <SyncHealthItem
-              label="Last manual attempt"
-              tone={lastActivity?.outcome === "error" ? "error" : undefined}
-              value={formatActivity(lastActivity)}
+              label="Last backup attempt"
+              tone={currentActivity?.outcome === "error" ? "error" : undefined}
+              value={formatActivity(currentActivity, settings.githubRepo)}
             />
           </div>
+          {lastActivityError ? (
+            <p className="sync-persisted-error">{lastActivityError}</p>
+          ) : null}
           <p className="muted vocab-hint sync-inline-hint">
-            This status covers backups started with Sync now on this device.
-            Automatic backup history will appear after the backend begins
-            recording background outcomes.
+            Includes both automatic backups and Sync now attempts.
           </p>
         </SectionPanel>
       ) : null}

@@ -796,6 +796,17 @@ export type GithubSyncReport = {
   filesWritten: number;
 };
 
+export type GithubSyncActivity = {
+  completedAt: string;
+  outcome: "success" | "error";
+  source: "manual" | "automatic";
+  repo: string;
+  syncedItems: number;
+  filesWritten: number;
+  errorCode: string | null;
+  errorMessage: string | null;
+};
+
 /** Reports whether this build is configured for GitHub sync, the current
  * connection state, the connected username, and the configured repo. */
 export function githubStatus(): Promise<GithubStatus> {
@@ -831,6 +842,11 @@ export function githubDisconnect(): Promise<AppSettings> {
 /** Backs up notes (and optionally all transcripts) to the configured repo now. */
 export function githubSyncNow(): Promise<GithubSyncReport> {
   return invoke("github_sync_now");
+}
+
+/** Returns the most recent persisted manual or automatic backup attempt. */
+export function githubSyncActivity(): Promise<GithubSyncActivity | null> {
+  return invoke("github_sync_activity");
 }
 
 /** Which transcripts a local export includes. */

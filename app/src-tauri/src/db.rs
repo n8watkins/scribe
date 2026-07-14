@@ -9,6 +9,7 @@ use crate::{
     models::{ModelRecord, ModelStatus},
     settings::AppSettings,
     stats::BasicStats,
+    sync_history::GitHubSyncActivity,
     transcript::{metadata_for_text, Transcript, TranscriptSearchResult, TranscriptSort},
 };
 
@@ -22,6 +23,7 @@ const SETTINGS_KEY: &str = "app_settings";
 const CORRUPT_SETTINGS_KEY: &str = "app_settings_corrupt";
 const LAST_TRANSCRIPT_ID_KEY: &str = "last_transcript_id";
 const LAST_TRANSCRIPT_BUFFER_KEY: &str = "last_transcript_buffer";
+const GITHUB_SYNC_ACTIVITY_KEY: &str = "github_sync_activity";
 
 pub struct Database {
     conn: Connection,
@@ -98,6 +100,67 @@ impl Database {
             .map_err(CommandError::invalid_settings)?;
 
         self.upsert_setting(SETTINGS_KEY, &serde_json::to_string(settings)?)?;
+        Ok(())
+    }
+
+    pub fn save_settings_and_clear_github_activity(
+        &mut self,
+        settings: &AppSettings,
+    ) -> Result<(), CommandError> {
+        settings
+            .validate()
+            .map_err(CommandError::invalid_settings)?;
+        let transaction = self.conn.transaction().map_err(CommandError::database)?;
+        transaction
+            .execute(
+                "INSERT INTO settings (key, value, updated_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at",
+                params![
+                    SETTINGS_KEY,
+                    serde_json::to_string(settings)?,
+                    Utc::now().to_rfc3339()
+                ],
+            )
+            .map_err(CommandError::database)?;
+        transaction
+            .execute(
+                "DELETE FROM settings WHERE key = ?1",
+                [GITHUB_SYNC_ACTIVITY_KEY],
+            )
+            .map_err(CommandError::database)?;
+        transaction.commit().map_err(CommandError::database)
+    }
+
+    pub fn get_github_sync_activity(&self) -> Result<Option<GitHubSyncActivity>, CommandError> {
+        let Some(value) = self.get_setting_value(GITHUB_SYNC_ACTIVITY_KEY)? else {
+            return Ok(None);
+        };
+        match serde_json::from_str(&value) {
+            Ok(activity) => Ok(Some(activity)),
+            Err(error) => {
+                log::warn!("Ignoring corrupt GitHub sync activity: {error}");
+                Ok(None)
+            }
+        }
+    }
+
+    pub fn save_github_sync_activity(
+        &self,
+        activity: &GitHubSyncActivity,
+    ) -> Result<(), CommandError> {
+        self.upsert_setting(GITHUB_SYNC_ACTIVITY_KEY, &serde_json::to_string(activity)?)
+    }
+
+    pub fn clear_github_sync_activity(&self) -> Result<(), CommandError> {
+        self.conn
+            .execute(
+                "DELETE FROM settings WHERE key = ?1",
+                [GITHUB_SYNC_ACTIVITY_KEY],
+            )
+            .map_err(CommandError::database)?;
         Ok(())
     }
 
@@ -1013,6 +1076,7 @@ fn average_for(total: Option<i64>, count: u32) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sync_history::{GitHubSyncActivity, SyncOutcome, SyncSource};
     use crate::transcript::Transcript;
     use chrono::Duration;
 
@@ -1024,6 +1088,31 @@ mod tests {
             Some("en".to_string()),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn github_sync_activity_round_trips_and_corruption_is_non_fatal() {
+        let db = Database::in_memory().unwrap();
+        let activity = GitHubSyncActivity {
+            completed_at: Utc::now(),
+            outcome: SyncOutcome::Error,
+            source: SyncSource::Automatic,
+            repo: "alice/notes".into(),
+            synced_items: 2,
+            files_written: 1,
+            error_code: Some("github_sync_failed".into()),
+            error_message: Some("Network unavailable".into()),
+        };
+
+        db.save_github_sync_activity(&activity).unwrap();
+        assert_eq!(db.get_github_sync_activity().unwrap(), Some(activity));
+
+        db.clear_github_sync_activity().unwrap();
+        assert_eq!(db.get_github_sync_activity().unwrap(), None);
+
+        db.upsert_setting(GITHUB_SYNC_ACTIVITY_KEY, "not json")
+            .unwrap();
+        assert_eq!(db.get_github_sync_activity().unwrap(), None);
     }
 
     #[test]

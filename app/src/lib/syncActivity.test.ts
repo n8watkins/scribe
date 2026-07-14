@@ -1,69 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   backupCoverage,
   backupReadiness,
-  clearSyncActivity,
   formatActivity,
-  loadSyncActivity,
-  rememberSyncError,
-  rememberSyncSuccess,
+  syncActivityError,
 } from "./syncActivity";
-
-describe("sync activity", () => {
-  beforeEach(() => {
-    localStorage.clear();
-    vi.useRealTimers();
-  });
-
-  it("persists and reloads a successful manual backup", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-14T18:30:00.000Z"));
-
-    const activity = rememberSyncSuccess({
-      filesWritten: 2,
-      syncedNotes: 5,
-    });
-
-    expect(activity).toEqual({
-      completedAt: "2026-07-14T18:30:00.000Z",
-      filesWritten: 2,
-      itemCount: 5,
-      outcome: "success",
-      version: 1,
-    });
-    expect(loadSyncActivity()).toEqual(activity);
-  });
-
-  it("stores failure state without persisting a potentially sensitive error", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-14T18:30:00.000Z"));
-
-    expect(rememberSyncError()).toEqual({
-      completedAt: "2026-07-14T18:30:00.000Z",
-      outcome: "error",
-      version: 1,
-    });
-    expect(
-      localStorage.getItem("scribe.github.last-manual-sync"),
-    ).not.toContain("message");
-  });
-
-  it("rejects malformed stored data and clears it", () => {
-    localStorage.setItem(
-      "scribe.github.last-manual-sync",
-      JSON.stringify({ completedAt: "never", outcome: "success", version: 1 }),
-    );
-
-    expect(loadSyncActivity()).toBeNull();
-    expect(localStorage.getItem("scribe.github.last-manual-sync")).toBeNull();
-  });
-
-  it("clears a previous manual result", () => {
-    rememberSyncError();
-    clearSyncActivity();
-    expect(loadSyncActivity()).toBeNull();
-  });
-});
 
 describe("backup status labels", () => {
   const neither = {
@@ -95,23 +36,45 @@ describe("backup status labels", () => {
     ).toBe("Notes and dictations");
   });
 
-  it("formats empty, successful, and failed activity clearly", () => {
-    expect(formatActivity(null)).toBe("Not run on this device");
+  it("formats empty and successful persisted activity", () => {
+    expect(formatActivity(null, "alice/notes")).toBe(
+      "Not run for this repository",
+    );
     expect(
-      formatActivity({
-        completedAt: "2026-07-14T18:30:00.000Z",
-        filesWritten: 1,
-        itemCount: 2,
-        outcome: "success",
-        version: 1,
-      }),
-    ).toMatch(/^2 items, 1 file on /);
-    expect(
-      formatActivity({
-        completedAt: "2026-07-14T18:30:00.000Z",
-        outcome: "error",
-        version: 1,
-      }),
-    ).toMatch(/^Failed /);
+      formatActivity(
+        {
+          completedAt: "2026-07-14T18:30:00.000Z",
+          errorCode: null,
+          errorMessage: null,
+          filesWritten: 1,
+          outcome: "success",
+          repo: "alice/notes",
+          source: "automatic",
+          syncedItems: 2,
+        },
+        "alice/notes",
+      ),
+    ).toMatch(/^Automatic: 2 items, 1 file on /);
+  });
+
+  it("shows a persisted error only for the active repository", () => {
+    const activity = {
+      completedAt: "2026-07-14T18:30:00.000Z",
+      errorCode: "github_sync_failed",
+      errorMessage: "Network unavailable",
+      filesWritten: 1,
+      outcome: "error" as const,
+      repo: "alice/notes",
+      source: "manual" as const,
+      syncedItems: 2,
+    };
+
+    expect(formatActivity(activity, "alice/notes")).toMatch(
+      /^Manual backup failed /,
+    );
+    expect(syncActivityError(activity, "alice/notes")).toBe(
+      "Network unavailable",
+    );
+    expect(syncActivityError(activity, "alice/other")).toBeNull();
   });
 });

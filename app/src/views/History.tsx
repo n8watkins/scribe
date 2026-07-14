@@ -31,7 +31,6 @@ import {
   type Transcript,
   type TranscriptSort,
 } from "../backend";
-import { rememberSyncError, rememberSyncSuccess } from "../lib/syncActivity";
 import type { ViewActions } from "../types";
 import { EmptyState, InlineError } from "../components/feedback";
 import { ConfirmDialog } from "../components/modal";
@@ -449,15 +448,13 @@ export function HistoryView({
                   setHistoryError(null);
                   githubSyncNow()
                     .then((report) => {
-                      rememberSyncSuccess(report);
                       setSyncNotice(
-                        `Synced ${report.syncedNotes} note(s) to GitHub.`,
+                        `Backed up ${report.syncedNotes} item(s) to GitHub.`,
                       );
                     })
-                    .catch((cause) => {
-                      rememberSyncError();
-                      setHistoryError(commandErrorMessage(cause));
-                    })
+                    .catch((cause) =>
+                      setHistoryError(commandErrorMessage(cause)),
+                    )
                     .finally(() => setSyncingToGithub(false));
                 }}
                 type="button"

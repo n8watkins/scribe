@@ -158,7 +158,14 @@ pub fn update_settings(
         hotkey_failures = hotkeys::replace_hotkeys(&app, &previous.hotkeys, &settings.hotkeys)?;
     }
 
-    if let Err(error) = state.db()?.save_settings(&settings) {
+    let save_result = if previous.github_repo != settings.github_repo {
+        state
+            .db()?
+            .save_settings_and_clear_github_activity(&settings)
+    } else {
+        state.db()?.save_settings(&settings)
+    };
+    if let Err(error) = save_result {
         if previous.hotkeys != settings.hotkeys {
             let _ = hotkeys::replace_hotkeys(&app, &settings.hotkeys, &previous.hotkeys);
         }
@@ -1003,7 +1010,9 @@ pub async fn github_disconnect(app: tauri::AppHandle) -> Result<AppSettings, Com
     settings.github_sync_enabled = false;
     settings.github_sync_all_transcripts = false;
     settings.github_repo = String::new();
-    state.db()?.save_settings(&settings)?;
+    state
+        .db()?
+        .save_settings_and_clear_github_activity(&settings)?;
     Ok(settings)
 }
 
@@ -1024,15 +1033,23 @@ pub async fn github_sync_now(
         // lock (the guarded value is `()`).
         let state = app.state::<BackendState>();
         let _guard = state.github_sync_lock();
-        let notes = crate::note_sync::collect_and_sync(&app, &service)?;
-        let transcripts = crate::note_sync::collect_and_sync_all_transcripts(&app, &service)?;
-        Ok(crate::github_backup::SyncReport {
-            synced_notes: notes.synced_notes + transcripts.synced_notes,
-            files_written: notes.files_written + transcripts.files_written,
-        })
+        let attempt = crate::note_sync::collect_sync_attempt(&app, &service);
+        crate::note_sync::record_sync_attempt(
+            &app,
+            crate::sync_history::SyncSource::Manual,
+            &attempt,
+        );
+        attempt.into_result()
     })
     .await
     .map_err(|error| CommandError::new("github_sync_failed", error.to_string()))?
+}
+
+#[tauri::command]
+pub fn github_sync_activity(
+    state: tauri::State<'_, BackendState>,
+) -> Result<Option<crate::sync_history::GitHubSyncActivity>, CommandError> {
+    state.db()?.get_github_sync_activity()
 }
 
 /// Exports transcripts to a local file the user picks via a native save dialog.

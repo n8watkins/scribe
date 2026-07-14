@@ -24,6 +24,7 @@ pub mod settings;
 pub mod state_server;
 pub mod stats;
 pub mod status_file;
+pub mod sync_history;
 pub mod text_replace;
 pub mod transcript;
 pub mod tray;
@@ -496,6 +497,7 @@ pub fn run() {
             commands::github_device_cancel,
             commands::github_disconnect,
             commands::github_sync_now,
+            commands::github_sync_activity,
             commands::export_transcripts,
             commands::preview_transcript_import,
             commands::restore_transcript_import
