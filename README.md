@@ -31,7 +31,7 @@ Private, local-first dictation for Windows. Hold a hotkey, talk, release — you
 
 **Sync, back up, export**
 
-- **Google Drive sync (optional, your account):** push dictated notes to your own Drive as dated Markdown, and optionally back up every transcript. An end-of-day pass can have your local LLM reorganize the day's notes. Text-only, comfortably inside the free Drive tier.
+- **GitHub backup (optional, your account):** push dictated notes as dated Markdown to a private repository you control, and optionally back up every transcript.
 - **Export:** export transcripts to **Markdown / CSV / JSON** locally — no account needed.
 
 **Stays out of your way**
@@ -70,7 +70,11 @@ If a hotkey conflicts with another app, rebind it in the **Hotkeys** tab — con
 
 ### Privacy
 
-Audio is captured to a temp folder, transcribed locally, and the temp audio is deleted. Transcripts live in a local SQLite database under `%APPDATA%\com.natkins.scribe\` (the **Data & Privacy** tab can open the folder, clear history, or disable history entirely). Nothing is uploaded anywhere unless you turn on Google Drive sync (to your own account). The only built-in network access is the one-time model download you trigger yourself and the update check against GitHub. The optional LLM features talk only to the local server you configure.
+Audio is captured to a temp folder, transcribed locally, and the temp audio is deleted.
+Transcripts live in a local SQLite database under `%APPDATA%\com.natkins.scribe\` (the **Data & Privacy** tab can open the folder, clear history, or disable history entirely).
+Core dictation does not upload your audio or transcripts.
+Network access is used for model downloads you trigger, update checks against GitHub, the GitHub authorization flow, and optional GitHub backup when you enable it.
+Optional LLM features send their prompts to the OpenAI-compatible server URL you configure, which defaults to a local LM Studio endpoint.
 
 ## Building from source
 
