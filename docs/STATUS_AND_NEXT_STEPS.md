@@ -5,7 +5,7 @@
 > For the day-to-day feature record, see [`CHANGELOG.md`](../CHANGELOG.md).
 > The competitive analysis is also a dated strategy snapshot and now carries a current-state correction notice.
 
-Status: Shipping (public, MIT open-source); the source tree is currently versioned **0.7.0**
+Status: Shipping (public, MIT open-source); the source tree is currently versioned **0.8.0**.
 
 Last updated: 2026-07-14
 
