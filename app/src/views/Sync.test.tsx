@@ -11,9 +11,16 @@ import type { AppSettings } from "../backend";
 import type { ViewActions } from "../types";
 import { clearSyncActivity } from "../lib/syncActivity";
 
-const { githubStatusMock, githubSyncNowMock } = vi.hoisted(() => ({
+const {
+  githubStatusMock,
+  githubSyncNowMock,
+  previewTranscriptImportMock,
+  restoreTranscriptImportMock,
+} = vi.hoisted(() => ({
   githubStatusMock: vi.fn(),
   githubSyncNowMock: vi.fn(),
+  previewTranscriptImportMock: vi.fn(),
+  restoreTranscriptImportMock: vi.fn(),
 }));
 
 vi.mock("../backend", async (importOriginal) => {
@@ -27,6 +34,8 @@ vi.mock("../backend", async (importOriginal) => {
     githubDisconnect: vi.fn(),
     githubStatus: githubStatusMock,
     githubSyncNow: githubSyncNowMock,
+    previewTranscriptImport: previewTranscriptImportMock,
+    restoreTranscriptImport: restoreTranscriptImportMock,
   };
 });
 
@@ -39,7 +48,9 @@ const settings = {
   githubSyncEnabled: true,
 } as AppSettings;
 
+const refreshMock = vi.fn();
 const actions = {
+  refresh: refreshMock,
   savingSettings: false,
   updateSettings: vi.fn(),
 } as unknown as ViewActions;
@@ -57,6 +68,9 @@ describe("SyncView backup status", () => {
       username: "alice",
     });
     githubSyncNowMock.mockReset();
+    previewTranscriptImportMock.mockReset();
+    restoreTranscriptImportMock.mockReset();
+    refreshMock.mockReset();
   });
 
   it("shows readiness, coverage, and an empty manual history", async () => {
@@ -105,5 +119,53 @@ describe("SyncView backup status", () => {
       await screen.findByText("Choose what to back up"),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sync now" })).toBeDisabled();
+  });
+
+  it("previews and restores the exact selected backup with safe defaults", async () => {
+    previewTranscriptImportMock.mockResolvedValue({
+      audioPathsRemoved: 1,
+      conflicts: 1,
+      dictations: 3,
+      fileName: "scribe-export.json",
+      fingerprint: "abc123",
+      metadataCorrected: 1,
+      notes: 2,
+      path: "C:\\Backups\\scribe-export.json",
+      total: 5,
+    });
+    restoreTranscriptImportMock.mockResolvedValue({
+      imported: 4,
+      replaced: 0,
+      skipped: 1,
+    });
+    render(<SyncView actions={actions} settings={settings} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose backup…" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Restore Scribe backup?",
+    });
+    expect(dialog).toHaveTextContent("2 notes");
+    expect(dialog).toHaveTextContent("3 dictations");
+    expect(dialog).toHaveTextContent("1 existing");
+    expect(
+      screen.getByRole("checkbox", {
+        name: /Replace existing transcript data/,
+      }),
+    ).not.toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    await waitFor(() =>
+      expect(restoreTranscriptImportMock).toHaveBeenCalledWith(
+        "C:\\Backups\\scribe-export.json",
+        false,
+        "abc123",
+      ),
+    );
+    expect(
+      await screen.findByText(
+        "Restored 4 transcripts. Skipped 1 existing transcript.",
+      ),
+    ).toBeInTheDocument();
+    expect(refreshMock).toHaveBeenCalledOnce();
   });
 });

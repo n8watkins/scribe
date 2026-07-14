@@ -12,6 +12,7 @@ pub mod github_backup;
 pub mod github_oauth;
 pub mod gpu;
 pub mod hotkeys;
+pub mod import;
 pub mod incremental;
 pub mod model_manager;
 pub mod models;
@@ -495,7 +496,9 @@ pub fn run() {
             commands::github_device_cancel,
             commands::github_disconnect,
             commands::github_sync_now,
-            commands::export_transcripts
+            commands::export_transcripts,
+            commands::preview_transcript_import,
+            commands::restore_transcript_import
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

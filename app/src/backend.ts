@@ -848,6 +848,42 @@ export function exportTranscripts(
   return invoke("export_transcripts", { scope, format });
 }
 
+export type TranscriptImportPreview = {
+  path: string;
+  fileName: string;
+  total: number;
+  notes: number;
+  dictations: number;
+  conflicts: number;
+  audioPathsRemoved: number;
+  metadataCorrected: number;
+  fingerprint: string;
+};
+
+export type TranscriptImportReport = {
+  imported: number;
+  skipped: number;
+  replaced: number;
+};
+
+/** Opens and validates a Scribe JSON export without changing local data. */
+export function previewTranscriptImport(): Promise<TranscriptImportPreview | null> {
+  return invoke("preview_transcript_import");
+}
+
+/** Revalidates and atomically restores a previously previewed JSON export. */
+export function restoreTranscriptImport(
+  path: string,
+  replaceExisting: boolean,
+  expectedFingerprint: string,
+): Promise<TranscriptImportReport> {
+  return invoke("restore_transcript_import", {
+    path,
+    replaceExisting,
+    expectedFingerprint,
+  });
+}
+
 export function openReleasePage(url?: string): Promise<void> {
   return invoke("open_release_page", { url });
 }

@@ -4,9 +4,11 @@ import {
   Cloud,
   CloudOff,
   Download,
+  FileJson,
   GitBranch,
   RefreshCw,
   TriangleAlert,
+  Upload,
 } from "lucide-react";
 import {
   commandErrorMessage,
@@ -17,11 +19,15 @@ import {
   githubDisconnect,
   githubStatus,
   githubSyncNow,
+  previewTranscriptImport,
+  restoreTranscriptImport,
   type AppSettings,
   type ExportFormat,
   type ExportScope,
   type GithubDeviceCode,
   type GithubStatus,
+  type TranscriptImportPreview,
+  type TranscriptImportReport,
 } from "../backend";
 import {
   backupCoverage,
@@ -36,6 +42,7 @@ import {
 } from "../lib/syncActivity";
 import type { ViewActions } from "../types";
 import { SectionPanel, SettingRow } from "../components/layout";
+import { ConfirmDialog } from "../components/modal";
 import { Toggle } from "../components/primitives";
 import "./sync.css";
 
@@ -63,6 +70,10 @@ export function SyncView({
   const [exportFormat, setExportFormat] = useState<ExportFormat>("markdown");
   const [exportScope, setExportScope] = useState<ExportScope>("all");
   const [exporting, setExporting] = useState(false);
+  const [importPreview, setImportPreview] =
+    useState<TranscriptImportPreview | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [replaceExisting, setReplaceExisting] = useState(false);
 
   const reloadStatus = useCallback(async () => {
     try {
@@ -202,6 +213,47 @@ export function SyncView({
       setExporting(false);
     }
   }, [exportFormat, exportScope]);
+
+  const handlePreviewImport = useCallback(async () => {
+    setImporting(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const preview = await previewTranscriptImport();
+      if (preview) {
+        setImportPreview(preview);
+        setReplaceExisting(false);
+      }
+    } catch (cause) {
+      setError(commandErrorMessage(cause));
+    } finally {
+      setImporting(false);
+    }
+  }, []);
+
+  const handleRestore = useCallback(async () => {
+    if (!importPreview) {
+      return;
+    }
+    setImporting(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const report = await restoreTranscriptImport(
+        importPreview.path,
+        replaceExisting,
+        importPreview.fingerprint,
+      );
+      setNotice(formatImportReport(report));
+      setImportPreview(null);
+      setReplaceExisting(false);
+      await actions.refresh();
+    } catch (cause) {
+      setError(commandErrorMessage(cause));
+    } finally {
+      setImporting(false);
+    }
+  }, [actions, importPreview, replaceExisting]);
 
   return (
     <section className="view-grid">
@@ -477,6 +529,30 @@ export function SyncView({
         </div>
       </SectionPanel>
 
+      <SectionPanel
+        icon={<Upload aria-hidden="true" size={16} />}
+        title="Restore from a backup"
+      >
+        <p className="muted vocab-hint">
+          Restore a JSON file previously exported by Scribe. The file is
+          validated and previewed before local history changes.
+        </p>
+        <SettingRow
+          description="Existing transcripts are skipped by default. Audio file paths from another device are never imported."
+          label="Scribe JSON export"
+        >
+          <button
+            className="secondary-button"
+            disabled={importing}
+            onClick={() => void handlePreviewImport()}
+            type="button"
+          >
+            <FileJson aria-hidden="true" size={15} />
+            {importing && !importPreview ? "Checking…" : "Choose backup…"}
+          </button>
+        </SettingRow>
+      </SectionPanel>
+
       {notice ? (
         <p aria-live="polite" className="muted vocab-hint sync-status-line">
           {notice}
@@ -492,8 +568,78 @@ export function SyncView({
         More backup &amp; export destinations are coming. For now, everything
         syncs to GitHub.
       </p>
+
+      <ConfirmDialog
+        busy={importing}
+        confirmLabel={replaceExisting ? "Restore and replace" : "Restore"}
+        message={importPreviewMessage(importPreview)}
+        onCancel={() => {
+          setImportPreview(null);
+          setReplaceExisting(false);
+        }}
+        onConfirm={() => void handleRestore()}
+        open={importPreview != null}
+        title="Restore Scribe backup?"
+      >
+        {importPreview ? (
+          <div className="sync-import-preview">
+            <span>
+              <strong>{importPreview.notes}</strong> notes
+            </span>
+            <span>
+              <strong>{importPreview.dictations}</strong> dictations
+            </span>
+            <span>
+              <strong>{importPreview.conflicts}</strong> existing
+            </span>
+          </div>
+        ) : null}
+        {importPreview && importPreview.conflicts > 0 ? (
+          <label className="sync-replace-option">
+            <input
+              checked={replaceExisting}
+              disabled={importing}
+              onChange={(event) =>
+                setReplaceExisting(event.currentTarget.checked)
+              }
+              type="checkbox"
+            />
+            <span>
+              <strong>Replace existing transcript data</strong>
+              <small>Local audio attachments are preserved.</small>
+            </span>
+          </label>
+        ) : null}
+      </ConfirmDialog>
     </section>
   );
+}
+
+function importPreviewMessage(preview: TranscriptImportPreview | null): string {
+  if (!preview) {
+    return "Review the selected backup before restoring it.";
+  }
+  const conflictNote =
+    preview.conflicts === 0
+      ? "No existing transcript ids conflict."
+      : `${formatCount(preview.conflicts, "existing transcript")} will be skipped unless replacement is selected.`;
+  return `${preview.fileName} contains ${formatCount(preview.total, "transcript")}. ${conflictNote}`;
+}
+
+function formatImportReport(report: TranscriptImportReport): string {
+  const restored = report.imported + report.replaced;
+  const parts = [`Restored ${formatCount(restored, "transcript")}.`];
+  if (report.replaced > 0) {
+    parts.push(
+      `Replaced ${formatCount(report.replaced, "existing transcript")}.`,
+    );
+  }
+  if (report.skipped > 0) {
+    parts.push(
+      `Skipped ${formatCount(report.skipped, "existing transcript")}.`,
+    );
+  }
+  return parts.join(" ");
 }
 
 function SyncHealthItem({

@@ -5,6 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::{
     error::CommandError,
+    import::ImportReport,
     models::{ModelRecord, ModelStatus},
     settings::AppSettings,
     stats::BasicStats,
@@ -383,6 +384,73 @@ impl Database {
         }
         self.upsert_setting(LAST_TRANSCRIPT_ID_KEY, &transcript.id)?;
         Ok(())
+    }
+
+    pub fn count_existing_transcripts(
+        &self,
+        transcripts: &[Transcript],
+    ) -> Result<u32, CommandError> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT 1 FROM transcripts WHERE id = ?1 LIMIT 1")
+            .map_err(CommandError::database)?;
+        let mut count = 0_u32;
+        for transcript in transcripts {
+            let exists = statement
+                .query_row([&transcript.id], |_| Ok(()))
+                .optional()
+                .map_err(CommandError::database)?
+                .is_some();
+            count += u32::from(exists);
+        }
+        Ok(count)
+    }
+
+    /// Restores prepared transcripts in one transaction. Existing ids are
+    /// skipped by default. Explicit replacement updates transcript metadata
+    /// while preserving any local audio path already attached to that row.
+    pub fn restore_transcripts(
+        &mut self,
+        transcripts: &[Transcript],
+        replace_existing: bool,
+    ) -> Result<ImportReport, CommandError> {
+        let transaction = self.conn.transaction().map_err(CommandError::database)?;
+        let mut imported = 0_u32;
+        let mut skipped = 0_u32;
+        let mut replaced = 0_u32;
+
+        for transcript in transcripts {
+            let exists = transaction
+                .query_row(
+                    "SELECT 1 FROM transcripts WHERE id = ?1 LIMIT 1",
+                    [&transcript.id],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(CommandError::database)?
+                .is_some();
+            if exists && !replace_existing {
+                skipped += 1;
+                continue;
+            }
+
+            if exists {
+                write_restored_transcript(&transaction, transcript, true)
+                    .map_err(CommandError::database)?;
+                replaced += 1;
+            } else {
+                write_restored_transcript(&transaction, transcript, false)
+                    .map_err(CommandError::database)?;
+                imported += 1;
+            }
+        }
+
+        transaction.commit().map_err(CommandError::database)?;
+        Ok(ImportReport {
+            imported,
+            skipped,
+            replaced,
+        })
     }
 
     pub fn list_model_records(&self) -> Result<Vec<ModelRecord>, CommandError> {
@@ -833,6 +901,56 @@ fn transcript_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Transcript> 
     })
 }
 
+fn write_restored_transcript(
+    connection: &Connection,
+    transcript: &Transcript,
+    replace: bool,
+) -> rusqlite::Result<usize> {
+    let sql = if replace {
+        "UPDATE transcripts SET
+            text = ?2, created_at = ?3, duration_ms = ?4,
+            word_count = ?5, character_count = ?6, model_id = ?7,
+            language = ?8, output_mode = ?9, paste_method = ?10,
+            transcription_latency_ms = ?11, is_note = ?12,
+            analysis = ?13, analysis_model = ?14,
+            analysis_created_at = ?15
+         WHERE id = ?1"
+    } else {
+        "INSERT INTO transcripts (
+            id, text, created_at, duration_ms, word_count,
+            character_count, model_id, language, output_mode,
+            paste_method, transcription_latency_ms, audio_path,
+            is_note, analysis, analysis_model, analysis_created_at
+         ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+            NULL, ?12, ?13, ?14, ?15
+         )"
+    };
+    connection.execute(
+        sql,
+        params![
+            &transcript.id,
+            &transcript.text,
+            transcript.created_at.to_rfc3339(),
+            transcript.duration_ms,
+            transcript.word_count,
+            transcript.character_count,
+            transcript.model_id.as_deref(),
+            transcript.language.as_deref(),
+            transcript.output_mode.as_ref().map(enum_to_json_string),
+            transcript.paste_method.as_ref().map(enum_to_json_string),
+            transcript.transcription_latency_ms,
+            transcript.is_note,
+            transcript.analysis.as_deref(),
+            transcript.analysis_model.as_deref(),
+            transcript
+                .analysis_created_at
+                .as_ref()
+                .map(|date| date.to_rfc3339()),
+        ],
+    )
+}
+
 fn model_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ModelRecord> {
     let status: String = row.get(5)?;
     let downloaded_at: Option<String> = row.get(8)?;
@@ -906,6 +1024,58 @@ mod tests {
             Some("en".to_string()),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn restore_skips_conflicts_and_inserts_new_rows_atomically() {
+        let mut db = Database::in_memory().unwrap();
+        let existing = transcript_with_text("local copy");
+        db.save_last_transcript(&existing).unwrap();
+        let mut conflicting = existing.clone();
+        conflicting.text = "backup copy".into();
+        let new = transcript_with_text("new from backup");
+
+        assert_eq!(
+            db.count_existing_transcripts(&[conflicting.clone(), new.clone()])
+                .unwrap(),
+            1
+        );
+        let report = db
+            .restore_transcripts(&[conflicting, new.clone()], false)
+            .unwrap();
+
+        assert_eq!(
+            report,
+            ImportReport {
+                imported: 1,
+                skipped: 1,
+                replaced: 0,
+            }
+        );
+        assert_eq!(
+            db.get_transcript_by_id(&existing.id).unwrap(),
+            Some(existing)
+        );
+        assert_eq!(db.get_transcript_by_id(&new.id).unwrap(), Some(new));
+    }
+
+    #[test]
+    fn explicit_restore_replacement_preserves_local_audio() {
+        let mut db = Database::in_memory().unwrap();
+        let mut existing = transcript_with_text("local copy");
+        existing.audio_path = Some("C:\\local\\clip.wav".into());
+        db.save_last_transcript(&existing).unwrap();
+        let mut replacement = existing.clone();
+        replacement.text = "backup copy".into();
+        replacement.audio_path = None;
+
+        let report = db.restore_transcripts(&[replacement], true).unwrap();
+        let restored = db.get_transcript_by_id(&existing.id).unwrap().unwrap();
+
+        assert_eq!(report.imported, 0);
+        assert_eq!(report.replaced, 1);
+        assert_eq!(restored.text, "backup copy");
+        assert_eq!(restored.audio_path, existing.audio_path);
     }
 
     #[test]

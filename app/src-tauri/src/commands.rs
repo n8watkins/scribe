@@ -1,5 +1,6 @@
 use std::sync::Mutex;
 
+use serde::Serialize;
 use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
 
@@ -11,6 +12,7 @@ use crate::{
     error::CommandError,
     file_transcribe::{self, TranscribeFileResult},
     hotkeys::{self, HotkeyStatus},
+    import::{ImportReport, PreparedImport, MAX_IMPORT_BYTES},
     model_manager::{self, DownloadRegistry},
     models::ModelInfo,
     output::{self, OutputResult},
@@ -1136,6 +1138,128 @@ pub fn export_transcripts(
             "The export save dialog is only available in the Windows build.",
         ))
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptImportPreview {
+    pub path: String,
+    pub file_name: String,
+    pub total: u32,
+    pub notes: u32,
+    pub dictations: u32,
+    pub conflicts: u32,
+    pub audio_paths_removed: u32,
+    pub metadata_corrected: u32,
+    pub fingerprint: String,
+}
+
+struct LoadedTranscriptImport {
+    prepared: PreparedImport,
+    fingerprint: String,
+}
+
+/// Opens a native picker and validates a Scribe JSON export without changing
+/// the database. The returned counts drive the explicit confirmation UI.
+#[tauri::command]
+pub fn preview_transcript_import(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, BackendState>,
+) -> Result<Option<TranscriptImportPreview>, CommandError> {
+    #[cfg(windows)]
+    {
+        let start = effective_data_dir(&app).unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let picked = rfd::FileDialog::new()
+            .set_title("Restore Scribe backup")
+            .set_directory(&start)
+            .add_filter("Scribe JSON export", &["json"])
+            .pick_file();
+        let Some(path) = picked else {
+            return Ok(None);
+        };
+        let loaded = load_transcript_import(&path)?;
+        let conflicts = state
+            .db()?
+            .count_existing_transcripts(&loaded.prepared.transcripts)?;
+        Ok(Some(TranscriptImportPreview {
+            path: path.to_string_lossy().into_owned(),
+            file_name: path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Scribe backup.json")
+                .to_string(),
+            total: loaded.prepared.total,
+            notes: loaded.prepared.notes,
+            dictations: loaded.prepared.dictations,
+            conflicts,
+            audio_paths_removed: loaded.prepared.audio_paths_removed,
+            metadata_corrected: loaded.prepared.metadata_corrected,
+            fingerprint: loaded.fingerprint,
+        }))
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (app, state);
+        Err(CommandError::new(
+            "open_dialog_unsupported",
+            "The restore file picker is only available in the Windows build.",
+        ))
+    }
+}
+
+/// Revalidates the selected export, then imports every row in one database
+/// transaction. Re-reading at confirmation time prevents a stale preview from
+/// bypassing validation if the source file changed while the dialog was open.
+#[tauri::command]
+pub fn restore_transcript_import(
+    state: tauri::State<'_, BackendState>,
+    path: String,
+    replace_existing: bool,
+    expected_fingerprint: String,
+) -> Result<ImportReport, CommandError> {
+    let loaded = load_transcript_import(std::path::Path::new(&path))?;
+    crate::import::verify_fingerprint(&loaded.fingerprint, &expected_fingerprint)?;
+    state
+        .db()?
+        .restore_transcripts(&loaded.prepared.transcripts, replace_existing)
+}
+
+fn load_transcript_import(path: &std::path::Path) -> Result<LoadedTranscriptImport, CommandError> {
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+    {
+        return Err(CommandError::new(
+            "invalid_import_file",
+            "Choose a .json file exported by Scribe.",
+        ));
+    }
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        CommandError::new(
+            "import_read_failed",
+            format!("Could not read {}. {error}", path.display()),
+        )
+    })?;
+    if metadata.len() > MAX_IMPORT_BYTES {
+        return Err(CommandError::new(
+            "import_too_large",
+            "The backup is larger than the 100 MB restore limit.",
+        ));
+    }
+    let contents = std::fs::read(path).map_err(|error| {
+        CommandError::new(
+            "import_read_failed",
+            format!("Could not read {}. {error}", path.display()),
+        )
+    })?;
+    let fingerprint = crate::import::sha256_fingerprint(&contents);
+    let prepared = crate::import::prepare_json(&contents)?;
+    Ok(LoadedTranscriptImport {
+        prepared,
+        fingerprint,
+    })
 }
 
 fn open_folder(app: &tauri::AppHandle, dir: std::path::PathBuf) -> Result<(), CommandError> {
