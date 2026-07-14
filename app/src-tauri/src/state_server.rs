@@ -457,6 +457,7 @@ fn control_file_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = home.join(".scribe");
     std::fs::create_dir_all(&dir)
         .map_err(|error| format!("could not create ~/.scribe: {error}"))?;
+    restrict_directory_permissions(&dir)?;
     let name = if crate::is_dev_flavor(app) {
         "control.dev.json"
     } else {
@@ -496,19 +497,85 @@ fn write_control_file(
         let _ = std::fs::remove_file(&staging);
         return Err(format!("could not finalize control file: {error}"));
     }
-    restrict_permissions(path);
+    restrict_file_permissions(path)?;
     Ok(())
 }
 
 #[cfg(unix)]
-fn restrict_permissions(path: &Path) {
+fn restrict_file_permissions(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|error| format!("could not restrict control file permissions: {error}"))
 }
 
-#[cfg(not(unix))]
-fn restrict_permissions(_path: &Path) {
-    // Windows relies on the per-user profile ACL; no portable chmod equivalent.
+#[cfg(unix)]
+fn restrict_directory_permissions(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("could not restrict control directory permissions: {error}"))
+}
+
+#[cfg(windows)]
+fn restrict_file_permissions(path: &Path) -> Result<(), String> {
+    restrict_windows_acl(path, "control file")
+}
+
+#[cfg(windows)]
+fn restrict_directory_permissions(path: &Path) -> Result<(), String> {
+    restrict_windows_acl(path, "control directory")
+}
+
+/// Replace inherited Windows permissions with full control for the owner,
+/// Local System, and local administrators. The protected DACL prevents a broad
+/// parent-directory grant from exposing the discovery token to another user.
+#[cfg(windows)]
+fn restrict_windows_acl(path: &Path, description: &str) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::{w, PCWSTR};
+    use windows::Win32::Foundation::{LocalFree, HLOCAL};
+    use windows::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    };
+    use windows::Win32::Security::{
+        SetFileSecurityW, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+        PSECURITY_DESCRIPTOR,
+    };
+
+    let mut descriptor = PSECURITY_DESCRIPTOR::default();
+    unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            w!("D:P(A;;FA;;;OW)(A;;FA;;;SY)(A;;FA;;;BA)"),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            None,
+        )
+        .map_err(|error| format!("could not build {description} ACL: {error}"))?;
+    }
+
+    let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let result = unsafe {
+        SetFileSecurityW(
+            PCWSTR(wide_path.as_ptr()),
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            descriptor,
+        )
+    };
+    unsafe {
+        let _ = LocalFree(HLOCAL(descriptor.0));
+    }
+    result
+        .ok()
+        .map_err(|error| format!("could not restrict {description} permissions: {error}"))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn restrict_file_permissions(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn restrict_directory_permissions(_path: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 /// Periodically re-write the status-file fallback so its `updatedAt` stays fresh
@@ -762,6 +829,44 @@ mod tests {
         assert!(hub.try_acquire_connection());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn control_paths_are_owner_only_on_unix() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("scribe-acl-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        restrict_directory_permissions(&dir).unwrap();
+        let file = dir.join("control.json");
+        std::fs::write(&file, "{}").unwrap();
+        restrict_file_permissions(&file).unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn control_paths_have_protected_dacls_on_windows() {
+        let dir = std::env::temp_dir().join(format!("scribe-acl-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        restrict_directory_permissions(&dir).unwrap();
+        let file = dir.join("control.json");
+        std::fs::write(&file, "{}").unwrap();
+        restrict_file_permissions(&file).unwrap();
+
+        assert!(windows_dacl_is_protected(&dir).unwrap());
+        assert!(windows_dacl_is_protected(&file).unwrap());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// Read one chunk of bytes from a streaming response into a String. The
     /// server writes each event as its own frame and flushes, so a single read
     /// returns a whole event (or events) frame.
@@ -769,5 +874,45 @@ mod tests {
         let mut buf = [0u8; 4096];
         let n = stream.read(&mut buf).expect("read sse chunk");
         String::from_utf8_lossy(&buf[..n]).to_string()
+    }
+
+    #[cfg(windows)]
+    fn windows_dacl_is_protected(path: &Path) -> Result<bool, String> {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::core::PCWSTR;
+        use windows::Win32::Foundation::{LocalFree, HLOCAL};
+        use windows::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
+        use windows::Win32::Security::{
+            GetSecurityDescriptorControl, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+            SE_DACL_PROTECTED,
+        };
+
+        let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        let status = unsafe {
+            GetNamedSecurityInfoW(
+                PCWSTR(wide_path.as_ptr()),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                None,
+                None,
+                None,
+                None,
+                &mut descriptor,
+            )
+        };
+        status
+            .ok()
+            .map_err(|error| format!("could not read test ACL: {error}"))?;
+
+        let mut control = 0u16;
+        let mut revision = 0u32;
+        let result =
+            unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) };
+        unsafe {
+            let _ = LocalFree(HLOCAL(descriptor.0));
+        }
+        result.map_err(|error| format!("could not inspect test ACL: {error}"))?;
+        Ok(control & SE_DACL_PROTECTED.0 != 0)
     }
 }
