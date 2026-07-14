@@ -855,7 +855,7 @@ pub fn open_release_page(app: tauri::AppHandle, url: Option<String>) -> Result<(
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GithubStatus {
-    /// This build ships a real GitHub OAuth client id (device flow available).
+    /// This build ships a valid GitHub App client id (device flow available).
     pub configured: bool,
     /// An access token is present in the keyring.
     pub connected: bool,
@@ -945,10 +945,10 @@ pub async fn github_device_poll(
     let poll_service = service.clone();
     let poll_device_code = device_code.clone();
     let poll_result = tauri::async_runtime::spawn_blocking(move || {
-        let token =
+        let credential =
             crate::github_oauth::poll_for_token(&poll_device_code, interval, cancelled.as_ref())?;
         crate::github_oauth::ensure_attempt_active(cancelled.as_ref())?;
-        crate::github_oauth::store_token(&poll_service, &token)
+        crate::github_oauth::store_credential(&poll_service, &credential)
     })
     .await
     .map_err(|error| CommandError::new("github_auth_failed", error.to_string()))?;

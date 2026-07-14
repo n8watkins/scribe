@@ -32,3 +32,16 @@ npm run tauri dev
 ```
 
 Rust and the Tauri OS prerequisites are required for desktop builds.
+
+## GitHub App configuration
+
+GitHub backup uses a GitHub App device flow and does not embed a client secret.
+Set `SCRIBE_GITHUB_APP_CLIENT_ID` while compiling the Tauri backend to the app's public client ID, which starts with `Iv`.
+Builds reject OAuth App client IDs that start with `Ov` so they cannot request the classic account-wide `repo` scope.
+
+The GitHub App must have Device Flow enabled.
+It should request only repository Contents read and write access, plus Administration read and write only if Scribe will continue creating the private backup repository automatically.
+Repository access is controlled by the app installation, not OAuth scopes.
+
+If expiring user access tokens are enabled, Scribe stores both tokens in the OS keychain and rotates the refresh token before the access token expires.
+Existing raw OAuth access-token credentials remain readable during migration, but new connections require a configured GitHub App client ID.
