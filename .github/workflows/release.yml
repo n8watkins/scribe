@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       flavor:
-        description: "Build flavor: stable (Scribe) or dev (Scribe Dev, side-by-side)"
+        description: "Build flavor: stable or dev"
         type: choice
         options:
           - stable
@@ -15,19 +15,77 @@ on:
         default: stable
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}-${{ inputs.flavor || 'stable' }}
+  cancel-in-progress: false
 
 env:
-  # Built from source with Vulkan GPU support — upstream ships no prebuilt
-  # Vulkan-Windows binary (CPU + CUDA only, ggml-org/whisper.cpp#3673). v1.9.1
-  # was validated on the RX 7800 XT (detects + engages); see GPU_VULKAN_SPIKE.md.
   WHISPER_CPP_VERSION: v1.9.1
+  WHISPER_CPP_COMMIT: f049fff95a089aa9969deb009cdd4892b3e74916
 
 jobs:
   build-windows:
+    name: Build release candidate
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      flavor: ${{ steps.metadata.outputs.flavor }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Validate release metadata
+        id: metadata
+        shell: pwsh
+        run: |
+          $packageVersion = (Get-Content app/package.json -Raw | ConvertFrom-Json).version
+          $tauriVersion = (Get-Content app/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $cargoVersion = (Select-String -Path app/src-tauri/Cargo.toml -Pattern '^version = "([^"]+)"$' | Select-Object -First 1).Matches.Groups[1].Value
+          if (-not $packageVersion -or $packageVersion -ne $tauriVersion -or $packageVersion -ne $cargoVersion) {
+            throw "Version mismatch: package=$packageVersion tauri=$tauriVersion cargo=$cargoVersion"
+          }
+          if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne "v$packageVersion") {
+            throw "Tag ${{ github.ref_name }} does not match configured version v$packageVersion"
+          }
+          $flavor = "${{ inputs.flavor || 'stable' }}"
+          "version=$packageVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "flavor=$flavor" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $stage = Join-Path $env:RUNNER_TEMP "scribe-release"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Set-Content -Path (Join-Path $stage "version.txt") -Value $packageVersion -NoNewline
+          Set-Content -Path (Join-Path $stage "flavor.txt") -Value $flavor -NoNewline
+
+      - name: Generate source SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: app
+          format: cyclonedx-json
+          output-file: ${{ runner.temp }}/scribe-release/scribe-${{ steps.metadata.outputs.version }}.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+          dependency-snapshot: false
+
+      - name: Add bundled whisper.cpp to SBOM
+        shell: pwsh
+        run: |
+          $path = "$env:RUNNER_TEMP\scribe-release\scribe-${{ steps.metadata.outputs.version }}.cdx.json"
+          $sbom = Get-Content $path -Raw | ConvertFrom-Json
+          $whisper = [ordered]@{
+            type = "library"
+            name = "whisper.cpp"
+            version = $env:WHISPER_CPP_VERSION.TrimStart("v")
+            purl = "pkg:github/ggml-org/whisper.cpp@$($env:WHISPER_CPP_VERSION.TrimStart('v'))"
+            externalReferences = @(
+              [ordered]@{
+                type = "vcs"
+                url = "https://github.com/ggml-org/whisper.cpp/tree/$env:WHISPER_CPP_COMMIT"
+              }
+            )
+          }
+          $sbom.components = @($sbom.components) + $whisper
+          $sbom | ConvertTo-Json -Depth 100 | Set-Content $path -Encoding utf8
+          Get-Content $path -Raw | ConvertFrom-Json | Out-Null
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -36,6 +94,8 @@ jobs:
           cache-dependency-path: app/package-lock.json
 
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
@@ -53,11 +113,30 @@ jobs:
         with:
           arch: x64
 
-      - name: Build whisper.cpp from source with Vulkan
+      - name: Install and validate application dependencies
+        working-directory: app
+        run: |
+          npm ci
+          npm audit
+          npm run lint
+          npm run build
+
+      - name: Validate Rust backend
+        working-directory: app/src-tauri
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+
+      - name: Build reviewed whisper.cpp source with Vulkan
         shell: pwsh
         run: |
           $src = "$env:RUNNER_TEMP\wcpp"
           git clone --depth 1 --branch "$env:WHISPER_CPP_VERSION" https://github.com/ggml-org/whisper.cpp $src
+          $actual = (git -C $src rev-parse HEAD).Trim()
+          if ($actual -ne $env:WHISPER_CPP_COMMIT) {
+            throw "whisper.cpp commit $actual did not match reviewed commit $env:WHISPER_CPP_COMMIT"
+          }
           Push-Location $src
           cmake -B build -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
@@ -74,81 +153,195 @@ jobs:
           $bin = Split-Path $cli.FullName
           $dest = "app/src-tauri/resources/bin/windows"
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
-          # Same set the app bundles, plus the Vulkan backend DLL. ggml-cpu.dll
-          # stays present so the build still runs on machines with no GPU.
           $needed = @("whisper-cli.exe", "whisper-server.exe", "whisper.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll", "ggml-vulkan.dll")
           foreach ($name in $needed) {
             $file = Get-ChildItem -Path $bin -Recurse -Filter $name | Select-Object -First 1
             if (-not $file) { throw "Missing $name in the Vulkan build output" }
             Copy-Item $file.FullName -Destination $dest
           }
-          Get-ChildItem $dest | Select-Object Name,Length
-
-      - name: Install frontend dependencies
-        working-directory: app
-        run: npm ci
-
-      - name: Backend tests
-        working-directory: app/src-tauri
-        run: cargo test --locked
 
       - name: Build installers
         working-directory: app
         shell: pwsh
         env:
-          # Signs the NSIS updater artifact (createUpdaterArtifacts).
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          if ("${{ github.event.inputs.flavor }}" -eq "dev") {
-            Write-Host "Building Scribe Dev flavor (com.natkins.scribe.dev, installs side-by-side)"
+          if ("${{ steps.metadata.outputs.flavor }}" -eq "dev") {
             npm run tauri -- build --config src-tauri/tauri.dev-flavor.conf.json
           } else {
             npm run tauri build
           }
 
-      # The in-app updater fetches latest.json from the latest release; it
-      # points at the signed NSIS installer of this release.
-      - name: Generate updater manifest (latest.json)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Stage and validate release candidate
         shell: pwsh
         run: |
+          $stage = "$env:RUNNER_TEMP\scribe-release"
           $nsisDir = "app/src-tauri/target/release/bundle/nsis"
-          $setup = Get-ChildItem -Path $nsisDir -Filter "*-setup.exe" | Select-Object -First 1
-          if (-not $setup) { throw "No NSIS setup exe found" }
-          $sigFile = "$($setup.FullName).sig"
-          if (-not (Test-Path $sigFile)) { throw "No updater signature next to $($setup.Name); is TAURI_SIGNING_PRIVATE_KEY set?" }
-          $tag = "${{ github.ref_name }}"
-          $manifest = [ordered]@{
-            version  = $tag.TrimStart("v")
-            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-            platforms = @{
-              "windows-x86_64" = @{
-                signature = (Get-Content $sigFile -Raw).Trim()
-                url = "https://github.com/${{ github.repository }}/releases/download/$tag/$($setup.Name)"
+          $msiDir = "app/src-tauri/target/release/bundle/msi"
+          $setup = @(Get-ChildItem -Path $nsisDir -Filter "*-setup.exe")
+          $msi = @(Get-ChildItem -Path $msiDir -Filter "*.msi")
+          if ($setup.Count -ne 1) { throw "Expected one NSIS installer, found $($setup.Count)" }
+          if ($msi.Count -ne 1) { throw "Expected one MSI installer, found $($msi.Count)" }
+          $signature = "$($setup[0].FullName).sig"
+          if (-not (Test-Path $signature)) { throw "Missing Tauri updater signature for $($setup[0].Name)" }
+          Copy-Item $setup[0].FullName, $signature, $msi[0].FullName -Destination $stage
+
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $tag = "${{ github.ref_name }}"
+            $manifest = [ordered]@{
+              version = "${{ steps.metadata.outputs.version }}"
+              pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+              platforms = @{
+                "windows-x86_64" = @{
+                  signature = (Get-Content $signature -Raw).Trim()
+                  url = "https://github.com/${{ github.repository }}/releases/download/$tag/$($setup[0].Name)"
+                }
               }
             }
+            $manifestPath = Join-Path $stage "latest.json"
+            $manifest | ConvertTo-Json -Depth 4 | Set-Content $manifestPath -Encoding utf8
+            $parsed = Get-Content $manifestPath -Raw | ConvertFrom-Json
+            if ($parsed.version -ne "${{ steps.metadata.outputs.version }}") { throw "Updater version mismatch" }
+            if (@($parsed.platforms.PSObject.Properties).Count -ne 1) { throw "Unexpected updater platforms" }
+            if ($parsed.platforms.'windows-x86_64'.signature -ne (Get-Content $signature -Raw).Trim()) { throw "Updater signature mismatch" }
+            if (-not $parsed.platforms.'windows-x86_64'.url.EndsWith("/$($setup[0].Name)")) { throw "Updater installer URL mismatch" }
           }
-          $manifest | ConvertTo-Json -Depth 4 | Set-Content "$nsisDir/latest.json" -Encoding utf8
-          Get-Content "$nsisDir/latest.json"
 
-      - name: Attach installers to release
-        if: startsWith(github.ref, 'refs/tags/')
+          $files = Get-ChildItem $stage -File | Where-Object Name -NotIn @("SHA256SUMS.txt", "version.txt", "flavor.txt") | Sort-Object Name
+          $lines = foreach ($file in $files) {
+            "{0}  {1}" -f (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $file.Name
+          }
+          Set-Content -Path (Join-Path $stage "SHA256SUMS.txt") -Value $lines -Encoding ascii
+
+      - name: Upload release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: scribe-release-candidate
+          path: ${{ runner.temp }}/scribe-release/*
+          if-no-files-found: error
+          retention-days: 14
+
+  smoke-install:
+    name: Smoke install (${{ matrix.kind }})
+    needs: build-windows
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        kind: [nsis, msi]
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: scribe-release-candidate
+          path: candidate
+
+      - name: Verify checksums and install candidate
+        shell: pwsh
+        run: |
+          $candidate = (Resolve-Path candidate).Path
+          foreach ($line in Get-Content "$candidate\SHA256SUMS.txt") {
+            if ($line -notmatch '^([0-9a-f]{64})  (.+)$') { throw "Malformed checksum line: $line" }
+            $actual = (Get-FileHash (Join-Path $candidate $Matches[2]) -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $Matches[1]) { throw "Checksum mismatch for $($Matches[2])" }
+          }
+
+          if ("${{ matrix.kind }}" -eq "nsis") {
+            $installer = @(Get-ChildItem $candidate -Filter "*-setup.exe")
+            if ($installer.Count -ne 1) { throw "Expected one NSIS installer" }
+            $process = Start-Process $installer[0].FullName -ArgumentList "/S" -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "NSIS install failed with $($process.ExitCode)" }
+          } else {
+            $installer = @(Get-ChildItem $candidate -Filter "*.msi")
+            if ($installer.Count -ne 1) { throw "Expected one MSI installer" }
+            $process = Start-Process msiexec.exe -ArgumentList @("/i", $installer[0].FullName, "/qn", "/norestart", "/L*V", "$env:RUNNER_TEMP\scribe-msi-install.log") -Wait -PassThru
+            if ($process.ExitCode -notin @(0, 3010)) { throw "MSI install failed with $($process.ExitCode)" }
+          }
+
+          $roots = @(
+            "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
+            "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
+            "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+          )
+          $entry = Get-ItemProperty $roots -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -in @("Scribe", "Scribe Dev") } |
+            Select-Object -First 1
+          if (-not $entry) { throw "Scribe uninstall entry was not created" }
+          if ($entry.DisplayVersion -ne "${{ needs.build-windows.outputs.version }}") {
+            throw "Installed version $($entry.DisplayVersion) did not match ${{ needs.build-windows.outputs.version }}"
+          }
+
+          $displayIcon = ([string]$entry.DisplayIcon).Trim('"') -replace ',\d+$', ''
+          $exe = if ($displayIcon -and (Test-Path $displayIcon)) {
+            Get-Item $displayIcon
+          } elseif ($entry.InstallLocation) {
+            Get-ChildItem $entry.InstallLocation -Filter "Scribe*.exe" | Where-Object Name -NotLike "uninstall*" | Select-Object -First 1
+          }
+          if (-not $exe) { throw "Installed Scribe executable was not found" }
+          $installDir = $exe.Directory.FullName
+          foreach ($name in @("whisper-cli.exe", "whisper-server.exe", "whisper.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll", "ggml-vulkan.dll")) {
+            if (-not (Get-ChildItem $installDir -Recurse -Filter $name -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+              throw "Installed bundle is missing $name"
+            }
+          }
+
+          $app = Start-Process $exe.FullName -PassThru
+          Start-Sleep -Seconds 10
+          if ($app.HasExited) { throw "Scribe exited during launch smoke test with $($app.ExitCode)" }
+          Stop-Process -Id $app.Id -Force
+
+          if ("${{ matrix.kind }}" -eq "msi") {
+            $uninstall = Start-Process msiexec.exe -ArgumentList @("/x", $entry.PSChildName, "/qn", "/norestart", "/L*V", "$env:RUNNER_TEMP\scribe-msi-uninstall.log") -Wait -PassThru
+          } else {
+            $command = if ($entry.QuietUninstallString) { $entry.QuietUninstallString } else { "$($entry.UninstallString) /S" }
+            $uninstall = Start-Process cmd.exe -ArgumentList @("/d", "/s", "/c", $command) -Wait -PassThru
+          }
+          if ($uninstall.ExitCode -notin @(0, 3010)) { throw "Uninstall failed with $($uninstall.ExitCode)" }
+          if (Test-Path $exe.FullName) { throw "Scribe executable remained after uninstall" }
+
+      - name: Upload installer logs on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: smoke-logs-${{ matrix.kind }}
+          path: ${{ runner.temp }}/scribe-*.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  publish:
+    name: Publish verified release
+    needs: [build-windows, smoke-install]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: scribe-release-candidate
+          path: candidate
+
+      - name: Attach verified candidate to release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
-            app/src-tauri/target/release/bundle/nsis/*-setup.exe
-            app/src-tauri/target/release/bundle/nsis/*-setup.exe.sig
-            app/src-tauri/target/release/bundle/nsis/latest.json
-            app/src-tauri/target/release/bundle/msi/*.msi
+            candidate/*-setup.exe
+            candidate/*-setup.exe.sig
+            candidate/*.msi
+            candidate/latest.json
+            candidate/*.cdx.json
+            candidate/SHA256SUMS.txt
           generate_release_notes: true
 
-      - name: Upload installers as workflow artifacts
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: scribe-installers
-          path: |
-            app/src-tauri/target/release/bundle/nsis/*-setup.exe
-            app/src-tauri/target/release/bundle/nsis/*-setup.exe.sig
-            app/src-tauri/target/release/bundle/msi/*.msi
+      - name: Verify published release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir downloaded
+          gh release download "${{ github.ref_name }}" --dir downloaded
+          while IFS= read -r line; do
+            expected="${line%%  *}"
+            file="${line#*  }"
+            actual="$(sha256sum "downloaded/$file" | cut -d' ' -f1)"
+            test "$actual" = "$expected"
+          done < candidate/SHA256SUMS.txt
