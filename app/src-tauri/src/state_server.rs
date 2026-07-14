@@ -23,10 +23,10 @@
 //!
 //! The wire format is frozen in `docs/integrations/dictation-state-contract.md`.
 
-use crate::app_state::{AppStatus, AppStateSnapshot};
+use crate::app_state::{AppStateSnapshot, AppStatus};
 use crate::dictation_state::{self, DictationSnapshot};
 use chrono::{DateTime, Utc};
-use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use serde::Serialize;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -48,6 +48,10 @@ const PING_INTERVAL: Duration = Duration::from_secs(10);
 const STATUS_FILE_HEARTBEAT: Duration = Duration::from_secs(5);
 /// Accept-loop / heartbeat wake granularity, so shutdown is observed promptly.
 const SHUTDOWN_TICK: Duration = Duration::from_millis(500);
+/// Maximum number of simultaneous HTTP requests, including SSE streams.
+const MAX_CONNECTIONS: usize = 32;
+/// Per-client state updates buffered before a slow SSE client is disconnected.
+const SSE_QUEUE_CAPACITY: usize = 16;
 
 const STATUS_PATH: &str = "/v1/status";
 const EVENTS_PATH: &str = "/v1/events";
@@ -65,6 +69,7 @@ struct Hub {
     /// on disconnect (`Drop`), plus its sender for broadcast.
     subscribers: Mutex<Vec<(usize, Sender<Vec<u8>>)>>,
     next_id: AtomicUsize,
+    active_connections: AtomicUsize,
     pid: u32,
     read_token: String,
 }
@@ -79,6 +84,7 @@ impl Hub {
             }),
             subscribers: Mutex::new(Vec::new()),
             next_id: AtomicUsize::new(0),
+            active_connections: AtomicUsize::new(0),
             pid,
             read_token,
         }
@@ -113,11 +119,15 @@ impl Hub {
             payload.extend_from_slice(&frame_event("dictation.stopped", &snapshot));
         }
 
-        // Prune any connection whose receiver has gone away.
+        // Never let a slow or abandoned consumer grow memory without bound.
+        // A disconnected client can reconnect and receive the latest snapshot.
         self.subscribers
             .lock()
             .unwrap()
-            .retain(|(_, tx)| tx.send(payload.clone()).is_ok());
+            .retain(|(_, tx)| match tx.try_send(payload.clone()) {
+                Ok(()) => true,
+                Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => false,
+            });
     }
 
     /// The current snapshot as the `/v1/status` JSON body.
@@ -135,7 +145,7 @@ impl Hub {
     /// Register a new SSE connection. Returns its id, its receiver, and the
     /// framed initial `state` event to send before any live update.
     fn subscribe(&self) -> (usize, Receiver<Vec<u8>>, Vec<u8>) {
-        let (tx, rx) = crossbeam_channel::unbounded();
+        let (tx, rx) = crossbeam_channel::bounded(SSE_QUEUE_CAPACITY);
         // Hold `latest` across the snapshot-and-register so the initial replay
         // and the subscriber registration are atomic w.r.t. `publish`.
         let latest = self.latest.lock().unwrap();
@@ -158,6 +168,18 @@ impl Hub {
     fn disconnect_all(&self) {
         self.subscribers.lock().unwrap().clear();
     }
+
+    fn try_acquire_connection(&self) -> bool {
+        self.active_connections
+            .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |count| {
+                (count < MAX_CONNECTIONS).then_some(count + 1)
+            })
+            .is_ok()
+    }
+
+    fn release_connection(&self) {
+        self.active_connections.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 /// Frame a snapshot as a single SSE event. Compact JSON has no newlines, so a
@@ -178,6 +200,17 @@ struct Subscription {
 impl Drop for Subscription {
     fn drop(&mut self) {
         self.hub.unsubscribe(self.id);
+    }
+}
+
+/// Releases one of the bounded connection slots on every thread exit path.
+struct ConnectionPermit {
+    hub: Arc<Hub>,
+}
+
+impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        self.hub.release_connection();
     }
 }
 
@@ -244,10 +277,23 @@ fn accept_loop(server: Arc<Server>, hub: Arc<Hub>, shutdown: Arc<AtomicBool>) {
         match server.recv_timeout(SHUTDOWN_TICK) {
             Ok(Some(request)) => {
                 let hub = hub.clone();
+                if !hub.try_acquire_connection() {
+                    let response = Response::from_string("Service Unavailable")
+                        .with_status_code(StatusCode(503));
+                    let _ = request.respond(response);
+                    continue;
+                }
+                let permit_hub = hub.clone();
+                let error_hub = hub.clone();
                 if let Err(error) = thread::Builder::new()
                     .name("dictation-state-conn".to_string())
-                    .spawn(move || handle_request(request, hub))
+                    .spawn(move || {
+                        let _permit = ConnectionPermit { hub: permit_hub };
+                        handle_request(request, hub);
+                    })
                 {
+                    // The thread never started, so no permit guard exists.
+                    error_hub.release_connection();
                     log::warn!("Could not spawn dictation-state connection thread: {error}");
                 }
             }
@@ -268,12 +314,7 @@ fn handle_request(request: tiny_http::Request, hub: Arc<Hub>) {
         .unwrap_or(false);
 
     // Strip any query string before matching the path.
-    let path = request
-        .url()
-        .split('?')
-        .next()
-        .unwrap_or("")
-        .to_string();
+    let path = request.url().split('?').next().unwrap_or("").to_string();
     let is_get = request.method() == &Method::Get;
 
     if is_get && path == STATUS_PATH {
@@ -358,7 +399,11 @@ fn respond_unauthorized(request: tiny_http::Request) {
 /// `?token=<token>` query parameter (fallback for browser `EventSource`).
 fn request_token(request: &tiny_http::Request) -> Option<String> {
     for header in request.headers() {
-        if header.field.to_string().eq_ignore_ascii_case("authorization") {
+        if header
+            .field
+            .to_string()
+            .eq_ignore_ascii_case("authorization")
+        {
             let value = header.value.to_string();
             let token = value
                 .strip_prefix("Bearer ")
@@ -690,6 +735,31 @@ mod tests {
 
         shutdown.store(true, Ordering::Relaxed);
         hub.disconnect_all();
+    }
+
+    #[test]
+    fn slow_sse_subscribers_are_bounded_and_disconnected() {
+        let hub = Hub::new(4242, "token".to_string());
+        let (_id, receiver, _initial) = hub.subscribe();
+
+        for _ in 0..=SSE_QUEUE_CAPACITY {
+            hub.publish(&recording(Utc::now()));
+        }
+
+        assert_eq!(receiver.len(), SSE_QUEUE_CAPACITY);
+        assert!(hub.subscribers.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn connection_slots_enforce_the_limit_and_can_be_reused() {
+        let hub = Hub::new(4242, "token".to_string());
+        for _ in 0..MAX_CONNECTIONS {
+            assert!(hub.try_acquire_connection());
+        }
+        assert!(!hub.try_acquire_connection());
+
+        hub.release_connection();
+        assert!(hub.try_acquire_connection());
     }
 
     /// Read one chunk of bytes from a streaming response into a String. The
