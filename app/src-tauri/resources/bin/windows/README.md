@@ -1,9 +1,15 @@
 # Windows whisper.cpp binary
 
-Place the real `whisper-cli.exe` build here before creating a Windows release:
+Local Windows builds need the reviewed whisper.cpp runtime files in this directory:
 
 ```text
-app/src-tauri/resources/bin/windows/whisper-cli.exe
+whisper-cli.exe
+whisper-server.exe
+whisper.dll
+ggml.dll
+ggml-base.dll
+ggml-cpu.dll
+ggml-vulkan.dll
 ```
 
 The Tauri bundle config maps the `resources/` directory to the app resource
@@ -13,6 +19,6 @@ root, so that file resolves to this runtime path:
 $RESOURCE/bin/windows/whisper-cli.exe
 ```
 
-`src/whisper.rs` resolves exactly that resource path. Do not commit a fake
-`.exe`; release builds should fail clearly until the real whisper.cpp binary is
-provided.
+`src/whisper.rs` and `src/whisper_server.rs` resolve the executable paths under this resource directory.
+The official release workflow compiles the pinned whisper.cpp source with Vulkan enabled, stages this complete set, and validates it before packaging.
+Do not commit placeholder executables or generated binaries.

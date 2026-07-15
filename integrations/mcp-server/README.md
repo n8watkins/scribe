@@ -2,7 +2,7 @@
 
 A standalone [Model Context Protocol](https://modelcontextprotocol.io) server that exposes **Scribe's live dictation state** to any MCP host (Claude, other AI agents, MCP-speaking tools).
 
-It is a thin, generic **client** of Scribe's frozen HTTP+SSE wire contract (v1) - see [`CONTRACT.md`](./CONTRACT.md) (a vendored copy; the canonical home is `docs/integrations/dictation-state-contract.md`, owned by the Scribe producer).
+It is a thin, generic **client** of Scribe's frozen HTTP+SSE wire contract (v1) - see the authoritative [`docs/integrations/dictation-state-contract.md`](../../docs/integrations/dictation-state-contract.md), owned by the Scribe producer.
 It does not embed, link, or depend on the Scribe desktop app; it discovers a running Scribe at runtime and proxies its state over MCP.
 Nothing here is specific to any particular host.
 

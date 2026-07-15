@@ -323,8 +323,8 @@ export function SyncView({
             <p className="muted vocab-hint">
               Connect a GitHub account to back up your notes. We'll open GitHub
               in your browser to enter a one-time code. GitHub will ask for
-              access to your repositories — Scribe uses it only to create and
-              write your private backup repo.
+              access to the private repositories where you install Scribe. The
+              app only writes to the private backup repository you select.
             </p>
             <div className="setting-control">
               <button

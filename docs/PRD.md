@@ -1,5 +1,9 @@
 # Scribe - Product Requirements Document
 
+> **Historical requirements:** This document captures the original product definition from 2026-06-10.
+> The shipped application has expanded and changed since this baseline.
+> Use the [root README](../README.md) and current source for present behavior.
+
 Status: Reference PRD  
 Date recorded: 2026-06-10  
 Target platform: Windows 10/11 desktop  

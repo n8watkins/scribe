@@ -7,7 +7,9 @@ This is the app subproject. For the full user-facing overview and install/build 
 
 Reference docs:
 
-- [Full feature list & changelog](../CHANGELOG.md)
+- [Current feature and installation guide](../README.md)
+- [Documentation index](../docs/README.md)
+- [Historical changelog](../CHANGELOG.md)
 - [Competitive analysis & gap review](../docs/COMPETITIVE-ANALYSIS.md)
 - [Product requirements (original)](../docs/PRD.md)
 - [Implementation plan (original)](../docs/IMPLEMENTATION_PLAN.md)
@@ -42,8 +44,11 @@ Builds reject OAuth App client IDs that start with `Ov` so they cannot request t
 Release builds read this value from the GitHub Actions repository variable named `SCRIBE_GITHUB_APP_CLIENT_ID` and fail before compiling when it is missing or invalid.
 
 The GitHub App must have Device Flow enabled.
-It should request only repository Contents read and write access, plus Administration read and write only if Scribe will continue creating the private backup repository automatically.
+Set its homepage URL to `https://scribe.n8builds.dev`.
+It should request only repository Contents read and write access.
 Repository access is controlled by the app installation, not OAuth scopes.
+Users create a private backup repository themselves, install the GitHub App on that repository, and enter its `owner/name` in Scribe.
+Scribe deliberately does not request repository-administration permission or create repositories automatically.
 
 If expiring user access tokens are enabled, Scribe stores both tokens in the OS keychain and rotates the refresh token before the access token expires.
 Existing raw OAuth access-token credentials remain readable during migration, but new connections require a configured GitHub App client ID.

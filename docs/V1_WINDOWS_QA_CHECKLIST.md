@@ -2,9 +2,9 @@
 
 ## Release resources
 
-- Place the real whisper.cpp binary at `app/src-tauri/resources/bin/windows/whisper-cli.exe`.
-- Verify the bundled runtime path resolves to `$RESOURCE/bin/windows/whisper-cli.exe`.
-- Do not ship with a placeholder executable.
+- Verify the release workflow builds the pinned whisper.cpp source with Vulkan enabled.
+- Verify `whisper-cli.exe`, `whisper-server.exe`, `whisper.dll`, `ggml.dll`, `ggml-base.dll`, `ggml-cpu.dll`, and `ggml-vulkan.dll` are present under `$RESOURCE/bin/windows/`.
+- Do not ship with placeholder or unreviewed executable files.
 - Confirm Whisper models download to the backend-resolved app data `models` directory.
 
 ## Installer and release integrity

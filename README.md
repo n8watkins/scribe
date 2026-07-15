@@ -1,6 +1,10 @@
 # Scribe
 
-Private, local-first dictation for Windows. Hold a hotkey, talk, release — your words are transcribed on your own machine by [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and inserted wherever your cursor is. Your audio never leaves your PC, and no account is required. Optional GitHub backup (off by default) uploads your note text to a private repo you control. Free and source-available.
+Private, local-first dictation for Windows.
+Hold a hotkey, talk, and release to transcribe on your own machine with [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and insert the result wherever your cursor is.
+Your audio never leaves your PC, and no account is required.
+Optional GitHub backup is off by default and uploads text only to a private repository you control: notes by default and, if enabled, every transcript, but never audio.
+Scribe is free and open source under the MIT license.
 
 ## What it does
 
@@ -44,7 +48,7 @@ Windows 10/11 x64 only, by design. There are no plans to over-build this for oth
 
 ## Install (for users)
 
-1. Download `Scribe_x64-setup.exe` from the [latest release](../../releases/latest) and run it.
+1. Download the `Scribe_<version>_x64-setup.exe` installer from the [latest release](https://github.com/n8watkins/scribe/releases/latest) and run it.
    - The binary is not code-signed (no Authenticode certificate), so Windows SmartScreen will warn you. Click **More info → Run anyway**.
    - The installer bootstraps Microsoft WebView2 automatically if you don't have it.
 2. Launch Scribe. Open the **Models** tab and download a model — `base.en` (~140 MB) is a good start; `small.en` is more accurate and still fast on modern CPUs (the default is `small.en-q5_1`, a quantized balance). Models download once from [Hugging Face](https://huggingface.co/ggerganov/whisper.cpp) and run entirely offline afterward.
@@ -78,9 +82,44 @@ Optional LLM features send their prompts to the OpenAI-compatible server URL you
 
 ## Building from source
 
-Prerequisites: Windows 10/11 x64, [Rust](https://rustup.rs/) (stable, MSVC toolchain), Node.js 20+, and the [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) (Visual Studio Build Tools with the Desktop C++ workload).
+Prerequisites: Windows 10/11 x64, [Rust](https://rustup.rs/) (stable, MSVC toolchain), Node.js 20+, the [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) (Visual Studio Build Tools with the Desktop C++ workload), CMake, Ninja, and the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows) version 1.4.350.0.
 
-1. **Provide the whisper.cpp binaries** (required — the build intentionally fails at runtime without them). Download the Windows x64 binary zip from a [whisper.cpp release](https://github.com/ggml-org/whisper.cpp/releases) and copy exactly these files into `app/src-tauri/resources/bin/windows/`:
+1. **Build the reviewed whisper.cpp runtime** from the repository root in a Developer PowerShell for Visual Studio:
+
+   ```powershell
+   $src = Join-Path $env:TEMP "scribe-whisper-cpp"
+   git clone --depth 1 --branch v1.9.1 https://github.com/ggml-org/whisper.cpp $src
+   $actual = (git -C $src rev-parse HEAD).Trim()
+   if ($actual -ne "f049fff95a089aa9969deb009cdd4892b3e74916") {
+     throw "whisper.cpp commit $actual is not the reviewed commit"
+   }
+   cmake -S $src -B "$src/build" -G Ninja `
+     -DCMAKE_BUILD_TYPE=Release `
+     -DGGML_VULKAN=ON `
+     -DGGML_NATIVE=OFF `
+     -DBUILD_SHARED_LIBS=ON `
+     -DWHISPER_BUILD_EXAMPLES=ON `
+     -DWHISPER_BUILD_TESTS=OFF `
+     -DWHISPER_BUILD_SERVER=ON
+   cmake --build "$src/build" -j
+
+   $cli = Get-ChildItem "$src/build" -Recurse -Filter whisper-cli.exe | Select-Object -First 1
+   if (-not $cli) { throw "whisper-cli.exe was not produced" }
+   $bin = Split-Path $cli.FullName
+   $dest = "app/src-tauri/resources/bin/windows"
+   $needed = @(
+     "whisper-cli.exe", "whisper-server.exe", "whisper.dll", "ggml.dll",
+     "ggml-base.dll", "ggml-cpu.dll", "ggml-vulkan.dll"
+   )
+   foreach ($name in $needed) {
+     $file = Get-ChildItem $bin -Recurse -Filter $name | Select-Object -First 1
+     if (-not $file) { throw "Missing $name in the Vulkan build output" }
+     Copy-Item $file.FullName $dest
+   }
+   ```
+
+   This matches the pinned source, Vulkan SDK, CMake options, and runtime file validation in the release workflow.
+   It stages exactly these required files:
 
    ```text
    whisper-cli.exe
@@ -89,11 +128,11 @@ Prerequisites: Windows 10/11 x64, [Rust](https://rustup.rs/) (stable, MSVC toolc
    ggml.dll
    ggml-base.dll
    ggml-cpu.dll
+   ggml-vulkan.dll
    ```
 
-   `whisper-server.exe` powers the warm transcriber (the model stays loaded in RAM between dictations); `whisper-cli.exe` is the fallback path.
-
-   Don't copy the rest of the zip — everything in `resources/` gets bundled into the installer.
+   `whisper-server.exe` powers the warm transcriber, and `whisper-cli.exe` is the fallback path.
+   `ggml-vulkan.dll` enables GPU acceleration; CPU fallback remains available through `ggml-cpu.dll`.
 
 2. Build:
 
@@ -107,7 +146,7 @@ Prerequisites: Windows 10/11 x64, [Rust](https://rustup.rs/) (stable, MSVC toolc
 
 For development, `npm run tauri dev` gives hot reload. `cargo test` in `app/src-tauri/` runs the backend tests. Note that most of the audio/hotkey/paste code is `#[cfg(windows)]`-gated — compiling on non-Windows hosts proves little about the Windows build.
 
-Design and architecture docs live in [`docs/`](docs/), including the [PRD](docs/PRD.md) and the [Windows QA checklist](docs/V1_WINDOWS_QA_CHECKLIST.md). A competitive review and gap analysis is in [`docs/COMPETITIVE-ANALYSIS.md`](docs/COMPETITIVE-ANALYSIS.md).
+The [documentation index](docs/README.md) separates current operating guidance from historical plans and reports.
 
 ## Roadmap / known gaps
 
