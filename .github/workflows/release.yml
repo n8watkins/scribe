@@ -290,9 +290,10 @@ jobs:
 
           $binaryName = if ($entry.DisplayName -eq "Scribe Dev") { "Scribe Dev.exe" } else { "Scribe.exe" }
           $displayIcon = (([string]$entry.DisplayIcon).Trim('"') -replace ',\d+$', '').Trim()
+          $installLocation = ([string]$entry.InstallLocation).Trim().Trim('"')
           $candidatePaths = @(
             $displayIcon
-            if ($entry.InstallLocation) { Join-Path $entry.InstallLocation $binaryName }
+            if ($installLocation) { Join-Path $installLocation $binaryName }
           ) | Where-Object { $_ }
           $exePath = $candidatePaths |
             Where-Object { (Split-Path $_ -Leaf) -eq $binaryName -and (Test-Path $_ -PathType Leaf) } |
