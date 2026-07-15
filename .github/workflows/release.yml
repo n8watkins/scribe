@@ -344,23 +344,31 @@ jobs:
           path: candidate
 
       - name: Attach verified candidate to release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          files: |
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.ref_name }}"
+          repo="${{ github.repository }}"
+          assets=(
             candidate/*-setup.exe
             candidate/*-setup.exe.sig
             candidate/*.msi
             candidate/latest.json
             candidate/*.cdx.json
             candidate/SHA256SUMS.txt
-          generate_release_notes: true
+          )
+          if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber --repo "$repo"
+          else
+            gh release create "$tag" "${assets[@]}" --generate-notes --verify-tag --repo "$repo"
+          fi
 
       - name: Verify published release assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir downloaded
-          gh release download "${{ github.ref_name }}" --dir downloaded
+          gh release download "${{ github.ref_name }}" --repo "${{ github.repository }}" --dir downloaded
           while IFS= read -r line; do
             expected="${line%%  *}"
             file="${line#*  }"
