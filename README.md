@@ -3,7 +3,7 @@
 Private, local-first dictation for Windows.
 Hold a hotkey, talk, and release to transcribe on your own machine with [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and insert the result wherever your cursor is.
 Your audio never leaves your PC, and no account is required.
-Optional GitHub backup is off by default and uploads note text only to a private repository you control.
+Optional GitHub backup is off by default and uploads text only to a private repository you control: notes by default and, if enabled, every transcript, but never audio.
 Scribe is free and open source under the MIT license.
 
 ## What it does
@@ -82,9 +82,44 @@ Optional LLM features send their prompts to the OpenAI-compatible server URL you
 
 ## Building from source
 
-Prerequisites: Windows 10/11 x64, [Rust](https://rustup.rs/) (stable, MSVC toolchain), Node.js 20+, and the [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) (Visual Studio Build Tools with the Desktop C++ workload).
+Prerequisites: Windows 10/11 x64, [Rust](https://rustup.rs/) (stable, MSVC toolchain), Node.js 20+, the [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) (Visual Studio Build Tools with the Desktop C++ workload), CMake, Ninja, and the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows) version 1.4.350.0.
 
-1. **Provide the whisper.cpp binaries** (required — the build intentionally fails at runtime without them). Download the Windows x64 binary zip from a [whisper.cpp release](https://github.com/ggml-org/whisper.cpp/releases) and copy exactly these files into `app/src-tauri/resources/bin/windows/`:
+1. **Build the reviewed whisper.cpp runtime** from the repository root in a Developer PowerShell for Visual Studio:
+
+   ```powershell
+   $src = Join-Path $env:TEMP "scribe-whisper-cpp"
+   git clone --depth 1 --branch v1.9.1 https://github.com/ggml-org/whisper.cpp $src
+   $actual = (git -C $src rev-parse HEAD).Trim()
+   if ($actual -ne "f049fff95a089aa9969deb009cdd4892b3e74916") {
+     throw "whisper.cpp commit $actual is not the reviewed commit"
+   }
+   cmake -S $src -B "$src/build" -G Ninja `
+     -DCMAKE_BUILD_TYPE=Release `
+     -DGGML_VULKAN=ON `
+     -DGGML_NATIVE=OFF `
+     -DBUILD_SHARED_LIBS=ON `
+     -DWHISPER_BUILD_EXAMPLES=ON `
+     -DWHISPER_BUILD_TESTS=OFF `
+     -DWHISPER_BUILD_SERVER=ON
+   cmake --build "$src/build" -j
+
+   $cli = Get-ChildItem "$src/build" -Recurse -Filter whisper-cli.exe | Select-Object -First 1
+   if (-not $cli) { throw "whisper-cli.exe was not produced" }
+   $bin = Split-Path $cli.FullName
+   $dest = "app/src-tauri/resources/bin/windows"
+   $needed = @(
+     "whisper-cli.exe", "whisper-server.exe", "whisper.dll", "ggml.dll",
+     "ggml-base.dll", "ggml-cpu.dll", "ggml-vulkan.dll"
+   )
+   foreach ($name in $needed) {
+     $file = Get-ChildItem $bin -Recurse -Filter $name | Select-Object -First 1
+     if (-not $file) { throw "Missing $name in the Vulkan build output" }
+     Copy-Item $file.FullName $dest
+   }
+   ```
+
+   This matches the pinned source, Vulkan SDK, CMake options, and runtime file validation in the release workflow.
+   It stages exactly these required files:
 
    ```text
    whisper-cli.exe
@@ -98,9 +133,6 @@ Prerequisites: Windows 10/11 x64, [Rust](https://rustup.rs/) (stable, MSVC toolc
 
    `whisper-server.exe` powers the warm transcriber, and `whisper-cli.exe` is the fallback path.
    `ggml-vulkan.dll` enables GPU acceleration; CPU fallback remains available through `ggml-cpu.dll`.
-   Official release builds compile these reviewed whisper.cpp binaries from source in CI.
-
-   Don't copy the rest of the zip — everything in `resources/` gets bundled into the installer.
 
 2. Build:
 
