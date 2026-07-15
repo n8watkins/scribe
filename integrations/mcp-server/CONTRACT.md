@@ -37,7 +37,7 @@ It is identical across all transports.
 {
   "schemaVersion": 1,
   "app": "scribe",
-  "appVersion": "0.7.0",
+  "appVersion": "0.8.0",
   "status": "Recording",
   "dictating": true,
   "busy": true,
@@ -122,7 +122,7 @@ Example frame:
 
 ```
 event: state
-data: {"schemaVersion":1,"app":"scribe","appVersion":"0.7.0","status":"Recording","dictating":true,"busy":true,"since":"2026-07-08T12:34:56.789Z","updatedAt":"2026-07-08T12:34:56.812Z","pid":1234}
+data: {"schemaVersion":1,"app":"scribe","appVersion":"0.8.0","status":"Recording","dictating":true,"busy":true,"since":"2026-07-08T12:34:56.789Z","updatedAt":"2026-07-08T12:34:56.812Z","pid":1234}
 
 ```
 
@@ -169,7 +169,7 @@ A consumer finds the running server by reading a well-known file in the user's h
 {
   "schemaVersion": 1,
   "app": "scribe",
-  "appVersion": "0.7.0",
+  "appVersion": "0.8.0",
   "pid": 1234,
   "transport": "http-sse",
   "baseUrl": "http://127.0.0.1:52431",
@@ -213,7 +213,7 @@ Shape (a superset of the section-1 snapshot):
 {
   "schemaVersion": 1,
   "app": "scribe",
-  "appVersion": "0.7.0",
+  "appVersion": "0.8.0",
   "status": "Recording",
   "dictating": true,
   "busy": true,

@@ -1,6 +1,10 @@
 # Scribe
 
-Private, local-first dictation for Windows. Hold a hotkey, talk, release — your words are transcribed on your own machine by [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and inserted wherever your cursor is. Your audio never leaves your PC, and no account is required. Optional GitHub backup (off by default) uploads your note text to a private repo you control. Free and source-available.
+Private, local-first dictation for Windows.
+Hold a hotkey, talk, and release to transcribe on your own machine with [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and insert the result wherever your cursor is.
+Your audio never leaves your PC, and no account is required.
+Optional GitHub backup is off by default and uploads note text only to a private repository you control.
+Scribe is free and open source under the MIT license.
 
 ## What it does
 
@@ -44,7 +48,7 @@ Windows 10/11 x64 only, by design. There are no plans to over-build this for oth
 
 ## Install (for users)
 
-1. Download `Scribe_x64-setup.exe` from the [latest release](../../releases/latest) and run it.
+1. Download the `Scribe_<version>_x64-setup.exe` installer from the [latest release](https://github.com/n8watkins/scribe/releases/latest) and run it.
    - The binary is not code-signed (no Authenticode certificate), so Windows SmartScreen will warn you. Click **More info → Run anyway**.
    - The installer bootstraps Microsoft WebView2 automatically if you don't have it.
 2. Launch Scribe. Open the **Models** tab and download a model — `base.en` (~140 MB) is a good start; `small.en` is more accurate and still fast on modern CPUs (the default is `small.en-q5_1`, a quantized balance). Models download once from [Hugging Face](https://huggingface.co/ggerganov/whisper.cpp) and run entirely offline afterward.
@@ -89,9 +93,12 @@ Prerequisites: Windows 10/11 x64, [Rust](https://rustup.rs/) (stable, MSVC toolc
    ggml.dll
    ggml-base.dll
    ggml-cpu.dll
+   ggml-vulkan.dll
    ```
 
-   `whisper-server.exe` powers the warm transcriber (the model stays loaded in RAM between dictations); `whisper-cli.exe` is the fallback path.
+   `whisper-server.exe` powers the warm transcriber, and `whisper-cli.exe` is the fallback path.
+   `ggml-vulkan.dll` enables GPU acceleration; CPU fallback remains available through `ggml-cpu.dll`.
+   Official release builds compile these reviewed whisper.cpp binaries from source in CI.
 
    Don't copy the rest of the zip — everything in `resources/` gets bundled into the installer.
 
@@ -107,7 +114,7 @@ Prerequisites: Windows 10/11 x64, [Rust](https://rustup.rs/) (stable, MSVC toolc
 
 For development, `npm run tauri dev` gives hot reload. `cargo test` in `app/src-tauri/` runs the backend tests. Note that most of the audio/hotkey/paste code is `#[cfg(windows)]`-gated — compiling on non-Windows hosts proves little about the Windows build.
 
-Design and architecture docs live in [`docs/`](docs/), including the [PRD](docs/PRD.md) and the [Windows QA checklist](docs/V1_WINDOWS_QA_CHECKLIST.md). A competitive review and gap analysis is in [`docs/COMPETITIVE-ANALYSIS.md`](docs/COMPETITIVE-ANALYSIS.md).
+The [documentation index](docs/README.md) separates current operating guidance from historical plans and reports.
 
 ## Roadmap / known gaps
 

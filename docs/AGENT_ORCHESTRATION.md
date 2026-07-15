@@ -1,6 +1,10 @@
 # Scribe - Agent Orchestration
 
-Status: Working assignment plan  
+> **Archived plan:** This was the initial 2026-06-10 implementation assignment and is no longer active.
+> Its paths, branch assumptions, and baseline status are historical.
+> See the [documentation index](README.md) for current guidance.
+
+Original status: Working assignment plan
 Created: 2026-06-10  
 Related docs:
 

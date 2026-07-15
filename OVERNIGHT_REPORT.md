@@ -1,5 +1,9 @@
 # Scribe — Daily-Driver Reliability Pass (Overnight Report)
 
+> **Archived report:** This document records the 2026-06-20 reliability pass and its original branch state.
+> It is not current release guidance.
+> See [`docs/STATUS_AND_NEXT_STEPS.md`](docs/STATUS_AND_NEXT_STEPS.md) for the current product state.
+
 **Branch:** `reliability-pass`
 **Date:** 2026-06-20
 **Scope:** Audit the recording / transcription / clipboard / hotkey / settings flows; implement the

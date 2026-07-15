@@ -7,7 +7,9 @@ This is the app subproject. For the full user-facing overview and install/build 
 
 Reference docs:
 
-- [Full feature list & changelog](../CHANGELOG.md)
+- [Current feature and installation guide](../README.md)
+- [Documentation index](../docs/README.md)
+- [Historical changelog](../CHANGELOG.md)
 - [Competitive analysis & gap review](../docs/COMPETITIVE-ANALYSIS.md)
 - [Product requirements (original)](../docs/PRD.md)
 - [Implementation plan (original)](../docs/IMPLEMENTATION_PLAN.md)

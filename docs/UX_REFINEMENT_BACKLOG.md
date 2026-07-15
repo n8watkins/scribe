@@ -1,9 +1,13 @@
 # UX Refinement Backlog (captured 2026-06-21)
 
-> Source: Nathan's spoken brain-dump. This is the **verbatim-intent capture** —
-> every item, nothing dropped. Status is design/outline only; nothing here is
-> built. Sequencing recommendation at the bottom. Separate from the in-flight
-> 0.6.0 GPU release.
+> **Archived backlog:** This capture predates the current interface and version 0.8.0 release.
+> Many items shipped or changed direction, so unchecked entries must not be treated as the active roadmap.
+> Current opportunities are listed in [`STATUS_AND_NEXT_STEPS.md`](STATUS_AND_NEXT_STEPS.md).
+
+> Source: Nathan's spoken brain-dump.
+> This is the **verbatim-intent capture** with every original item retained.
+> At capture time the status was design/outline only and none of the items were built.
+> The sequencing recommendation at the bottom is historical.
 
 ## A. Integrations (new architecture)
 

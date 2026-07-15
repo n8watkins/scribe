@@ -1,6 +1,9 @@
 # Scribe — UX & Architecture Rework Plan
 
-Status: PLANNED (owner reviewing — build nothing until approved)
+> **Archived plan:** This owner-review plan predates the current architecture and interface.
+> Its proposed work and locked decisions are historical unless the current source or documentation explicitly repeats them.
+
+Original status: PLANNED (owner reviewing; build nothing until approved)
 Created: 2026-06-13
 Author: deep-dive pass over the full codebase (frontend `App.tsx`, Rust backend, pill)
 Related docs: [PRD.md](./PRD.md), [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md),

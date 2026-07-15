@@ -1,8 +1,9 @@
 # Pause-Aware Filler Suppression — Plan (design only)
 
-> **Status: design / not started.** How a user-configurable, pause-aware filler
-> remover would work in Scribe, and what it would take. Nothing here is built. See
-> the open-items list in [`STATUS_AND_NEXT_STEPS.md`](STATUS_AND_NEXT_STEPS.md).
+> **Superseded plan:** Pause-aware filler suppression shipped in version 0.5.23 and remains available as an optional local setting.
+> This file preserves the original design process and should not be used as an implementation-status reference.
+
+> **Original status: design / not started.** This section describes how a user-configurable, pause-aware filler remover was intended to work before it shipped.
 
 ## 1. Goal
 
