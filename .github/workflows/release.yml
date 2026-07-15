@@ -369,9 +369,6 @@ jobs:
         run: |
           mkdir downloaded
           gh release download "${{ github.ref_name }}" --repo "${{ github.repository }}" --dir downloaded
-          while IFS= read -r line; do
-            expected="${line%%  *}"
-            file="${line#*  }"
-            actual="$(sha256sum "downloaded/$file" | cut -d' ' -f1)"
-            test "$actual" = "$expected"
-          done < candidate/SHA256SUMS.txt
+          cp candidate/SHA256SUMS.txt downloaded/
+          cd downloaded
+          sha256sum --check SHA256SUMS.txt
