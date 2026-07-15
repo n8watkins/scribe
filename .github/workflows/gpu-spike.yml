@@ -58,9 +58,19 @@ jobs:
           Push-Location wcpp; Write-Host "HEAD: $(git rev-parse HEAD)"; Pop-Location
 
       - name: Set up MSVC environment
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
-        with:
-          arch: x64
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installationPath = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
+          if (-not $installationPath) { throw "Visual Studio with the x64 C++ toolchain was not found" }
+          $devCommand = Join-Path $installationPath "Common7\Tools\VsDevCmd.bat"
+          if (-not (Test-Path $devCommand)) { throw "VsDevCmd.bat was not found at $devCommand" }
+          & cmd.exe /s /c "`"$devCommand`" -no_logo -arch=x64 -host_arch=x64 && set" |
+            ForEach-Object {
+              if ($_ -match '^([^=]+)=(.*)$') {
+                "$($Matches[1])=$($Matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+              }
+            }
 
       - name: Configure + build (Vulkan, Ninja, shared libs)
         shell: pwsh
@@ -162,14 +172,14 @@ jobs:
           Get-ChildItem $out | Select-Object Name,Length
 
       - name: Upload Vulkan binaries
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: whisper-vulkan-windows-${{ github.event.inputs.whisper_ref || 'v1.9.1' }}
           path: wcpp/vulkan-bin/**
 
       - name: Upload probe logs
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: spike-logs
           path: |
