@@ -1,5 +1,9 @@
 # Scribe - Implementation Plan
 
+> **Archived plan:** This is the original 2026-06-10 engineering outline.
+> It does not describe the current repository structure or shipped feature set.
+> See the [documentation index](README.md) for current guidance.
+
 Status: Initial engineering outline  
 Source PRD: [PRD.md](./PRD.md)  
 Date: 2026-06-10

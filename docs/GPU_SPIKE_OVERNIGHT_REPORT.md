@@ -1,5 +1,8 @@
 # Overnight Report — GPU Vulkan spike (CI-first) + 0.5.24 ship
 
+> **Archived report:** This records the Vulkan investigation that led to the shipped GPU implementation.
+> Vulkan acceleration has been production behavior since version 0.6.0, with automatic CPU fallback.
+
 **Date:** 2026-06-21 (overnight)
 **Branch:** `feat/gpu-vulkan-spike` (GPU work) · `main` (the 0.5.24 release)
 **Asked:** "do the recommended path [for the GPU build] while I sleep" + "deal with

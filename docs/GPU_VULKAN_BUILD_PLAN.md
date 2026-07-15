@@ -1,11 +1,14 @@
 # GPU Acceleration via Vulkan — Build Plan (design only)
 
-> **Status: design + spike in progress.** This outlines *how* a GPU-accelerated
+> **Superseded plan:** Vulkan acceleration shipped in version 0.6.0 and is built from pinned whisper.cpp source in the release workflow.
+> The design and spike notes below are retained as engineering history, not current work instructions.
+
+> **Original status: design + spike in progress.** This outlines *how* a GPU-accelerated
 > whisper build would work in Scribe and what it would take. The §0 update below
 > supersedes the more cautious framing in §5b/§8 — read it first. See the
 > open-items list in [`STATUS_AND_NEXT_STEPS.md`](STATUS_AND_NEXT_STEPS.md), the
 > turnkey hardware test in [`GPU_VULKAN_SPIKE.md`](GPU_VULKAN_SPIKE.md), and the
-> CI spike workflow `.github/workflows/gpu-spike.yml`.
+> historical CI spike workflow `.github/workflows/gpu-spike.yml`.
 
 ## 0a. Implementation status (2026-06-21) — Option A built
 

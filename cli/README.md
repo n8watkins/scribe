@@ -39,7 +39,7 @@ Scribe: dictating (Recording)
   status:     Recording
   since:      2026-07-08T12:34:56.789Z
   updatedAt:  2026-07-08T12:34:56.812Z
-  app:        scribe 0.7.0  pid 1234
+  app:        scribe 0.8.0  pid 1234
 ```
 
 `--json` emits the **raw** server payload verbatim, so additive/unknown fields (and future ones) are preserved with full fidelity.

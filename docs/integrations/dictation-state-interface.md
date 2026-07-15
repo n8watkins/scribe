@@ -1,6 +1,10 @@
 # Dictation State Interface - Design Proposal
 
-Status: proposal (design phase, no production code).
+> **Superseded proposal:** The interface described here has been implemented.
+> The frozen v1 wire contract in [`dictation-state-contract.md`](dictation-state-contract.md) is authoritative for consumers.
+> The CLI and MCP server READMEs contain current client instructions.
+
+Original status: proposal (design phase, no production code).
 Author: design crew (branch `scribe-state-interface-design`).
 Scribe version at time of writing: 0.6.1.
 

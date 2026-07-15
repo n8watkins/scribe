@@ -1,5 +1,8 @@
 # Experiment: clipboard-free, keystroke-free insert via Windows UI Automation
 
+> **Historical experiment:** This prototype is retained for research context and is not the current insertion implementation.
+> Current behavior is documented in the [root README](../README.md).
+
 **Status:** prototype, opt-in only. Not wired into the normal output flow.
 **Verdict (short version):** **Partial. Keep as opt-in; do NOT make it the
 default.** A pure-UIA atomic insert is reliable only for a narrow class of

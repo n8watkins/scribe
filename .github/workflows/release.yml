@@ -114,9 +114,19 @@ jobs:
           cache: true
 
       - name: Set up MSVC environment
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
-        with:
-          arch: x64
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installationPath = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
+          if (-not $installationPath) { throw "Visual Studio with the x64 C++ toolchain was not found" }
+          $devCommand = Join-Path $installationPath "Common7\Tools\VsDevCmd.bat"
+          if (-not (Test-Path $devCommand)) { throw "VsDevCmd.bat was not found at $devCommand" }
+          & cmd.exe /s /c "`"$devCommand`" -no_logo -arch=x64 -host_arch=x64 && set" |
+            ForEach-Object {
+              if ($_ -match '^([^=]+)=(.*)$') {
+                "$($Matches[1])=$($Matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+              }
+            }
 
       - name: Install and validate application dependencies
         working-directory: app
@@ -222,7 +232,7 @@ jobs:
           Set-Content -Path (Join-Path $stage "SHA256SUMS.txt") -Value $lines -Encoding ascii
 
       - name: Upload release candidate
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: scribe-release-candidate
           path: ${{ runner.temp }}/scribe-release/*
@@ -238,7 +248,7 @@ jobs:
       matrix:
         kind: [nsis, msi]
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: scribe-release-candidate
           path: candidate
@@ -278,12 +288,17 @@ jobs:
             throw "Installed version $($entry.DisplayVersion) did not match ${{ needs.build-windows.outputs.version }}"
           }
 
-          $displayIcon = ([string]$entry.DisplayIcon).Trim('"') -replace ',\d+$', ''
-          $exe = if ($displayIcon -and (Test-Path $displayIcon)) {
-            Get-Item $displayIcon
-          } elseif ($entry.InstallLocation) {
-            Get-ChildItem $entry.InstallLocation -Filter "Scribe*.exe" | Where-Object Name -NotLike "uninstall*" | Select-Object -First 1
-          }
+          $binaryName = if ($entry.DisplayName -eq "Scribe Dev") { "Scribe Dev.exe" } else { "Scribe.exe" }
+          $displayIcon = (([string]$entry.DisplayIcon).Trim('"') -replace ',\d+$', '').Trim()
+          $installLocation = ([string]$entry.InstallLocation).Trim().Trim('"')
+          $candidatePaths = @(
+            $displayIcon
+            if ($installLocation) { Join-Path $installLocation $binaryName }
+          ) | Where-Object { $_ }
+          $exePath = $candidatePaths |
+            Where-Object { (Split-Path $_ -Leaf) -eq $binaryName -and (Test-Path $_ -PathType Leaf) } |
+            Select-Object -First 1
+          $exe = if ($exePath) { Get-Item $exePath }
           if (-not $exe) { throw "Installed Scribe executable was not found" }
           $installDir = $exe.Directory.FullName
           foreach ($name in @("whisper-cli.exe", "whisper-server.exe", "whisper.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll", "ggml-vulkan.dll")) {
@@ -308,7 +323,7 @@ jobs:
 
       - name: Upload installer logs on failure
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: smoke-logs-${{ matrix.kind }}
           path: ${{ runner.temp }}/scribe-*.log
@@ -323,32 +338,37 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: scribe-release-candidate
           path: candidate
 
       - name: Attach verified candidate to release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          files: |
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.ref_name }}"
+          repo="${{ github.repository }}"
+          assets=(
             candidate/*-setup.exe
             candidate/*-setup.exe.sig
             candidate/*.msi
             candidate/latest.json
             candidate/*.cdx.json
             candidate/SHA256SUMS.txt
-          generate_release_notes: true
+          )
+          if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber --repo "$repo"
+          else
+            gh release create "$tag" "${assets[@]}" --generate-notes --verify-tag --repo "$repo"
+          fi
 
       - name: Verify published release assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir downloaded
-          gh release download "${{ github.ref_name }}" --dir downloaded
-          while IFS= read -r line; do
-            expected="${line%%  *}"
-            file="${line#*  }"
-            actual="$(sha256sum "downloaded/$file" | cut -d' ' -f1)"
-            test "$actual" = "$expected"
-          done < candidate/SHA256SUMS.txt
+          gh release download "${{ github.ref_name }}" --repo "${{ github.repository }}" --dir downloaded
+          cp candidate/SHA256SUMS.txt downloaded/
+          cd downloaded
+          sha256sum --check SHA256SUMS.txt

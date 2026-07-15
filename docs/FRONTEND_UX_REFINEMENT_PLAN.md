@@ -1,6 +1,9 @@
 # Scribe - Frontend UX Refinement Plan
 
-Status: Ready for implementation  
+> **Archived plan:** This 2026-06-10 refinement plan predates the current desktop interface and is not an active backlog.
+> See the current application and [`STATUS_AND_NEXT_STEPS.md`](STATUS_AND_NEXT_STEPS.md) for present behavior and remaining opportunities.
+
+Original status: Ready for implementation
 Created: 2026-06-10  
 Scope: Reduce clutter, clarify settings, improve component hierarchy, and make transcript actions obvious.
 

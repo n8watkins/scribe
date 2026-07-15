@@ -1,5 +1,8 @@
 # GPU Vulkan Spike — the 5-minute hardware test (RX 7800 XT)
 
+> **Completed experiment:** The hardware gate passed and Vulkan acceleration shipped in version 0.6.0.
+> These steps are retained only to document the original validation method.
+
 > **One question this answers:** does a Vulkan-built whisper.cpp **detect and
 > actually run on the discrete Radeon RX 7800 XT** on Windows, and is it
 > **materially faster** than CPU on a large model? Everything else (does it build,
