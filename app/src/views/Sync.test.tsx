@@ -90,6 +90,25 @@ describe("SyncView backup status", () => {
     expect(screen.getByRole("button", { name: "Sync now" })).toBeEnabled();
   });
 
+  it("explains that Scribe writes only to an installed private repository", async () => {
+    githubStatusMock.mockResolvedValue({
+      configured: true,
+      connected: false,
+      repo: null,
+      username: null,
+    });
+
+    render(<SyncView actions={actions} settings={settings} />);
+
+    expect(
+      await screen.findByText(/access to the private repositories where you install Scribe/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/only writes to the private backup repository you select/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/create and write/)).not.toBeInTheDocument();
+  });
+
   it("loads the persisted manual result after a sync and view remount", async () => {
     githubSyncNowMock.mockResolvedValue({ filesWritten: 2, syncedNotes: 3 });
     githubSyncActivityMock
