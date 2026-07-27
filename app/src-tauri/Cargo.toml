@@ -69,3 +69,25 @@ windows = { version = "0.58", features = [
     "Win32_System_Memory",
     "Win32_System_Threading",
 ] }
+
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+[profile.dev.package."*"]
+debug = "none"
+
+[profile.test]
+debug = "line-tables-only"
+incremental = false
+
+[profile.test.package."*"]
+debug = "none"
+
+[profile.full-debug]
+inherits = "dev"
+debug = "full"
+incremental = false
+
+[profile.full-debug.package."*"]
+debug = "full"
