@@ -315,8 +315,9 @@ jobs:
           if ("${{ matrix.kind }}" -eq "msi") {
             $uninstall = Start-Process msiexec.exe -ArgumentList @("/x", $entry.PSChildName, "/qn", "/norestart", "/L*V", "$env:RUNNER_TEMP\scribe-msi-uninstall.log") -Wait -PassThru
           } else {
-            $command = if ($entry.QuietUninstallString) { $entry.QuietUninstallString } else { "$($entry.UninstallString) /S" }
-            $uninstall = Start-Process cmd.exe -ArgumentList @("/d", "/s", "/c", $command) -Wait -PassThru
+            $uninstaller = ([string]$entry.UninstallString).Trim().Trim('"')
+            if (-not (Test-Path $uninstaller -PathType Leaf)) { throw "NSIS uninstaller was not found at $uninstaller" }
+            $uninstall = Start-Process $uninstaller -ArgumentList "/S" -Wait -PassThru
           }
           if ($uninstall.ExitCode -notin @(0, 3010)) { throw "Uninstall failed with $($uninstall.ExitCode)" }
           if (Test-Path $exe.FullName) { throw "Scribe executable remained after uninstall" }
