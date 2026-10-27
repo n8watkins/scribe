@@ -144,16 +144,16 @@ build` clean. The maintainer is running 0.5.22 (installed via WSL→Windows).
 7. The **UI reorg is HELD** (the maintainer took it back). The big themes/
    multilingual/auto-update features were built via **parallel worktree agents**.
 
-## Release process (the flow that works)
+## Release process (release-kit)
 
-1. Bump the version in **3 files**: `app/src-tauri/Cargo.toml`,
-   `app/src-tauri/tauri.conf.json`, `app/package.json`.
-2. `cd app/src-tauri && cargo check` (refreshes `Cargo.lock`'s app version).
-3. Add a dated section to `CHANGELOG.md`.
-4. `git commit` (with the `Co-Authored-By: Claude ...` trailer), `git tag vX.Y.Z`,
-   `git push origin main && git push origin vX.Y.Z`.
-5. CI builds the signed release (~14–16 min): `gh run watch <run-id>
-   --exit-status`, then confirm `gh release view vX.Y.Z`.
+Scribe follows the n8 release standard ([release-kit](https://github.com/n8watkins/release-kit); see `RELEASING.md`).
+release-kit owns the version, the tag, `CHANGELOG.md` and the release notes; `.github/workflows/release.yml` still owns the build, signing, smoke installs, `latest.json`, checksums and the upload.
+
+1. Commit with Conventional Commits; `feat`, `fix`, `perf` and `security` subjects become the release notes, so write them for a user.
+2. From a clean, up-to-date `main`: `npm run release -- --dry-run` to preview the version and notes.
+3. `npm run release -- --push`: runs `release:check` (the desktop frontend's lint, tests and build), bumps every file in `.release.json` (root and app `package.json` and lock, `tauri.conf.json`, `Cargo.toml`, `Cargo.lock`), writes the `CHANGELOG.md` section, commits `chore(release): vX.Y.Z`, tags it, and pushes the branch and tag together.
+4. The tag starts the Release workflow (~15 min): `gh run watch <run-id> --exit-status`, then `gh release view vX.Y.Z`.
+   It checks the tag against every version file and publishes the notes from the commits, not GitHub's pull request list.
 
 ## Verification & parallel-work commands
 

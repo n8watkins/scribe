@@ -1,0 +1,15 @@
+{
+  "name": "scribe",
+  "version": "0.8.0",
+  "private": true,
+  "description": "Release tooling for Scribe (n8watkins/release-kit). The app itself is in app/.",
+  "license": "MIT",
+  "scripts": {
+    "release:check": "release-kit check && npm --prefix app ci && npm --prefix app run lint && npm --prefix app test && npm --prefix app run build",
+    "release": "release-kit release",
+    "prepare": "git config core.hooksPath .githooks || true"
+  },
+  "devDependencies": {
+    "release-kit": "github:n8watkins/release-kit#v2.0.0"
+  }
+}
