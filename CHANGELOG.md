@@ -1,10 +1,41 @@
 # Changelog
 
-Versions bump with each meaningful increment of progress — patch for small
-changes, minor for feature sets / phases — even when the work is still in flight
-and not yet perfect.
+## 0.8.0 - 2026-07-14
 
-## 0.6.0 — 2026-06-21
+### Features
+
+- GitHub backup signs in through Scribe's own GitHub App, with access to only the repo you choose.
+- The Sync screen shows whether your backup is working, with a history of each automatic backup.
+- Restore transcripts from a Scribe JSON export.
+  Scribe checks the whole file and shows what it will add before it changes anything.
+
+### Fixes
+
+- Cancelling GitHub sign-in partway through now stops it cleanly.
+- Installing an update only closes Scribe's own processes, never anything else.
+- Backup setup matches the permissions the GitHub App asks for.
+
+### Security
+
+- Every speech model download is checked against its known SHA-256 hash.
+- CSV exports can't carry spreadsheet formulas from a transcript into Excel or Sheets.
+- The local dictation-state server's access file is readable only by you, and the server limits how much it accepts.
+- Vulnerable Rust and npm dependencies were updated.
+- Each installer is test-installed on Windows and checked against its published checksums before a release goes out.
+
+## 0.7.0 - 2026-07-09
+
+### Features
+
+- Other apps can see when you're dictating: Scribe shares its live state (idle, listening, busy) through a local, token-protected server, so a tool can hold its own sounds or messages while you talk.
+- A small `scribe` command-line client and an MCP server read that state, for scripts and AI assistants.
+- Scribe also writes its current state to a status file on disk (0.6.1).
+
+### Fixes
+
+- The floating pill can no longer get stuck off-screen after a minimized window or an unplugged monitor.
+
+## 0.6.0 - 2026-06-21
 
 GPU acceleration, and a simpler/faster local-LLM story.
 
@@ -38,7 +69,7 @@ GPU acceleration, and a simpler/faster local-LLM story.
   local LLM still powers **Notes analysis** and **Selection transform** — both
   on-demand, never in the dictation path.
 
-## 0.5.24 — 2026-06-21
+## 0.5.24 - 2026-06-21
 
 A small frontend-polish patch (the fixes landed just after the 0.5.23 tag, so
 they ship here).
@@ -50,7 +81,7 @@ they ship here).
 - **Honest types.** `RecordingResult` regained the `isTransform` + `disconnected`
   fields, so the `transcribe_recording` round-trip can't silently drop them.
 
-## 0.5.23 — 2026-06-21
+## 0.5.23 - 2026-06-21
 
 A reliability, text-quality, and polish pass.
 
@@ -102,7 +133,7 @@ A reliability, text-quality, and polish pass.
 - Authenticode code signing is no longer being pursued; installers stay unsigned
   (the SmartScreen first-run warning remains).
 
-## 0.5.22 — 2026-06-14
+## 0.5.22 - 2026-06-14
 
 - **Fixed: update checks were tripping GitHub's API rate limit (HTTP 403).** The
   background poll used the GitHub REST API (~60 requests/hour for unauthenticated
@@ -113,7 +144,7 @@ A reliability, text-quality, and polish pass.
   subject to the API rate limit) — the exact source the install already uses, so
   frequent polling works again and detection/install can't disagree.
 
-## 0.5.21 — 2026-06-14
+## 0.5.21 - 2026-06-14
 
 - **Multilingual transcription.** Added multilingual Whisper models
   (tiny/base/small/medium) alongside the English-only ones, a **language picker**
@@ -128,7 +159,7 @@ A reliability, text-quality, and polish pass.
   real light mode. 6 themes total in the Themes view; the 5 dark ones are
   unchanged.
 
-## 0.5.20 — 2026-06-14
+## 0.5.20 - 2026-06-14
 
 Code-review fixes for the 0.5.19 auto-update + themes:
 - **Auto-update isn't skipped on a slow startup anymore.** The on-launch
@@ -143,7 +174,7 @@ Code-review fixes for the 0.5.19 auto-update + themes:
   themes are solid; a proper light theme is a follow-up), and added a pre-paint
   theme bootstrap so a non-default theme doesn't flash midnight on launch.
 
-## 0.5.19 — 2026-06-14
+## 0.5.19 - 2026-06-14
 
 - **Seamless, branded auto-update.** New versions now download and install **on
   launch** behind a Scribe-branded "Updating…" screen (logo + progress) instead
@@ -157,7 +188,7 @@ Code-review fixes for the 0.5.19 auto-update + themes:
 - **Docs:** added `docs/COMPETITIVE-ANALYSIS.md` (Scribe vs. the field + a
   prioritized gap list) and refreshed the README to the current feature set.
 
-## 0.5.18 — 2026-06-14
+## 0.5.18 - 2026-06-14
 
 - **Simplified the update UI.** The topbar indicator is now a single
   **"Update v0.5.x"** button (dropped the View/dismiss chip). **About → Updates**
@@ -169,7 +200,7 @@ Code-review fixes for the 0.5.19 auto-update + themes:
   off, background polling stops but manual "Check for updates" still works.
 - Removed the per-version dismiss (it was over-complicated).
 
-## 0.5.17 — 2026-06-14
+## 0.5.17 - 2026-06-14
 
 - **Polling back to 1 minute** while we're actively iterating on the updater, so
   detection is immediate during testing. (Production target is ~6 hours — the
@@ -179,7 +210,7 @@ Code-review fixes for the 0.5.19 auto-update + themes:
   note once dismissed. Dismiss is shared with the topbar chip, so it works from
   either place.
 
-## 0.5.16 — 2026-06-14
+## 0.5.16 - 2026-06-14
 
 - **Update polling dialed back to every 5 minutes** (the 0.5.15 1-minute test
   confirmed polling works) — new releases still surface promptly via the
@@ -194,7 +225,7 @@ Code-review fixes for the 0.5.19 auto-update + themes:
   you dismiss the topbar chip, so installing later is always one stop away.
 - **Larger description text** across settings and views for readability.
 
-## 0.5.15 — 2026-06-14
+## 0.5.15 - 2026-06-14
 
 - **Update polling you can watch (test cadence).** The app now polls for new
   releases **every 60 seconds** (was 30 min), and About shows a live
@@ -209,7 +240,7 @@ Code-review fixes for the 0.5.19 auto-update + themes:
 - **FAQ:** added entries on the taskbar/Task-Manager **icon cache** and **how
   updates work** (install / dismiss / view).
 
-## 0.5.14 — 2026-06-14
+## 0.5.14 - 2026-06-14
 
 - **Custom window title bar.** The main window now runs without native Windows
   chrome and draws its own slim bar (drag region + minimize / maximize / close),
@@ -218,7 +249,7 @@ Code-review fixes for the 0.5.19 auto-update + themes:
   logo in the build — a stale icon there is Windows' **icon cache** after
   updating in place, which a clean install (or a reboot) refreshes.
 
-## 0.5.13 — 2026-06-14
+## 0.5.13 - 2026-06-14
 
 - **Update notifications you won't miss.** Scribe now re-checks for a new release
   ~5s after launch, **every 30 minutes** (was 2 hours), **and whenever you
@@ -232,7 +263,7 @@ Code-review fixes for the 0.5.19 auto-update + themes:
   yet — the Models list is a fixed catalog) and "Why didn't I get an update
   notification?".
 
-## 0.5.12 — 2026-06-14
+## 0.5.12 - 2026-06-14
 
 - **AI dictation cleanup.** Optional local-LLM polish of each dictation before
   it's saved/pasted — strips filler ("um/uh/like"), fixes punctuation & casing,
@@ -254,7 +285,7 @@ Code-review fixes for the 0.5.19 auto-update + themes:
   deliberate saves; you opt in). Data & Privacy → "History & retention" shows the
   transcript and note retentions side by side.
 
-## 0.5.11 — 2026-06-14
+## 0.5.11 - 2026-06-14
 
 - **Fixed: clearing transcript history (and the retention auto-delete) was also
   wiping your notes**, despite the dialog promising notes are safe. Notes are
@@ -264,7 +295,7 @@ Code-review fixes for the 0.5.19 auto-update + themes:
   `clear_notes`), and the History/Notes "Clear all" uses the on-brand
   confirmation dialog instead of the native popup.
 
-## 0.5.10 — 2026-06-14
+## 0.5.10 - 2026-06-14
 
 - **Real app icon everywhere.** Regenerated all icons from the Scribe mic logo,
   so the installed app's window/taskbar icon is the logo (releases had stale
@@ -275,7 +306,7 @@ Code-review fixes for the 0.5.19 auto-update + themes:
   transcripts" is marked coming-soon — only note sync is wired up in the backend
   today.)
 
-## 0.5.9 — 2026-06-14
+## 0.5.9 - 2026-06-14
 
 - **Google Drive sync works in released builds again.** Releases were shipping
   placeholder OAuth credentials (the real ones are gitignored); the release
@@ -291,7 +322,7 @@ Code-review fixes for the 0.5.19 auto-update + themes:
 - Removed the giant native hover tooltip that popped the full transcript text on
   History/Notes items.
 
-## 0.5.8 — 2026-06-14
+## 0.5.8 - 2026-06-14
 
 Another UI wave (three parallel agents) + perf fixes:
 
@@ -317,7 +348,7 @@ Another UI wave (three parallel agents) + perf fixes:
 - **Models:** Refresh + Open-models-folder moved to the left toolbar.
 - **Bigger app brand** (icon + "Scribe") in the sidebar.
 
-## 0.5.7 — 2026-06-14
+## 0.5.7 - 2026-06-14
 
 - **Fixes the "Error opening file for writing … ggml-base.dll" update failure.**
   A whisper-server child process orphaned by a non-graceful exit could keep the
@@ -327,7 +358,7 @@ Another UI wave (three parallel agents) + perf fixes:
 - **About:** "Install update" and "View release" are now a matched pair — both
   have icons, the same footprint, and more breathing room between them.
 
-## 0.5.6 — 2026-06-14
+## 0.5.6 - 2026-06-14
 
 UI feedback wave (built by three parallel agents in isolated worktrees):
 
@@ -346,7 +377,7 @@ UI feedback wave (built by three parallel agents in isolated worktrees):
 - **Clear transcript history** now uses an on-brand confirmation dialog instead
   of the native browser popup.
 
-## 0.5.5 — 2026-06-14
+## 0.5.5 - 2026-06-14
 
 - **Audio:** the "Default input device" option (and the input label) now shows
   the *resolved* default device in parens — e.g. "Default input device (FIFINE
@@ -355,7 +386,7 @@ UI feedback wave (built by three parallel agents in isolated worktrees):
   controls the floating pill's background (applied with slight translucency over
   the desktop); defaults to the on-brand dark blue.
 
-## 0.5.4 — 2026-06-13
+## 0.5.4 - 2026-06-13
 
 UI declutter / redesign pass (run partly via parallel agents) plus a few new
 controls:
@@ -383,7 +414,7 @@ controls:
   folder is groundwork-only for now — the picker is held back until the
   database/models/clips can be safely relocated and Windows-tested.)
 
-## 0.5.3 — 2026-06-13
+## 0.5.3 - 2026-06-13
 
 - **Per-bind press/release trigger.** Toggle Dictation, Paste Last Transcript,
   and Open Dashboard each get an "On press / On release" switch in Hotkeys
@@ -395,7 +426,7 @@ controls:
   chord (which needs the key held — i.e. release mode). The Toggle hint explains
   this right where you flip the edge, instead of failing silently.
 
-## 0.5.2 — 2026-06-13
+## 0.5.2 - 2026-06-13
 
 - **Paste-last fires on key-press, not on release.** The clipboard paste no
   longer blocks waiting for you to let go of the whole chord (e.g.
@@ -403,7 +434,7 @@ controls:
   pastes immediately, so you don't have to release every key. The toggle/tilde
   stays on release by design (it doubles as the hold-`~`+Q note trigger).
 
-## 0.5.1 — 2026-06-13
+## 0.5.1 - 2026-06-13
 
 Multi-agent code-review fixes:
 
@@ -424,7 +455,7 @@ Multi-agent code-review fixes:
   stop + object-URL leak fixed; History playback error handling; Settings
   deep-link tab resets on exit; removed dead exports.
 
-## 0.5.0 — 2026-06-13
+## 0.5.0 - 2026-06-13
 
 - **Audio view reorganized** into Input / Audio processing / Device health
   sections (compact, no scrolling at the default window).
@@ -435,7 +466,7 @@ Multi-agent code-review fixes:
   (insertion, archive, models, pill, LM-Studio status, dictionary, audio,
   dashboard/refactor).
 
-## 0.4.8 — 2026-06-13
+## 0.4.8 - 2026-06-13
 
 - **Dictionary redesign.** The old "Custom vocabulary" tab is now **Dictionary**,
   with two clearly-separated layers: a **Context hint** (the Whisper priming
@@ -444,21 +475,21 @@ Multi-agent code-review fixes:
   every transcript after recognition (e.g. "my email" → your address, fix
   "clawed" → "Claude").
 
-## 0.4.7 — 2026-06-13
+## 0.4.7 - 2026-06-13
 
 - **Local-LLM status.** The Notes-analysis settings tab gets a connection card
   with a **Test connection** button — shows Connected + the server's available
   models, or "Not running" with setup guidance, for the LM Studio / Ollama
   endpoint that powers notes analysis.
 
-## 0.4.6 — 2026-06-13
+## 0.4.6 - 2026-06-13
 
 - **Pill polish.** The floating pill is now a true rounded pill and a bit
   narrower; the waveform **tapers at the edges** (outer bars quieter than the
   center); and the **bar/dot colors are configurable** — normal + note-session
   color pickers in Settings (defaults amber / cyan).
 
-## 0.4.5 — 2026-06-13
+## 0.4.5 - 2026-06-13
 
 - **Models view rework.** Summary header (active model + storage used + open
   folder), a "Browse models" accordion that scrolls internally, and **select
@@ -468,7 +499,7 @@ Multi-agent code-review fixes:
   History/Notes row is now just the transcript text (regular weight) with the
   timestamp/meta underneath, reclaiming the line for actual content.
 
-## 0.4.4 — 2026-06-13
+## 0.4.4 - 2026-06-13
 
 - **Phase 2 — transcript archive.** History/Notes rows now **lead with the
   transcript text** (timestamp + meta secondary) with inline **See more / See
@@ -478,7 +509,7 @@ Multi-agent code-review fixes:
   `from`/`to`/`sort`, plus `combine_transcripts`, `save_combined_transcript`, and
   `open_transcript_externally` commands.
 
-## 0.4.3 — 2026-06-13
+## 0.4.3 - 2026-06-13
 
 - **"Keep my clipboard" toggle** — the second insertion switch. Together,
   **Auto-insert** × **Keep my clipboard** select the behavior: paste &
@@ -486,7 +517,7 @@ Multi-agent code-review fixes:
   insertion/paste design (auto-insert toggle + clipboard toggle + rebindable
   Paste-last hotkey + full-fidelity restore + Dev keystroke fallback).
 
-## 0.4.2 — 2026-06-13
+## 0.4.2 - 2026-06-13
 
 - **Simplified insertion controls.** Output behavior is now a single
   **"Auto-insert after dictation"** on/off toggle (On = paste when you stop
@@ -495,7 +526,7 @@ Multi-agent code-review fixes:
   "type it out" mode moved to **Developer → Experimental insert**. Clipboard
   status labels are now honest about borrow-and-restore.
 
-## 0.4.1 — 2026-06-13
+## 0.4.1 - 2026-06-13
 
 - **Full-fidelity clipboard restore.** The instant paste (auto-paste *and*
   `Ctrl+Alt+V`) now snapshots and restores the *entire* clipboard — images
@@ -504,7 +535,7 @@ Multi-agent code-review fixes:
   bitmap/metafile handles and delayed-render formats are skipped, but images and
   files also publish a byte-copyable variant that is restored.)
 
-## 0.4.0 — 2026-06-13
+## 0.4.0 - 2026-06-13
 
 - **Insertion overhauled.** Auto-paste *and* Paste-last-transcript (`Ctrl+Alt+V`)
   now do a single **instant clipboard paste that restores your previous

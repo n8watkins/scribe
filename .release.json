@@ -1,0 +1,9 @@
+{
+  "versionFiles": [
+    "app/src-tauri/tauri.conf.json",
+    "app/src-tauri/Cargo.toml",
+    "app/src-tauri/Cargo.lock",
+    "app/package.json",
+    "app/package-lock.json"
+  ]
+}

@@ -98,6 +98,15 @@ jobs:
           cache: npm
           cache-dependency-path: app/package-lock.json
 
+      # release-kit's check covers every file that carries the version
+      # (.release.json), including the root package.json and both lock files.
+      - name: Tag matches every version file
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: node scripts/release-kit/release.mjs --verify-tag "$TAG"
+
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           components: clippy, rustfmt
@@ -248,6 +257,19 @@ jobs:
       matrix:
         kind: [nsis, msi]
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # the notes need the previous tag
+          persist-credentials: false
+
+      # User-facing notes from the Conventional Commits since the previous
+      # release (release-kit), the same section the release commit wrote to
+      # CHANGELOG.md; not GitHub's list of pull request titles.
+      - name: Release notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: node scripts/release-kit/notes.mjs --to "$TAG" > release-notes.md
+
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: scribe-release-candidate
@@ -360,7 +382,7 @@ jobs:
           if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --clobber --repo "$repo"
           else
-            gh release create "$tag" "${assets[@]}" --generate-notes --verify-tag --repo "$repo"
+            gh release create "$tag" "${assets[@]}" --notes-file release-notes.md --verify-tag --repo "$repo"
           fi
 
       - name: Verify published release assets
