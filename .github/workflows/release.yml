@@ -98,14 +98,17 @@ jobs:
           cache: npm
           cache-dependency-path: app/package-lock.json
 
-      # release-kit's check covers every file that carries the version
-      # (.release.json), including the root package.json and both lock files.
+      # release-kit's check (the root dev dependency) covers every file that
+      # carries the version (.release.json), including the root package.json
+      # and both lock files.
       - name: Tag matches every version file
         if: github.ref_type == 'tag'
         shell: bash
         env:
           TAG: ${{ github.ref_name }}
-        run: node scripts/release-kit/release.mjs --verify-tag "$TAG"
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx --no-install release-kit release --verify-tag "$TAG"
 
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
@@ -268,7 +271,9 @@ jobs:
       - name: Release notes
         env:
           TAG: ${{ github.ref_name }}
-        run: node scripts/release-kit/notes.mjs --to "$TAG" > release-notes.md
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx --no-install release-kit notes --to "$TAG" > release-notes.md
 
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:

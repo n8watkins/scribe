@@ -20,6 +20,42 @@ type(scope): subject
 
 The `commit-msg` hook checks this locally, and the Commit messages workflow checks every pushed commit.
 
+## Writing for the release notes
+
+`feat`, `fix`, `perf` and `security` subjects become the release notes, the changelog and the public build log.
+Write them as patch notes: what a user can now do, or what works better, in plain words.
+
+| Instead of | Write |
+|---|---|
+| `fix(marquee): debounce ResizeObserver` | `fix: the logo strip no longer stutters when you resize the window` |
+| `feat: owner round 10` | `feat: a dino game in the AI kit, and a rebuilt Loadout` |
+| `perf: lazy Sentry and LazyMotion` | `perf: pages load about a second faster on phones` |
+
+- Say what changed for the user, not which file, library or test changed.
+- A change no user would notice (a flaky test, a CI fix) isn't a `fix`: use `test`, `ci` or `chore`.
+- When the subject has to stay technical, add a `Release-note:` line to the body; the notes use it instead:
+
+  ```
+  fix(marquee): debounce ResizeObserver
+
+  Release-note: the logo strip no longer stutters when you resize the window
+  ```
+
+- `Release-note: skip` keeps a `feat` or `fix` out of the notes (a breaking change is always listed).
+- `npm run release -- --summary "Dark mode, and a faster homepage."` puts a line in your words at the top of the release.
+
+### How the notes look
+
+Set `notes` in `.release.json`:
+
+- The default style: headings New, Fixed, Faster and Safer, and no scope labels.
+- `"style": "classic"`: the commit-type headings Features, Fixes, Performance and Security, with scope labels.
+- `"headings": { "Features": "What's new" }`: rename any heading.
+- `"scopes": "hide"`, or `{ "a11y": "Accessibility", "ci": false }` to rename some scopes and drop others.
+
+Pull request numbers like `(#12)` link to the pull request.
+The GitHub Release shows exactly the section the release wrote to `CHANGELOG.md`, summary and all.
+
 ## Cutting a release
 
 ```bash
@@ -32,7 +68,7 @@ npm run release -- --push      # check, bump, changelog, commit, tag, push
 - It bumps `package.json`, `package-lock.json` and any file listed in `.release.json` `versionFiles`, adds a section to `CHANGELOG.md`, commits `chore(release): vX.Y.Z` and tags it.
 - With `--push` it first makes sure `main` isn't behind `origin/main` and runs `npm run release:check` (skip that with `--no-check`), so a tag is only pushed for a commit that passes. If the push is rejected, the release commit and tag are undone.
 - The changelog date is today in `.release.json` `timeZone` (for example `"America/Los_Angeles"`), or in the machine's time zone; set it when the release train cuts releases, because CI runs in UTC.
-- Edit the new `CHANGELOG.md` section before pushing if a line needs rewording (`git commit --amend`, then move the tag with `git tag -f -a vX.Y.Z`).
+- Edit the new `CHANGELOG.md` section before pushing if a line needs rewording (`git commit --amend`, then move the tag with `git tag -f -a --cleanup=verbatim vX.Y.Z` and paste the new section as its message).
   Never move a tag after it is pushed: the next release would start from the wrong place, and the kit stops when it finds one moved.
 
 Pushing the tag runs `.github/workflows/release.yml`:
@@ -70,8 +106,8 @@ A tag pushed with the key starts the Release workflow by itself, and pushing `ma
 Set it up once, as an admin, with the gh CLI signed in:
 
 ```sh
-node scripts/release-kit/protect.mjs --dry-run   # what it will do
-node scripts/release-kit/protect.mjs
+npx release-kit protect --dry-run   # what it will do
+npx release-kit protect
 ```
 
 It creates the ruleset `release-kit: protect main` (no deletion, no force push, the required checks that classic protection had, or `--checks "CI result,check"`), lets the deploy key and repository admins bypass it (`--no-admin-bypass` to drop admins), adds a new write deploy key `release-kit train` with its private half only in the secret, and then removes classic branch protection, which a deploy key can't bypass.

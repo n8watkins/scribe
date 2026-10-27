@@ -2,20 +2,20 @@
 
 ## 0.8.0 - 2026-07-14
 
-### Features
+### New
 
 - GitHub backup signs in through Scribe's own GitHub App, with access to only the repo you choose.
 - The Sync screen shows whether your backup is working, with a history of each automatic backup.
 - Restore transcripts from a Scribe JSON export.
   Scribe checks the whole file and shows what it will add before it changes anything.
 
-### Fixes
+### Fixed
 
 - Cancelling GitHub sign-in partway through now stops it cleanly.
 - Installing an update only closes Scribe's own processes, never anything else.
 - Backup setup matches the permissions the GitHub App asks for.
 
-### Security
+### Safer
 
 - Every speech model download is checked against its known SHA-256 hash.
 - CSV exports can't carry spreadsheet formulas from a transcript into Excel or Sheets.
@@ -25,13 +25,13 @@
 
 ## 0.7.0 - 2026-07-09
 
-### Features
+### New
 
 - Other apps can see when you're dictating: Scribe shares its live state (idle, listening, busy) through a local, token-protected server, so a tool can hold its own sounds or messages while you talk.
 - A small `scribe` command-line client and an MCP server read that state, for scripts and AI assistants.
 - Scribe also writes its current state to a status file on disk (0.6.1).
 
-### Fixes
+### Fixed
 
 - The floating pill can no longer get stuck off-screen after a minimized window or an unplugged monitor.
 
