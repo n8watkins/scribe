@@ -171,7 +171,7 @@ impl Hub {
 
     fn try_acquire_connection(&self) -> bool {
         self.active_connections
-            .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |count| {
+            .try_update(Ordering::AcqRel, Ordering::Relaxed, |count| {
                 (count < MAX_CONNECTIONS).then_some(count + 1)
             })
             .is_ok()
