@@ -1,5 +1,16 @@
 version: 2
 updates:
+  # release-kit (the root dev dependency): each kit release, majors included.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: America/Los_Angeles
+    allow:
+      - dependency-name: release-kit
+
   - package-ecosystem: npm
     directory: /app
     schedule:
