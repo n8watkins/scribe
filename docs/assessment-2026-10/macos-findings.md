@@ -17,7 +17,8 @@ No Mac hardware was used: everything below comes from CI logs, and the last sect
 - The macOS bundle settings live in `app/src-tauri/tauri.macos.conf.json`, which Tauri merges only when it builds on macOS, so the Windows and Linux bundles are unchanged.
 - The app finds its whisper.cpp binaries under `Scribe.app/Contents/Resources/bin/macos/`, the same layout as `bin/windows/` and `bin/linux/`.
 - Sizes: `Scribe.app` is 59 MiB and `Scribe_<version>_universal.dmg` is 21 MiB.
-- Timing on the runner: whisper.cpp for both slices takes about 2 minutes (cached after the first run), the two Rust release builds about 4 minutes each, and the whole job about 14 minutes.
+- Timing on the runner: whisper.cpp for both slices takes about 2 minutes, the two Rust release builds about 4 minutes each, and the whole job about 14 minutes from cold.
+  With the whisper.cpp and cargo caches warm the job takes about 7 minutes.
 
 ## Signing and Gatekeeper
 
