@@ -26,10 +26,21 @@ export function formatMsReadable(ms: number): string {
   return seconds > 0 ? `${minutes} min ${seconds} s` : `${minutes} min`;
 }
 
-// The four `outputMode` values are presented to the owner as two independent
-// switches: "Auto-insert after dictation" (paste for you vs. buffer only) and
-// "Keep my clipboard" (borrow-and-restore vs. leave the transcript on the
-// clipboard). These helpers map between the two representations.
+// The four `outputMode` values are presented as one "After dictation" choice
+// (insert at the cursor, copy only, or save only) plus, for inserting, an
+// "Insert method". These helpers map between the two representations without
+// changing what any saved value means.
+export type AfterDictation = "insert" | "copy" | "save";
+
+// How an inserted dictation reaches the app:
+// - paste_restore: borrow the clipboard for one Ctrl+V, then restore it
+//   (`auto_paste` + `clipboard_paste`, the default).
+// - paste_keep: paste and leave the transcript on the clipboard
+//   (`copy_and_paste`).
+// - type: type the text out as keystrokes for apps that block paste
+//   (`auto_paste` + `direct_insert`).
+export type InsertMethod = "paste_restore" | "paste_keep" | "type";
+
 export function isAutoInsert(mode: OutputMode): boolean {
   return mode === "auto_paste" || mode === "copy_and_paste";
 }
@@ -38,28 +49,60 @@ export function isKeepClipboard(mode: OutputMode): boolean {
   return mode === "auto_paste" || mode === "save_only";
 }
 
-export function outputModeFromToggles(
-  autoInsert: boolean,
-  keepClipboard: boolean,
-): OutputMode {
-  if (autoInsert) {
-    return keepClipboard ? "auto_paste" : "copy_and_paste";
+export function afterDictationOf(mode: OutputMode): AfterDictation {
+  if (isAutoInsert(mode)) {
+    return "insert";
   }
-  return keepClipboard ? "save_only" : "copy_clipboard";
+  return mode === "copy_clipboard" ? "copy" : "save";
 }
 
-// Short, honest label driven by the actual paste method and output mode.
-// `direct_insert` types the transcript out as keystrokes; otherwise, when the
-// owner keeps their clipboard, Scribe momentarily borrows it for one Ctrl+V and
-// then restores the previous contents — and when they don't, it simply leaves
-// the transcript on the clipboard for them to paste.
-export function clipboardStatus(settings: AppSettings) {
-  if (settings.pasteMethod === "direct_insert") {
-    return "Types it out";
+export function insertMethodOf(
+  settings: Pick<AppSettings, "outputMode" | "pasteMethod">,
+): InsertMethod {
+  // Copy + paste always pastes through the clipboard (the backend ignores the
+  // paste method there), so it reads as "paste and keep" either way.
+  if (settings.outputMode === "copy_and_paste") {
+    return "paste_keep";
   }
-  return isKeepClipboard(settings.outputMode)
-    ? "Clipboard restored"
-    : "On your clipboard";
+  return settings.pasteMethod === "direct_insert" ? "type" : "paste_restore";
+}
+
+// The settings patch for a new choice. Copy only and Save only leave the
+// paste method alone, because Paste Last and History's Insert still use it.
+export function outputSettingsFor(
+  after: AfterDictation,
+  method: InsertMethod,
+): Partial<Pick<AppSettings, "outputMode" | "pasteMethod">> {
+  if (after === "copy") {
+    return { outputMode: "copy_clipboard" };
+  }
+  if (after === "save") {
+    return { outputMode: "save_only" };
+  }
+  switch (method) {
+    case "paste_keep":
+      return { outputMode: "copy_and_paste", pasteMethod: "clipboard_paste" };
+    case "type":
+      return { outputMode: "auto_paste", pasteMethod: "direct_insert" };
+    default:
+      return { outputMode: "auto_paste", pasteMethod: "clipboard_paste" };
+  }
+}
+
+// Short, honest label for what the last dictation did to the clipboard,
+// driven by the output mode and, when inserting, the insert method.
+export function clipboardStatus(settings: AppSettings) {
+  switch (settings.outputMode) {
+    case "save_only":
+      return "Clipboard untouched";
+    case "copy_clipboard":
+    case "copy_and_paste":
+      return "On your clipboard";
+    default:
+      return settings.pasteMethod === "direct_insert"
+        ? "Types it out"
+        : "Clipboard restored";
+  }
 }
 
 export function routeToView(route: string): ViewName | null {

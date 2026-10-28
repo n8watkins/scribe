@@ -22,12 +22,10 @@ import {
   canStartRecording,
   formatHotkey,
   formatMsReadable,
-  isAutoInsert,
-  isKeepClipboard,
-  outputModeFromToggles,
   recordingStageTitle,
 } from "../lib/format";
-import { StatePill, Toggle } from "../components/primitives";
+import { OutputSettingRows } from "../components/OutputSettings";
+import { StatePill } from "../components/primitives";
 import {
   LastTranscriptCard,
   LiveTranscript,
@@ -191,34 +189,11 @@ function RecordTab({
           <div className="section-heading compact">
             <h2>Output behavior</h2>
           </div>
-          <div className="settings-list">
-            <OutputModeRow
-              checked={isAutoInsert(settings.outputMode)}
-              description={`On: your transcript is pasted automatically when you stop talking. Off: it's saved to the buffer — paste it anywhere with ${formatHotkey(settings.hotkeys.pasteLastTranscript)}.`}
+          <div className="settings-list transcribe-output-settings">
+            <OutputSettingRows
               disabled={actions.savingSettings}
-              label="Auto-insert after dictation"
-              onChange={(on) =>
-                actions.updateSettings({
-                  outputMode: outputModeFromToggles(
-                    on,
-                    isKeepClipboard(settings.outputMode),
-                  ),
-                })
-              }
-            />
-            <OutputModeRow
-              checked={isKeepClipboard(settings.outputMode)}
-              description="On: Scribe borrows your clipboard for the paste, then restores what you had — Ctrl+V keeps working with your stuff. Off: it leaves the transcript on your clipboard so you paste it yourself with any bind (Ctrl+V / Shift+Insert), replacing your previous clipboard."
-              disabled={actions.savingSettings}
-              label="Keep my clipboard"
-              onChange={(on) =>
-                actions.updateSettings({
-                  outputMode: outputModeFromToggles(
-                    isAutoInsert(settings.outputMode),
-                    on,
-                  ),
-                })
-              }
+              onChange={(patch) => actions.updateSettings(patch)}
+              settings={settings}
             />
           </div>
         </article>
@@ -238,49 +213,6 @@ function RecordTab({
         </div>
       </div>
     </section>
-  );
-}
-
-/** Compact, full-width output-mode row: label + toggle on one line, a
- * single-line clamped description below with an inline "see more" expander so
- * the verbose copy doesn't waste the wide right column. */
-function OutputModeRow({
-  checked,
-  description,
-  disabled,
-  label,
-  onChange,
-}: {
-  checked: boolean;
-  description: string;
-  disabled?: boolean;
-  label: string;
-  onChange: (checked: boolean) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <div className="output-mode-row">
-      <div className="output-mode-head">
-        <strong>{label}</strong>
-        <Toggle
-          checked={checked}
-          disabled={disabled}
-          label={label}
-          onChange={onChange}
-        />
-      </div>
-      <p className={`output-mode-desc${expanded ? "" : " is-clamped"}`}>
-        {description}
-      </p>
-      <button
-        className="output-mode-more"
-        onClick={() => setExpanded((value) => !value)}
-        type="button"
-      >
-        {expanded ? "See less" : "See more"}
-      </button>
-    </div>
   );
 }
 

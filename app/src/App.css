@@ -1557,6 +1557,24 @@ textarea {
   width: min(184px, 100%);
 }
 
+/* The three-way "After dictation" choice sizes each segment to its label so
+   "Insert at cursor" never wraps, and the insert-method select shows its
+   longest option in full. */
+.setting-control .output-after-control {
+  grid-template-columns: repeat(3, auto);
+  width: auto;
+}
+
+.setting-control .output-after-control button {
+  padding-inline: 8px;
+  white-space: nowrap;
+}
+
+.setting-control .output-method-select {
+  width: 250px;
+  max-width: 100%;
+}
+
 .setting-control select,
 .setting-control input {
   max-width: 132px;

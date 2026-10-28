@@ -18,13 +18,8 @@ import {
   type TextReplacement,
 } from "../backend";
 import type { ViewActions } from "../types";
-import {
-  formatHotkey,
-  isAutoInsert,
-  isKeepClipboard,
-  outputModeFromToggles,
-} from "../lib/format";
 import { SettingRow } from "../components/layout";
+import { OutputSettingRows } from "../components/OutputSettings";
 import { MsInput, Toggle } from "../components/primitives";
 
 export function SettingsView({
@@ -92,42 +87,11 @@ export function SettingsView({
         <div className="settings-list">
           <div className="settings-subsection">
             <h3 className="settings-subhead">Output</h3>
-            <SettingRow
-              description={`On: your transcript is pasted automatically when you stop talking. Off: it's saved to the buffer — paste it anywhere with ${formatHotkey(settings.hotkeys.pasteLastTranscript)}.`}
-              label="Auto-insert after dictation"
-            >
-              <Toggle
-                checked={isAutoInsert(settings.outputMode)}
-                disabled={actions.savingSettings}
-                label="Auto-insert after dictation"
-                onChange={(on) =>
-                  actions.updateSettings({
-                    outputMode: outputModeFromToggles(
-                      on,
-                      isKeepClipboard(settings.outputMode),
-                    ),
-                  })
-                }
-              />
-            </SettingRow>
-            <SettingRow
-              description="On: Scribe borrows your clipboard for the paste, then restores what you had — Ctrl+V keeps working with your stuff. Off: it leaves the transcript on your clipboard so you paste it yourself with any bind (Ctrl+V / Shift+Insert), replacing your previous clipboard."
-              label="Keep my clipboard"
-            >
-              <Toggle
-                checked={isKeepClipboard(settings.outputMode)}
-                disabled={actions.savingSettings}
-                label="Keep my clipboard"
-                onChange={(on) =>
-                  actions.updateSettings({
-                    outputMode: outputModeFromToggles(
-                      isAutoInsert(settings.outputMode),
-                      on,
-                    ),
-                  })
-                }
-              />
-            </SettingRow>
+            <OutputSettingRows
+              disabled={actions.savingSettings}
+              onChange={(patch) => actions.updateSettings(patch)}
+              settings={settings}
+            />
             <SettingRow
               description="Spoken language Scribe transcribes. Auto-detect and any non-English language need a multilingual model (see Models)."
               label="Language"
