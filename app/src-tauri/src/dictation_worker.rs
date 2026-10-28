@@ -487,16 +487,14 @@ fn stop_and_transcribe(app: &AppHandle) -> Result<(), CommandError> {
     Ok(())
 }
 
-#[cfg(windows)]
+/// Where the system can't copy the selection out of another app, the
+/// typed-instruction panel on the dashboard stands in for it.
 fn start_transform(app: &AppHandle) -> Result<(), CommandError> {
-    crate::hotkeys::start_transform(app)
-}
-
-/// Off Windows there is no selection capture (SendInput and the clipboard), so
-/// the typed-instruction panel on the dashboard stands in for it.
-#[cfg(not(windows))]
-fn start_transform(app: &AppHandle) -> Result<(), CommandError> {
-    tray::open_dashboard(app, Some("dashboard"))
+    if crate::platform::can_capture_selection() {
+        crate::hotkeys::start_transform(app)
+    } else {
+        tray::open_dashboard(app, Some("dashboard"))
+    }
 }
 
 #[cfg(test)]

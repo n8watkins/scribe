@@ -3,11 +3,13 @@ use std::{thread, time::Duration};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
+pub use crate::platform::PasteTarget;
 use crate::{
     app_state::{AppEvent, AppStatus},
     commands::BackendState,
     dictation_state::emit_state_snapshot,
     error::CommandError,
+    platform,
     settings::{AppSettings, OutputMode, PasteMethod},
     transcript::Transcript,
 };
@@ -33,14 +35,6 @@ pub enum OutputStatus {
     /// dictation started in, or Windows would have blocked the paste. The
     /// text was left on the clipboard for the user to paste themselves.
     PasteSkipped,
-}
-
-/// The window a dictation started in. Held so the result is pasted back
-/// there, and only there.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PasteTarget {
-    pub window: isize,
-    pub process_id: u32,
 }
 
 /// Why Scribe chose to leave the text on the clipboard instead of pasting.
@@ -95,6 +89,16 @@ pub fn paste_block_reason(
 /// windows or there is none. Recorded when a dictation starts.
 pub fn current_paste_target() -> Option<PasteTarget> {
     platform::foreground_target()
+}
+
+/// Whether to skip the paste, checked after the focus guard so it sees the
+/// window the keystrokes would really go to.
+fn paste_block(pinned: Option<PasteTarget>) -> Option<PasteBlock> {
+    let current = platform::foreground_target();
+    let elevated = current
+        .map(|target| platform::runs_elevated_above_us(target.process_id))
+        .unwrap_or(false);
+    paste_block_reason(pinned, current, elevated)
 }
 
 /// Honest description of what each output path did to the system clipboard.
@@ -192,27 +196,6 @@ pub fn paste_text(app: &AppHandle, text: &str) -> Result<OutputResult, CommandEr
     )
 }
 
-/// Snapshots every clipboard format as raw bytes (text, image, files, ...) so
-/// it can be restored later. Public wrapper over the platform snapshot used by
-/// the selected-text transform to preserve the user's pre-capture clipboard.
-/// Returns an empty vec on any failure (treated as "nothing to restore").
-pub fn save_clipboard_snapshot() -> Vec<(u32, Vec<u8>)> {
-    platform::save_clipboard_snapshot()
-}
-
-/// Restores a snapshot produced by `save_clipboard_snapshot`. Public wrapper
-/// over the platform restore used by the selected-text transform.
-pub fn restore_clipboard_snapshot(snapshot: &[(u32, Vec<u8>)]) -> Result<(), CommandError> {
-    platform::restore_clipboard_snapshot(snapshot)
-}
-
-/// When one of Scribe's own windows is in front, hands focus back to the app
-/// the user was in before (the same focus guard the paste path uses). Used by
-/// the typed transform, whose button click leaves Scribe focused.
-pub fn focus_previous_app() -> Result<(), CommandError> {
-    platform::ensure_foreign_focus()
-}
-
 pub fn paste_last_transcript(app: &AppHandle) -> Result<OutputResult, CommandError> {
     let state = app.state::<BackendState>();
     let transcript = state.last_transcript()?.ok_or_else(no_last_transcript)?;
@@ -288,7 +271,7 @@ fn paste_transcript_text(
         // the transcript must never be typed into Scribe itself.
         platform::ensure_foreign_focus()?;
 
-        if let Some(block) = platform::paste_block(pinned) {
+        if let Some(block) = paste_block(pinned) {
             set_private_clipboard_text(&transcript.text)?;
             return Ok(paste_skipped_result(
                 transcript,
@@ -300,7 +283,7 @@ fn paste_transcript_text(
 
         match paste_method {
             PasteMethod::DirectInsert => {
-                platform::direct_insert_text(&transcript.text)?;
+                platform::type_text(&transcript.text)?;
                 Ok(OutputResult {
                     transcript_id: transcript.id.clone(),
                     action: OutputAction::Paste,
@@ -405,7 +388,7 @@ fn copy_and_paste_transcript_text(
         // the transcript must never be typed into Scribe itself. The
         // clipboard copy above is kept either way so a manual paste still works.
         platform::ensure_foreign_focus()?;
-        if let Some(block) = platform::paste_block(pinned) {
+        if let Some(block) = paste_block(pinned) {
             // The text is already on the clipboard, where this mode keeps it.
             return Ok(paste_skipped_result(
                 transcript,
@@ -537,21 +520,7 @@ fn clipboard_paste(
 /// transform can make the same private writes.
 pub fn set_private_clipboard_text(text: &str) -> Result<(), CommandError> {
     let mut clipboard = open_clipboard()?;
-
-    #[cfg(windows)]
-    let written = {
-        use arboard::SetExtWindows;
-        clipboard
-            .set()
-            .exclude_from_monitoring()
-            .exclude_from_cloud()
-            .exclude_from_history()
-            .text(text.to_string())
-    };
-    #[cfg(not(windows))]
-    let written = clipboard.set_text(text.to_string());
-
-    written.map_err(clipboard_write_failed)
+    platform::set_private_clipboard_text(&mut clipboard, text).map_err(clipboard_write_failed)
 }
 
 /// Text the user asked to keep on the clipboard (Copy, Copy only, Paste and
@@ -719,599 +688,6 @@ impl Drop for PasteStateGuard<'_> {
         if let Ok(snapshot) = state.transition_app_state(AppEvent::PasteCompleted) {
             emit_state_snapshot(self.app, &snapshot);
         }
-    }
-}
-
-#[cfg(windows)]
-mod platform {
-    use super::{paste_block_reason, PasteBlock, PasteTarget};
-    use crate::error::CommandError;
-    use std::{ffi::c_void, mem::size_of, thread, time::Duration};
-    use windows::core::w;
-    use windows::Win32::Foundation::{CloseHandle, GlobalFree, HANDLE, HGLOBAL, HWND};
-    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
-    use windows::Win32::Security::{
-        GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TokenIntegrityLevel,
-        TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
-    };
-    use windows::Win32::System::DataExchange::{
-        CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData, OpenClipboard,
-        RegisterClipboardFormatW, SetClipboardData,
-    };
-    use windows::Win32::System::Memory::{
-        GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
-    };
-    use windows::Win32::System::Threading::{
-        GetCurrentProcess, GetCurrentProcessId, OpenProcess, OpenProcessToken,
-        PROCESS_QUERY_LIMITED_INFORMATION,
-    };
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
-        KEYEVENTF_UNICODE, VIRTUAL_KEY, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN,
-        VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_V,
-    };
-
-    /// Every modifier whose held state would otherwise combine with injected
-    /// characters. Includes the generic (`VK_CONTROL`) and side-specific
-    /// (`VK_LCONTROL`/`VK_RCONTROL`) virtual keys so an explicit key-up is
-    /// emitted for whichever one Windows is actually tracking.
-    const MODIFIER_KEYS: [VIRTUAL_KEY; 11] = [
-        VK_CONTROL,
-        VK_LCONTROL,
-        VK_RCONTROL,
-        VK_MENU,
-        VK_LMENU,
-        VK_RMENU,
-        VK_SHIFT,
-        VK_LSHIFT,
-        VK_RSHIFT,
-        VK_LWIN,
-        VK_RWIN,
-    ];
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW,
-        GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow, GWL_EXSTYLE, GW_HWNDNEXT,
-        WS_EX_TOOLWINDOW,
-    };
-
-    pub fn ensure_foreign_focus() -> Result<(), CommandError> {
-        let foreground = unsafe { GetForegroundWindow() };
-        if foreground.is_invalid() || !is_own_window(foreground) {
-            return Ok(());
-        }
-
-        // Walking down the Z-order from our foreground window reaches the app
-        // the user was in before focusing Scribe. Refocusing it is allowed
-        // because our process currently owns the foreground window.
-        let mut candidate = foreground;
-        while let Ok(next) = unsafe { GetWindow(candidate, GW_HWNDNEXT) } {
-            candidate = next;
-
-            if !is_paste_target(candidate) {
-                continue;
-            }
-
-            if !unsafe { SetForegroundWindow(candidate) }.as_bool() {
-                break;
-            }
-
-            // The target needs time to take keyboard focus before SendInput.
-            thread::sleep(Duration::from_millis(100));
-            return Ok(());
-        }
-
-        log::warn!("Focus guard found no other app window; skipping paste.");
-        Err(CommandError::new(
-            "paste_target_unavailable",
-            "Could not find another app window to paste into. Click into the target app and try again.",
-        ))
-    }
-
-    pub fn foreground_target() -> Option<PasteTarget> {
-        let foreground = unsafe { GetForegroundWindow() };
-        if foreground.is_invalid() || is_own_window(foreground) {
-            return None;
-        }
-        let mut process_id = 0u32;
-        unsafe { GetWindowThreadProcessId(foreground, Some(&mut process_id)) };
-        Some(PasteTarget {
-            window: foreground.0 as isize,
-            process_id,
-        })
-    }
-
-    /// Whether to skip the paste, checked after the focus guard so it sees
-    /// the window the keystrokes would really go to.
-    pub fn paste_block(pinned: Option<PasteTarget>) -> Option<PasteBlock> {
-        let current = foreground_target();
-        let elevated = current
-            .map(|target| runs_above_our_integrity(target.process_id))
-            .unwrap_or(false);
-        paste_block_reason(pinned, current, elevated)
-    }
-
-    /// True when `process_id` runs at a higher integrity level than Scribe
-    /// (an app started as administrator while Scribe isn't). Windows drops
-    /// SendInput into such windows without an error. When either level can't
-    /// be read, assumes not, which keeps today's behavior.
-    fn runs_above_our_integrity(process_id: u32) -> bool {
-        let Some(ours) = integrity_level(unsafe { GetCurrentProcess() }) else {
-            return false;
-        };
-        let Ok(process) =
-            (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) })
-        else {
-            return false;
-        };
-        let theirs = integrity_level(process);
-        let _ = unsafe { CloseHandle(process) };
-        theirs.is_some_and(|theirs| theirs > ours)
-    }
-
-    /// The mandatory integrity level RID of a process (for example 0x2000 for
-    /// medium, 0x3000 for high).
-    fn integrity_level(process: HANDLE) -> Option<u32> {
-        let mut token = HANDLE::default();
-        unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) }.ok()?;
-
-        let mut needed = 0u32;
-        let _ = unsafe { GetTokenInformation(token, TokenIntegrityLevel, None, 0, &mut needed) };
-        let mut buffer = vec![0u8; needed as usize];
-        let read = unsafe {
-            GetTokenInformation(
-                token,
-                TokenIntegrityLevel,
-                Some(buffer.as_mut_ptr() as *mut c_void),
-                needed,
-                &mut needed,
-            )
-        };
-        let _ = unsafe { CloseHandle(token) };
-        if read.is_err() || buffer.len() < size_of::<TOKEN_MANDATORY_LABEL>() {
-            return None;
-        }
-
-        let label = unsafe { &*(buffer.as_ptr() as *const TOKEN_MANDATORY_LABEL) };
-        let sid = label.Label.Sid;
-        unsafe {
-            let count = *GetSidSubAuthorityCount(sid);
-            if count == 0 {
-                return None;
-            }
-            Some(*GetSidSubAuthority(sid, u32::from(count - 1)))
-        }
-    }
-
-    fn is_own_window(hwnd: HWND) -> bool {
-        let mut process_id = 0u32;
-        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut process_id)) };
-        process_id == unsafe { GetCurrentProcessId() }
-    }
-
-    fn is_paste_target(hwnd: HWND) -> bool {
-        if is_own_window(hwnd) || !unsafe { IsWindowVisible(hwnd) }.as_bool() {
-            return false;
-        }
-
-        // Tool windows (tray flyouts, floating palettes) never take typed input.
-        let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
-        if ex_style & WS_EX_TOOLWINDOW.0 != 0 {
-            return false;
-        }
-
-        // Untitled top-level windows are almost always invisible helpers.
-        if unsafe { GetWindowTextLengthW(hwnd) } == 0 {
-            return false;
-        }
-
-        // Suspended UWP apps stay "visible" in the Z-order but are cloaked by
-        // DWM; focusing one would swallow the paste. A failed query means the
-        // window predates cloaking and is safe to use.
-        let mut cloaked = 0u32;
-        let cloak_query = unsafe {
-            DwmGetWindowAttribute(
-                hwnd,
-                DWMWA_CLOAKED,
-                &mut cloaked as *mut u32 as *mut _,
-                size_of::<u32>() as u32,
-            )
-        };
-        !(cloak_query.is_ok() && cloaked != 0)
-    }
-
-    /// Hotkey-triggered pastes can start while the user still physically
-    /// holds the chord (e.g. Ctrl+Alt+V). Injected keystrokes then combine
-    /// with the held modifiers in the target app — terminals turn a typed
-    /// "," into Ctrl+Alt+"," and open their settings JSON — so wait for
-    /// every modifier to come back up before sending input.
-    fn wait_for_modifier_release() {
-        let deadline = std::time::Instant::now() + Duration::from_millis(1_500);
-        loop {
-            let held = MODIFIER_KEYS
-                .iter()
-                .any(|vk| (unsafe { GetAsyncKeyState(vk.0 as i32) } as u16) & 0x8000 != 0);
-            if !held {
-                return;
-            }
-            if std::time::Instant::now() >= deadline {
-                log::warn!("Pasting with modifier keys still held after 1.5 s");
-                return;
-            }
-            thread::sleep(Duration::from_millis(15));
-        }
-    }
-
-    /// Defensive backstop to `wait_for_modifier_release`: synthesize an explicit
-    /// key-up for every modifier still physically down. Even if the user keeps
-    /// holding the paste chord past the wait deadline, this guarantees the
-    /// modifiers are logically up before any character is injected, so a typed
-    /// "," can never be seen as Ctrl+Alt+"," (which scrambles Windows Terminal
-    /// and opens settings JSON). Sent as one burst, immediately before the text.
-    fn release_held_modifiers() -> Result<(), CommandError> {
-        let releases: Vec<INPUT> = MODIFIER_KEYS
-            .iter()
-            .filter(|vk| (unsafe { GetAsyncKeyState(vk.0 as i32) } as u16) & 0x8000 != 0)
-            .map(|vk| keyboard_input(*vk, 0, KEYEVENTF_KEYUP))
-            .collect();
-
-        if releases.is_empty() {
-            return Ok(());
-        }
-
-        send_inputs(&releases, "modifier release")
-    }
-
-    /// Maximum INPUT events per `SendInput` call. The whole transcript is sent
-    /// in a single call so it lands as one atomic insert (not a visible crawl);
-    /// only pathologically long text is split, and then into large chunks so it
-    /// still appears as at most a couple of bursts. Each UTF-16 unit is two
-    /// INPUTs (key-down + key-up), so this caps a chunk at ~2000 characters.
-    const MAX_INPUTS_PER_BURST: usize = 4000;
-
-    pub fn direct_insert_text(text: &str) -> Result<(), CommandError> {
-        wait_for_modifier_release();
-        // Backstop: force-release anything still held so injected characters
-        // cannot combine into shortcuts in the target app.
-        release_held_modifiers()?;
-
-        // Build the INPUTs for the entire transcript up front so the common case
-        // is a single SendInput call (one atomic insert).
-        let mut inputs: Vec<INPUT> = Vec::with_capacity(text.len().saturating_mul(2));
-        for unit in text.encode_utf16() {
-            inputs.push(keyboard_input(VIRTUAL_KEY(0), unit, KEYEVENTF_UNICODE));
-            inputs.push(keyboard_input(
-                VIRTUAL_KEY(0),
-                unit,
-                KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
-            ));
-        }
-
-        if inputs.is_empty() {
-            return Ok(());
-        }
-
-        // One call for normal-length transcripts; large chunks only if huge.
-        for chunk in inputs.chunks(MAX_INPUTS_PER_BURST) {
-            send_inputs(chunk, "direct insert")?;
-        }
-
-        Ok(())
-    }
-
-    /// Closes the clipboard on drop so every early return in the snapshot/
-    /// restore routines still releases it. The OS clipboard is a single global
-    /// lock — leaking it open would wedge copy/paste for the whole desktop.
-    struct ClipboardGuard;
-
-    impl Drop for ClipboardGuard {
-        fn drop(&mut self) {
-            // Best effort: nothing useful to do if the close itself fails.
-            let _ = unsafe { CloseClipboard() };
-        }
-    }
-
-    /// Opens the clipboard, retrying a few times because another app may briefly
-    /// hold it (Win32 allows only one owner at a time). Returns a guard that
-    /// closes it on drop.
-    fn open_clipboard_with_retry() -> Result<ClipboardGuard, CommandError> {
-        const ATTEMPTS: u32 = 6;
-        for attempt in 0..ATTEMPTS {
-            // HWND::default() (null) ties the clipboard to the current task
-            // without associating a specific window, which is fine here.
-            if unsafe { OpenClipboard(HWND::default()) }.is_ok() {
-                return Ok(ClipboardGuard);
-            }
-            if attempt + 1 < ATTEMPTS {
-                thread::sleep(Duration::from_millis(20));
-            }
-        }
-        Err(CommandError::new(
-            "clipboard_unavailable",
-            "Could not open the clipboard; another app may be holding it.",
-        ))
-    }
-
-    /// Clipboard formats backed by GDI/handle objects rather than HGLOBAL
-    /// memory. `GlobalLock`/`GlobalSize` are invalid on these handles, so they
-    /// cannot be byte-captured and are skipped. Images and files are unaffected
-    /// because they also publish GlobalAlloc-backed variants (CF_DIB/CF_DIBV5
-    /// for images, CF_HDROP for files) that ARE captured here.
-    fn is_non_hglobal_format(format: u32) -> bool {
-        // CF_BITMAP, CF_METAFILEPICT, CF_PALETTE, CF_ENHMETAFILE, and the
-        // owner-display / private display variants.
-        matches!(
-            format,
-            2      // CF_BITMAP
-                | 3  // CF_METAFILEPICT
-                | 9  // CF_PALETTE
-                | 14 // CF_ENHMETAFILE
-                | 0x80 // CF_OWNERDISPLAY
-                | 0x82 // CF_DSPBITMAP
-                | 0x83 // CF_DSPMETAFILEPICT
-                | 0x8E // CF_DSPENHMETAFILE
-        )
-    }
-
-    /// Snapshots EVERY currently-available clipboard format as raw bytes so the
-    /// full payload (text, image, files, ...) can be restored after a borrow.
-    ///
-    /// For each enumerated format: read its data handle; null handles are
-    /// delayed-render placeholders (the data isn't materialized) and are
-    /// skipped; raw GDI/handle formats (see `is_non_hglobal_format`) are skipped
-    /// because they aren't HGLOBAL memory; everything else is treated as HGLOBAL
-    /// and its bytes are copied out via GlobalLock/GlobalSize.
-    ///
-    /// Returns an empty vec on any failure (e.g. the clipboard couldn't be
-    /// opened) so the caller can still paste; the worst case is that the
-    /// previous clipboard is cleared rather than restored.
-    pub fn save_clipboard_snapshot() -> Vec<(u32, Vec<u8>)> {
-        let _guard = match open_clipboard_with_retry() {
-            Ok(guard) => guard,
-            Err(error) => {
-                log::warn!("Clipboard snapshot skipped: {}", error.message);
-                return Vec::new();
-            }
-        };
-
-        let mut snapshot: Vec<(u32, Vec<u8>)> = Vec::new();
-        let mut format = unsafe { EnumClipboardFormats(0) };
-        while format != 0 {
-            if !is_non_hglobal_format(format) {
-                // A null/invalid handle is GetClipboardData's Err case here and
-                // signals delayed rendering — there is nothing to copy.
-                if let Ok(handle) = unsafe { GetClipboardData(format) } {
-                    let hglobal = HGLOBAL(handle.0);
-                    let ptr = unsafe { GlobalLock(hglobal) };
-                    if !ptr.is_null() {
-                        let size = unsafe { GlobalSize(hglobal) };
-                        if size > 0 {
-                            let mut bytes = vec![0u8; size];
-                            unsafe {
-                                std::ptr::copy_nonoverlapping(
-                                    ptr as *const u8,
-                                    bytes.as_mut_ptr(),
-                                    size,
-                                );
-                            }
-                            snapshot.push((format, bytes));
-                        }
-                        // GlobalUnlock returns Err once the lock count hits 0,
-                        // which is the normal success case here, so ignore it.
-                        let _ = unsafe { GlobalUnlock(hglobal) };
-                    }
-                }
-            }
-
-            format = unsafe { EnumClipboardFormats(format) };
-        }
-
-        snapshot
-    }
-
-    /// Restores a snapshot produced by `save_clipboard_snapshot`: clears the
-    /// clipboard, then republishes each captured format from a freshly allocated
-    /// HGLOBAL.
-    ///
-    /// Ownership: after a SUCCESSFUL `SetClipboardData` the system owns the
-    /// HGLOBAL and will free it, so it must NOT be freed here. The block is only
-    /// freed when `SetClipboardData` fails (data never handed off).
-    pub fn restore_clipboard_snapshot(snapshot: &[(u32, Vec<u8>)]) -> Result<(), CommandError> {
-        let _guard = open_clipboard_with_retry()?;
-
-        // Take ownership of the clipboard and drop the transcript that is on it
-        // before republishing the saved formats.
-        unsafe { EmptyClipboard() }.map_err(|error| {
-            CommandError::new(
-                "clipboard_clear_failed",
-                format!("Could not clear the clipboard before restore. {}", error),
-            )
-        })?;
-
-        for (format, bytes) in snapshot {
-            // Allocate at least one byte so GlobalLock is always valid, even for
-            // a (rare) zero-length format; only the real bytes are copied in.
-            let alloc_size = bytes.len().max(1);
-            let hglobal = unsafe { GlobalAlloc(GMEM_MOVEABLE, alloc_size) }.map_err(|error| {
-                CommandError::new(
-                    "clipboard_alloc_failed",
-                    format!(
-                        "Could not allocate memory to restore the clipboard. {}",
-                        error
-                    ),
-                )
-            })?;
-
-            let ptr = unsafe { GlobalLock(hglobal) };
-            if ptr.is_null() {
-                // Hand the just-allocated (never-published) block back to the OS.
-                let _ = unsafe { GlobalFree(hglobal) };
-                return Err(CommandError::new(
-                    "clipboard_lock_failed",
-                    "Could not lock memory to restore the clipboard.",
-                ));
-            }
-
-            if !bytes.is_empty() {
-                unsafe {
-                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr as *mut u8, bytes.len());
-                }
-            }
-            let _ = unsafe { GlobalUnlock(hglobal) };
-
-            // SetClipboardData takes ownership of the HGLOBAL on success.
-            match unsafe { SetClipboardData(*format, HANDLE(hglobal.0)) } {
-                Ok(_) => {}
-                Err(error) => {
-                    // Data was not handed off, so we still own the block.
-                    let _ = unsafe { GlobalFree(hglobal) };
-                    return Err(CommandError::new(
-                        "clipboard_set_failed",
-                        format!("Could not restore a clipboard format. {}", error),
-                    ));
-                }
-            }
-        }
-
-        // Putting the user's own clipboard back must not add a second copy of
-        // it to Clipboard History or upload it again.
-        mark_clipboard_private();
-
-        Ok(())
-    }
-
-    /// Adds the formats that keep the current clipboard item out of Clipboard
-    /// History, the cloud clipboard and clipboard managers. Needs the clipboard
-    /// open. Best effort: a failure only means Windows may keep a copy.
-    fn mark_clipboard_private() {
-        let markers = [
-            w!("ExcludeClipboardContentFromMonitorProcessing"),
-            w!("CanIncludeInClipboardHistory"),
-            w!("CanUploadToCloudClipboard"),
-        ];
-        for name in markers {
-            let format = unsafe { RegisterClipboardFormatW(name) };
-            if format == 0 {
-                log::warn!("Could not register a clipboard privacy format");
-                continue;
-            }
-            // Each marker is a DWORD of 0 ("no").
-            let Ok(hglobal) = (unsafe { GlobalAlloc(GMEM_MOVEABLE, size_of::<u32>()) }) else {
-                continue;
-            };
-            let ptr = unsafe { GlobalLock(hglobal) };
-            if ptr.is_null() {
-                let _ = unsafe { GlobalFree(hglobal) };
-                continue;
-            }
-            unsafe { std::ptr::write_unaligned(ptr as *mut u32, 0) };
-            let _ = unsafe { GlobalUnlock(hglobal) };
-            if unsafe { SetClipboardData(format, HANDLE(hglobal.0)) }.is_err() {
-                let _ = unsafe { GlobalFree(hglobal) };
-                log::warn!("Could not mark the restored clipboard as private");
-            }
-        }
-    }
-
-    pub fn send_paste_shortcut() -> Result<(), CommandError> {
-        // Paste fires on key-PRESS, not on release: rather than blocking until
-        // the user lets go of the whole paste chord (which made Ctrl+Alt+Shift+V
-        // feel like it only worked once every key was released), synthesize
-        // key-ups for any physically-held modifier so a held Ctrl/Alt/Shift/Win
-        // can't combine with the synthetic Ctrl+V below and scramble the target
-        // (e.g. Windows Terminal). The OS treats the modifiers as up until the
-        // held key's next auto-repeat (~250 ms away), so the Ctrl+V lands clean.
-        release_held_modifiers()?;
-
-        let inputs = [
-            keyboard_input(VK_CONTROL, 0, Default::default()),
-            keyboard_input(VK_V, 0, Default::default()),
-            keyboard_input(VK_V, 0, KEYEVENTF_KEYUP),
-            keyboard_input(VK_CONTROL, 0, KEYEVENTF_KEYUP),
-        ];
-
-        send_inputs(&inputs, "paste shortcut")
-    }
-
-    fn keyboard_input(
-        virtual_key: VIRTUAL_KEY,
-        scan_code: u16,
-        flags: windows::Win32::UI::Input::KeyboardAndMouse::KEYBD_EVENT_FLAGS,
-    ) -> INPUT {
-        INPUT {
-            r#type: INPUT_KEYBOARD,
-            Anonymous: INPUT_0 {
-                ki: KEYBDINPUT {
-                    wVk: virtual_key,
-                    wScan: scan_code,
-                    dwFlags: flags,
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-            },
-        }
-    }
-
-    fn send_inputs(inputs: &[INPUT], context: &str) -> Result<(), CommandError> {
-        let sent = unsafe { SendInput(inputs, size_of::<INPUT>() as i32) };
-
-        if sent != inputs.len() as u32 {
-            return Err(CommandError::new(
-                "paste_failed",
-                format!(
-                    "Could not send {} input to the focused app. Sent {} of {} events.",
-                    context,
-                    sent,
-                    inputs.len()
-                ),
-            ));
-        }
-
-        Ok(())
-    }
-}
-
-#[cfg(not(windows))]
-mod platform {
-    use super::{PasteBlock, PasteTarget};
-    use crate::error::CommandError;
-
-    pub fn ensure_foreign_focus() -> Result<(), CommandError> {
-        Ok(())
-    }
-
-    pub fn foreground_target() -> Option<PasteTarget> {
-        None
-    }
-
-    pub fn paste_block(_pinned: Option<PasteTarget>) -> Option<PasteBlock> {
-        None
-    }
-
-    pub fn direct_insert_text(_text: &str) -> Result<(), CommandError> {
-        Err(CommandError::new(
-            "direct_insert_unsupported",
-            "Direct Insert is currently implemented for Windows only.",
-        ))
-    }
-
-    pub fn send_paste_shortcut() -> Result<(), CommandError> {
-        Err(CommandError::new(
-            "paste_unsupported",
-            "Programmatic paste is currently implemented for Windows only.",
-        ))
-    }
-
-    /// Non-Windows stub: there is no raw Win32 clipboard to snapshot, so report
-    /// "nothing captured". The full-fidelity borrow-and-restore path is
-    /// Windows-only (the app itself targets Windows).
-    pub fn save_clipboard_snapshot() -> Vec<(u32, Vec<u8>)> {
-        Vec::new()
-    }
-
-    /// Non-Windows stub: nothing was snapshotted, so there is nothing to
-    /// restore. Treated as a successful no-op.
-    pub fn restore_clipboard_snapshot(_snapshot: &[(u32, Vec<u8>)]) -> Result<(), CommandError> {
-        Ok(())
     }
 }
 
