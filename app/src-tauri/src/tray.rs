@@ -48,13 +48,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         true,
         None::<&str>,
     )?;
-    let dashboard = MenuItem::with_id(
-        app,
-        MENU_OPEN_DASHBOARD,
-        "Open Dashboard",
-        true,
-        None::<&str>,
-    )?;
+    let dashboard = MenuItem::with_id(app, MENU_OPEN_DASHBOARD, "Open Scribe", true, None::<&str>)?;
     let history = MenuItem::with_id(app, MENU_OPEN_HISTORY, "Open History", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit", true, None::<&str>)?;

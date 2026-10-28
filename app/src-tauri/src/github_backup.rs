@@ -446,7 +446,7 @@ fn failure(message: impl Into<String>) -> CommandError {
 fn unauthorized() -> CommandError {
     CommandError::new(
         "github_unauthorized",
-        "Your GitHub connection expired or was revoked. Reconnect GitHub in Settings → Sync.",
+        "Your GitHub connection expired or was revoked. Reconnect it on the GitHub backup page.",
     )
 }
 
