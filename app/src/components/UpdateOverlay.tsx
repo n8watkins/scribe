@@ -1,4 +1,5 @@
 import scribeIcon from "../assets/scribe-icon.png";
+import { ReleaseNotesBody } from "./ReleaseNotes";
 import "./update-overlay.css";
 
 /** Drives the branded auto-update screen. App.tsx owns the actual
@@ -21,10 +22,13 @@ export type UpdateOverlayState =
 export function UpdateOverlay({
   state,
   onDismiss,
+  notes,
 }: {
   state: UpdateOverlayState;
   /** Called from the error state's "Continue" button to return to the app. */
   onDismiss: () => void;
+  /** The new version's release notes, shown while it downloads. */
+  notes?: string | null;
 }) {
   const isError = state.phase === "error";
   const versionLabel = state.version ? `v${state.version}` : "";
@@ -114,6 +118,13 @@ export function UpdateOverlay({
             />
           </div>
         )}
+
+        {!isError && notes ? (
+          <div className="update-overlay-notes">
+            <strong>What's new{versionLabel ? ` in ${versionLabel}` : ""}</strong>
+            <ReleaseNotesBody className="update-notes" markdown={notes} />
+          </div>
+        ) : null}
 
         {!isError ? (
           <p className="update-overlay-hint">

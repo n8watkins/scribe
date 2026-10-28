@@ -1,0 +1,131 @@
+/* Release notes: the "What's new" card, About's release notes and the notes
+   shown with an available update. */
+.release-notes {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--scribe-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.release-notes p,
+.release-notes ul {
+  margin: 0;
+}
+
+.release-notes ul {
+  display: grid;
+  gap: 4px;
+  padding-left: 18px;
+}
+
+.release-notes strong {
+  color: var(--scribe-text);
+  font-weight: 600;
+}
+
+.release-notes code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--scribe-surface-sunken);
+  font-size: 12px;
+}
+
+.release-notes-heading {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--scribe-text-muted);
+}
+
+.release-notes-heading:first-child {
+  margin-top: 0;
+}
+
+.release-notes-link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--scribe-accent-bright);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.release-notes-current {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+
+.release-notes-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--scribe-text-muted);
+}
+
+.whats-new-card {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+  border-color: var(--scribe-accent-soft);
+}
+
+.whats-new-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.whats-new-head h3 {
+  flex: 1;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--scribe-text);
+}
+
+.whats-new-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--scribe-accent-soft);
+  color: var(--scribe-accent-bright);
+}
+
+.whats-new-notes {
+  max-height: 232px;
+  overflow-y: auto;
+  padding: 0 4px 12px 0;
+  /* Fades the last visible line, so a long list reads as scrollable rather
+     than cut off. */
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+}
+
+.whats-new-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Notes of an available update, in About and on the update screen. */
+.update-notes {
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--scribe-border);
+  border-radius: 10px;
+  background: var(--scribe-surface-sunken);
+  text-align: left;
+}
+
+.about-update-notes {
+  margin-top: 4px;
+}

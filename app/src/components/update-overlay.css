@@ -126,3 +126,12 @@
   min-width: 132px;
   justify-content: center;
 }
+
+.update-overlay-notes {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  font-size: 13px;
+  color: var(--scribe-text);
+}

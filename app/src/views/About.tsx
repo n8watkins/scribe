@@ -15,6 +15,7 @@ import {
   ListChecks,
   Mic,
   Replace,
+  ScrollText,
   StickyNote,
 } from "lucide-react";
 import {
@@ -27,6 +28,10 @@ import {
 import { detectUpdate } from "../lib/updates";
 import type { ViewName } from "../types";
 import { Toggle } from "../components/primitives";
+import {
+  CurrentReleaseNotes,
+  ReleaseNotesBody,
+} from "../components/ReleaseNotes";
 import "./about.css";
 
 /** The GitHub releases list — every release with its notes, i.e. the changelog
@@ -243,6 +248,12 @@ export function AboutView({
               <strong>Updates</strong>
             </div>
             <small>{updateStatus}</small>
+            {effectiveUpdate?.updateAvailable && effectiveUpdate.releaseNotes ? (
+              <ReleaseNotesBody
+                className="update-notes about-update-notes"
+                markdown={effectiveUpdate.releaseNotes}
+              />
+            ) : null}
             <small className="about-update-poll">
               {autoCheckEnabled === false
                 ? "Automatic checks are off"
@@ -343,6 +354,19 @@ export function AboutView({
       ),
     },
     {
+      id: "release-notes",
+      title: "Release notes",
+      icon: <ScrollText aria-hidden="true" size={16} />,
+      render: () => (
+        <article className="panel-card">
+          <div className="settings-list">
+            <p className="about-lead">What changed in v{version}.</p>
+            <CurrentReleaseNotes />
+          </div>
+        </article>
+      ),
+    },
+    {
       id: "features",
       title: "What Scribe does",
       icon: <ListChecks aria-hidden="true" size={16} />,
@@ -417,6 +441,7 @@ export function AboutView({
             aria-controls={`about-panel-${tab.id}`}
             aria-selected={tab.id === active.id}
             className={`settings-tab${tab.id === active.id ? " is-active" : ""}`}
+            data-setting={tab.title}
             onClick={() => setActiveTab(tab.id)}
           >
             {tab.icon}

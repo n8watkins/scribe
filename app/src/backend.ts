@@ -742,7 +742,20 @@ export type UpdateCheckResult = {
   latestVersion: string;
   updateAvailable: boolean;
   releaseUrl: string;
+  /** The release notes of the available update (the GitHub release body),
+   * when the update feed carries them. */
+  releaseNotes?: string | null;
 };
+
+/** The running version when its "What's new" card has not been dismissed. */
+export function whatsNewPending(): Promise<string | null> {
+  return invoke("whats_new_pending");
+}
+
+/** Remembers that the "What's new" card for `version` was dismissed. */
+export function dismissWhatsNew(version: string): Promise<void> {
+  return invoke("dismiss_whats_new", { version });
+}
 
 export function checkForUpdate(): Promise<UpdateCheckResult> {
   return invoke("check_for_update");

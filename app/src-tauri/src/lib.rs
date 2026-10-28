@@ -21,6 +21,7 @@ pub mod models;
 pub mod note_analysis;
 pub mod note_sync;
 pub mod output;
+pub mod release_notes;
 pub mod selection_transform;
 pub mod self_test;
 pub mod settings;
@@ -479,6 +480,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_app_state,
+            release_notes::whats_new_pending,
+            release_notes::dismiss_whats_new,
             commands::get_settings,
             commands::patch_settings,
             commands::get_last_transcript,

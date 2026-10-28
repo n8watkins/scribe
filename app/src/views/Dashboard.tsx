@@ -23,6 +23,7 @@ import {
 } from "../lib/format";
 import { HotkeyList, StatsRow, StatusCard } from "../components/layout";
 import { LastTranscriptCard, LiveTranscript } from "../components/transcript";
+import { WhatsNewCard } from "../components/ReleaseNotes";
 
 /** The hotkeys Home always lists; any other hotkey shows up only when it
  * failed to register, so a conflict is never hidden. */
@@ -69,6 +70,7 @@ export function DashboardView({
 
   return (
     <>
+      <WhatsNewCard />
       {!modelReady ? (
         <div className="setup-banner" role="alert">
           <Download aria-hidden="true" size={16} />

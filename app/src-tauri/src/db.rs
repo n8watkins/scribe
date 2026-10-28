@@ -24,6 +24,9 @@ const CORRUPT_SETTINGS_KEY: &str = "app_settings_corrupt";
 const LAST_TRANSCRIPT_ID_KEY: &str = "last_transcript_id";
 const LAST_TRANSCRIPT_BUFFER_KEY: &str = "last_transcript_buffer";
 const GITHUB_SYNC_ACTIVITY_KEY: &str = "github_sync_activity";
+/// The app version whose "What's new" card was last dismissed (or skipped on
+/// a fresh install). Its own key, so whole-settings saves never overwrite it.
+const WHATS_NEW_SEEN_KEY: &str = "whats_new_seen_version";
 
 pub struct Database {
     conn: Connection,
@@ -982,6 +985,20 @@ impl Database {
             .map_err(CommandError::database)?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(CommandError::database)
+    }
+
+    pub fn whats_new_seen_version(&self) -> Result<Option<String>, CommandError> {
+        self.get_setting_value(WHATS_NEW_SEEN_KEY)
+    }
+
+    pub fn set_whats_new_seen_version(&self, version: &str) -> Result<(), CommandError> {
+        self.upsert_setting(WHATS_NEW_SEEN_KEY, version)
+    }
+
+    /// True once settings have been saved at least once (any install that
+    /// has been used), false on a fresh install that still runs on defaults.
+    pub fn has_saved_settings(&self) -> Result<bool, CommandError> {
+        Ok(self.get_setting_value(SETTINGS_KEY)?.is_some())
     }
 
     fn get_setting_value(&self, key: &str) -> Result<Option<String>, CommandError> {
