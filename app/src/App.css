@@ -2381,7 +2381,8 @@ kbd {
   margin-top: 4px;
   color: var(--scribe-text);
   font-size: 16px;
-  line-height: 1;
+  /* Room below the baseline: overflow: hidden clips underscores at 1. */
+  line-height: 1.25;
 }
 
 /* Themes view: a responsive grid of theme cards. Each card previews a theme's
