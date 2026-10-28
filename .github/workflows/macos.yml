@@ -28,7 +28,7 @@ env:
   WHISPER_CPP_VERSION: v1.9.1
   WHISPER_CPP_COMMIT: f049fff95a089aa9969deb009cdd4892b3e74916
   # Bump when the whisper.cpp build flags below change, so the cache rebuilds.
-  WHISPER_MACOS_BUILD: metal-static-universal-1
+  WHISPER_MACOS_BUILD: metal-arm64-cpu-x86_64-1
   # The oldest macOS the build supports: ggml's Accelerate path calls the
   # new LAPACK interface (cblas_sgemm), which macOS has only since 13.3, the
   # same floor upstream whisper.cpp and llama.cpp use. Keep it in step with
@@ -79,7 +79,10 @@ jobs:
       # The Metal shaders are compiled into the binary (GGML_METAL_EMBED_LIBRARY)
       # so there is no default.metallib to find at run time. Each architecture
       # is built on its own and the two are joined with lipo. The Intel slice
-      # targets AVX2/FMA/F16C, which every Intel Mac that runs macOS 13 has.
+      # is CPU only (Accelerate plus AVX2/FMA/F16C, which every Intel Mac that
+      # runs macOS 13 has), as in upstream's own x86_64 macOS builds: under
+      # Rosetta its Metal path returned empty transcripts, and Metal on Intel
+      # Mac GPUs cannot be verified without one.
       - name: Build reviewed whisper.cpp source with Metal
         if: steps.whisper-cache.outputs.cache-hit != 'true'
         run: |
@@ -92,15 +95,17 @@ jobs:
             exit 1
           fi
           for arch in arm64 x86_64; do
+            metal=ON
             extra=()
             if [ "$arch" = x86_64 ]; then
+              metal=OFF
               extra=(-DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON)
             fi
             cmake -S "$src" -B "$src/build-$arch" \
               -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_OSX_ARCHITECTURES="$arch" \
               -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
-              -DGGML_METAL=ON \
+              -DGGML_METAL="$metal" \
               -DGGML_METAL_EMBED_LIBRARY=ON \
               -DGGML_NATIVE=OFF \
               -DGGML_OPENMP=OFF \
