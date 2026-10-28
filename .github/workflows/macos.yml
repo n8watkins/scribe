@@ -16,6 +16,8 @@ on:
       - ".github/workflows/**"
       - "app/src-tauri/tauri.macos.conf.json"
       - "app/src-tauri/Info.plist"
+      - "app/src-tauri/src/platform/**"
+      - "app/src-tauri/src/audio.rs"
 
 permissions:
   contents: read
@@ -37,6 +39,32 @@ env:
   MACOSX_DEPLOYMENT_TARGET: "13.3"
 
 jobs:
+  # The macOS-only Rust code (platform/macos.rs and everything cfg'd for it)
+  # is otherwise never compiled, linted or tested for aarch64-apple-darwin.
+  backend-macos:
+    name: Desktop backend (macOS, experimental)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: app/src-tauri
+          key: backend
+
+      - name: Run clippy
+        working-directory: app/src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Run backend tests
+        working-directory: app/src-tauri
+        run: cargo test --locked
+
   build-macos:
     name: Build macOS bundle (experimental)
     # Apple Silicon runner; the Intel slice is cross-compiled and tested under
