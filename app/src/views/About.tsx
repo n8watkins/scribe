@@ -32,6 +32,7 @@ import {
   CurrentReleaseNotes,
   ReleaseNotesBody,
 } from "../components/ReleaseNotes";
+import { CopyDiagnostics } from "../components/CopyDiagnostics";
 import "./about.css";
 
 /** The GitHub releases list — every release with its notes, i.e. the changelog
@@ -349,6 +350,8 @@ export function AboutView({
               </button>
             </div>
           </div>
+
+          <CopyDiagnostics />
           </div>
         </article>
       ),

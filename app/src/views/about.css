@@ -254,3 +254,12 @@
   border-color: var(--scribe-accent-soft);
   color: var(--scribe-accent-bright);
 }
+
+.about-diagnostics-error {
+  color: var(--scribe-danger);
+}
+
+/* Same width for "Copy diagnostics", "Copying..." and "Copied". */
+.about-diagnostics-button {
+  min-width: 170px;
+}
