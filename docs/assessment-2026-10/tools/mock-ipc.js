@@ -256,6 +256,7 @@
     check_for_update: () => ({ currentVersion: "0.8.0", latestVersion: S.update ? "0.9.0" : "0.8.0", updateAvailable: !!S.update, releaseUrl: "https://github.com/n8watkins/scribe/releases" }),
     whats_new_pending: () => (S.whatsNew ? "0.8.0" : null),
     dismiss_whats_new: () => null,
+    collect_diagnostics: () => "Scribe diagnostics\nApp: Scribe 0.8.0 (com.natkins.scribe)\n",
     "plugin:app|version": () => "0.8.0",
     "plugin:app|name": () => "Scribe",
     "plugin:app|tauri_version": () => "2.9.0",
