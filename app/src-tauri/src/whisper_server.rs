@@ -555,35 +555,23 @@ fn spawn_server_process(
     args: &[String],
     vk_visible_devices: Option<String>,
 ) -> Result<Child, String> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let mut command = std::process::Command::new(executable);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    whisper::suppress_console_window(&mut command);
 
-        let mut command = std::process::Command::new(executable);
-        command
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(CREATE_NO_WINDOW);
-
-        // Pin a specific Vulkan device for the resident server (multi-GPU boxes);
-        // absent means ggml picks its default device.
-        if let Some(devices) = vk_visible_devices {
-            command.env("GGML_VK_VISIBLE_DEVICES", devices);
-        }
-
-        command
-            .spawn()
-            .map_err(|error| format!("Could not start whisper-server. {}", error))
+    // Pin a specific Vulkan device for the resident server (multi-GPU boxes);
+    // absent means ggml picks its default device.
+    if let Some(devices) = vk_visible_devices {
+        command.env("GGML_VK_VISIBLE_DEVICES", devices);
     }
 
-    #[cfg(not(windows))]
-    {
-        let _ = (executable, args, vk_visible_devices, Stdio::null());
-        Err("whisper-server is only supported on Windows.".to_string())
-    }
+    command
+        .spawn()
+        .map_err(|error| format!("Could not start whisper-server. {}", error))
 }
 
 fn wait_until_healthy(

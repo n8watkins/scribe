@@ -1,0 +1,143 @@
+name: Linux (experimental)
+
+# An experimental Linux build: an AppImage and a .deb uploaded as workflow
+# artifacts only. It is not part of a published release. Windows bundles are
+# unchanged because the Linux targets live in tauri.linux.conf.json, which
+# Tauri merges only when it builds on Linux.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "app/src-tauri/tauri.linux.conf.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Same reviewed whisper.cpp source as the Windows release build.
+  WHISPER_CPP_VERSION: v1.9.1
+  WHISPER_CPP_COMMIT: f049fff95a089aa9969deb009cdd4892b3e74916
+
+jobs:
+  build-linux:
+    name: Build Linux bundles (experimental)
+    # The oldest supported runner, so the AppImage runs on older glibc too.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            patchelf \
+            file \
+            cmake \
+            ninja-build
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: app/src-tauri
+
+      # CPU only and statically linked, so the two binaries need no shared
+      # whisper or ggml libraries next to them and no OpenMP runtime. The
+      # Windows build adds Vulkan; Linux GPU support is not part of this
+      # experiment.
+      - name: Build reviewed whisper.cpp source
+        run: |
+          src="$RUNNER_TEMP/wcpp"
+          git clone --depth 1 --branch "$WHISPER_CPP_VERSION" https://github.com/ggml-org/whisper.cpp "$src"
+          actual="$(git -C "$src" rev-parse HEAD)"
+          if [ "$actual" != "$WHISPER_CPP_COMMIT" ]; then
+            echo "whisper.cpp commit $actual did not match reviewed commit $WHISPER_CPP_COMMIT" >&2
+            exit 1
+          fi
+          cmake -S "$src" -B "$src/build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_NATIVE=OFF \
+            -DGGML_OPENMP=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_SERVER=ON
+          cmake --build "$src/build" -j --target whisper-cli whisper-server
+          dest=app/src-tauri/resources/bin/linux
+          mkdir -p "$dest"
+          for name in whisper-cli whisper-server; do
+            install -m 0755 "$src/build/bin/$name" "$dest/$name"
+          done
+          # Nothing but system libraries may be left to resolve at run time.
+          for name in whisper-cli whisper-server; do
+            if ldd "$dest/$name" | grep -E 'libwhisper|libggml|not found'; then
+              echo "$name links a library the bundle does not ship" >&2
+              exit 1
+            fi
+          done
+          "$dest/whisper-cli" --help > /dev/null
+
+      # Same install as the Windows build: scripts off, esbuild's run on its own.
+      - name: Install application dependencies
+        working-directory: app
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild esbuild
+
+      # No updater artifacts and no signing key: tauri.linux.conf.json turns
+      # updater artifacts off, and this job never sees the key.
+      - name: Build AppImage and .deb
+        working-directory: app
+        env:
+          SCRIBE_GITHUB_APP_CLIENT_ID: ${{ vars.SCRIBE_GITHUB_APP_CLIENT_ID }}
+        run: npm run tauri -- build
+
+      - name: Verify bundles
+        run: |
+          bundle=app/src-tauri/target/release/bundle
+          appimage=("$bundle"/appimage/*.AppImage)
+          deb=("$bundle"/deb/*.deb)
+          if [ "${#appimage[@]}" -ne 1 ] || [ ! -f "${appimage[0]}" ]; then
+            echo "Expected one AppImage" >&2
+            exit 1
+          fi
+          if [ "${#deb[@]}" -ne 1 ] || [ ! -f "${deb[0]}" ]; then
+            echo "Expected one .deb" >&2
+            exit 1
+          fi
+          contents="$(dpkg-deb --contents "${deb[0]}")"
+          for name in whisper-cli whisper-server; do
+            if ! grep -q "bin/linux/$name\$" <<< "$contents"; then
+              echo "The .deb is missing bin/linux/$name" >&2
+              exit 1
+            fi
+          done
+          mkdir -p "$RUNNER_TEMP/scribe-linux"
+          cp "${appimage[0]}" "${deb[0]}" "$RUNNER_TEMP/scribe-linux/"
+          (cd "$RUNNER_TEMP/scribe-linux" && sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
+      - name: Upload Linux bundles
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: scribe-linux-experimental
+          path: ${{ runner.temp }}/scribe-linux/*
+          if-no-files-found: error
+          retention-days: 14
