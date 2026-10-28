@@ -278,7 +278,7 @@ jobs:
     name: Smoke install (${{ matrix.kind }})
     needs: build-windows
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -289,10 +289,17 @@ jobs:
           name: scribe-release-candidate
           path: candidate
 
-      # A hung msiexec or installer must fail the job (so the logs upload)
-      # instead of holding the runner for hours.
-      - name: Verify checksums and install candidate
-        timeout-minutes: 10
+      # Only the short speech clip the self-test transcribes.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: source
+          sparse-checkout: app/src-tauri/tests/fixtures
+          persist-credentials: false
+
+      # A hung msiexec, installer or app must fail the job (so the logs
+      # upload) instead of holding the runner for hours.
+      - name: Verify checksums, install candidate and transcribe a clip
+        timeout-minutes: 25
         shell: pwsh
         run: |
           $candidate = (Resolve-Path candidate).Path
@@ -353,6 +360,32 @@ jobs:
           Start-Sleep -Seconds 10
           if ($app.HasExited) { throw "Scribe exited during launch smoke test with $($app.ExitCode)" }
           Stop-Process -Id $app.Id -Force
+          # The single-instance guard would hand the next launch to this copy.
+          if (-not $app.WaitForExit(30000)) { throw "Scribe did not stop after the launch smoke test" }
+
+          # End to end through the installed app: it starts as usual on this
+          # fresh runner profile, downloads the default model through its
+          # verified download path, transcribes the clip with the bundled
+          # whisper.cpp, writes the result and exits. Paths are quoted
+          # because Start-Process joins ArgumentList without quoting.
+          $clip = (Resolve-Path "source/app/src-tauri/tests/fixtures/jfk.wav").Path
+          $resultPath = Join-Path $env:RUNNER_TEMP "scribe-self-test.json"
+          $selfTest = Start-Process $exe.FullName -ArgumentList @("--self-test-transcribe", "`"$clip`"", "`"$resultPath`"") -PassThru
+          $null = $selfTest.Handle # keeps ExitCode readable after exit
+          if (-not $selfTest.WaitForExit(600000)) {
+            Stop-Process -Id $selfTest.Id -Force -ErrorAction SilentlyContinue
+            throw "The self-test did not finish within 10 minutes"
+          }
+          if (-not (Test-Path $resultPath)) { throw "The self-test exited with $($selfTest.ExitCode) and wrote no result" }
+          $result = Get-Content $resultPath -Raw | ConvertFrom-Json
+          Write-Host "Self-test: model $($result.modelId), $($result.latencyMs) ms, text: $($result.text)"
+          if (-not $result.ok) { throw "The self-test failed: $($result.error)" }
+          if ($selfTest.ExitCode -ne 0) { throw "The self-test reported success but exited with $($selfTest.ExitCode)" }
+          if ([string]::IsNullOrWhiteSpace($result.text)) { throw "The self-test transcript was empty" }
+          if ($result.text -notmatch "country") { throw "The self-test transcript did not match the clip: $($result.text)" }
+          if ($result.appVersion -ne "${{ needs.build-windows.outputs.version }}") {
+            throw "The self-test ran version $($result.appVersion), not ${{ needs.build-windows.outputs.version }}"
+          }
 
           if ("${{ matrix.kind }}" -eq "msi") {
             $uninstall = Start-Process msiexec.exe -ArgumentList @("/x", $entry.PSChildName, "/qn", "/norestart", "/L*V", "`"$env:RUNNER_TEMP\scribe-msi-uninstall.log`"") -Wait -PassThru
@@ -366,12 +399,27 @@ jobs:
           if ($uninstall.ExitCode -notin @(0, 3010)) { throw "Uninstall failed with $($uninstall.ExitCode)" }
           if (Test-Path $exe.FullName) { throw "Scribe executable remained after uninstall" }
 
+      - name: Collect app logs on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          foreach ($id in @("com.natkins.scribe", "com.natkins.scribe.dev")) {
+            $logs = Join-Path $env:LOCALAPPDATA "$id\logs"
+            if (Test-Path $logs) {
+              Get-ChildItem $logs -Filter *.log | ForEach-Object {
+                Copy-Item $_.FullName (Join-Path $env:RUNNER_TEMP "scribe-app-$id-$($_.Name)")
+              }
+            }
+          }
+
       - name: Upload installer logs on failure
         if: failure()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: smoke-logs-${{ matrix.kind }}
-          path: ${{ runner.temp }}/scribe-*.log
+          path: |
+            ${{ runner.temp }}/scribe-*.log
+            ${{ runner.temp }}/scribe-self-test.json
           if-no-files-found: ignore
           retention-days: 14
 
