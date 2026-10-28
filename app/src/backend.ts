@@ -478,8 +478,25 @@ export function getSettings(): Promise<AppSettings> {
   return invoke("get_settings");
 }
 
-export function updateSettings(settings: AppSettings): Promise<AppSettings> {
-  return invoke("update_settings", { settings });
+/** Emitted with the full stored settings after every settings write, from any
+ * window or the backend itself. */
+export const SETTINGS_CHANGED_EVENT = "scribe:settings-changed";
+
+// Settings writes from this window, chained so they reach the backend in the
+// order they were made.
+let settingsWrites: Promise<unknown> = Promise.resolve();
+
+/** Saves only the given settings fields and resolves to the stored settings.
+ * Send just the fields that changed (see changedSettings): the backend merges
+ * them over the stored settings, so other fields keep any newer value another
+ * window saved. */
+export function updateSettings(
+  patch: Partial<AppSettings>,
+): Promise<AppSettings> {
+  const write = () => invoke<AppSettings>("patch_settings", { patch });
+  const result = settingsWrites.then(write, write);
+  settingsWrites = result.catch(() => undefined);
+  return result;
 }
 
 export function getLastTranscript(): Promise<Transcript | null> {

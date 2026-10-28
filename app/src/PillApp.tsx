@@ -12,6 +12,7 @@ import {
   copyTranscript,
   getAppState,
   getSettings,
+  SETTINGS_CHANGED_EVENT,
   stopDictation,
   updateSettings,
   type AppSettings,
@@ -290,7 +291,10 @@ function PillApp() {
 
   useEffect(() => {
     let disposed = false;
-    let unlisten: (() => void) | null = null;
+    // Once a settings-changed event arrives, it is newer than the initial
+    // load, which must not overwrite it.
+    let settingsFromEvent = false;
+    let unlisteners: Array<() => void> = [];
 
     const loadInitial = async () => {
       try {
@@ -300,7 +304,9 @@ function PillApp() {
         ]);
         if (!disposed) {
           setAppState(state);
-          setSettings(loadedSettings);
+          if (!settingsFromEvent) {
+            setSettings(loadedSettings);
+          }
         }
       } catch {
         // Backend not ready yet; the window stays hidden until events arrive.
@@ -308,33 +314,29 @@ function PillApp() {
     };
 
     const setup = async () => {
-      const stop = await listen<AppStateSnapshot>(
-        "scribe:app-state",
-        (event) => {
+      const stops = await Promise.all([
+        listen<AppStateSnapshot>("scribe:app-state", (event) => {
           setAppState(event.payload);
-          void getSettings()
-            .then((latest) => {
-              if (!disposed) {
-                setSettings(latest);
-              }
-            })
-            .catch(() => {
-              // Keep the last known settings.
-            });
-        },
-      );
-      unlisten = stop;
+        }),
+        // Every settings write, from any window or the backend, arrives here.
+        listen<AppSettings>(SETTINGS_CHANGED_EVENT, (event) => {
+          settingsFromEvent = true;
+          settingsRef.current = event.payload;
+          setSettings(event.payload);
+        }),
+      ]);
+      unlisteners = stops;
       if (disposed) {
-        stop();
+        stops.forEach((stop) => stop());
       }
     };
 
-    void loadInitial();
     void setup();
+    void loadInitial();
 
     return () => {
       disposed = true;
-      unlisten?.();
+      unlisteners.forEach((stop) => stop());
     };
   }, []);
 
@@ -437,7 +439,8 @@ function PillApp() {
             const next = { ...current, pillX: x, pillY: y };
             settingsRef.current = next;
             setSettings(next);
-            void updateSettings(next).catch(() => {
+            // Only the position: the rest of this copy may be out of date.
+            void updateSettings({ pillX: x, pillY: y }).catch(() => {
               // Position persistence is best-effort.
             });
           })();

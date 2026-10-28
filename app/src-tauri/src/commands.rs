@@ -17,6 +17,7 @@ use crate::{
     models::ModelInfo,
     output::{self, OutputResult},
     settings::AppSettings,
+    settings_store,
     stats::BasicStats,
     transcript::{Transcript, TranscriptSearchResult, TranscriptSort},
 };
@@ -32,6 +33,9 @@ pub struct BackendState {
     /// manual "Sync now" can never PUT the same daily file concurrently. The
     /// `()` payload is irrelevant — it's a plain mutual-exclusion latch.
     github_sync_lock: Mutex<()>,
+    /// Serializes every settings write from read to save, so concurrent
+    /// writers never lose each other's fields (see `settings_store`).
+    settings_writes: Mutex<()>,
     /// Selection captured when a voice Transform Selection recording starts,
     /// held until that recording's transcription consumes it.
     #[cfg(windows)]
@@ -62,6 +66,7 @@ impl BackendState {
             incremental: crate::incremental::Registry::default(),
             github_device_flows: crate::github_oauth::DeviceFlowRegistry::default(),
             github_sync_lock: Mutex::new(()),
+            settings_writes: Mutex::new(()),
             #[cfg(windows)]
             pending_transform: Mutex::new(None),
             paste_target: Mutex::new(None),
@@ -178,6 +183,12 @@ impl BackendState {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// The settings write lock. Take it (via `settings_store::lock`) before
+    /// the database lock whenever settings are read in order to be written.
+    pub fn settings_writes(&self) -> &Mutex<()> {
+        &self.settings_writes
+    }
+
     /// Active incremental transcription sessions, keyed by recording session
     /// id.
     pub fn incremental(&self) -> &crate::incremental::Registry {
@@ -255,80 +266,103 @@ pub async fn get_settings(app: tauri::AppHandle) -> Result<AppSettings, CommandE
     .await
 }
 
+/// Changes only the settings named in `patch` (camelCase keys, as the
+/// frontend sends them), so a window never writes back fields it did not
+/// touch. Patches are applied one at a time against the stored settings, and
+/// every window hears the result through `scribe:settings-changed`.
 #[tauri::command]
-pub async fn update_settings(
+pub async fn patch_settings(
     app: tauri::AppHandle,
-    settings: AppSettings,
+    patch: serde_json::Map<String, serde_json::Value>,
 ) -> Result<AppSettings, CommandError> {
     off_main(app, move |app| {
         let state = app.state::<BackendState>().inner();
-        settings
-            .validate()
-            .map_err(CommandError::invalid_settings)?;
-
-        let previous = state.db()?.get_settings()?;
-
-        // Apply launch-at-startup first: when the OS registration fails the new
-        // value is never saved, so the UI toggle reverts.
-        if previous.launch_at_startup != settings.launch_at_startup {
-            apply_autostart(app, settings.launch_at_startup)?;
-        }
-
-        // Transform Selection is only bound while Local AI is on, so turning it on
-        // or off re-registers the hotkey set too.
-        let transform_toggled = previous.notes_analysis_enabled != settings.notes_analysis_enabled;
-        let rebind = previous.hotkeys != settings.hotkeys || transform_toggled;
-        let mut hotkey_failures = Vec::new();
-        if rebind {
-            hotkeys::set_transform_enabled(app, settings.notes_analysis_enabled);
-            hotkey_failures =
-                match hotkeys::replace_hotkeys(app, &previous.hotkeys, &settings.hotkeys) {
-                    Ok(failures) => failures,
-                    Err(error) => {
-                        hotkeys::set_transform_enabled(app, previous.notes_analysis_enabled);
-                        return Err(error);
-                    }
-                };
-        }
-
-        let save_result = if previous.github_repo != settings.github_repo {
-            state
-                .db()?
-                .save_settings_and_clear_github_activity(&settings)
-        } else {
-            state.db()?.save_settings(&settings)
-        };
-        if let Err(error) = save_result {
-            if rebind {
-                hotkeys::set_transform_enabled(app, previous.notes_analysis_enabled);
-                let _ = hotkeys::replace_hotkeys(app, &settings.hotkeys, &previous.hotkeys);
-            }
-            if previous.launch_at_startup != settings.launch_at_startup {
-                let _ = apply_autostart(app, previous.launch_at_startup);
-            }
-
-            return Err(error);
-        }
-
-        hotkeys::emit_registration_failures(app, &hotkey_failures);
-
-        if previous.history_retention_days != settings.history_retention_days
-            || (!previous.history_enabled && settings.history_enabled)
-        {
-            state
-                .db()?
-                .enforce_history_retention(settings.history_retention_days)?;
-        }
-
-        if previous.notes_retention_days != settings.notes_retention_days {
-            state
-                .db()?
-                .enforce_notes_retention(settings.notes_retention_days)?;
-        }
-
-        Ok(settings)
+        settings_store::patch_locked(
+            state.settings_writes(),
+            &patch,
+            || state.db()?.get_settings(),
+            |previous, next| apply_settings_change(app, state, previous, next),
+        )
     })
     .await
+}
+
+/// Stores `settings` over `previous` and applies what changed: launch at
+/// startup, hotkey registration, GitHub activity, and retention. Rolls the
+/// side effects back when the save fails. The caller holds the settings write
+/// lock.
+fn apply_settings_change(
+    app: &tauri::AppHandle,
+    state: &BackendState,
+    previous: &AppSettings,
+    settings: AppSettings,
+) -> Result<AppSettings, CommandError> {
+    settings
+        .validate()
+        .map_err(CommandError::invalid_settings)?;
+
+    // Apply launch-at-startup first: when the OS registration fails the new
+    // value is never saved, so the UI toggle reverts.
+    if previous.launch_at_startup != settings.launch_at_startup {
+        apply_autostart(app, settings.launch_at_startup)?;
+    }
+
+    // Transform Selection is only bound while Local AI is on, so turning it on
+    // or off re-registers the hotkey set too.
+    let transform_toggled = previous.notes_analysis_enabled != settings.notes_analysis_enabled;
+    let rebind = previous.hotkeys != settings.hotkeys || transform_toggled;
+    let mut hotkey_failures = Vec::new();
+    if rebind {
+        hotkeys::set_transform_enabled(app, settings.notes_analysis_enabled);
+        hotkey_failures = match hotkeys::replace_hotkeys(app, &previous.hotkeys, &settings.hotkeys)
+        {
+            Ok(failures) => failures,
+            Err(error) => {
+                hotkeys::set_transform_enabled(app, previous.notes_analysis_enabled);
+                return Err(error);
+            }
+        };
+    }
+
+    let save_result = if previous.github_repo != settings.github_repo {
+        state
+            .db()?
+            .save_settings_and_clear_github_activity(&settings)
+    } else {
+        state.db()?.save_settings(&settings)
+    };
+    if let Err(error) = save_result {
+        if rebind {
+            hotkeys::set_transform_enabled(app, previous.notes_analysis_enabled);
+            let _ = hotkeys::replace_hotkeys(app, &settings.hotkeys, &previous.hotkeys);
+        }
+        if previous.launch_at_startup != settings.launch_at_startup {
+            let _ = apply_autostart(app, previous.launch_at_startup);
+        }
+
+        return Err(error);
+    }
+
+    // Every window updates from this event, so it goes out as soon as the
+    // new settings are stored.
+    settings_store::emit_changed(app, &settings);
+    hotkeys::emit_registration_failures(app, &hotkey_failures);
+
+    if previous.history_retention_days != settings.history_retention_days
+        || (!previous.history_enabled && settings.history_enabled)
+    {
+        state
+            .db()?
+            .enforce_history_retention(settings.history_retention_days)?;
+    }
+
+    if previous.notes_retention_days != settings.notes_retention_days {
+        state
+            .db()?
+            .enforce_notes_retention(settings.notes_retention_days)?;
+    }
+
+    Ok(settings)
 }
 
 /// Enables or disables the OS launch-at-startup registration. Shared by the
@@ -649,6 +683,7 @@ pub async fn rebind_hotkey(
 ) -> Result<HotkeyStatus, CommandError> {
     off_main(app, move |app| {
         let state = app.state::<BackendState>().inner();
+        let _writes = settings_store::lock(state.settings_writes());
         let action = hotkeys::HotkeyAction::parse(&action)?;
         let mut settings = state.db()?.get_settings()?;
         let previous_hotkeys = settings.hotkeys.clone();
@@ -673,6 +708,7 @@ pub async fn rebind_hotkey(
             return Err(error);
         }
 
+        settings_store::emit_changed(app, &settings);
         hotkeys::emit_registration_failures(app, &failures);
         hotkeys::status(app, &settings.hotkeys)
     })
@@ -690,6 +726,7 @@ pub async fn set_hotkey_trigger(
 ) -> Result<HotkeyStatus, CommandError> {
     off_main(app, move |app| {
         let state = app.state::<BackendState>().inner();
+        let _writes = settings_store::lock(state.settings_writes());
         let action = hotkeys::HotkeyAction::parse(&action)?;
         let mut settings = state.db()?.get_settings()?;
         let previous_hotkeys = settings.hotkeys.clone();
@@ -711,6 +748,7 @@ pub async fn set_hotkey_trigger(
             return Err(error);
         }
 
+        settings_store::emit_changed(app, &settings);
         hotkeys::emit_registration_failures(app, &failures);
         hotkeys::status(app, &settings.hotkeys)
     })
@@ -723,6 +761,7 @@ pub async fn reset_hotkeys_to_defaults(
 ) -> Result<HotkeyStatus, CommandError> {
     off_main(app, move |app| {
         let state = app.state::<BackendState>().inner();
+        let _writes = settings_store::lock(state.settings_writes());
         let mut settings = state.db()?.get_settings()?;
         let previous_hotkeys = settings.hotkeys.clone();
         // "Defaults" are flavor-specific: the Dev flavor resets to its
@@ -743,6 +782,7 @@ pub async fn reset_hotkeys_to_defaults(
             return Err(error);
         }
 
+        settings_store::emit_changed(app, &settings);
         hotkeys::emit_registration_failures(app, &failures);
         hotkeys::status(app, &settings.hotkeys)
     })
@@ -759,6 +799,7 @@ pub async fn load_production_hotkey_defaults(
 ) -> Result<HotkeyStatus, CommandError> {
     off_main(app, move |app| {
         let state = app.state::<BackendState>().inner();
+        let _writes = settings_store::lock(state.settings_writes());
         let mut settings = state.db()?.get_settings()?;
         let previous_hotkeys = settings.hotkeys.clone();
         let next_hotkeys = AppSettings::default().hotkeys;
@@ -773,6 +814,7 @@ pub async fn load_production_hotkey_defaults(
             return Err(error);
         }
 
+        settings_store::emit_changed(app, &settings);
         hotkeys::emit_registration_failures(app, &failures);
         hotkeys::status(app, &settings.hotkeys)
     })
@@ -1003,10 +1045,12 @@ pub async fn save_window_size(app: tauri::AppHandle) -> Result<AppSettings, Comm
             )
         })?;
 
+        let _writes = settings_store::lock(state.settings_writes());
         let mut settings = state.db()?.get_settings()?;
         settings.window_width = Some(size.width as i32);
         settings.window_height = Some(size.height as i32);
         state.db()?.save_settings(&settings)?;
+        settings_store::emit_changed(app, &settings);
         log::info!("Saved default window size {}x{}", size.width, size.height);
         Ok(settings)
     })
@@ -1223,11 +1267,16 @@ pub async fn github_device_poll(
     .map_err(|error| CommandError::new("github_auth_failed", error.to_string()))?
     .unwrap_or_default();
 
-    let state = app.state::<BackendState>();
-    let mut settings = state.db()?.get_settings()?;
-    settings.github_account_login = login;
-    state.db()?.save_settings(&settings)?;
-    Ok(settings)
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        let _writes = settings_store::lock(state.settings_writes());
+        let mut settings = state.db()?.get_settings()?;
+        settings.github_account_login = login;
+        state.db()?.save_settings(&settings)?;
+        settings_store::emit_changed(app, &settings);
+        Ok(settings)
+    })
+    .await
 }
 
 /// Cancels an active GitHub device flow and prevents its token from being
@@ -1252,16 +1301,21 @@ pub async fn github_disconnect(app: tauri::AppHandle) -> Result<AppSettings, Com
         .await
         .map_err(|error| CommandError::new("github_auth_failed", error.to_string()))??;
 
-    let state = app.state::<BackendState>();
-    let mut settings = state.db()?.get_settings()?;
-    settings.github_account_login = String::new();
-    settings.github_sync_enabled = false;
-    settings.github_sync_all_transcripts = false;
-    settings.github_repo = String::new();
-    state
-        .db()?
-        .save_settings_and_clear_github_activity(&settings)?;
-    Ok(settings)
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        let _writes = settings_store::lock(state.settings_writes());
+        let mut settings = state.db()?.get_settings()?;
+        settings.github_account_login = String::new();
+        settings.github_sync_enabled = false;
+        settings.github_sync_all_transcripts = false;
+        settings.github_repo = String::new();
+        state
+            .db()?
+            .save_settings_and_clear_github_activity(&settings)?;
+        settings_store::emit_changed(app, &settings);
+        Ok(settings)
+    })
+    .await
 }
 
 /// Pushes the current notes (is_note=1 only) to the configured GitHub repo as
@@ -1757,8 +1811,19 @@ pub async fn delete_model(
 ) -> Result<ModelInfo, CommandError> {
     off_main(app, move |app| {
         let state = app.state::<BackendState>().inner();
-        let db = state.db()?;
-        model_manager::delete_model(app, &db, &model_id)
+        let _writes = settings_store::lock(state.settings_writes());
+        let (info, settings) = {
+            let db = state.db()?;
+            let before = db.get_settings()?;
+            let info = model_manager::delete_model(app, &db, &model_id)?;
+            let after = db.get_settings()?;
+            (info, (after != before).then_some(after))
+        };
+        // Deleting the selected model clears the selection.
+        if let Some(settings) = settings {
+            settings_store::emit_changed(app, &settings);
+        }
+        Ok(info)
     })
     .await
 }
@@ -1769,7 +1834,12 @@ pub async fn select_model(
     model_id: String,
 ) -> Result<ModelInfo, CommandError> {
     off_main(app, move |app| {
-        model_manager::select_model(app, app.state::<BackendState>().inner(), &model_id)
+        let state = app.state::<BackendState>().inner();
+        let _writes = settings_store::lock(state.settings_writes());
+        let info = model_manager::select_model(app, state, &model_id)?;
+        let settings = state.db()?.get_settings()?;
+        settings_store::emit_changed(app, &settings);
+        Ok(info)
     })
     .await
 }

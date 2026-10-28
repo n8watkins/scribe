@@ -43,8 +43,10 @@ import {
   listModels,
   pasteLastTranscript,
   startRecording,
+  SETTINGS_CHANGED_EVENT,
   stopDictation,
   updateSettings,
+  type AppSettings,
   type AppStateSnapshot,
   type UpdateCheckResult,
   type DashboardData,
@@ -69,6 +71,7 @@ import type {
   ViewName,
 } from "./types";
 import { canStartRecording, formatHotkey, routeToView } from "./lib/format";
+import { changedSettings, settingsFor } from "./lib/settingsPatch";
 import { ErrorPanel, InlineError, LoadingPanel, Toast } from "./components/feedback";
 import {
   UpdateOverlay,
@@ -628,6 +631,12 @@ function App() {
           }
           scheduleRefresh();
         }),
+        // Settings saved by any window (or the backend) replace this copy.
+        listen<AppSettings>(SETTINGS_CHANGED_EVENT, (event) => {
+          setDashboardData((current) =>
+            current ? { ...current, settings: event.payload } : current,
+          );
+        }),
         listen<RecordingSessionInfo>("audio://recording-started", (event) => {
           setLiveTranscript(null);
           // A fresh recording ends any prior disconnect episode, so its own
@@ -783,13 +792,20 @@ function App() {
         return;
       }
 
-      const previousSettings = dashboardData.settings;
-      const nextSettings = { ...previousSettings, ...patch };
+      // Send only what changed, so this window never writes back a field
+      // another window saved since this copy was taken.
+      const changes = changedSettings(dashboardData.settings, patch);
+      if (Object.keys(changes).length === 0) {
+        return;
+      }
+      const previousValues = settingsFor(dashboardData.settings, changes);
 
       setSaveError(null);
       setSavingSettings(true);
       setDashboardData((current) =>
-        current ? { ...current, settings: nextSettings } : current,
+        current
+          ? { ...current, settings: { ...current.settings, ...changes } }
+          : current,
       );
 
       try {
@@ -798,13 +814,15 @@ function App() {
         // every view (and resets scroll) on each toggle; the optimistic update
         // above plus this reconcile already reflect the change. Dashboard-derived
         // data (app state, last transcript) doesn't depend on a settings toggle.
-        const savedSettings = await updateSettings(nextSettings);
+        const savedSettings = await updateSettings(changes);
         setDashboardData((current) =>
           current ? { ...current, settings: savedSettings } : current,
         );
       } catch (error) {
         setDashboardData((current) =>
-          current ? { ...current, settings: previousSettings } : current,
+          current
+            ? { ...current, settings: { ...current.settings, ...previousValues } }
+            : current,
         );
         setSaveError(commandErrorMessage(error));
       } finally {
