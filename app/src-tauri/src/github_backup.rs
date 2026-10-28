@@ -42,6 +42,18 @@ pub struct GitHubBackup {
     api: String,
 }
 
+/// True only for a repository nobody but its collaborators can read.
+/// GitHub reports an enterprise "internal" repository as `private: true` with
+/// `visibility: "internal"`, and every member of the enterprise can read it,
+/// so `visibility` decides when present; the `private` flag is only the
+/// fallback for responses that omit it.
+fn repo_is_private(repo: &serde_json::Value) -> bool {
+    match repo.get("visibility").and_then(|v| v.as_str()) {
+        Some(visibility) => visibility == "private",
+        None => repo.get("private").and_then(|v| v.as_bool()) == Some(true),
+    }
+}
+
 impl GitHubBackup {
     /// Builds a backup handle for `owner/name`. Errors when `repo_slug` is not
     /// exactly "owner/name".
@@ -151,7 +163,7 @@ impl GitHubBackup {
             // Privacy guard: Scribe only ever backs up to a PRIVATE repo. If the
             // existing repo is public (or its visibility can't be confirmed),
             // refuse rather than upload note text where anyone can read it.
-            if json.get("private").and_then(|v| v.as_bool()) != Some(true) {
+            if !repo_is_private(&json) {
                 return Err(CommandError::new(
                     "github_repo_public",
                     format!(
@@ -689,6 +701,37 @@ mod tests {
         // Only the one GET happened — we never reached a create/PUT.
         let requests = handle.join().unwrap();
         assert_eq!(requests.len(), 1);
+    }
+
+    #[test]
+    fn ensure_repo_rejects_enterprise_internal_repo() {
+        // GitHub marks internal repos `private: true`, but the whole enterprise
+        // can read them, so visibility must decide.
+        let (base, handle) = mock_server(vec![(
+            200,
+            serde_json::json!({ "id": 1, "private": true, "visibility": "internal" }).to_string(),
+        )]);
+
+        let backup = GitHubBackup::with_base("tok", "alice", "scribe-notes", &base);
+        let error = backup.ensure_repo().unwrap_err();
+        assert_eq!(error.code, "github_repo_public");
+        assert_eq!(handle.join().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn repo_privacy_prefers_visibility_over_private_flag() {
+        use serde_json::json;
+        assert!(repo_is_private(
+            &json!({ "private": true, "visibility": "private" })
+        ));
+        assert!(repo_is_private(&json!({ "private": true })));
+        assert!(!repo_is_private(
+            &json!({ "private": true, "visibility": "internal" })
+        ));
+        assert!(!repo_is_private(
+            &json!({ "private": false, "visibility": "public" })
+        ));
+        assert!(!repo_is_private(&json!({})));
     }
 
     #[test]
