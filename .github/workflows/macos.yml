@@ -1,0 +1,281 @@
+name: macOS (experimental)
+
+# An experimental macOS build: a universal (Apple Silicon and Intel) .dmg
+# uploaded as a workflow artifact only. It is not part of a published release.
+# Windows and Linux bundles are unchanged because the macOS targets live in
+# tauri.macos.conf.json, which Tauri merges only when it builds on macOS.
+#
+# There is no Apple Developer ID: the app and its bundled whisper.cpp binaries
+# are ad-hoc signed (`codesign -s -`), which Apple Silicon needs to run any
+# code at all. Gatekeeper still rejects the app when it is downloaded, because
+# it is not notarized.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "app/src-tauri/tauri.macos.conf.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Same reviewed whisper.cpp source as the Windows release build.
+  WHISPER_CPP_VERSION: v1.9.1
+  WHISPER_CPP_COMMIT: f049fff95a089aa9969deb009cdd4892b3e74916
+  # Bump when the whisper.cpp build flags below change, so the cache rebuilds.
+  WHISPER_MACOS_BUILD: metal-static-universal-1
+  # The oldest macOS that runs on Apple Silicon.
+  MACOSX_DEPLOYMENT_TARGET: "11.0"
+
+jobs:
+  build-macos:
+    name: Build macOS bundle (experimental)
+    # Apple Silicon runner; the Intel slice is cross-compiled and tested under
+    # Rosetta.
+    runs-on: macos-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Runner
+        run: |
+          sw_vers
+          uname -m
+          sysctl -n machdep.cpu.brand_string
+          xcrun --show-sdk-version
+          system_profiler SPDisplaysDataType | sed -n '1,20p' || true
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Restore whisper.cpp build
+        id: whisper-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/whisper-macos
+          key: whisper-macos-${{ env.WHISPER_CPP_COMMIT }}-${{ env.WHISPER_MACOS_BUILD }}-${{ env.MACOSX_DEPLOYMENT_TARGET }}
+
+      # Statically linked, so the two binaries need no whisper or ggml dylibs
+      # next to them, only system frameworks (Metal, Accelerate, Foundation).
+      # The Metal shaders are compiled into the binary (GGML_METAL_EMBED_LIBRARY)
+      # so there is no default.metallib to find at run time. Each architecture
+      # is built on its own and the two are joined with lipo. The Intel slice
+      # targets Haswell (AVX2/FMA/F16C), which every Intel Mac that runs
+      # macOS 11 has except the 2013 Mac Pro.
+      - name: Build reviewed whisper.cpp source with Metal
+        if: steps.whisper-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/wcpp"
+          git clone --depth 1 --branch "$WHISPER_CPP_VERSION" https://github.com/ggml-org/whisper.cpp "$src"
+          actual="$(git -C "$src" rev-parse HEAD)"
+          if [ "$actual" != "$WHISPER_CPP_COMMIT" ]; then
+            echo "whisper.cpp commit $actual did not match reviewed commit $WHISPER_CPP_COMMIT" >&2
+            exit 1
+          fi
+          for arch in arm64 x86_64; do
+            extra=()
+            if [ "$arch" = x86_64 ]; then
+              extra=(-DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON)
+            fi
+            cmake -S "$src" -B "$src/build-$arch" -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_OSX_ARCHITECTURES="$arch" \
+              -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
+              -DGGML_METAL=ON \
+              -DGGML_METAL_EMBED_LIBRARY=ON \
+              -DGGML_NATIVE=OFF \
+              -DGGML_OPENMP=OFF \
+              -DBUILD_SHARED_LIBS=OFF \
+              -DWHISPER_BUILD_EXAMPLES=ON \
+              -DWHISPER_BUILD_TESTS=OFF \
+              -DWHISPER_BUILD_SERVER=ON \
+              "${extra[@]}"
+            cmake --build "$src/build-$arch" -j --target whisper-cli whisper-server
+          done
+          out="$RUNNER_TEMP/whisper-macos"
+          mkdir -p "$out"
+          for name in whisper-cli whisper-server; do
+            lipo -create "$src/build-arm64/bin/$name" "$src/build-x86_64/bin/$name" -output "$out/$name"
+          done
+
+      - name: Stage, sign and check whisper.cpp binaries
+        run: |
+          set -euo pipefail
+          dest=app/src-tauri/resources/bin/macos
+          mkdir -p "$dest"
+          for name in whisper-cli whisper-server; do
+            install -m 0755 "$RUNNER_TEMP/whisper-macos/$name" "$dest/$name"
+            archs="$(lipo -archs "$dest/$name")"
+            echo "$name: $archs"
+            for arch in arm64 x86_64; do
+              if ! grep -qw "$arch" <<< "$archs"; then
+                echo "$name is missing the $arch slice" >&2
+                exit 1
+              fi
+            done
+            # Nothing but system libraries and frameworks may be left to
+            # resolve at run time.
+            if otool -L "$dest/$name" | tail -n +2 | grep -vE '^\s+/(usr/lib|System/Library)/'; then
+              echo "$name links a library the bundle does not ship" >&2
+              exit 1
+            fi
+            codesign --force --sign - --timestamp=none "$dest/$name"
+            codesign --verify --strict --verbose=2 "$dest/$name"
+          done
+          "$dest/whisper-cli" --help > /dev/null
+          arch -x86_64 "$dest/whisper-cli" --help > /dev/null
+
+      # Same install as the Windows build: scripts off, esbuild's run on its own.
+      - name: Install application dependencies
+        working-directory: app
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild esbuild
+
+      # No updater artifacts and no signing key: tauri.macos.conf.json turns
+      # updater artifacts off and sets the ad-hoc signing identity, and this
+      # job never sees the updater key.
+      - name: Build .app and .dmg
+        working-directory: app
+        env:
+          SCRIBE_GITHUB_APP_CLIENT_ID: ${{ vars.SCRIBE_GITHUB_APP_CLIENT_ID }}
+        run: npm run tauri -- build --target universal-apple-darwin
+
+      - name: Verify bundle and signature
+        id: bundle
+        run: |
+          set -euo pipefail
+          bundle=app/src-tauri/target/universal-apple-darwin/release/bundle
+          apps=("$bundle"/macos/*.app)
+          dmgs=("$bundle"/dmg/*.dmg)
+          if [ "${#apps[@]}" -ne 1 ] || [ ! -d "${apps[0]}" ]; then
+            echo "Expected one .app" >&2
+            exit 1
+          fi
+          if [ "${#dmgs[@]}" -ne 1 ] || [ ! -f "${dmgs[0]}" ]; then
+            echo "Expected one .dmg" >&2
+            exit 1
+          fi
+          app="${apps[0]}"
+          main="$app/Contents/MacOS/Scribe"
+          echo "Scribe: $(lipo -archs "$main")"
+          for name in whisper-cli whisper-server; do
+            if [ ! -x "$app/Contents/Resources/bin/macos/$name" ]; then
+              echo "The app is missing Resources/bin/macos/$name" >&2
+              exit 1
+            fi
+            codesign --verify --strict --verbose=2 "$app/Contents/Resources/bin/macos/$name"
+          done
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --display --verbose=2 "$app" 2>&1
+          # Expected to reject: the app is ad-hoc signed and not notarized.
+          # Recorded, not enforced.
+          echo "spctl --assess (app):"
+          spctl --assess --type execute --verbose=4 "$app" 2>&1 || true
+          echo "spctl --assess (dmg):"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "${dmgs[0]}" 2>&1 || true
+          echo "dmg=${dmgs[0]}" >> "$GITHUB_OUTPUT"
+
+      # End to end through the .dmg the way a user installs it: mount it, copy
+      # the app into an Applications folder, then let the app download the
+      # default model through its verified download path, transcribe the clip
+      # with the bundled whisper.cpp, write the result and exit. The Intel
+      # slice runs the same test under Rosetta with the model already present.
+      # perl's alarm is the timeout, so a hung app fails the job fast.
+      - name: Install from the .dmg and transcribe a clip
+        timeout-minutes: 25
+        env:
+          DMG: ${{ steps.bundle.outputs.dmg }}
+        run: |
+          set -euo pipefail
+          mnt="$RUNNER_TEMP/scribe-dmg"
+          apps="$RUNNER_TEMP/Applications"
+          mkdir -p "$mnt" "$apps"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$DMG"
+          ditto "$mnt/Scribe.app" "$apps/Scribe.app"
+          hdiutil detach "$mnt"
+          codesign --verify --deep --strict "$apps/Scribe.app"
+          version="$(jq -r .version app/src-tauri/tauri.conf.json)"
+          clip="$PWD/app/src-tauri/tests/fixtures/jfk.wav"
+          exe="$apps/Scribe.app/Contents/MacOS/Scribe"
+
+          self_test() {
+            local label="$1" result="$RUNNER_TEMP/scribe-self-test-$1.json"
+            shift
+            local start end status=0
+            start=$(date +%s)
+            perl -e 'alarm shift; exec @ARGV or die "exec failed: $!"' 600 \
+              "$@" "$exe" --self-test-transcribe "$clip" "$result" || status=$?
+            end=$(date +%s)
+            echo "Self-test ($label) exited with $status after $((end - start)) s"
+            if [ ! -f "$result" ]; then
+              echo "The self-test ($label) wrote no result" >&2
+              return 1
+            fi
+            cat "$result"
+            echo
+            jq -e '.ok == true' "$result" > /dev/null || { echo "The self-test ($label) failed" >&2; return 1; }
+            [ "$status" -eq 0 ] || { echo "The self-test ($label) reported success but exited with $status" >&2; return 1; }
+            jq -e '.text | test("country")' "$result" > /dev/null || { echo "The transcript ($label) did not match the clip" >&2; return 1; }
+            jq -e --arg v "$version" '.appVersion == $v' "$result" > /dev/null || { echo "The self-test ($label) ran the wrong version" >&2; return 1; }
+          }
+
+          self_test arm64
+          self_test x86_64 arch -x86_64
+
+      - name: Stage .dmg
+        env:
+          DMG: ${{ steps.bundle.outputs.dmg }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/scribe-macos"
+          cp "$DMG" "$RUNNER_TEMP/scribe-macos/"
+          (cd "$RUNNER_TEMP/scribe-macos" && shasum -a 256 -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
+      - name: Upload macOS bundle
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: scribe-macos-experimental
+          path: ${{ runner.temp }}/scribe-macos/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Collect app logs on failure
+        if: failure()
+        run: |
+          mkdir -p "$RUNNER_TEMP/scribe-logs"
+          cp "$RUNNER_TEMP"/scribe-self-test-*.json "$RUNNER_TEMP/scribe-logs/" 2>/dev/null || true
+          for dir in "$HOME/Library/Logs/com.natkins.scribe" "$HOME/Library/Application Support/com.natkins.scribe/logs"; do
+            if [ -d "$dir" ]; then
+              cp -R "$dir" "$RUNNER_TEMP/scribe-logs/" || true
+            fi
+          done
+          # Crash reports, if the app or whisper.cpp crashed.
+          find "$HOME/Library/Logs/DiagnosticReports" -newer app/package.json \( -name 'Scribe*' -o -name 'whisper*' \) \
+            -exec cp {} "$RUNNER_TEMP/scribe-logs/" \; 2>/dev/null || true
+          ls -la "$RUNNER_TEMP/scribe-logs"
+
+      - name: Upload app logs on failure
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: scribe-macos-logs
+          path: ${{ runner.temp }}/scribe-logs
+          if-no-files-found: ignore
+          retention-days: 14
