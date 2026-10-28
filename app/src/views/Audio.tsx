@@ -205,6 +205,7 @@ export function AudioView({
             <label>
               Microphone
               <select
+                className="microphone-select"
                 disabled={actions.savingSettings}
                 onChange={(event) =>
                   actions.updateSettings({

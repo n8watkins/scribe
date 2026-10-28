@@ -1101,6 +1101,13 @@ select {
     var(--scribe-bg-elevated);
 }
 
+/* Device names are long ("Default input device (Fifine Microphone)"); let
+   the picker use the card's width instead of the 190px select cap. */
+select.microphone-select {
+  width: 100%;
+  max-width: 100%;
+}
+
 select option {
   color: var(--scribe-text);
   background: var(--scribe-bg-elevated);
@@ -1263,6 +1270,9 @@ textarea {
 .model-list,
 .model-table {
   display: grid;
+  /* An explicit shrinkable column: the implicit auto column grows to its
+     widest child's min-content and pushes the card past the window. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 
@@ -1884,12 +1894,22 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  white-space: nowrap;
 }
 
+/* The hint gives way to the label in narrow columns: it truncates on one
+   line instead of wrapping the header into a block. */
 .accordion-toggle-meta {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.accordion-toggle-meta > .muted {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .accordion-chevron {
@@ -2035,8 +2055,10 @@ textarea {
   background: rgba(127, 29, 29, 0.22);
 }
 
+/* The tooltip only exists while shown: a hidden one still counts toward the
+   scroll area, and on a button at the window edge it added sideways scroll. */
 .icon-button::after {
-  content: attr(aria-label);
+  content: none;
   position: absolute;
   bottom: calc(100% + 7px);
   left: 50%;
@@ -2058,7 +2080,16 @@ textarea {
 
 .icon-button:hover::after,
 .icon-button:focus-visible::after {
+  content: attr(aria-label);
   opacity: 1;
+}
+
+/* The last button in a row opens its tooltip leftward so it stays inside the
+   card instead of poking past the window's right edge. */
+.icon-button:last-child::after {
+  left: auto;
+  right: 0;
+  transform: none;
 }
 
 .icon-button:disabled::after {

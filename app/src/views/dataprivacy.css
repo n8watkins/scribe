@@ -17,11 +17,14 @@
   gap: 8px 10px;
 }
 
+/* Shrinkable and capped at the row width, so a long note wraps instead of
+   widening the panel past the window. */
 .local-data-meta {
   display: grid;
   gap: 1px;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   min-width: 130px;
+  max-width: 100%;
 }
 
 .local-data-label {
