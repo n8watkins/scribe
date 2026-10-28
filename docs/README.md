@@ -9,7 +9,9 @@ Use current source, tests, workflows, and release metadata as the final authorit
 - [`../FAQ.md`](../FAQ.md) covers common product and update questions.
 - [`../SECURITY.md`](../SECURITY.md) defines supported versions and private vulnerability reporting.
 - [`../app/README.md`](../app/README.md) covers desktop development and GitHub App configuration.
+- [`HANDOFF.md`](HANDOFF.md) starts with the current state, open problems, owner blockers and next steps (its "Historical record" part below that is not current).
 - [`STATUS_AND_NEXT_STEPS.md`](STATUS_AND_NEXT_STEPS.md) records the current release state and remaining opportunities.
+- [`ASSESSMENT_PLAN_2026-10.md`](ASSESSMENT_PLAN_2026-10.md) is the plan for the full code, security and UX assessment.
 - [`V1_WINDOWS_QA_CHECKLIST.md`](V1_WINDOWS_QA_CHECKLIST.md) is the active Windows acceptance checklist.
 - [`integrations/dictation-state-contract.md`](integrations/dictation-state-contract.md) is the frozen v1 external state contract.
 - [`../cli/README.md`](../cli/README.md) and [`../integrations/mcp-server/README.md`](../integrations/mcp-server/README.md) document the current integration clients.
@@ -27,7 +29,7 @@ The following documents are retained for decision history and should not be trea
 - `GPU_SPIKE_OVERNIGHT_REPORT.md`
 - `GPU_VULKAN_BUILD_PLAN.md`
 - `GPU_VULKAN_SPIKE.md`
-- `HANDOFF.md`
+- `HANDOFF.md` (the "Historical record" part only)
 - `IMPLEMENTATION_PLAN.md`
 - `PRD.md`
 - `REWORK_PLAN.md`
