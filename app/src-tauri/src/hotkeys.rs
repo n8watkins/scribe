@@ -778,11 +778,19 @@ fn register_hotkey_set(
                         );
                         actions_by_id.insert(shortcut.id(), action);
                     }
-                    Err(error) => record_failure(
-                        action,
-                        shortcut_text,
-                        CommandError::hotkey_registration_failed(shortcut_text, error).message,
-                    ),
+                    Err(error) => {
+                        log::warn!(
+                            "Registering {:?} ({}) failed: {}",
+                            action,
+                            shortcut_text,
+                            error
+                        );
+                        record_failure(
+                            action,
+                            shortcut_text,
+                            CommandError::hotkey_registration_failed(shortcut_text).message,
+                        )
+                    }
                 }
             }
             Ok(ParsedShortcut::ModifierChord(chord)) => {

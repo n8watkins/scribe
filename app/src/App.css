@@ -2307,6 +2307,18 @@ code {
   font-size: 12px;
 }
 
+.hotkey-row-failed > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--scribe-danger);
+}
+
+.hotkey-row-failed kbd {
+  border-color: rgba(239, 68, 68, 0.45);
+  color: var(--scribe-danger);
+}
+
 kbd {
   padding: 3px 6px;
   color: var(--scribe-text);

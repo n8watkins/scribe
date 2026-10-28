@@ -1,5 +1,5 @@
 import { type ReactNode } from "react";
-import { ArrowUpRight, type LucideIcon } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, type LucideIcon } from "lucide-react";
 import type { AppSettings, BasicStats } from "../backend";
 import {
   formatHotkey,
@@ -49,9 +49,12 @@ export function StatsCard({
 
 export function HotkeyList({
   compact = false,
+  failedActions,
   settings,
 }: {
   compact?: boolean;
+  /** Actions whose shortcut failed to register (another app holds it). */
+  failedActions?: ReadonlySet<string>;
   settings: AppSettings;
 }) {
   return (
@@ -63,12 +66,28 @@ export function HotkeyList({
             hotkey.action !== "transformSelection" ||
             settings.notesAnalysisEnabled,
         )
-        .map((hotkey) => (
-        <div className="hotkey-row" key={hotkey.label}>
-          <span>{hotkey.label}</span>
-          <kbd>{formatHotkey(hotkey.value)}</kbd>
-        </div>
-      ))}
+        .map((hotkey) => {
+          const failed = failedActions?.has(hotkey.action) ?? false;
+          return (
+            <div
+              className={failed ? "hotkey-row hotkey-row-failed" : "hotkey-row"}
+              key={hotkey.label}
+              title={
+                failed
+                  ? "Not registered. Another app may already use this shortcut."
+                  : undefined
+              }
+            >
+              <span>
+                {failed ? (
+                  <AlertTriangle aria-label="Not registered" role="img" size={13} />
+                ) : null}
+                {hotkey.label}
+              </span>
+              <kbd>{formatHotkey(hotkey.value)}</kbd>
+            </div>
+          );
+        })}
     </div>
   );
 }

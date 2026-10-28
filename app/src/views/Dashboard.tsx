@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Clipboard,
   Database,
@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import {
   commandErrorMessage,
+  getHotkeyStatus,
   transformSelection,
   type DashboardData,
   type MicrophoneInfo,
@@ -43,6 +44,10 @@ export function DashboardView({
 }) {
   const { appState, lastTranscript, settings } = data;
   const modelReady = isSelectedModelReady(models, settings.selectedModelId);
+  const failedHotkeys = useFailedHotkeys(
+    JSON.stringify(settings.hotkeys),
+    settings.notesAnalysisEnabled,
+  );
 
   return (
     <>
@@ -121,7 +126,11 @@ export function DashboardView({
               Rebind
             </button>
           </div>
-          <HotkeyList compact settings={settings} />
+          <HotkeyList
+            compact
+            failedActions={failedHotkeys}
+            settings={settings}
+          />
         </article>
 
         {settings.notesAnalysisEnabled ? (
@@ -133,6 +142,37 @@ export function DashboardView({
       </section>
     </>
   );
+}
+
+/** Actions whose shortcut is bound but not registered, so the Dashboard can
+ * flag a conflict instead of listing a hotkey that does nothing. Reloads when
+ * the bindings or the Local AI switch change. Status errors are left to the
+ * Hotkeys view, which reports them in full. */
+function useFailedHotkeys(
+  hotkeysKey: string,
+  aiEnabled: boolean,
+): ReadonlySet<string> {
+  const [failed, setFailed] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    let cancelled = false;
+    getHotkeyStatus()
+      .then((status) => {
+        if (!cancelled) {
+          setFailed(
+            new Set(
+              status.bindings
+                .filter((binding) => !binding.registered && !binding.disabledReason)
+                .map((binding) => binding.action),
+            ),
+          );
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [hotkeysKey, aiEnabled]);
+  return failed;
 }
 
 /** Inline AI editor: the user highlights text in another app, types an
