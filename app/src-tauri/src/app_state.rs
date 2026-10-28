@@ -315,7 +315,7 @@ mod tests {
     #[test]
     fn disconnect_recovery_reuses_the_normal_stop_to_transcribe_sequence() {
         // A microphone unplugged mid-recording drives the SAME state events a
-        // manual stop with valid audio does (audio::disconnect_recording_for_app
+        // manual stop with valid audio does (audio::finish_disconnected_recording
         // -> stop_recording_with_reason -> transcribe). This locks that the
         // recovery sequence is a legal path the FSM accepts, so a dropped mic
         // lands the user back on Ready (then Idle) rather than wedged.

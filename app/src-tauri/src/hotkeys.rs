@@ -14,9 +14,9 @@ use tauri_plugin_global_shortcut::Code;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 
 use crate::{
-    app_state::AppStatus,
     audio,
     commands::BackendState,
+    dictation_worker::{self, Intent},
     error::CommandError,
     settings::{HotkeySettings, TriggerEdge},
     tray,
@@ -591,9 +591,7 @@ fn on_toggle_key_up(app: &AppHandle) {
     let fired = disarm_note_chord(app);
     log::info!("Toggle key released (note chord fired: {})", fired);
     if !fired {
-        if let Err(error) = toggle_dictation(app) {
-            audio::emit_recording_error(app, error);
-        }
+        dictation_worker::submit(app, Intent::Toggle);
     }
 }
 
@@ -605,9 +603,7 @@ fn on_toggle_key_press(app: &AppHandle) {
         "scribe:hotkey-action",
         HotkeyAction::ToggleDictation.event_name(),
     );
-    if let Err(error) = toggle_dictation(app) {
-        audio::emit_recording_error(app, error);
-    }
+    dictation_worker::submit(app, Intent::Toggle);
 }
 
 /// Maps a shortcut key code to the Windows virtual key the toggle watcher
@@ -992,16 +988,13 @@ fn note_chord_active(hotkeys: &HotkeySettings) -> bool {
 
 /// Press edge of a binding. Hold-to-talk always starts here (it is push-to-talk
 /// and uses both edges); single-shot actions fire only when their configured
-/// trigger is Press. Reached by the plugin shortcut handler and the
-/// modifier-chord watcher.
+/// trigger is Press. Reached by the plugin shortcut handler (on the main
+/// thread) and the modifier-chord watcher, so dictation actions only queue
+/// work on the dictation worker and return.
 fn handle_press_edge(app: &AppHandle, action: HotkeyAction) {
-    // Hold-to-talk never auto-stops on silence: the user is still holding the
-    // key, and a pause mid-thought must not cut them off.
     if action == HotkeyAction::HoldToTalk {
         let _ = app.emit("scribe:hotkey-action", action.event_name());
-        if let Err(error) = tray::start_dictation(app, false) {
-            audio::emit_recording_error(app, error);
-        }
+        dictation_worker::submit(app, Intent::StartHold);
         return;
     }
 
@@ -1014,9 +1007,7 @@ fn handle_press_edge(app: &AppHandle, action: HotkeyAction) {
 /// actions fire only when their configured trigger is Release.
 fn handle_release_edge(app: &AppHandle, action: HotkeyAction) {
     if action == HotkeyAction::HoldToTalk {
-        if let Err(error) = tray::stop_dictation(app) {
-            audio::emit_recording_error(app, error);
-        }
+        dictation_worker::submit(app, Intent::Stop);
         return;
     }
 
@@ -1046,9 +1037,13 @@ fn run_action(app: &AppHandle, action: HotkeyAction) {
             if let Some(runtime) = app.try_state::<HotkeyRuntimeState>() {
                 runtime.mark_released_once(HotkeyAction::ToggleDictation);
             }
-            toggle_dictation(app)
+            dictation_worker::submit(app, Intent::Toggle);
+            Ok(())
         }
-        HotkeyAction::PasteLastTranscript => tray::paste_last_transcript(app),
+        HotkeyAction::PasteLastTranscript => {
+            dictation_worker::submit(app, Intent::PasteLast);
+            Ok(())
+        }
         HotkeyAction::OpenDashboard => {
             let toggles = app
                 .state::<BackendState>()
@@ -1064,11 +1059,22 @@ fn run_action(app: &AppHandle, action: HotkeyAction) {
         }
         // Discards the in-progress recording without transcribing. A no-op when
         // nothing is recording, so a stray press is harmless.
-        HotkeyAction::DiscardDictation => audio::cancel_recording_for_app(app),
-        // Voice path: capture the selection, record a spoken instruction, and
-        // route the transcription into the transform engine (rewrite in place).
-        // The typed-instruction Dashboard panel remains as an alternative.
-        HotkeyAction::TransformSelection => toggle_transform(app),
+        HotkeyAction::DiscardDictation => {
+            dictation_worker::submit(app, Intent::Cancel);
+            Ok(())
+        }
+        // Voice Transform Selection (tap to start, tap again, or let silence
+        // auto-stop end it, to finish). Starting captures the focused app's
+        // selection and records a spoken *instruction*; stopping flows through
+        // the normal stop and transcribe path, but because the recording is
+        // flagged `is_transform` the transcription is routed to the transform
+        // engine (rewrite the captured selection in place) instead of being
+        // saved or pasted as dictation. The typed-instruction Dashboard panel
+        // remains as an alternative.
+        HotkeyAction::TransformSelection => {
+            dictation_worker::submit(app, Intent::ToggleTransform);
+            Ok(())
+        }
         HotkeyAction::HoldToTalk => return,
     };
 
@@ -1131,77 +1137,23 @@ fn disarm_note_chord(app: &AppHandle) -> bool {
 fn handle_note_chord(app: &AppHandle) {
     log::info!("Note chord (Q) pressed during toggle hold");
     let _ = app.emit("scribe:hotkey-action", "note_dictation");
-    let result = (|| {
-        let state = app.state::<BackendState>();
-        let status = state.app_state()?.status().clone();
-        match status {
-            AppStatus::Idle | AppStatus::Ready | AppStatus::Error => {
-                tray::start_note_dictation(app)
-            }
-            AppStatus::Recording => tray::stop_dictation(app),
-            _ => Ok(()),
-        }
-    })();
-    if let Err(error) = result {
-        audio::emit_recording_error(app, error);
-    }
-}
-
-fn toggle_dictation(app: &AppHandle) -> Result<(), CommandError> {
-    let state = app.state::<BackendState>();
-    let status = state.app_state()?.status().clone();
-
-    match status {
-        // From Error the start path resets the state machine to Idle first
-        // (ResetError), so a wedged Error state never disables the toggle:
-        // pressing it again starts a fresh dictation. Hold-to-talk gets the
-        // same recovery for free because tray::start_dictation handles Error.
-        AppStatus::Idle | AppStatus::Ready | AppStatus::Error => tray::start_dictation(app, true),
-        AppStatus::Recording => tray::stop_dictation(app),
-        _ => Ok(()),
-    }
-}
-
-/// Voice Transform Selection (tap to start, tap again — or let silence
-/// auto-stop end it — to finish). Starting captures the focused app's selection
-/// and records a spoken *instruction*; stopping flows through the normal
-/// stop→transcribe path, but because the recording is flagged `is_transform`
-/// the transcription is routed to the transform engine (rewrite the captured
-/// selection in place) instead of being saved/pasted as dictation. Mirrors
-/// `toggle_dictation`'s start/stop gating.
-#[cfg(windows)]
-fn toggle_transform(app: &AppHandle) -> Result<(), CommandError> {
-    let state = app.state::<BackendState>();
-    let status = state.app_state()?.status().clone();
-    match status {
-        AppStatus::Idle | AppStatus::Ready | AppStatus::Error => {
-            // Second guard behind registration: never copy a selection while
-            // Local AI is off.
-            let settings = state.db()?.get_settings()?;
-            if let Err(error) = crate::selection_transform::ensure_enabled(&settings) {
-                let _ = app.emit("scribe:selection-transform-failed", &error.message);
-                return Ok(());
-            }
-            start_transform(app)
-        }
-        AppStatus::Recording => tray::stop_dictation(app),
-        _ => Ok(()),
-    }
-}
-
-/// Off-Windows there is no selection capture (SendInput/clipboard), so fall
-/// back to surfacing the typed-instruction Dashboard panel.
-#[cfg(not(windows))]
-fn toggle_transform(app: &AppHandle) -> Result<(), CommandError> {
-    tray::open_dashboard(app, Some("dashboard"))
+    dictation_worker::submit(app, Intent::ToggleNote);
 }
 
 /// Captures the focused app's current selection and starts a transform
 /// recording for the spoken instruction. Aborts with a friendly notice when
-/// nothing is selected, so the user never records an instruction for an empty
-/// selection.
+/// Local AI is off or nothing is selected, so the user never records an
+/// instruction for an empty selection. Runs on the dictation worker.
 #[cfg(windows)]
-fn start_transform(app: &AppHandle) -> Result<(), CommandError> {
+pub(crate) fn start_transform(app: &AppHandle) -> Result<(), CommandError> {
+    // Second guard behind registration: never copy a selection while Local AI
+    // is off.
+    let settings = app.state::<BackendState>().db()?.get_settings()?;
+    if let Err(error) = crate::selection_transform::ensure_enabled(&settings) {
+        let _ = app.emit("scribe:selection-transform-failed", &error.message);
+        return Ok(());
+    }
+
     // An empty or non-text selection drops `captured`, which restores the
     // user's clipboard; a copy that changed nothing comes back as None.
     let captured = crate::selection_transform::capture_selection()?
@@ -1221,11 +1173,7 @@ fn start_transform(app: &AppHandle) -> Result<(), CommandError> {
     // If the recording can't start, `captured` drops here and the clipboard
     // is put back.
     audio::start_recording_for_app(app, Some(request), true)?;
-
-    let state = app.state::<BackendState>();
-    state.set_pending_transform(captured);
-    let status = state.app_state()?.status().clone();
-    tray::update_tray_status(app, status);
+    app.state::<BackendState>().set_pending_transform(captured);
     Ok(())
 }
 

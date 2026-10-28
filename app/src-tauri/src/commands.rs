@@ -8,7 +8,7 @@ use crate::{
     app_state::{AppEvent, AppStateMachine, AppStateSnapshot},
     audio::{self, MicrophoneInfo, RecordingResult, RecordingSessionInfo, StartRecordingRequest},
     db::Database,
-    dictation::{self, DictationResult},
+    dictation_worker::{self, DictationCommand, Outcome},
     error::CommandError,
     file_transcribe::{self, TranscribeFileResult},
     hotkeys::{self, HotkeyStatus},
@@ -191,89 +191,144 @@ impl BackendState {
     }
 }
 
-#[tauri::command]
-pub fn get_app_state(
-    state: tauri::State<'_, BackendState>,
-) -> Result<AppStateSnapshot, CommandError> {
-    Ok(state.app_state()?.snapshot())
+/// Runs blocking command work on Tauri's blocking thread pool. Tauri runs every
+/// non-async command on the main thread, where anything slow (the database,
+/// disk, the network, the clipboard, a file dialog) freezes every window, so
+/// commands that touch any of those wrap their body in this.
+async fn off_main<T, F>(app: tauri::AppHandle, work: F) -> Result<T, CommandError>
+where
+    T: Send + 'static,
+    F: FnOnce(&tauri::AppHandle) -> Result<T, CommandError> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(move || work(&app))
+        .await
+        .map_err(|error| {
+            CommandError::new(
+                "command_failed",
+                format!("Scribe could not finish that action. {}", error),
+            )
+        })?
+}
+
+/// Like [`off_main`], for commands that open a native file dialog. Each dialog
+/// gets a fresh thread, so the dialog's COM apartment can never clash with
+/// whatever an earlier task on a reused pool thread set up.
+async fn on_dialog_thread<T, F>(app: tauri::AppHandle, work: F) -> Result<T, CommandError>
+where
+    T: Send + 'static,
+    F: FnOnce(&tauri::AppHandle) -> Result<T, CommandError> + Send + 'static,
+{
+    off_main(app, move |app| {
+        let app = app.clone();
+        std::thread::Builder::new()
+            .name("scribe-file-dialog".to_string())
+            .spawn(move || work(&app))
+            .map_err(|error| {
+                CommandError::new(
+                    "command_failed",
+                    format!("Scribe could not open the file dialog. {}", error),
+                )
+            })?
+            .join()
+            .map_err(|_| {
+                CommandError::new("command_failed", "The file dialog closed unexpectedly.")
+            })?
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_settings(state: tauri::State<'_, BackendState>) -> Result<AppSettings, CommandError> {
-    state.db()?.get_settings()
+pub async fn get_app_state(app: tauri::AppHandle) -> Result<AppStateSnapshot, CommandError> {
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        Ok(state.app_state()?.snapshot())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn update_settings(
+pub async fn get_settings(app: tauri::AppHandle) -> Result<AppSettings, CommandError> {
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        state.db()?.get_settings()
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn update_settings(
     app: tauri::AppHandle,
-    state: tauri::State<'_, BackendState>,
     settings: AppSettings,
 ) -> Result<AppSettings, CommandError> {
-    settings
-        .validate()
-        .map_err(CommandError::invalid_settings)?;
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        settings
+            .validate()
+            .map_err(CommandError::invalid_settings)?;
 
-    let previous = state.db()?.get_settings()?;
+        let previous = state.db()?.get_settings()?;
 
-    // Apply launch-at-startup first: when the OS registration fails the new
-    // value is never saved, so the UI toggle reverts.
-    if previous.launch_at_startup != settings.launch_at_startup {
-        apply_autostart(&app, settings.launch_at_startup)?;
-    }
-
-    // Transform Selection is only bound while Local AI is on, so turning it on
-    // or off re-registers the hotkey set too.
-    let transform_toggled = previous.notes_analysis_enabled != settings.notes_analysis_enabled;
-    let rebind = previous.hotkeys != settings.hotkeys || transform_toggled;
-    let mut hotkey_failures = Vec::new();
-    if rebind {
-        hotkeys::set_transform_enabled(&app, settings.notes_analysis_enabled);
-        hotkey_failures = match hotkeys::replace_hotkeys(&app, &previous.hotkeys, &settings.hotkeys)
-        {
-            Ok(failures) => failures,
-            Err(error) => {
-                hotkeys::set_transform_enabled(&app, previous.notes_analysis_enabled);
-                return Err(error);
-            }
-        };
-    }
-
-    let save_result = if previous.github_repo != settings.github_repo {
-        state
-            .db()?
-            .save_settings_and_clear_github_activity(&settings)
-    } else {
-        state.db()?.save_settings(&settings)
-    };
-    if let Err(error) = save_result {
-        if rebind {
-            hotkeys::set_transform_enabled(&app, previous.notes_analysis_enabled);
-            let _ = hotkeys::replace_hotkeys(&app, &settings.hotkeys, &previous.hotkeys);
-        }
+        // Apply launch-at-startup first: when the OS registration fails the new
+        // value is never saved, so the UI toggle reverts.
         if previous.launch_at_startup != settings.launch_at_startup {
-            let _ = apply_autostart(&app, previous.launch_at_startup);
+            apply_autostart(app, settings.launch_at_startup)?;
         }
 
-        return Err(error);
-    }
+        // Transform Selection is only bound while Local AI is on, so turning it on
+        // or off re-registers the hotkey set too.
+        let transform_toggled = previous.notes_analysis_enabled != settings.notes_analysis_enabled;
+        let rebind = previous.hotkeys != settings.hotkeys || transform_toggled;
+        let mut hotkey_failures = Vec::new();
+        if rebind {
+            hotkeys::set_transform_enabled(app, settings.notes_analysis_enabled);
+            hotkey_failures =
+                match hotkeys::replace_hotkeys(app, &previous.hotkeys, &settings.hotkeys) {
+                    Ok(failures) => failures,
+                    Err(error) => {
+                        hotkeys::set_transform_enabled(app, previous.notes_analysis_enabled);
+                        return Err(error);
+                    }
+                };
+        }
 
-    hotkeys::emit_registration_failures(&app, &hotkey_failures);
+        let save_result = if previous.github_repo != settings.github_repo {
+            state
+                .db()?
+                .save_settings_and_clear_github_activity(&settings)
+        } else {
+            state.db()?.save_settings(&settings)
+        };
+        if let Err(error) = save_result {
+            if rebind {
+                hotkeys::set_transform_enabled(app, previous.notes_analysis_enabled);
+                let _ = hotkeys::replace_hotkeys(app, &settings.hotkeys, &previous.hotkeys);
+            }
+            if previous.launch_at_startup != settings.launch_at_startup {
+                let _ = apply_autostart(app, previous.launch_at_startup);
+            }
 
-    if previous.history_retention_days != settings.history_retention_days
-        || (!previous.history_enabled && settings.history_enabled)
-    {
-        state
-            .db()?
-            .enforce_history_retention(settings.history_retention_days)?;
-    }
+            return Err(error);
+        }
 
-    if previous.notes_retention_days != settings.notes_retention_days {
-        state
-            .db()?
-            .enforce_notes_retention(settings.notes_retention_days)?;
-    }
+        hotkeys::emit_registration_failures(app, &hotkey_failures);
 
-    Ok(settings)
+        if previous.history_retention_days != settings.history_retention_days
+            || (!previous.history_enabled && settings.history_enabled)
+        {
+            state
+                .db()?
+                .enforce_history_retention(settings.history_retention_days)?;
+        }
+
+        if previous.notes_retention_days != settings.notes_retention_days {
+            state
+                .db()?
+                .enforce_notes_retention(settings.notes_retention_days)?;
+        }
+
+        Ok(settings)
+    })
+    .await
 }
 
 /// Enables or disables the OS launch-at-startup registration. Shared by the
@@ -301,33 +356,45 @@ pub(crate) fn apply_autostart(app: &tauri::AppHandle, enabled: bool) -> Result<(
 }
 
 #[tauri::command]
-pub fn get_last_transcript(
-    state: tauri::State<'_, BackendState>,
+pub async fn get_last_transcript(
+    app: tauri::AppHandle,
 ) -> Result<Option<Transcript>, CommandError> {
-    state.last_transcript()
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        state.last_transcript()
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn clear_last_transcript(state: tauri::State<'_, BackendState>) -> Result<(), CommandError> {
-    state.set_unsaved_last_transcript(None);
-    state.db()?.clear_last_transcript()
+pub async fn clear_last_transcript(app: tauri::AppHandle) -> Result<(), CommandError> {
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        state.set_unsaved_last_transcript(None);
+        state.db()?.clear_last_transcript()
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn list_recent_transcripts(
-    state: tauri::State<'_, BackendState>,
+pub async fn list_recent_transcripts(
+    app: tauri::AppHandle,
     limit: Option<u32>,
 ) -> Result<Vec<Transcript>, CommandError> {
-    let limit = limit.unwrap_or(20).clamp(1, 100);
-    state.db()?.list_recent_transcripts(limit)
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        let limit = limit.unwrap_or(20).clamp(1, 100);
+        state.db()?.list_recent_transcripts(limit)
+    })
+    .await
 }
 
 #[tauri::command]
 // Tauri maps these flat parameters directly from the stable frontend command
 // payload, so grouping them would be a breaking IPC contract change.
 #[allow(clippy::too_many_arguments)]
-pub fn search_transcripts(
-    state: tauri::State<'_, BackendState>,
+pub async fn search_transcripts(
+    app: tauri::AppHandle,
     query: Option<String>,
     notes_only: Option<bool>,
     from: Option<String>,
@@ -336,172 +403,207 @@ pub fn search_transcripts(
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<TranscriptSearchResult, CommandError> {
-    let limit = limit.unwrap_or(20).clamp(1, 100);
-    let offset = offset.unwrap_or_default();
-    state.db()?.search_transcripts(
-        query.as_deref(),
-        notes_only.unwrap_or(false),
-        from.as_deref(),
-        to.as_deref(),
-        sort.unwrap_or_default(),
-        limit,
-        offset,
-    )
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        let limit = limit.unwrap_or(20).clamp(1, 100);
+        let offset = offset.unwrap_or_default();
+        state.db()?.search_transcripts(
+            query.as_deref(),
+            notes_only.unwrap_or(false),
+            from.as_deref(),
+            to.as_deref(),
+            sort.unwrap_or_default(),
+            limit,
+            offset,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_transcript(
-    state: tauri::State<'_, BackendState>,
+pub async fn get_transcript(
+    app: tauri::AppHandle,
     id: String,
 ) -> Result<Option<Transcript>, CommandError> {
-    state.db()?.get_transcript_by_id(&id)
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        state.db()?.get_transcript_by_id(&id)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn update_transcript(
-    state: tauri::State<'_, BackendState>,
+pub async fn update_transcript(
+    app: tauri::AppHandle,
     id: String,
     text: String,
 ) -> Result<Transcript, CommandError> {
-    state.db()?.update_transcript(&id, &text)
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        state.db()?.update_transcript(&id, &text)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_transcript(
-    state: tauri::State<'_, BackendState>,
-    id: String,
-) -> Result<(), CommandError> {
-    state.db()?.delete_transcript(&id)?;
-    // "Open in editor" may have left a plain-text copy; it goes with the
-    // transcript.
-    let _ = std::fs::remove_file(state.dirs().editor_copy(&id));
-    Ok(())
+pub async fn delete_transcript(app: tauri::AppHandle, id: String) -> Result<(), CommandError> {
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        state.db()?.delete_transcript(&id)?;
+        // "Open in editor" may have left a plain-text copy; it goes with the
+        // transcript.
+        let _ = std::fs::remove_file(state.dirs().editor_copy(&id));
+        Ok(())
+    })
+    .await
 }
 
 /// Clears dictation history and everything that still holds a copy of it:
 /// the Last Transcript Buffer, failed recordings and editor copies. Notes are
 /// kept.
 #[tauri::command]
-pub fn clear_transcript_history(state: tauri::State<'_, BackendState>) -> Result<(), CommandError> {
-    state.set_unsaved_last_transcript(None);
-    let db = state.db()?;
-    db.clear_transcript_history()?;
-    crate::data_hygiene::clear_history_leftovers(&db, state.dirs())
+pub async fn clear_transcript_history(app: tauri::AppHandle) -> Result<(), CommandError> {
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        state.set_unsaved_last_transcript(None);
+        let db = state.db()?;
+        db.clear_transcript_history()?;
+        crate::data_hygiene::clear_history_leftovers(&db, state.dirs())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn clear_notes(state: tauri::State<'_, BackendState>) -> Result<(), CommandError> {
-    let db = state.db()?;
-    db.clear_notes()?;
-    db.vacuum()
+pub async fn clear_notes(app: tauri::AppHandle) -> Result<(), CommandError> {
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        let db = state.db()?;
+        db.clear_notes()?;
+        db.vacuum()
+    })
+    .await
 }
 
 /// Loads the given transcripts, orders them oldest-first, and joins their text
 /// with `separator` (default "\n\n"). Ids that don't resolve are skipped.
 #[tauri::command]
-pub fn combine_transcripts(
-    state: tauri::State<'_, BackendState>,
+pub async fn combine_transcripts(
+    app: tauri::AppHandle,
     ids: Vec<String>,
     separator: Option<String>,
 ) -> Result<String, CommandError> {
-    let separator = separator.unwrap_or_else(|| "\n\n".to_string());
-    state.db()?.combine_transcripts(&ids, &separator)
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        let separator = separator.unwrap_or_else(|| "\n\n".to_string());
+        state.db()?.combine_transcripts(&ids, &separator)
+    })
+    .await
 }
 
 /// Persists `text` as a new (non-note) history entry and makes it the Last
 /// Transcript Buffer, mirroring how a dictation is saved. Returns the saved
 /// transcript.
 #[tauri::command]
-pub fn save_combined_transcript(
-    state: tauri::State<'_, BackendState>,
+pub async fn save_combined_transcript(
+    app: tauri::AppHandle,
     text: String,
 ) -> Result<Transcript, CommandError> {
-    let transcript = Transcript::new_last_buffer(text, None, None, None).ok_or_else(|| {
-        CommandError::new(
-            "empty_transcript",
-            "Cannot save an empty combined transcript.",
-        )
-    })?;
-    let db = state.db()?;
-    let history_enabled = db.get_settings()?.history_enabled;
-    db.save_last_transcript_with_history(&transcript, history_enabled)?;
-    Ok(transcript)
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        let transcript = Transcript::new_last_buffer(text, None, None, None).ok_or_else(|| {
+            CommandError::new(
+                "empty_transcript",
+                "Cannot save an empty combined transcript.",
+            )
+        })?;
+        let db = state.db()?;
+        let history_enabled = db.get_settings()?.history_enabled;
+        db.save_last_transcript_with_history(&transcript, history_enabled)?;
+        Ok(transcript)
+    })
+    .await
 }
 
 /// Writes a transcript's text to a temp `.txt` file under the app cache dir and
 /// opens it with the OS default text app.
 #[tauri::command]
-pub fn open_transcript_externally(
+pub async fn open_transcript_externally(
     app: tauri::AppHandle,
-    state: tauri::State<'_, BackendState>,
     id: String,
 ) -> Result<(), CommandError> {
-    let transcript = state
-        .db()?
-        .get_transcript_by_id(&id)?
-        .ok_or_else(|| CommandError::new("transcript_not_found", "Transcript was not found."))?;
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        let transcript = state.db()?.get_transcript_by_id(&id)?.ok_or_else(|| {
+            CommandError::new("transcript_not_found", "Transcript was not found.")
+        })?;
 
-    let export_dir = state.dirs().editor_copies();
-    std::fs::create_dir_all(&export_dir).map_err(|error| {
-        CommandError::new(
-            "transcript_export_failed",
-            format!(
-                "Could not create export folder {}. {}",
-                export_dir.display(),
-                error
-            ),
-        )
-    })?;
-
-    let path = state.dirs().editor_copy(&id);
-    std::fs::write(&path, transcript.text.as_bytes()).map_err(|error| {
-        CommandError::new(
-            "transcript_export_failed",
-            format!(
-                "Could not write transcript file {}. {}",
-                path.display(),
-                error
-            ),
-        )
-    })?;
-
-    app.opener()
-        .open_path(path.to_string_lossy(), None::<&str>)
-        .map_err(|error| {
+        let export_dir = state.dirs().editor_copies();
+        std::fs::create_dir_all(&export_dir).map_err(|error| {
             CommandError::new(
-                "transcript_open_failed",
+                "transcript_export_failed",
                 format!(
-                    "Could not open transcript file {}. {}",
+                    "Could not create export folder {}. {}",
+                    export_dir.display(),
+                    error
+                ),
+            )
+        })?;
+
+        let path = state.dirs().editor_copy(&id);
+        std::fs::write(&path, transcript.text.as_bytes()).map_err(|error| {
+            CommandError::new(
+                "transcript_export_failed",
+                format!(
+                    "Could not write transcript file {}. {}",
                     path.display(),
                     error
                 ),
             )
-        })
+        })?;
+
+        app.opener()
+            .open_path(path.to_string_lossy(), None::<&str>)
+            .map_err(|error| {
+                CommandError::new(
+                    "transcript_open_failed",
+                    format!(
+                        "Could not open transcript file {}. {}",
+                        path.display(),
+                        error
+                    ),
+                )
+            })
+    })
+    .await
 }
 
 /// Returns a transcript's saved audio clip as a base64 WAV string for
 /// in-app playback. Errors with code "transcript_audio_missing" when the
 /// transcript has no clip or the file is gone.
 #[tauri::command]
-pub fn get_transcript_audio(
-    state: tauri::State<'_, BackendState>,
+pub async fn get_transcript_audio(
+    app: tauri::AppHandle,
     id: String,
 ) -> Result<String, CommandError> {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-    let db = state.db()?;
-    let transcript = match db.get_transcript_by_id(&id)? {
-        Some(transcript) => Some(transcript),
-        // With history disabled the dictation only lives in the Last
-        // Transcript Buffer, which can still carry a clip.
-        None => db.get_last_transcript()?.filter(|last| last.id == id),
-    };
+        let db = state.db()?;
+        let transcript = match db.get_transcript_by_id(&id)? {
+            Some(transcript) => Some(transcript),
+            // With history disabled the dictation only lives in the Last
+            // Transcript Buffer, which can still carry a clip.
+            None => db.get_last_transcript()?.filter(|last| last.id == id),
+        };
 
-    let path = transcript
-        .and_then(|transcript| transcript.audio_path)
-        .ok_or_else(transcript_audio_missing)?;
-    let bytes = std::fs::read(&path).map_err(|_| transcript_audio_missing())?;
-    Ok(STANDARD.encode(bytes))
+        let path = transcript
+            .and_then(|transcript| transcript.audio_path)
+            .ok_or_else(transcript_audio_missing)?;
+        let bytes = std::fs::read(&path).map_err(|_| transcript_audio_missing())?;
+        Ok(STANDARD.encode(bytes))
+    })
+    .await
 }
 
 fn transcript_audio_missing() -> CommandError {
@@ -512,123 +614,139 @@ fn transcript_audio_missing() -> CommandError {
 }
 
 #[tauri::command]
-pub fn get_basic_stats(state: tauri::State<'_, BackendState>) -> Result<BasicStats, CommandError> {
-    state.db()?.get_basic_stats()
+pub async fn get_basic_stats(app: tauri::AppHandle) -> Result<BasicStats, CommandError> {
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        state.db()?.get_basic_stats()
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn refresh_basic_stats(
-    state: tauri::State<'_, BackendState>,
-) -> Result<BasicStats, CommandError> {
-    state.db()?.get_basic_stats()
+pub async fn refresh_basic_stats(app: tauri::AppHandle) -> Result<BasicStats, CommandError> {
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        state.db()?.get_basic_stats()
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_hotkey_status(
+pub async fn get_hotkey_status(app: tauri::AppHandle) -> Result<HotkeyStatus, CommandError> {
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        let settings = state.db()?.get_settings()?;
+        hotkeys::status(app, &settings.hotkeys)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn rebind_hotkey(
     app: tauri::AppHandle,
-    state: tauri::State<'_, BackendState>,
-) -> Result<HotkeyStatus, CommandError> {
-    let settings = state.db()?.get_settings()?;
-    hotkeys::status(&app, &settings.hotkeys)
-}
-
-#[tauri::command]
-pub fn rebind_hotkey(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, BackendState>,
     action: String,
     shortcut: String,
 ) -> Result<HotkeyStatus, CommandError> {
-    let action = hotkeys::HotkeyAction::parse(&action)?;
-    let mut settings = state.db()?.get_settings()?;
-    let previous_hotkeys = settings.hotkeys.clone();
-    let mut next_hotkeys = previous_hotkeys.clone();
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        let action = hotkeys::HotkeyAction::parse(&action)?;
+        let mut settings = state.db()?.get_settings()?;
+        let previous_hotkeys = settings.hotkeys.clone();
+        let mut next_hotkeys = previous_hotkeys.clone();
 
-    action.set_shortcut(&mut next_hotkeys, shortcut);
-    hotkeys::validate_hotkeys(&next_hotkeys)?;
-    let failures = hotkeys::replace_hotkeys(&app, &previous_hotkeys, &next_hotkeys)?;
+        action.set_shortcut(&mut next_hotkeys, shortcut);
+        hotkeys::validate_hotkeys(&next_hotkeys)?;
+        let failures = hotkeys::replace_hotkeys(app, &previous_hotkeys, &next_hotkeys)?;
 
-    // When the binding being changed is the one that failed, restore the
-    // previous set (other bindings stay registered either way) and surface
-    // the error inline to the rebind UI.
-    if let Some(failure) = failures.iter().find(|failure| failure.action == action) {
-        let message = failure.message.clone();
-        let _ = hotkeys::replace_hotkeys(&app, &next_hotkeys, &previous_hotkeys);
-        return Err(CommandError::new("hotkey_registration_failed", message));
-    }
+        // When the binding being changed is the one that failed, restore the
+        // previous set (other bindings stay registered either way) and surface
+        // the error inline to the rebind UI.
+        if let Some(failure) = failures.iter().find(|failure| failure.action == action) {
+            let message = failure.message.clone();
+            let _ = hotkeys::replace_hotkeys(app, &next_hotkeys, &previous_hotkeys);
+            return Err(CommandError::new("hotkey_registration_failed", message));
+        }
 
-    settings.hotkeys = next_hotkeys.clone();
-    if let Err(error) = state.db()?.save_settings(&settings) {
-        let _ = hotkeys::replace_hotkeys(&app, &next_hotkeys, &previous_hotkeys);
-        return Err(error);
-    }
+        settings.hotkeys = next_hotkeys.clone();
+        if let Err(error) = state.db()?.save_settings(&settings) {
+            let _ = hotkeys::replace_hotkeys(app, &next_hotkeys, &previous_hotkeys);
+            return Err(error);
+        }
 
-    hotkeys::emit_registration_failures(&app, &failures);
-    hotkeys::status(&app, &settings.hotkeys)
+        hotkeys::emit_registration_failures(app, &failures);
+        hotkeys::status(app, &settings.hotkeys)
+    })
+    .await
 }
 
 /// Sets whether a single-shot bind (Toggle, Paste, Open Dashboard) acts on key
 /// press or release. Rejected for Hold-to-Talk, which is push-to-talk. Re-runs
 /// registration so the toggle watcher picks up the new edge, then persists.
 #[tauri::command]
-pub fn set_hotkey_trigger(
+pub async fn set_hotkey_trigger(
     app: tauri::AppHandle,
-    state: tauri::State<'_, BackendState>,
     action: String,
     trigger: crate::settings::TriggerEdge,
 ) -> Result<HotkeyStatus, CommandError> {
-    let action = hotkeys::HotkeyAction::parse(&action)?;
-    let mut settings = state.db()?.get_settings()?;
-    let previous_hotkeys = settings.hotkeys.clone();
-    let mut next_hotkeys = previous_hotkeys.clone();
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        let action = hotkeys::HotkeyAction::parse(&action)?;
+        let mut settings = state.db()?.get_settings()?;
+        let previous_hotkeys = settings.hotkeys.clone();
+        let mut next_hotkeys = previous_hotkeys.clone();
 
-    if !action.set_trigger(&mut next_hotkeys, trigger) {
-        return Err(CommandError::new(
-            "invalid_hotkey_trigger",
-            "Hold-to-Talk is push-to-talk; it has no press/release option.",
-        ));
-    }
+        if !action.set_trigger(&mut next_hotkeys, trigger) {
+            return Err(CommandError::new(
+                "invalid_hotkey_trigger",
+                "Hold-to-Talk is push-to-talk; it has no press/release option.",
+            ));
+        }
 
-    hotkeys::validate_hotkeys(&next_hotkeys)?;
-    let failures = hotkeys::replace_hotkeys(&app, &previous_hotkeys, &next_hotkeys)?;
+        hotkeys::validate_hotkeys(&next_hotkeys)?;
+        let failures = hotkeys::replace_hotkeys(app, &previous_hotkeys, &next_hotkeys)?;
 
-    settings.hotkeys = next_hotkeys.clone();
-    if let Err(error) = state.db()?.save_settings(&settings) {
-        let _ = hotkeys::replace_hotkeys(&app, &next_hotkeys, &previous_hotkeys);
-        return Err(error);
-    }
+        settings.hotkeys = next_hotkeys.clone();
+        if let Err(error) = state.db()?.save_settings(&settings) {
+            let _ = hotkeys::replace_hotkeys(app, &next_hotkeys, &previous_hotkeys);
+            return Err(error);
+        }
 
-    hotkeys::emit_registration_failures(&app, &failures);
-    hotkeys::status(&app, &settings.hotkeys)
+        hotkeys::emit_registration_failures(app, &failures);
+        hotkeys::status(app, &settings.hotkeys)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn reset_hotkeys_to_defaults(
+pub async fn reset_hotkeys_to_defaults(
     app: tauri::AppHandle,
-    state: tauri::State<'_, BackendState>,
 ) -> Result<HotkeyStatus, CommandError> {
-    let mut settings = state.db()?.get_settings()?;
-    let previous_hotkeys = settings.hotkeys.clone();
-    // "Defaults" are flavor-specific: the Dev flavor resets to its
-    // non-conflicting binds, stable resets to the production binds.
-    let next_hotkeys = if crate::is_dev_flavor(&app) {
-        crate::settings::HotkeySettings::dev_defaults()
-    } else {
-        AppSettings::default().hotkeys
-    };
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        let mut settings = state.db()?.get_settings()?;
+        let previous_hotkeys = settings.hotkeys.clone();
+        // "Defaults" are flavor-specific: the Dev flavor resets to its
+        // non-conflicting binds, stable resets to the production binds.
+        let next_hotkeys = if crate::is_dev_flavor(app) {
+            crate::settings::HotkeySettings::dev_defaults()
+        } else {
+            AppSettings::default().hotkeys
+        };
 
-    hotkeys::validate_hotkeys(&next_hotkeys)?;
-    let failures = hotkeys::replace_hotkeys(&app, &previous_hotkeys, &next_hotkeys)?;
+        hotkeys::validate_hotkeys(&next_hotkeys)?;
+        let failures = hotkeys::replace_hotkeys(app, &previous_hotkeys, &next_hotkeys)?;
 
-    settings.hotkeys = next_hotkeys.clone();
-    settings.dev_hotkeys_seeded = true;
-    if let Err(error) = state.db()?.save_settings(&settings) {
-        let _ = hotkeys::replace_hotkeys(&app, &next_hotkeys, &previous_hotkeys);
-        return Err(error);
-    }
+        settings.hotkeys = next_hotkeys.clone();
+        settings.dev_hotkeys_seeded = true;
+        if let Err(error) = state.db()?.save_settings(&settings) {
+            let _ = hotkeys::replace_hotkeys(app, &next_hotkeys, &previous_hotkeys);
+            return Err(error);
+        }
 
-    hotkeys::emit_registration_failures(&app, &failures);
-    hotkeys::status(&app, &settings.hotkeys)
+        hotkeys::emit_registration_failures(app, &failures);
+        hotkeys::status(app, &settings.hotkeys)
+    })
+    .await
 }
 
 /// Loads the production (stable-flavor) hotkey defaults. Exposed for the Dev
@@ -636,26 +754,29 @@ pub fn reset_hotkeys_to_defaults(
 /// running it alone. Sets `dev_hotkeys_seeded` so the one-shot dev seeding
 /// never re-applies the Dev binds on the next launch.
 #[tauri::command]
-pub fn load_production_hotkey_defaults(
+pub async fn load_production_hotkey_defaults(
     app: tauri::AppHandle,
-    state: tauri::State<'_, BackendState>,
 ) -> Result<HotkeyStatus, CommandError> {
-    let mut settings = state.db()?.get_settings()?;
-    let previous_hotkeys = settings.hotkeys.clone();
-    let next_hotkeys = AppSettings::default().hotkeys;
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        let mut settings = state.db()?.get_settings()?;
+        let previous_hotkeys = settings.hotkeys.clone();
+        let next_hotkeys = AppSettings::default().hotkeys;
 
-    hotkeys::validate_hotkeys(&next_hotkeys)?;
-    let failures = hotkeys::replace_hotkeys(&app, &previous_hotkeys, &next_hotkeys)?;
+        hotkeys::validate_hotkeys(&next_hotkeys)?;
+        let failures = hotkeys::replace_hotkeys(app, &previous_hotkeys, &next_hotkeys)?;
 
-    settings.hotkeys = next_hotkeys.clone();
-    settings.dev_hotkeys_seeded = true;
-    if let Err(error) = state.db()?.save_settings(&settings) {
-        let _ = hotkeys::replace_hotkeys(&app, &next_hotkeys, &previous_hotkeys);
-        return Err(error);
-    }
+        settings.hotkeys = next_hotkeys.clone();
+        settings.dev_hotkeys_seeded = true;
+        if let Err(error) = state.db()?.save_settings(&settings) {
+            let _ = hotkeys::replace_hotkeys(app, &next_hotkeys, &previous_hotkeys);
+            return Err(error);
+        }
 
-    hotkeys::emit_registration_failures(&app, &failures);
-    hotkeys::status(&app, &settings.hotkeys)
+        hotkeys::emit_registration_failures(app, &failures);
+        hotkeys::status(app, &settings.hotkeys)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -664,46 +785,67 @@ pub fn open_dashboard(app: tauri::AppHandle) -> Result<(), CommandError> {
 }
 
 #[tauri::command]
-pub fn list_microphones(app: tauri::AppHandle) -> Result<Vec<MicrophoneInfo>, CommandError> {
-    audio::list_microphones_for_app(&app)
+pub async fn list_microphones(app: tauri::AppHandle) -> Result<Vec<MicrophoneInfo>, CommandError> {
+    off_main(app, audio::list_microphones_for_app).await
 }
 
+/// Starts a dictation from the dashboard. Runs on the dictation worker, so it
+/// is ordered with every hotkey, tray, and pill action.
 #[tauri::command]
-pub fn start_recording(
+pub async fn start_recording(
     app: tauri::AppHandle,
     request: Option<StartRecordingRequest>,
 ) -> Result<RecordingSessionInfo, CommandError> {
     // UI-started recordings are toggle-style (no key is held), so silence
     // auto-stop applies.
-    audio::start_recording_for_app(&app, request, true)
+    let command = DictationCommand::Start {
+        request,
+        allow_auto_stop: true,
+    };
+    match dictation_worker::request(app, command).await? {
+        Outcome::Started(info) => Ok(info),
+        _ => Err(CommandError::new(
+            "recording_unavailable",
+            "The recording could not be started.",
+        )),
+    }
+}
+
+/// Stops the dictation and transcribes it: the one stop path the dashboard and
+/// the pill share with the hotkeys and the tray. Resolves once the text is
+/// out; the result itself arrives through the usual dictation events. A stop
+/// while nothing is recording does nothing.
+#[tauri::command]
+pub async fn stop_dictation(app: tauri::AppHandle) -> Result<(), CommandError> {
+    dictation_worker::request(app, DictationCommand::Stop).await?;
+    Ok(())
 }
 
 #[tauri::command]
-pub fn stop_recording(app: tauri::AppHandle) -> Result<RecordingResult, CommandError> {
-    audio::stop_recording_for_app(&app)
+pub async fn cancel_recording(app: tauri::AppHandle) -> Result<(), CommandError> {
+    dictation_worker::request(app, DictationCommand::Cancel).await?;
+    Ok(())
 }
 
 #[tauri::command]
-pub fn cancel_recording(app: tauri::AppHandle) -> Result<(), CommandError> {
-    audio::cancel_recording_for_app(&app)
-}
-
-#[tauri::command]
-pub fn record_test_clip(
+pub async fn record_test_clip(
     app: tauri::AppHandle,
     duration_ms: Option<u64>,
 ) -> Result<RecordingResult, CommandError> {
-    audio::record_test_clip_for_app(&app, duration_ms)
+    off_main(app, move |app| {
+        audio::record_test_clip_for_app(app, duration_ms)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_test_clip_audio(app: tauri::AppHandle) -> Result<String, CommandError> {
-    audio::get_test_clip_audio_for_app(&app)
+pub async fn get_test_clip_audio(app: tauri::AppHandle) -> Result<String, CommandError> {
+    off_main(app, audio::get_test_clip_audio_for_app).await
 }
 
 #[tauri::command]
-pub fn open_data_folder(app: tauri::AppHandle) -> Result<(), CommandError> {
-    open_folder(&app, effective_data_dir(&app)?)
+pub async fn open_data_folder(app: tauri::AppHandle) -> Result<(), CommandError> {
+    off_main(app, move |app| open_folder(app, effective_data_dir(app)?)).await
 }
 
 /// The directory Scribe treats as its data root: the user-chosen `data_dir`
@@ -734,8 +876,11 @@ fn effective_data_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, Comm
 /// Returns the current effective data directory as a display string, so the
 /// Data & Privacy view can show the path prominently.
 #[tauri::command]
-pub fn get_data_dir(app: tauri::AppHandle) -> Result<String, CommandError> {
-    Ok(effective_data_dir(&app)?.to_string_lossy().into_owned())
+pub async fn get_data_dir(app: tauri::AppHandle) -> Result<String, CommandError> {
+    off_main(app, move |app| {
+        Ok(effective_data_dir(app)?.to_string_lossy().into_owned())
+    })
+    .await
 }
 
 /// Opens a native folder picker so the user can choose a new data directory.
@@ -743,31 +888,37 @@ pub fn get_data_dir(app: tauri::AppHandle) -> Result<String, CommandError> {
 /// choice is the frontend's job (it writes `dataDir` via update_settings),
 /// matching how the pill persists its position.
 #[tauri::command]
-pub fn pick_data_dir(app: tauri::AppHandle) -> Result<Option<String>, CommandError> {
-    #[cfg(windows)]
-    {
-        let start = effective_data_dir(&app).unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let picked = rfd::FileDialog::new()
-            .set_title("Choose Scribe data folder")
-            .set_directory(&start)
-            .pick_folder();
-        Ok(picked.map(|path| path.to_string_lossy().into_owned()))
-    }
+pub async fn pick_data_dir(app: tauri::AppHandle) -> Result<Option<String>, CommandError> {
+    on_dialog_thread(app, move |app| {
+        #[cfg(windows)]
+        {
+            let start = effective_data_dir(app).unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let picked = rfd::FileDialog::new()
+                .set_title("Choose Scribe data folder")
+                .set_directory(&start)
+                .pick_folder();
+            Ok(picked.map(|path| path.to_string_lossy().into_owned()))
+        }
 
-    #[cfg(not(windows))]
-    {
-        let _ = app;
-        Err(CommandError::new(
-            "folder_picker_unsupported",
-            "The folder picker is only available in the Windows build.",
-        ))
-    }
+        #[cfg(not(windows))]
+        {
+            let _ = app;
+            Err(CommandError::new(
+                "folder_picker_unsupported",
+                "The folder picker is only available in the Windows build.",
+            ))
+        }
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn open_models_folder(app: tauri::AppHandle) -> Result<(), CommandError> {
-    let dir = model_manager::models_dir(&app)?;
-    open_folder(&app, dir)
+pub async fn open_models_folder(app: tauri::AppHandle) -> Result<(), CommandError> {
+    off_main(app, move |app| {
+        let dir = model_manager::models_dir(app)?;
+        open_folder(app, dir)
+    })
+    .await
 }
 
 /// The directory tauri-plugin-log writes rotating log files to (TargetKind::
@@ -785,9 +936,12 @@ fn logs_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandError> 
 /// Opens the folder that holds Scribe's rotating local log files, so a user can
 /// find and attach them to a bug report.
 #[tauri::command]
-pub fn open_logs_folder(app: tauri::AppHandle) -> Result<(), CommandError> {
-    let dir = logs_dir(&app)?;
-    open_folder(&app, dir)
+pub async fn open_logs_folder(app: tauri::AppHandle) -> Result<(), CommandError> {
+    off_main(app, move |app| {
+        let dir = logs_dir(app)?;
+        open_folder(app, dir)
+    })
+    .await
 }
 
 /// Returns the logs directory as a display string for the Data & Privacy view,
@@ -817,9 +971,12 @@ fn failed_recordings_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, C
 /// Opens the folder that holds audio from dictations whose transcription failed,
 /// so a user can recover the recording from disk (risk R2 follow-up to Fix E).
 #[tauri::command]
-pub fn open_failed_recordings_folder(app: tauri::AppHandle) -> Result<(), CommandError> {
-    let dir = failed_recordings_dir(&app)?;
-    open_folder(&app, dir)
+pub async fn open_failed_recordings_folder(app: tauri::AppHandle) -> Result<(), CommandError> {
+    off_main(app, move |app| {
+        let dir = failed_recordings_dir(app)?;
+        open_folder(app, dir)
+    })
+    .await
 }
 
 /// Returns the failed-recordings directory as a display string for the Data &
@@ -833,26 +990,27 @@ pub fn get_failed_recordings_dir(app: tauri::AppHandle) -> Result<String, Comman
 /// window size, mirroring how the pill stores its position. The saved size is
 /// restored on the next launch (see lib.rs setup).
 #[tauri::command]
-pub fn save_window_size(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, BackendState>,
-) -> Result<AppSettings, CommandError> {
-    let window = app.get_webview_window("main").ok_or_else(|| {
-        CommandError::new("window_unavailable", "The main window is not available.")
-    })?;
-    let size = window.inner_size().map_err(|error| {
-        CommandError::new(
-            "window_size_unavailable",
-            format!("Could not read the window size. {}", error),
-        )
-    })?;
+pub async fn save_window_size(app: tauri::AppHandle) -> Result<AppSettings, CommandError> {
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        let window = app.get_webview_window("main").ok_or_else(|| {
+            CommandError::new("window_unavailable", "The main window is not available.")
+        })?;
+        let size = window.inner_size().map_err(|error| {
+            CommandError::new(
+                "window_size_unavailable",
+                format!("Could not read the window size. {}", error),
+            )
+        })?;
 
-    let mut settings = state.db()?.get_settings()?;
-    settings.window_width = Some(size.width as i32);
-    settings.window_height = Some(size.height as i32);
-    state.db()?.save_settings(&settings)?;
-    log::info!("Saved default window size {}x{}", size.width, size.height);
-    Ok(settings)
+        let mut settings = state.db()?.get_settings()?;
+        settings.window_width = Some(size.width as i32);
+        settings.window_height = Some(size.height as i32);
+        state.db()?.save_settings(&settings)?;
+        log::info!("Saved default window size {}x{}", size.width, size.height);
+        Ok(settings)
+    })
+    .await
 }
 
 /// Runs the user's notes-analysis prompt over a saved transcript via the
@@ -865,7 +1023,7 @@ pub async fn analyze_note(
     transcript_id: String,
 ) -> Result<Transcript, CommandError> {
     tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<BackendState>();
+        let state = app.state::<BackendState>().inner();
         // Read everything up front and drop the DB lock before the
         // long-running HTTP call.
         let (settings, transcript) = {
@@ -913,15 +1071,19 @@ pub async fn analyze_note(
 /// `reachable: false` for a down server rather than erroring; only an
 /// inaccessible settings store produces an `Err`.
 #[tauri::command]
-pub fn llm_status(
-    state: tauri::State<'_, BackendState>,
+pub async fn llm_status(
+    app: tauri::AppHandle,
     endpoint: Option<String>,
 ) -> Result<crate::note_analysis::LlmStatus, CommandError> {
-    let endpoint = match endpoint {
-        Some(endpoint) => endpoint,
-        None => state.db()?.get_settings()?.notes_analysis_endpoint,
-    };
-    Ok(crate::note_analysis::check_status(&endpoint))
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        let endpoint = match endpoint {
+            Some(endpoint) => endpoint,
+            None => state.db()?.get_settings()?.notes_analysis_endpoint,
+        };
+        Ok(crate::note_analysis::check_status(&endpoint))
+    })
+    .await
 }
 
 #[tauri::command]
@@ -960,20 +1122,21 @@ pub struct GithubStatus {
 }
 
 #[tauri::command]
-pub fn github_status(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, BackendState>,
-) -> Result<GithubStatus, CommandError> {
-    let settings = state.db()?.get_settings()?;
-    let service = app.config().identifier.clone();
-    Ok(GithubStatus {
-        configured: crate::github_oauth::is_configured(),
-        // A stored access token is the source of truth for "connected"; the
-        // login is just for display.
-        connected: crate::github_oauth::has_stored_token(&service),
-        username: settings.github_account_login,
-        repo: settings.github_repo,
+pub async fn github_status(app: tauri::AppHandle) -> Result<GithubStatus, CommandError> {
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        let settings = state.db()?.get_settings()?;
+        let service = app.config().identifier.clone();
+        Ok(GithubStatus {
+            configured: crate::github_oauth::is_configured(),
+            // A stored access token is the source of truth for "connected"; the
+            // login is just for display.
+            connected: crate::github_oauth::has_stored_token(&service),
+            username: settings.github_account_login,
+            repo: settings.github_repo,
+        })
     })
+    .await
 }
 
 /// The device-flow payload the UI shows the user to authorize. The frontend
@@ -1116,7 +1279,7 @@ pub async fn github_sync_now(
         // Serialize against the debounce worker so the same daily file is never
         // PUT concurrently. Held for the whole sync; recovers from a poisoned
         // lock (the guarded value is `()`).
-        let state = app.state::<BackendState>();
+        let state = app.state::<BackendState>().inner();
         let _guard = state.github_sync_lock();
         let attempt = crate::note_sync::collect_sync_attempt(&app, &service);
         crate::note_sync::record_sync_attempt(
@@ -1131,10 +1294,14 @@ pub async fn github_sync_now(
 }
 
 #[tauri::command]
-pub fn github_sync_activity(
-    state: tauri::State<'_, BackendState>,
+pub async fn github_sync_activity(
+    app: tauri::AppHandle,
 ) -> Result<Option<crate::sync_history::GitHubSyncActivity>, CommandError> {
-    state.db()?.get_github_sync_activity()
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        state.db()?.get_github_sync_activity()
+    })
+    .await
 }
 
 /// Exports transcripts to a local file the user picks via a native save dialog.
@@ -1143,103 +1310,106 @@ pub fn github_sync_activity(
 /// or None when the user cancels the dialog. Unlike the GitHub backup this needs
 /// no connected account — it is a purely local save.
 #[tauri::command]
-pub fn export_transcripts(
+pub async fn export_transcripts(
     app: tauri::AppHandle,
-    state: tauri::State<'_, BackendState>,
     scope: String,
     format: String,
 ) -> Result<Option<String>, CommandError> {
-    // Fetch the rows for the scope. A large cap so a normal history exports in
-    // one pass; notes/dictation reuse the same filtered queries the rest of the
-    // app uses.
-    let db = state.db()?;
-    let transcripts = match scope.as_str() {
-        "all" => {
-            db.search_transcripts(
-                None,
-                false,
-                None,
-                None,
-                TranscriptSort::OldestFirst,
-                1_000_000,
-                0,
-            )?
-            .transcripts
-        }
-        "notes" => {
-            db.search_transcripts(
-                None,
-                true,
-                None,
-                None,
-                TranscriptSort::OldestFirst,
-                1_000_000,
-                0,
-            )?
-            .transcripts
-        }
-        "dictation" => db.search_dictation_transcripts(1_000_000, 0)?.transcripts,
-        other => {
-            return Err(CommandError::new(
-                "invalid_export_scope",
-                format!(
-                    "Unknown export scope \"{}\". Expected all, notes, or dictation.",
-                    other
-                ),
-            ));
-        }
-    };
-    drop(db);
-
-    let (contents, extension) = match format.as_str() {
-        "markdown" => (crate::export::to_markdown(&transcripts), "md"),
-        "csv" => (crate::export::to_csv(&transcripts), "csv"),
-        "json" => (crate::export::to_json(&transcripts), "json"),
-        other => {
-            return Err(CommandError::new(
-                "invalid_export_format",
-                format!(
-                    "Unknown export format \"{}\". Expected markdown, csv, or json.",
-                    other
-                ),
-            ));
-        }
-    };
-
-    let default_name = format!(
-        "scribe-export-{}.{}",
-        chrono::Local::now().format("%Y-%m-%d"),
-        extension
-    );
-
-    #[cfg(windows)]
-    {
-        let start = effective_data_dir(&app).unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let picked = rfd::FileDialog::new()
-            .set_title("Export transcripts")
-            .set_directory(&start)
-            .set_file_name(&default_name)
-            .save_file();
-        let Some(path) = picked else {
-            return Ok(None);
+    on_dialog_thread(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        // Fetch the rows for the scope. A large cap so a normal history exports in
+        // one pass; notes/dictation reuse the same filtered queries the rest of the
+        // app uses.
+        let db = state.db()?;
+        let transcripts = match scope.as_str() {
+            "all" => {
+                db.search_transcripts(
+                    None,
+                    false,
+                    None,
+                    None,
+                    TranscriptSort::OldestFirst,
+                    1_000_000,
+                    0,
+                )?
+                .transcripts
+            }
+            "notes" => {
+                db.search_transcripts(
+                    None,
+                    true,
+                    None,
+                    None,
+                    TranscriptSort::OldestFirst,
+                    1_000_000,
+                    0,
+                )?
+                .transcripts
+            }
+            "dictation" => db.search_dictation_transcripts(1_000_000, 0)?.transcripts,
+            other => {
+                return Err(CommandError::new(
+                    "invalid_export_scope",
+                    format!(
+                        "Unknown export scope \"{}\". Expected all, notes, or dictation.",
+                        other
+                    ),
+                ));
+            }
         };
-        std::fs::write(&path, contents.as_bytes()).map_err(|error| {
-            CommandError::new(
-                "export_failed",
-                format!("Could not write {}. {}", path.display(), error),
-            )
-        })?;
-        Ok(Some(path.to_string_lossy().into_owned()))
-    }
+        drop(db);
 
-    #[cfg(not(windows))]
-    {
-        let _ = (app, contents, default_name);
-        Err(CommandError::new(
-            "save_dialog_unsupported",
-            "The export save dialog is only available in the Windows build.",
-        ))
-    }
+        let (contents, extension) = match format.as_str() {
+            "markdown" => (crate::export::to_markdown(&transcripts), "md"),
+            "csv" => (crate::export::to_csv(&transcripts), "csv"),
+            "json" => (crate::export::to_json(&transcripts), "json"),
+            other => {
+                return Err(CommandError::new(
+                    "invalid_export_format",
+                    format!(
+                        "Unknown export format \"{}\". Expected markdown, csv, or json.",
+                        other
+                    ),
+                ));
+            }
+        };
+
+        let default_name = format!(
+            "scribe-export-{}.{}",
+            chrono::Local::now().format("%Y-%m-%d"),
+            extension
+        );
+
+        #[cfg(windows)]
+        {
+            let start = effective_data_dir(app).unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let picked = rfd::FileDialog::new()
+                .set_title("Export transcripts")
+                .set_directory(&start)
+                .set_file_name(&default_name)
+                .save_file();
+            let Some(path) = picked else {
+                return Ok(None);
+            };
+            std::fs::write(&path, contents.as_bytes()).map_err(|error| {
+                CommandError::new(
+                    "export_failed",
+                    format!("Could not write {}. {}", path.display(), error),
+                )
+            })?;
+            Ok(Some(path.to_string_lossy().into_owned()))
+        }
+
+        #[cfg(not(windows))]
+        {
+            let _ = (app, contents, default_name);
+            Err(CommandError::new(
+                "save_dialog_unsupported",
+                "The export save dialog is only available in the Windows build.",
+            ))
+        }
+    })
+    .await
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1264,67 +1434,74 @@ struct LoadedTranscriptImport {
 /// Opens a native picker and validates a Scribe JSON export without changing
 /// the database. The returned counts drive the explicit confirmation UI.
 #[tauri::command]
-pub fn preview_transcript_import(
+pub async fn preview_transcript_import(
     app: tauri::AppHandle,
-    state: tauri::State<'_, BackendState>,
 ) -> Result<Option<TranscriptImportPreview>, CommandError> {
-    #[cfg(windows)]
-    {
-        let start = effective_data_dir(&app).unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let picked = rfd::FileDialog::new()
-            .set_title("Restore Scribe backup")
-            .set_directory(&start)
-            .add_filter("Scribe JSON export", &["json"])
-            .pick_file();
-        let Some(path) = picked else {
-            return Ok(None);
-        };
-        let loaded = load_transcript_import(&path)?;
-        let conflicts = state
-            .db()?
-            .count_existing_transcripts(&loaded.prepared.transcripts)?;
-        Ok(Some(TranscriptImportPreview {
-            path: path.to_string_lossy().into_owned(),
-            file_name: path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("Scribe backup.json")
-                .to_string(),
-            total: loaded.prepared.total,
-            notes: loaded.prepared.notes,
-            dictations: loaded.prepared.dictations,
-            conflicts,
-            audio_paths_removed: loaded.prepared.audio_paths_removed,
-            metadata_corrected: loaded.prepared.metadata_corrected,
-            fingerprint: loaded.fingerprint,
-        }))
-    }
+    on_dialog_thread(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        #[cfg(windows)]
+        {
+            let start = effective_data_dir(app).unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let picked = rfd::FileDialog::new()
+                .set_title("Restore Scribe backup")
+                .set_directory(&start)
+                .add_filter("Scribe JSON export", &["json"])
+                .pick_file();
+            let Some(path) = picked else {
+                return Ok(None);
+            };
+            let loaded = load_transcript_import(&path)?;
+            let conflicts = state
+                .db()?
+                .count_existing_transcripts(&loaded.prepared.transcripts)?;
+            Ok(Some(TranscriptImportPreview {
+                path: path.to_string_lossy().into_owned(),
+                file_name: path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("Scribe backup.json")
+                    .to_string(),
+                total: loaded.prepared.total,
+                notes: loaded.prepared.notes,
+                dictations: loaded.prepared.dictations,
+                conflicts,
+                audio_paths_removed: loaded.prepared.audio_paths_removed,
+                metadata_corrected: loaded.prepared.metadata_corrected,
+                fingerprint: loaded.fingerprint,
+            }))
+        }
 
-    #[cfg(not(windows))]
-    {
-        let _ = (app, state);
-        Err(CommandError::new(
-            "open_dialog_unsupported",
-            "The restore file picker is only available in the Windows build.",
-        ))
-    }
+        #[cfg(not(windows))]
+        {
+            let _ = (app, state);
+            Err(CommandError::new(
+                "open_dialog_unsupported",
+                "The restore file picker is only available in the Windows build.",
+            ))
+        }
+    })
+    .await
 }
 
 /// Revalidates the selected export, then imports every row in one database
 /// transaction. Re-reading at confirmation time prevents a stale preview from
 /// bypassing validation if the source file changed while the dialog was open.
 #[tauri::command]
-pub fn restore_transcript_import(
-    state: tauri::State<'_, BackendState>,
+pub async fn restore_transcript_import(
+    app: tauri::AppHandle,
     path: String,
     replace_existing: bool,
     expected_fingerprint: String,
 ) -> Result<ImportReport, CommandError> {
-    let loaded = load_transcript_import(std::path::Path::new(&path))?;
-    crate::import::verify_fingerprint(&loaded.fingerprint, &expected_fingerprint)?;
-    state
-        .db()?
-        .restore_transcripts(&loaded.prepared.transcripts, replace_existing)
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        let loaded = load_transcript_import(std::path::Path::new(&path))?;
+        crate::import::verify_fingerprint(&loaded.fingerprint, &expected_fingerprint)?;
+        state
+            .db()?
+            .restore_transcripts(&loaded.prepared.transcripts, replace_existing)
+    })
+    .await
 }
 
 fn load_transcript_import(path: &std::path::Path) -> Result<LoadedTranscriptImport, CommandError> {
@@ -1382,17 +1559,6 @@ fn open_folder(app: &tauri::AppHandle, dir: std::path::PathBuf) -> Result<(), Co
         })
 }
 
-/// Returns None (null) when the recording was valid but contained no speech;
-/// the frontend hears about it via "scribe:dictation-empty" and the
-/// app-state event returning to Idle.
-#[tauri::command]
-pub fn transcribe_recording(
-    app: tauri::AppHandle,
-    recording: RecordingResult,
-) -> Result<Option<DictationResult>, CommandError> {
-    dictation::transcribe_recording_for_app(&app, recording)
-}
-
 /// Transcribes a user-picked audio/video file. Async so the (possibly
 /// minutes-long) whisper-cli run happens on a blocking worker, never the
 /// main thread.
@@ -1414,28 +1580,46 @@ pub async fn transcribe_file(
 /// Writes transcribed text to `<source>.txt` next to the source file and
 /// returns the path written.
 #[tauri::command]
-pub fn save_text_file(path: String, text: String) -> Result<String, CommandError> {
-    file_transcribe::save_text_file(&path, &text)
+pub async fn save_text_file(
+    app: tauri::AppHandle,
+    path: String,
+    text: String,
+) -> Result<String, CommandError> {
+    off_main(app, move |_| file_transcribe::save_text_file(&path, &text)).await
+}
+
+/// Pastes the Last Transcript Buffer. Runs on the dictation worker so it can
+/// never paste over a dictation that is being output.
+#[tauri::command]
+pub async fn paste_last_transcript(app: tauri::AppHandle) -> Result<OutputResult, CommandError> {
+    match dictation_worker::request(app, DictationCommand::PasteLast).await? {
+        Outcome::Output(result) => Ok(result),
+        _ => Err(CommandError::new(
+            "paste_failed",
+            "The last transcript could not be pasted.",
+        )),
+    }
 }
 
 #[tauri::command]
-pub fn paste_last_transcript(app: tauri::AppHandle) -> Result<OutputResult, CommandError> {
-    output::paste_last_transcript(&app)
+pub async fn copy_last_transcript(app: tauri::AppHandle) -> Result<OutputResult, CommandError> {
+    off_main(app, output::copy_last_transcript).await
 }
 
 #[tauri::command]
-pub fn copy_last_transcript(app: tauri::AppHandle) -> Result<OutputResult, CommandError> {
-    output::copy_last_transcript(&app)
+pub async fn paste_transcript(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<OutputResult, CommandError> {
+    off_main(app, move |app| output::paste_transcript(app, &id)).await
 }
 
 #[tauri::command]
-pub fn paste_transcript(app: tauri::AppHandle, id: String) -> Result<OutputResult, CommandError> {
-    output::paste_transcript(&app, &id)
-}
-
-#[tauri::command]
-pub fn copy_transcript(app: tauri::AppHandle, id: String) -> Result<OutputResult, CommandError> {
-    output::copy_transcript(&app, &id)
+pub async fn copy_transcript(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<OutputResult, CommandError> {
+    off_main(app, move |app| output::copy_transcript(app, &id)).await
 }
 
 /// Selected-text transform: copy the text the user highlighted in the focused
@@ -1472,7 +1656,7 @@ fn transform_selection_blocking(
     }
 
     let (endpoint, model) = {
-        let state = app.state::<BackendState>();
+        let state = app.state::<BackendState>().inner();
         let settings = state.db()?.get_settings()?;
         selection_transform::ensure_enabled(&settings)?;
         (
@@ -1518,63 +1702,74 @@ fn transform_selection_blocking(
 }
 
 #[tauri::command]
-pub fn list_models(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, BackendState>,
-) -> Result<Vec<ModelInfo>, CommandError> {
-    let db = state.db()?;
-    model_manager::list_models(&app, &db, state.model_downloads())
+pub async fn list_models(app: tauri::AppHandle) -> Result<Vec<ModelInfo>, CommandError> {
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        let db = state.db()?;
+        model_manager::list_models(app, &db, state.model_downloads())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn download_model(
+pub async fn download_model(
     app: tauri::AppHandle,
-    state: tauri::State<'_, BackendState>,
     model_id: String,
 ) -> Result<ModelInfo, CommandError> {
-    let db = state.db()?;
-    model_manager::download_model(&app, &db, state.model_downloads(), &model_id)
+    off_main(app, move |app| {
+        model_manager::download_model(app, app.state::<BackendState>().inner(), &model_id)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn cancel_model_download(
-    state: tauri::State<'_, BackendState>,
+pub async fn cancel_model_download(
+    app: tauri::AppHandle,
     model_id: String,
 ) -> Result<(), CommandError> {
-    if model_manager::request_cancel_download(state.model_downloads(), &model_id)? {
-        return Ok(());
-    }
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        if model_manager::request_cancel_download(state.model_downloads(), &model_id)? {
+            return Ok(());
+        }
 
-    let db = state.db()?;
-    model_manager::cancel_model_download(&db, state.model_downloads(), &model_id)
+        let db = state.db()?;
+        model_manager::cancel_model_download(&db, state.model_downloads(), &model_id)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn retry_model_download(
+pub async fn retry_model_download(
     app: tauri::AppHandle,
-    state: tauri::State<'_, BackendState>,
     model_id: String,
 ) -> Result<ModelInfo, CommandError> {
-    let db = state.db()?;
-    model_manager::retry_model_download(&app, &db, state.model_downloads(), &model_id)
+    off_main(app, move |app| {
+        model_manager::retry_model_download(app, app.state::<BackendState>().inner(), &model_id)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_model(
+pub async fn delete_model(
     app: tauri::AppHandle,
-    state: tauri::State<'_, BackendState>,
     model_id: String,
 ) -> Result<ModelInfo, CommandError> {
-    let db = state.db()?;
-    model_manager::delete_model(&app, &db, &model_id)
+    off_main(app, move |app| {
+        let state = app.state::<BackendState>().inner();
+        let db = state.db()?;
+        model_manager::delete_model(app, &db, &model_id)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn select_model(
+pub async fn select_model(
     app: tauri::AppHandle,
-    state: tauri::State<'_, BackendState>,
     model_id: String,
 ) -> Result<ModelInfo, CommandError> {
-    let db = state.db()?;
-    model_manager::select_model(&app, &db, &model_id)
+    off_main(app, move |app| {
+        model_manager::select_model(app, app.state::<BackendState>().inner(), &model_id)
+    })
+    .await
 }
