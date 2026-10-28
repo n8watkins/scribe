@@ -1,22 +1,15 @@
-#![cfg_attr(not(windows), allow(dead_code))]
-
 use std::{fs, path::PathBuf, thread, time::Duration};
 
 use chrono::{DateTime, Utc};
-#[cfg(windows)]
 use cpal::{
-    platform::{WasapiDevice as Device, WasapiHost, WasapiStream as Stream},
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    SampleFormat, StreamConfig,
+    Device, SampleFormat, Stream, StreamConfig,
 };
-#[cfg(windows)]
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
-#[cfg(any(test, windows))]
 use uuid::Uuid;
 
-#[cfg(windows)]
 use std::{
     collections::HashMap,
     sync::{
@@ -37,7 +30,6 @@ use crate::{
 pub(crate) const TARGET_SAMPLE_RATE: u32 = 16_000;
 const TARGET_CHANNELS: u16 = 1;
 const TARGET_BITS_PER_SAMPLE: u16 = 16;
-#[cfg(windows)]
 const LEVEL_EVENT_INTERVAL: Duration = Duration::from_millis(40);
 const DEFAULT_TEST_CLIP_MS: u64 = 3_000;
 /// Per-chunk RMS at or above this counts as speech. Silence auto-stop and the
@@ -54,7 +46,6 @@ const TRIM_PADDING_MS: u32 = 300;
 /// How long capture keeps running after a user-initiated stop. People press
 /// stop while the last word is still leaving their mouth (and in WASAPI
 /// buffers); cutting the stream at the keypress clips it.
-#[cfg(windows)]
 const STOP_GRACE_MS: u64 = 400;
 /// RMS analysis window for silence trimming.
 const TRIM_WINDOW_MS: u32 = 20;
@@ -142,7 +133,6 @@ pub struct RecordingResult {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg(windows)]
 struct AudioLevelEvent {
     session_id: String,
     level: f32,
@@ -170,29 +160,25 @@ enum StopReason {
 }
 
 #[derive(Debug)]
-#[cfg(windows)]
 struct AudioChunk {
     samples: Vec<f32>,
 }
 
 #[derive(Debug)]
-#[cfg(windows)]
 enum WorkerControl {
     Stop(StopReason),
 }
 
 pub struct AudioService {
     temp_dir: PathBuf,
-    #[cfg(windows)]
     active: Option<RecordingSession>,
     last_result: Option<RecordingResult>,
     last_test_clip: Option<PathBuf>,
 }
 
-#[cfg(windows)]
 struct RecordingSession {
     info: RecordingSessionInfo,
-    stream: Stream,
+    stream: CaptureStream,
     control_tx: Sender<WorkerControl>,
     worker: thread::JoinHandle<Result<RecordingResult, CommandError>>,
     timeout_active: Arc<AtomicBool>,
@@ -204,8 +190,6 @@ struct StartOutcome {
     started: bool,
 }
 
-#[derive(Debug)]
-#[cfg(windows)]
 struct DeviceCandidate {
     info: MicrophoneInfo,
     device: Device,
@@ -215,7 +199,6 @@ impl AudioService {
     pub fn new(temp_dir: PathBuf) -> Self {
         Self {
             temp_dir,
-            #[cfg(windows)]
             active: None,
             last_result: None,
             last_test_clip: None,
@@ -230,7 +213,6 @@ impl AudioService {
         self.last_test_clip.clone()
     }
 
-    #[cfg(windows)]
     fn list_microphones(
         &self,
         selected_mic_id: Option<&str>,
@@ -241,15 +223,6 @@ impl AudioService {
             .collect())
     }
 
-    #[cfg(not(windows))]
-    fn list_microphones(
-        &self,
-        _selected_mic_id: Option<&str>,
-    ) -> Result<Vec<MicrophoneInfo>, CommandError> {
-        Err(unsupported_audio_platform())
-    }
-
-    #[cfg(windows)]
     fn start(
         &mut self,
         app: &AppHandle,
@@ -361,20 +334,14 @@ impl AudioService {
             )
         });
 
-        let stream = build_input_stream(
-            &candidate.device,
-            &stream_config,
+        let stream = CaptureStream::start(
+            candidate.device,
+            stream_config,
             sample_format,
             chunk_tx,
             app.clone(),
             session_id.clone(),
         )?;
-        stream.play().map_err(|error| {
-            CommandError::new(
-                "recording_failed",
-                format!("Could not start recording stream. {}", error),
-            )
-        })?;
 
         let timeout_active = Arc::new(AtomicBool::new(true));
         spawn_timeout_thread(
@@ -409,19 +376,6 @@ impl AudioService {
         })
     }
 
-    #[cfg(not(windows))]
-    fn start(
-        &mut self,
-        _app: &AppHandle,
-        _settings: &AppSettings,
-        _request: StartRecordingRequest,
-        _is_test_clip: bool,
-        _allow_auto_stop: bool,
-    ) -> Result<StartOutcome, CommandError> {
-        Err(unsupported_audio_platform())
-    }
-
-    #[cfg(windows)]
     fn stop(&mut self, reason: StopReason) -> Result<Option<RecordingResult>, CommandError> {
         let Some(session) = self.active.take() else {
             return Ok(self.last_result.clone());
@@ -444,12 +398,6 @@ impl AudioService {
         Ok(Some(result))
     }
 
-    #[cfg(not(windows))]
-    fn stop(&mut self, _reason: StopReason) -> Result<Option<RecordingResult>, CommandError> {
-        Ok(self.last_result.clone())
-    }
-
-    #[cfg(windows)]
     fn stop_session(
         &mut self,
         session_id: &str,
@@ -467,25 +415,10 @@ impl AudioService {
         self.stop(reason)
     }
 
-    #[cfg(not(windows))]
-    fn stop_session(
-        &mut self,
-        _session_id: &str,
-        _reason: StopReason,
-    ) -> Result<Option<RecordingResult>, CommandError> {
-        Ok(None)
-    }
-
-    #[cfg(windows)]
     fn active_session_id(&self) -> Option<&str> {
         self.active
             .as_ref()
             .map(|session| session.info.session_id.as_str())
-    }
-
-    #[cfg(not(windows))]
-    fn active_session_id(&self) -> Option<&str> {
-        None
     }
 }
 
@@ -552,14 +485,8 @@ pub fn start_recording_for_app(
     }
 }
 
-#[cfg(windows)]
 pub fn stop_recording_for_app(app: &AppHandle) -> Result<RecordingResult, CommandError> {
     stop_recording_with_reason(app, StopReason::Completed, None)
-}
-
-#[cfg(not(windows))]
-pub fn stop_recording_for_app(_app: &AppHandle) -> Result<RecordingResult, CommandError> {
-    Err(unsupported_audio_platform())
 }
 
 pub fn cancel_recording_for_app(app: &AppHandle) -> Result<(), CommandError> {
@@ -575,7 +502,6 @@ pub fn cancel_recording_for_app(app: &AppHandle) -> Result<(), CommandError> {
         // No transcription will follow: drop any incremental session, and give
         // a transform recording's captured selection back to the clipboard.
         state.incremental().discard(&result.session_id);
-        #[cfg(windows)]
         if result.is_transform {
             state.discard_pending_transform();
         }
@@ -658,7 +584,6 @@ fn no_test_clip() -> CommandError {
 /// Stops and transcribes a recording whose max-duration timer fired. Runs on
 /// the dictation worker; a no-op when `session_id` is no longer the active
 /// recording (the user stopped it while the timeout was queued).
-#[cfg(windows)]
 pub(crate) fn finish_timed_out_recording(
     app: &AppHandle,
     session_id: &str,
@@ -686,14 +611,6 @@ pub(crate) fn finish_timed_out_recording(
     Ok(())
 }
 
-#[cfg(not(windows))]
-pub(crate) fn finish_timed_out_recording(
-    _app: &AppHandle,
-    _session_id: &str,
-) -> Result<(), CommandError> {
-    Err(unsupported_audio_platform())
-}
-
 /// Recovers from a capture-stream error (e.g. the mic was unplugged mid-record).
 /// Runs on the dictation worker, queued by the cpal error callback. Stops the
 /// in-flight session like a normal completion — so whatever was captured before
@@ -702,7 +619,6 @@ pub(crate) fn finish_timed_out_recording(
 /// and timeout paths so the app never strands in Recording/Transcribing. If the
 /// session is already gone (the user stopped first, or a duplicate error
 /// callback slipped past the guard), it no-ops cleanly.
-#[cfg(windows)]
 pub(crate) fn finish_disconnected_recording(
     app: &AppHandle,
     session_id: &str,
@@ -739,15 +655,6 @@ pub(crate) fn finish_disconnected_recording(
     Ok(())
 }
 
-#[cfg(not(windows))]
-pub(crate) fn finish_disconnected_recording(
-    _app: &AppHandle,
-    _session_id: &str,
-) -> Result<(), CommandError> {
-    Err(unsupported_audio_platform())
-}
-
-#[cfg(windows)]
 fn stop_recording_with_reason(
     app: &AppHandle,
     reason: StopReason,
@@ -835,7 +742,6 @@ fn stop_recording_with_reason(
     Ok(result)
 }
 
-#[cfg(windows)]
 fn spawn_timeout_thread(
     app: AppHandle,
     session_id: String,
@@ -857,7 +763,6 @@ fn spawn_timeout_thread(
     });
 }
 
-#[cfg(windows)]
 #[allow(clippy::too_many_arguments)]
 fn recording_worker(
     app: AppHandle,
@@ -931,7 +836,6 @@ fn recording_worker(
     )
 }
 
-#[cfg(windows)]
 fn maybe_emit_level(
     app: &AppHandle,
     session_id: &str,
@@ -961,7 +865,6 @@ fn maybe_emit_level(
 /// heard, and only once per session. Stopping goes through the dictation
 /// worker like a toggle-hotkey stop, so transcription and output run exactly
 /// as if the user stopped manually.
-#[cfg(windows)]
 struct SilenceAutoStop {
     auto_stop_after_ms: Option<u64>,
     sample_rate: u32,
@@ -970,7 +873,6 @@ struct SilenceAutoStop {
     triggered: bool,
 }
 
-#[cfg(windows)]
 impl SilenceAutoStop {
     fn new(auto_stop_after_ms: Option<u64>, sample_rate: u32) -> Self {
         Self {
@@ -1163,7 +1065,86 @@ fn recording_result(
     }
 }
 
-#[cfg(windows)]
+/// The running microphone stream. cpal streams are not `Send` on every system
+/// (the recording session lives in shared state), so the stream is built,
+/// played and dropped on a capture thread of its own. Dropping the handle
+/// stops the stream and waits until it is gone, so no audio arrives after.
+struct CaptureStream {
+    stop_tx: Option<Sender<()>>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl CaptureStream {
+    fn start(
+        device: Device,
+        config: StreamConfig,
+        sample_format: SampleFormat,
+        chunk_tx: Sender<AudioChunk>,
+        app: AppHandle,
+        session_id: String,
+    ) -> Result<Self, CommandError> {
+        let (ready_tx, ready_rx) = bounded::<Result<(), CommandError>>(1);
+        let (stop_tx, stop_rx) = bounded::<()>(1);
+        let thread = thread::Builder::new()
+            .name("scribe-audio-capture".to_string())
+            .spawn(move || {
+                let started =
+                    build_input_stream(&device, &config, sample_format, chunk_tx, app, session_id)
+                        .and_then(|stream| {
+                            stream.play().map(|()| stream).map_err(|error| {
+                                CommandError::new(
+                                    "recording_failed",
+                                    format!("Could not start recording stream. {}", error),
+                                )
+                            })
+                        });
+                let stream = match started {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        let _ = ready_tx.send(Err(error));
+                        return;
+                    }
+                };
+                let _ = ready_tx.send(Ok(()));
+                // Runs until stopped, or until the handle is gone.
+                let _ = stop_rx.recv();
+                drop(stream);
+            })
+            .map_err(|error| {
+                CommandError::new(
+                    "recording_failed",
+                    format!("Could not start the audio capture thread. {}", error),
+                )
+            })?;
+
+        let handle = Self {
+            stop_tx: Some(stop_tx),
+            thread: Some(thread),
+        };
+        match ready_rx.recv() {
+            Ok(Ok(())) => Ok(handle),
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err(CommandError::new(
+                "recording_failed",
+                "The audio capture thread stopped before the recording started.",
+            )),
+        }
+    }
+}
+
+impl Drop for CaptureStream {
+    fn drop(&mut self) {
+        // Closing the channel wakes the capture thread whether or not a
+        // stop message fits.
+        drop(self.stop_tx.take());
+        if let Some(thread) = self.thread.take() {
+            if thread.join().is_err() {
+                log::error!("The audio capture thread panicked");
+            }
+        }
+    }
+}
+
 fn build_input_stream(
     device: &Device,
     config: &StreamConfig,
@@ -1254,7 +1235,6 @@ fn build_input_stream(
     }
 }
 
-#[cfg(windows)]
 fn build_stream<T, F>(
     device: &Device,
     config: &StreamConfig,
@@ -1292,23 +1272,16 @@ where
         })
 }
 
-#[cfg(windows)]
 fn unsigned_to_f32(sample: f32, max: f32) -> f32 {
     (sample / max) * 2.0 - 1.0
 }
 
-#[cfg(windows)]
 fn device_candidates(selected_mic_id: Option<&str>) -> Result<Vec<DeviceCandidate>, CommandError> {
-    let host = WasapiHost::new().map_err(|error| {
-        CommandError::new(
-            "microphone_unavailable",
-            format!("Could not initialize Windows audio host. {}", error),
-        )
-    })?;
+    let host = cpal::default_host();
     let default_name = host
         .default_input_device()
         .and_then(|device| device.name().ok());
-    let endpoint_ids_by_name = endpoint_ids_by_name();
+    let endpoint_ids_by_name = crate::platform::audio_endpoint_ids_by_name();
     let mut endpoint_positions = HashMap::<String, usize>::new();
     let devices = host.input_devices().map_err(|error| {
         CommandError::new(
@@ -1376,7 +1349,6 @@ fn choose_input_index(
     Some((index, fell_back))
 }
 
-#[cfg(windows)]
 fn select_input_device(
     selected_mic_id: Option<&str>,
 ) -> Result<(DeviceCandidate, bool), CommandError> {
@@ -1392,74 +1364,15 @@ fn select_input_device(
     Ok((candidates.remove(index), fell_back))
 }
 
-#[cfg(windows)]
 fn fallback_microphone_id(index: usize, name: &str) -> String {
     format!("cpal:{}:{}", index, name)
 }
 
-#[cfg(windows)]
 fn microphone_unavailable(name: &str, error: impl std::fmt::Display) -> CommandError {
     CommandError::new(
         "microphone_unavailable",
         format!("Microphone '{}' is unavailable. {}", name, error),
     )
-}
-
-#[cfg(windows)]
-fn endpoint_ids_by_name() -> HashMap<String, Vec<String>> {
-    use windows::Win32::{
-        Devices::FunctionDiscovery::PKEY_Device_FriendlyName,
-        Media::Audio::{
-            eCapture, eConsole, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
-        },
-        System::Com::{
-            CoCreateInstance, CoInitializeEx, StructuredStorage::PropVariantToStringAlloc,
-            CLSCTX_ALL, COINIT_MULTITHREADED, STGM_READ,
-        },
-    };
-
-    let mut endpoints = HashMap::<String, Vec<String>>::new();
-    unsafe {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-        let Ok(enumerator) =
-            CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
-        else {
-            return endpoints;
-        };
-        let Ok(collection) = enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE) else {
-            return endpoints;
-        };
-        let Ok(count) = collection.GetCount() else {
-            return endpoints;
-        };
-
-        for index in 0..count {
-            let Ok(device) = collection.Item(index) else {
-                continue;
-            };
-            let Ok(id) = device.GetId() else {
-                continue;
-            };
-            let Ok(store) = device.OpenPropertyStore(STGM_READ) else {
-                continue;
-            };
-            let Ok(value) = store.GetValue(&PKEY_Device_FriendlyName) else {
-                continue;
-            };
-            let Ok(name) = PropVariantToStringAlloc(&value) else {
-                continue;
-            };
-
-            endpoints
-                .entry(name.to_string().unwrap_or_default())
-                .or_default()
-                .push(id.to_string().unwrap_or_default());
-        }
-
-        let _ = enumerator.GetDefaultAudioEndpoint(eCapture, eConsole);
-    }
-
-    endpoints
 }
 
 /// Cuts leading and trailing silence (windowed RMS below
@@ -1640,14 +1553,6 @@ pub fn emit_recording_error(app: &AppHandle, error: CommandError) {
             message: error.message,
         },
     );
-}
-
-#[cfg(not(windows))]
-fn unsupported_audio_platform() -> CommandError {
-    CommandError::new(
-        "audio_platform_unsupported",
-        "Audio capture is implemented for Windows in Scribe V1.",
-    )
 }
 
 #[cfg(test)]

@@ -3,6 +3,8 @@
 //! so pastes and selection copies report that they are unsupported and the
 //! clipboard is never borrowed.
 
+use std::collections::HashMap;
+
 use super::{unsupported, PasteTarget, WindowId};
 use crate::error::CommandError;
 
@@ -77,4 +79,10 @@ pub fn set_private_clipboard_text(
     text: &str,
 ) -> Result<(), arboard::Error> {
     clipboard.set_text(text.to_string())
+}
+
+/// No system endpoint ids on Linux: microphones are identified by their cpal
+/// names.
+pub fn audio_endpoint_ids_by_name() -> HashMap<String, Vec<String>> {
+    HashMap::new()
 }

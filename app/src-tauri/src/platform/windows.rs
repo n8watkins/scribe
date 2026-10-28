@@ -3,7 +3,7 @@
 
 use super::{PasteTarget, WindowId};
 use crate::error::CommandError;
-use std::{ffi::c_void, mem::size_of, thread, time::Duration};
+use std::{collections::HashMap, ffi::c_void, mem::size_of, thread, time::Duration};
 use windows::core::w;
 use windows::Win32::Foundation::{CloseHandle, GlobalFree, HANDLE, HGLOBAL, HWND};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
@@ -637,6 +637,66 @@ fn send_inputs(inputs: &[INPUT], error_code: &str, context: &str) -> Result<(), 
     }
 
     Ok(())
+}
+
+/// The Windows endpoint ids of the active capture devices, keyed by their
+/// friendly name (the name cpal reports). Several devices can share a name,
+/// so each name maps to its ids in enumeration order. Empty when the audio
+/// endpoints can't be read.
+pub fn audio_endpoint_ids_by_name() -> HashMap<String, Vec<String>> {
+    use windows::Win32::{
+        Devices::FunctionDiscovery::PKEY_Device_FriendlyName,
+        Media::Audio::{
+            eCapture, eConsole, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
+        },
+        System::Com::{
+            CoCreateInstance, CoInitializeEx, StructuredStorage::PropVariantToStringAlloc,
+            CLSCTX_ALL, COINIT_MULTITHREADED, STGM_READ,
+        },
+    };
+
+    let mut endpoints = HashMap::<String, Vec<String>>::new();
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let Ok(enumerator) =
+            CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
+        else {
+            return endpoints;
+        };
+        let Ok(collection) = enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE) else {
+            return endpoints;
+        };
+        let Ok(count) = collection.GetCount() else {
+            return endpoints;
+        };
+
+        for index in 0..count {
+            let Ok(device) = collection.Item(index) else {
+                continue;
+            };
+            let Ok(id) = device.GetId() else {
+                continue;
+            };
+            let Ok(store) = device.OpenPropertyStore(STGM_READ) else {
+                continue;
+            };
+            let Ok(value) = store.GetValue(&PKEY_Device_FriendlyName) else {
+                continue;
+            };
+            let Ok(name) = PropVariantToStringAlloc(&value) else {
+                continue;
+            };
+
+            endpoints
+                .entry(name.to_string().unwrap_or_default())
+                .or_default()
+                .push(id.to_string().unwrap_or_default());
+        }
+
+        let _ = enumerator.GetDefaultAudioEndpoint(eCapture, eConsole);
+    }
+
+    endpoints
 }
 
 #[cfg(test)]

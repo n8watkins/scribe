@@ -41,6 +41,7 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libxdo-dev \
+            libasound2-dev \
             libssl-dev \
             patchelf \
             file \
