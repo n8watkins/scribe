@@ -79,9 +79,11 @@ If a hotkey conflicts with another app, rebind it in the **Hotkeys** tab, where 
 
 Your audio is recorded and transcribed on your PC and is never uploaded.
 By default Scribe keeps each recording with its transcript so you can play it back, and deletes both automatically after 30 days.
-The **Data & Privacy** tab sets how long history is kept, and turning off **Save raw audio clips** deletes each recording as soon as it is transcribed.
-Notes are kept until you delete them.
-Transcripts live in a local SQLite database under `%APPDATA%\com.natkins.scribe\`; **Data & Privacy** can open the folder, clear history, or turn history off.
+Notes keep their text until you delete them, but their recordings are deleted after the same 30 days.
+Recordings that fail to transcribe are kept (up to 20) so you can retry them, and are deleted on the same schedule.
+The **Data & Privacy** tab sets how long history is kept, and turning off **Save raw audio clips** stops Scribe keeping new recordings once they are transcribed.
+Transcripts live in a local SQLite database under `%APPDATA%\com.natkins.scribe\`.
+**Data & Privacy** can open the folder, turn history off, or clear history, which deletes every dictation with its audio, failed recordings and copies opened in an editor, and keeps your notes.
 
 Dictated text reaches the app you're typing in through the clipboard.
 Scribe restores what you had copied afterwards and marks its own clipboard entries so Windows clipboard history and cloud clipboard sync skip them.
