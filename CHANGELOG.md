@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.10.0 - 2026-10-28
+
+A reorganized Scribe: settings are grouped, Ctrl+K finds any setting, and Home shows your stats. Scribe's windows stay responsive while it transcribes, and settings changed in one window are no longer undone by another.
+
+### New
+
+- Grouped sidebar with Ctrl+K settings search, stats on Home, History and Notes as tabs ([#57](https://github.com/n8watkins/scribe/pull/57))
+- Show release notes before updating, once after an update, and in About ([#55](https://github.com/n8watkins/scribe/pull/55))
+- Copy a diagnostics report from About for bug reports ([#58](https://github.com/n8watkins/scribe/pull/58))
+
+### Fixed
+
+- Keep every Scribe window responsive while a dictation transcribes ([#53](https://github.com/n8watkins/scribe/pull/53))
+- Settings saved in one Scribe window are no longer undone by another ([#54](https://github.com/n8watkins/scribe/pull/54))
+- Tidier Home cards and plainer wording on Hotkeys, Local AI and Models ([#61](https://github.com/n8watkins/scribe/pull/61))
+
 ## 0.9.0 - 2026-10-28
 
 Dictations now paste only into the window you started in, and stay out of Windows clipboard history. New in Settings: choose what happens after dictation (insert, copy only or save only) and how text goes in, including typing it out for apps that block paste. Web pages can no longer reach Scribe's local speech server.
