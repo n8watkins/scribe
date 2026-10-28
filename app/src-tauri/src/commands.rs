@@ -383,6 +383,7 @@ pub fn delete_transcript(
 /// kept.
 #[tauri::command]
 pub fn clear_transcript_history(state: tauri::State<'_, BackendState>) -> Result<(), CommandError> {
+    state.set_unsaved_last_transcript(None);
     let db = state.db()?;
     db.clear_transcript_history()?;
     crate::data_hygiene::clear_history_leftovers(&db, state.dirs())
