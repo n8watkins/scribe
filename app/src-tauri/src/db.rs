@@ -828,7 +828,18 @@ impl Database {
             return Ok(());
         };
 
-        let cutoff = (Utc::now() - chrono::Duration::days(i64::from(retention_days))).to_rfc3339();
+        let cutoff_time = Utc::now() - chrono::Duration::days(i64::from(retention_days));
+        let cutoff = cutoff_time.to_rfc3339();
+
+        // The Last Transcript Buffer holds a copy of the newest dictation, so
+        // its text must not outlive that dictation's retention window.
+        if self
+            .buffer_transcript()?
+            .is_some_and(|buffer| buffer.created_at < cutoff_time)
+        {
+            self.clear_last_transcript()?;
+        }
+
         // Notes (is_note = 1) are deliberate saves and are never auto-pruned;
         // retention only ages out ordinary dictation transcripts.
         let clips = self.clip_paths(
@@ -1500,6 +1511,26 @@ mod tests {
             .search_transcripts(None, false, None, None, TranscriptSort::default(), 10, 0)
             .unwrap();
         assert_eq!(after.total, 0);
+    }
+
+    #[test]
+    fn history_retention_clears_an_expired_last_transcript_buffer() {
+        let db = Database::in_memory().unwrap();
+        let mut old = transcript_with_text("months-old dictation");
+        old.created_at = Utc::now() - Duration::days(45);
+        db.save_last_transcript_with_history(&old, false).unwrap();
+        assert!(db.get_last_transcript().unwrap().is_some());
+
+        db.enforce_history_retention(Some(30)).unwrap();
+        assert!(
+            db.get_last_transcript().unwrap().is_none(),
+            "an expired dictation must not stay pasteable from the buffer"
+        );
+
+        let fresh = transcript_with_text("fresh dictation");
+        db.save_last_transcript_with_history(&fresh, false).unwrap();
+        db.enforce_history_retention(Some(30)).unwrap();
+        assert_eq!(db.get_last_transcript().unwrap().unwrap().id, fresh.id);
     }
 
     #[test]
