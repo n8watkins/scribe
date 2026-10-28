@@ -56,7 +56,14 @@ export function HotkeyList({
 }) {
   return (
     <div className={compact ? "hotkey-list compact-list" : "hotkey-list"}>
-      {hotkeyRows(settings).map((hotkey) => (
+      {hotkeyRows(settings)
+        // Transform Selection is only bound while Local AI is on.
+        .filter(
+          (hotkey) =>
+            hotkey.action !== "transformSelection" ||
+            settings.notesAnalysisEnabled,
+        )
+        .map((hotkey) => (
         <div className="hotkey-row" key={hotkey.label}>
           <span>{hotkey.label}</span>
           <kbd>{formatHotkey(hotkey.value)}</kbd>

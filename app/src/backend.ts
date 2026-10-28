@@ -419,6 +419,9 @@ export type HotkeyBinding = {
   trigger: TriggerEdge | null;
   registered: boolean;
   error: string | null;
+  /** Why the binding is intentionally off (Transform Selection while Local AI
+   * is off); not a registration failure. */
+  disabledReason: string | null;
 };
 
 export type HotkeyStatus = {

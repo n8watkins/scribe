@@ -124,19 +124,21 @@ export function DashboardView({
           <HotkeyList compact settings={settings} />
         </article>
 
-        <TransformSelectionPanel
-          shortcut={settings.hotkeys.transformSelection}
-          showNotice={showNotice}
-        />
+        {settings.notesAnalysisEnabled ? (
+          <TransformSelectionPanel
+            shortcut={settings.hotkeys.transformSelection}
+            showNotice={showNotice}
+          />
+        ) : null}
       </section>
     </>
   );
 }
 
-/** Inline AI editor: the user highlights text in any app, types an instruction
- * here, and Scribe copies the selection, rewrites it with the local LLM, and
- * pastes the result back over the selection. This is the typed-instruction v1
- * of the selected-text transform; the matching hotkey opens this panel. */
+/** Inline AI editor: the user highlights text in another app, types an
+ * instruction here, and Scribe hands focus back to that app, copies the
+ * selection, rewrites it with the local LLM, and pastes the result back over
+ * the selection. Shown only while Local AI is on. */
 function TransformSelectionPanel({
   shortcut,
   showNotice,
@@ -156,8 +158,8 @@ function TransformSelectionPanel({
     setBusy(true);
     setError(null);
     try {
-      // The focused app keeps the highlighted selection; the backend sends
-      // Ctrl+C to grab it, transforms it, and pastes the result back.
+      // The other app keeps the highlighted selection; the backend refocuses
+      // it, copies the selection, transforms it, and pastes the result back.
       const result = await transformSelection(trimmed);
       showNotice?.(result.message ?? "Selection transformed.", "success");
     } catch (caught) {
@@ -176,8 +178,9 @@ function TransformSelectionPanel({
         <span className="muted">{formatHotkey(shortcut)}</span>
       </div>
       <p className="muted">
-        Highlight text in any app, describe the change, and Scribe rewrites it in
-        place with your local LLM.
+        Highlight text in another app, then describe the change here. Scribe
+        switches back to that app and rewrites the text in place with your local
+        AI.
       </p>
       <textarea
         className="transform-instruction"

@@ -33,7 +33,7 @@ const hotkeyActionHints: Record<string, string> = {
   openDashboard: "Bring up this dashboard",
   discardDictation: "Cancel the current recording without transcribing",
   transformSelection:
-    "Tap, speak an instruction for the highlighted text, then tap again (or pause) — Scribe rewrites it in place. Or type one in the Dashboard panel.",
+    "Tap, speak an instruction for the highlighted text, then tap again (or pause). Scribe rewrites it in place. Or type one in the Dashboard panel.",
 };
 
 const triggerLabels: Record<TriggerEdge, string> = {
@@ -322,6 +322,7 @@ export function HotkeysView({
       trigger: triggerFromSettings(row.action),
       registered: false,
       error: null,
+      disabledReason: null,
     }));
 
   const noteChordActive = status?.noteChordActive ?? false;
@@ -366,7 +367,10 @@ export function HotkeysView({
               // A registered bind needs no status; only failures surface. We
               // treat "not registered" as a failure once a real status load has
               // happened (before that we don't know, so don't flag it).
-              const failed = Boolean(status) && !binding.registered;
+              const failed =
+                Boolean(status) &&
+                !binding.registered &&
+                !binding.disabledReason;
               const bindLabel = hotkeyActionLabels[binding.action] ?? binding.action;
               const bindDisabled = hotkeyBusy || (captureAction !== null && !isCapturing);
               return (
@@ -384,8 +388,12 @@ export function HotkeysView({
                     ) : failed ? (
                       <span className="hotkeys-row-error">
                         <AlertTriangle aria-hidden="true" size={13} />
-                        Not registered — another app may already use this
+                        Not registered. Another app may already use this
                         shortcut.
+                      </span>
+                    ) : binding.disabledReason ? (
+                      <span className="hotkeys-row-desc">
+                        {binding.disabledReason}
                       </span>
                     ) : (
                       <span className="hotkeys-row-desc">
