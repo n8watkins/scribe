@@ -799,7 +799,7 @@ fn recording_worker(
                         }
                         samples.extend(chunk.samples);
                     }
-                    Err(_) => break StopReason::Completed,
+                    Err(_) => break stop_reason_after_stream_end(&control_rx),
                 }
             }
         }
@@ -834,6 +834,18 @@ fn recording_worker(
         min_recording_ms,
         silence_trim_enabled,
     )
+}
+
+/// Why the recording ended, once the audio stream is gone. `stop` drops the
+/// stream before it sends the reason, so the chunk channel closes first; the
+/// reason (Cancelled, Timeout, Disconnected) still decides how the clip is
+/// finalized. Waits for it, and counts a stop that never comes (the session
+/// was dropped) as Completed.
+fn stop_reason_after_stream_end(control_rx: &Receiver<WorkerControl>) -> StopReason {
+    match control_rx.recv() {
+        Ok(WorkerControl::Stop(reason)) => reason,
+        Err(_) => StopReason::Completed,
+    }
 }
 
 fn maybe_emit_level(
@@ -1572,6 +1584,28 @@ mod tests {
             is_selected: false,
             is_available: true,
         }
+    }
+
+    #[test]
+    fn a_stream_that_ends_first_keeps_the_stop_reason() {
+        for reason in [
+            StopReason::Cancelled,
+            StopReason::Timeout,
+            StopReason::Disconnected,
+            StopReason::Completed,
+        ] {
+            let (control_tx, control_rx) = unbounded();
+            control_tx.send(WorkerControl::Stop(reason)).unwrap();
+            assert_eq!(stop_reason_after_stream_end(&control_rx), reason);
+        }
+
+        // The session went away without a stop: finalize what was captured.
+        let (control_tx, control_rx) = unbounded::<WorkerControl>();
+        drop(control_tx);
+        assert_eq!(
+            stop_reason_after_stream_end(&control_rx),
+            StopReason::Completed
+        );
     }
 
     #[test]
