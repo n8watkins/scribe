@@ -436,7 +436,6 @@ export type HotkeyStatus = {
   /** Whether the hold-toggle-key + tap-Q note chord is currently usable. */
   noteChordActive: boolean;
   holdReleaseVerificationRequired: boolean;
-  windowsFallbackNote: string;
 };
 
 export type HotkeyRegistrationFailure = {

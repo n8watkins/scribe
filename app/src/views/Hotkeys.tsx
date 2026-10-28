@@ -461,9 +461,6 @@ export function HotkeysView({
           </div>
         )}
         <div className="hotkeys-notes">
-          {status?.windowsFallbackNote ? (
-            <p className="hotkey-note">{status.windowsFallbackNote}</p>
-          ) : null}
           {status?.holdReleaseVerificationRequired ? (
             <p className="hotkey-note">
               Hold-to-talk release is tracked by a native key watcher, so

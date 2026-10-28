@@ -252,7 +252,7 @@
       S.github === "connected"
         ? { completedAt: iso(22), outcome: "success", source: "automatic", repo: "n8watkins/scribe-notes", syncedItems: 5, filesWritten: 6, errorCode: null, errorMessage: null }
         : null,
-    get_hotkey_status: () => ({ bindings, noteChordActive: true, holdReleaseVerificationRequired: false, windowsFallbackNote: "" }),
+    get_hotkey_status: () => ({ bindings, noteChordActive: true, holdReleaseVerificationRequired: false }),
     check_for_update: () => ({ currentVersion: "0.8.0", latestVersion: S.update ? "0.9.0" : "0.8.0", updateAvailable: !!S.update, releaseUrl: "https://github.com/n8watkins/scribe/releases" }),
     whats_new_pending: () => (S.whatsNew ? "0.8.0" : null),
     dismiss_whats_new: () => null,

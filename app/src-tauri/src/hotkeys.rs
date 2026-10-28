@@ -151,7 +151,6 @@ pub struct HotkeyStatus {
     /// uses this to explain why the note chord is on or off.
     pub note_chord_active: bool,
     pub hold_release_verification_required: bool,
-    pub windows_fallback_note: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -917,8 +916,7 @@ pub fn status(app: &AppHandle, hotkeys: &HotkeySettings) -> Result<HotkeyStatus,
                 registered: false,
                 error: None,
                 disabled_reason: Some(
-                    "Off while Local AI is off. Turn on Local AI in Settings to use it."
-                        .to_string(),
+                    "Off while Local AI is off. Turn on Local AI to use it.".to_string(),
                 ),
             });
             continue;
@@ -968,9 +966,6 @@ pub fn status(app: &AppHandle, hotkeys: &HotkeySettings) -> Result<HotkeyStatus,
         bindings,
         note_chord_active: note_chord_active(hotkeys),
         hold_release_verification_required: true,
-        windows_fallback_note:
-            "Manual Windows verification is still required for hold-to-talk release events. If releases are unreliable, use a Windows-only SetWindowsHookExW(WH_KEYBOARD_LL) fallback."
-                .to_string(),
     })
 }
 

@@ -296,10 +296,6 @@ export function ModelsView({
           </div>
         </div>
 
-        <p className="muted models-summary-note">
-          Scribe uses its own app data models first, then compatible files from
-          SCRIBE_MODEL_DIR when set.
-        </p>
       </article>
 
       <article className="panel-card span-2">
