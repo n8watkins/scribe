@@ -119,6 +119,10 @@ impl FailureTracker {
 struct ServerProcess {
     child: Child,
     port: u16,
+    /// Random secret route prefix (`--request-path`) the server was started
+    /// with. Every route, including `/load`, sits under it, so a web page
+    /// that finds the loopback port cannot reach the server without it.
+    request_path: String,
     config: ServerConfig,
 }
 
@@ -300,10 +304,10 @@ impl WarmTranscriber {
         ensure_server(app, inner, config, &client)?;
         self.start_watchdog(inner);
 
-        let port = inner
+        let url = inner
             .server
             .as_ref()
-            .map(|server| server.port)
+            .map(|server| inference_url(server.port, &server.request_path))
             .ok_or_else(|| "whisper-server is not running".to_string())?;
 
         let wav_bytes = fs::read(&request.wav_path)
@@ -333,7 +337,7 @@ impl WarmTranscriber {
         }
 
         let response = client
-            .post(inference_url(port))
+            .post(url)
             .multipart(form)
             .timeout(INFERENCE_TIMEOUT)
             .send()
@@ -501,12 +505,14 @@ fn ensure_server(
     let executable = whisper::resolve_bundled_executable(app, SERVER_EXECUTABLE)
         .map_err(|error| error.message)?;
     let port = find_free_port()?;
+    let request_path = new_request_path();
     let threads = server_threads();
     let mut args = server_args(
         &config.model_path,
         &config.language,
         config.translate,
         port,
+        &request_path,
         threads,
     );
     // GPU off => --no-gpu, mirroring the whisper-cli path (whisper::push_gpu_args).
@@ -529,6 +535,7 @@ fn ensure_server(
     let mut server = ServerProcess {
         child,
         port,
+        request_path,
         config: config.clone(),
     };
 
@@ -584,25 +591,25 @@ fn wait_until_healthy(
     server: &mut ServerProcess,
 ) -> Result<(), String> {
     let deadline = Instant::now() + HEALTH_CHECK_TIMEOUT;
-    let url = server_root_url(server.port);
+    let url = health_url(server.port, &server.request_path);
 
     loop {
         if server.has_exited() {
             return Err("whisper-server exited during startup.".to_string());
         }
 
-        // Any HTTP response means the model is loaded and the server is
-        // accepting connections (whisper-server loads the model before it
-        // starts listening).
+        // Only a success from the secret health route counts: it proves the
+        // model is loaded and that the listener on this port is our server,
+        // not some other process that grabbed the port first.
         match client.get(&url).timeout(Duration::from_secs(2)).send() {
-            Ok(_) => return Ok(()),
-            Err(_) if Instant::now() >= deadline => {
+            Ok(response) if response.status().is_success() => return Ok(()),
+            _ if Instant::now() >= deadline => {
                 return Err(format!(
                     "whisper-server did not become ready within {} seconds.",
                     HEALTH_CHECK_TIMEOUT.as_secs()
                 ));
             }
-            Err(_) => std::thread::sleep(HEALTH_POLL_INTERVAL),
+            _ => std::thread::sleep(HEALTH_POLL_INTERVAL),
         }
     }
 }
@@ -631,6 +638,7 @@ fn server_args(
     language: &str,
     translate: bool,
     port: u16,
+    request_path: &str,
     threads: usize,
 ) -> Vec<String> {
     let mut args = vec![
@@ -640,6 +648,8 @@ fn server_args(
         SERVER_HOST.to_string(),
         "--port".to_string(),
         port.to_string(),
+        "--request-path".to_string(),
+        request_path.to_string(),
         "--threads".to_string(),
         threads.to_string(),
         "--language".to_string(),
@@ -658,12 +668,23 @@ fn server_args(
     args
 }
 
-fn server_root_url(port: u16) -> String {
-    format!("http://{}:{}/", SERVER_HOST, port)
+/// A fresh secret route prefix for one server process: two random v4 UUIDs
+/// (about 244 random bits from the OS generator), so the URL can't be guessed
+/// by anything that finds the port.
+fn new_request_path() -> String {
+    format!(
+        "/{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
 }
 
-fn inference_url(port: u16) -> String {
-    format!("http://{}:{}/inference", SERVER_HOST, port)
+fn health_url(port: u16, request_path: &str) -> String {
+    format!("http://{}:{}{}/health", SERVER_HOST, port, request_path)
+}
+
+fn inference_url(port: u16, request_path: &str) -> String {
+    format!("http://{}:{}{}/inference", SERVER_HOST, port, request_path)
 }
 
 fn needs_restart(current: &ServerConfig, desired: &ServerConfig) -> bool {
@@ -729,7 +750,14 @@ mod tests {
 
     #[test]
     fn builds_server_args_without_prompt() {
-        let args = server_args(Path::new("models/ggml-base.en.bin"), "en", false, 8090, 4);
+        let args = server_args(
+            Path::new("models/ggml-base.en.bin"),
+            "en",
+            false,
+            8090,
+            "/secret",
+            4,
+        );
 
         assert_eq!(
             args,
@@ -740,6 +768,8 @@ mod tests {
                 "127.0.0.1",
                 "--port",
                 "8090",
+                "--request-path",
+                "/secret",
                 "--threads",
                 "4",
                 "--language",
@@ -755,7 +785,7 @@ mod tests {
 
     #[test]
     fn server_args_include_translate_when_enabled() {
-        let args = server_args(Path::new("models/ggml-small.bin"), "es", true, 8090, 4);
+        let args = server_args(Path::new("models/ggml-small.bin"), "es", true, 8090, "/s", 4);
 
         let lang_index = args.iter().position(|arg| arg == "--language").unwrap();
         assert_eq!(args[lang_index + 1], "es");
@@ -764,8 +794,22 @@ mod tests {
 
     #[test]
     fn builds_loopback_urls() {
-        assert_eq!(inference_url(8090), "http://127.0.0.1:8090/inference");
-        assert_eq!(server_root_url(8090), "http://127.0.0.1:8090/");
+        assert_eq!(
+            inference_url(8090, "/abc"),
+            "http://127.0.0.1:8090/abc/inference"
+        );
+        assert_eq!(health_url(8090, "/abc"), "http://127.0.0.1:8090/abc/health");
+    }
+
+    #[test]
+    fn request_paths_are_long_random_and_unique() {
+        let first = new_request_path();
+        let second = new_request_path();
+        assert!(first.starts_with('/'));
+        // 64 hex characters after the slash.
+        assert_eq!(first.len(), 65);
+        assert!(first[1..].chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(first, second);
     }
 
     #[test]
