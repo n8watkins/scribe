@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { AppSettings, OutputMode, PasteMethod } from "../backend";
+import type {
+  AppSettings,
+  OutputMode,
+  OutputResult,
+  PasteMethod,
+} from "../backend";
 import {
   afterDictationOf,
+  clipboardOutcome,
   clipboardStatus,
   insertMethodOf,
   outputSettingsFor,
@@ -83,5 +89,61 @@ describe("clipboard status label", () => {
     expect(label("copy_and_paste", "clipboard_paste")).toBe("On your clipboard");
     expect(label("copy_clipboard", "direct_insert")).toBe("On your clipboard");
     expect(label("save_only", "direct_insert")).toBe("Clipboard untouched");
+  });
+});
+
+describe("clipboard outcome label", () => {
+  const outcome = (patch: Partial<OutputResult>) =>
+    clipboardOutcome({
+      transcriptId: "tx_1",
+      action: "paste",
+      status: "completed",
+      outputMode: "auto_paste",
+      pasteMethod: "clipboard_paste",
+      copied: false,
+      pasted: true,
+      clipboardRestored: true,
+      clipboardPreservation: "restored_after_paste",
+      clipboardRestoreError: null,
+      message: "",
+      ...patch,
+    } as OutputResult);
+
+  it("says the clipboard was restored only when it was", () => {
+    expect(outcome({})).toBe("Clipboard restored");
+  });
+
+  it("says the text is on the clipboard when a paste was blocked", () => {
+    expect(
+      outcome({
+        status: "paste_skipped",
+        pasted: false,
+        copied: true,
+        clipboardRestored: null,
+        clipboardPreservation: "replaced_with_transcript",
+      }),
+    ).toBe("On your clipboard");
+  });
+
+  it("says the text is on the clipboard when restoring failed", () => {
+    expect(
+      outcome({
+        status: "clipboard_restore_failed",
+        clipboardRestored: false,
+        clipboardPreservation: "restore_failed",
+      }),
+    ).toBe("On your clipboard");
+  });
+
+  it("describes typing and leaving the clipboard alone", () => {
+    expect(
+      outcome({
+        pasteMethod: "direct_insert",
+        clipboardPreservation: "untouched",
+      }),
+    ).toBe("Typed out");
+    expect(outcome({ pasted: false, clipboardPreservation: "untouched" })).toBe(
+      "Clipboard untouched",
+    );
   });
 });

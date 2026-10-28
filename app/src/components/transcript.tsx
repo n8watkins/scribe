@@ -10,8 +10,14 @@ import {
   Trash2,
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import type { AppSettings, AudioLevelEvent, Transcript } from "../backend";
+import type {
+  AppSettings,
+  AudioLevelEvent,
+  OutputResult,
+  Transcript,
+} from "../backend";
 import {
+  clipboardOutcome,
   clipboardStatus,
   formatCount,
   formatDateTime,
@@ -25,6 +31,7 @@ import { IconButton } from "./primitives";
 export function LastTranscriptCard({
   clearing,
   copying,
+  lastOutput,
   onClear,
   onCopy,
   onPaste,
@@ -34,6 +41,7 @@ export function LastTranscriptCard({
 }: {
   clearing: boolean;
   copying: boolean;
+  lastOutput: OutputResult | null;
   onClear: () => Promise<void>;
   onCopy: () => Promise<void>;
   onPaste: () => Promise<void>;
@@ -43,6 +51,13 @@ export function LastTranscriptCard({
 }) {
   const hasTranscript = Boolean(transcript);
   const outputBusy = clearing || copying || pasting;
+  // Describe what actually happened to this transcript when we know it (a
+  // blocked paste leaves the text on the clipboard); otherwise describe what
+  // the current settings will do.
+  const clipboardLabel =
+    transcript && lastOutput?.transcriptId === transcript.id
+      ? clipboardOutcome(lastOutput)
+      : clipboardStatus(settings);
 
   return (
     <article className="buffer-card" data-setting="Last transcript">
@@ -55,7 +70,7 @@ export function LastTranscriptCard({
               : "Nothing yet"}
           </h2>
         </div>
-        <span className="pill preserve">{clipboardStatus(settings)}</span>
+        <span className="pill preserve">{clipboardLabel}</span>
       </div>
 
       {transcript ? (
