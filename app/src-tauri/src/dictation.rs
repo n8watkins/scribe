@@ -78,7 +78,6 @@ pub fn transcribe_recording_for_app(
     let result = transcribe_recording_checked(app, &recording, incremental, stopped);
     // A transform recording that failed before reaching the transform engine
     // still holds the captured selection; dropping it restores the clipboard.
-    #[cfg(windows)]
     if recording.is_transform {
         app.state::<BackendState>().discard_pending_transform();
     }
@@ -303,7 +302,6 @@ fn transcribe_recording_inner(
     // spoken *instruction*, not dictation. Route it to the transform engine —
     // rewrite the selection captured when the recording started, paste it back
     // in place — and skip the normal save / paste path entirely.
-    #[cfg(windows)]
     if recording.is_transform {
         return finish_selection_transform(app, &settings, &final_text);
     }
@@ -443,7 +441,6 @@ fn transcribe_recording_inner(
 /// the normal dictation output never runs. The state machine always leaves
 /// Transcribing (success or a toasted, recoverable failure — never a wedged
 /// Error for a routine LLM miss).
-#[cfg(windows)]
 fn finish_selection_transform(
     app: &AppHandle,
     settings: &crate::settings::AppSettings,

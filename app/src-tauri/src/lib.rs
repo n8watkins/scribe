@@ -22,6 +22,7 @@ pub mod models;
 pub mod note_analysis;
 pub mod note_sync;
 pub mod output;
+pub mod platform;
 pub mod release_notes;
 pub mod selection_transform;
 pub mod self_test;

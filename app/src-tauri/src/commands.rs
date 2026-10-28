@@ -38,7 +38,6 @@ pub struct BackendState {
     settings_writes: Mutex<()>,
     /// Selection captured when a voice Transform Selection recording starts,
     /// held until that recording's transcription consumes it.
-    #[cfg(windows)]
     pending_transform: Mutex<Option<crate::selection_transform::CapturedSelection>>,
     /// The folders Scribe writes to, for cleanup that touches files.
     dirs: crate::data_hygiene::DataDirs,
@@ -67,7 +66,6 @@ impl BackendState {
             github_device_flows: crate::github_oauth::DeviceFlowRegistry::default(),
             github_sync_lock: Mutex::new(()),
             settings_writes: Mutex::new(()),
-            #[cfg(windows)]
             pending_transform: Mutex::new(None),
             paste_target: Mutex::new(None),
             unsaved_last_transcript: Mutex::new(None),
@@ -118,7 +116,6 @@ impl BackendState {
     /// recording). A leftover found here is stale: it is dropped without
     /// restoring, because its snapshot is older than the clipboard the new
     /// capture just saved.
-    #[cfg(windows)]
     pub fn set_pending_transform(&self, captured: crate::selection_transform::CapturedSelection) {
         if let Ok(mut slot) = self.pending_transform.lock() {
             if let Some(stale) = slot.replace(captured) {
@@ -129,13 +126,11 @@ impl BackendState {
 
     /// Drops the pending transform, which puts the user's pre-capture clipboard
     /// back. Called when a transform recording ends without a transcription.
-    #[cfg(windows)]
     pub fn discard_pending_transform(&self) {
         drop(self.take_pending_transform());
     }
 
     /// Takes the pending transform selection, if any (consumed exactly once).
-    #[cfg(windows)]
     pub fn take_pending_transform(&self) -> Option<crate::selection_transform::CapturedSelection> {
         self.pending_transform
             .lock()
@@ -1695,7 +1690,6 @@ pub async fn transform_selection(
         .map_err(|error| CommandError::new("selection_transform_failed", error.to_string()))?
 }
 
-#[cfg(windows)]
 fn transform_selection_blocking(
     app: &tauri::AppHandle,
     instruction: &str,
@@ -1742,17 +1736,6 @@ fn transform_selection_blocking(
     // 4. Paste the result back over the still-selected original, then restore
     //    the pre-capture clipboard.
     selection_transform::apply_result(app, &transformed, captured)
-}
-
-#[cfg(not(windows))]
-fn transform_selection_blocking(
-    _app: &tauri::AppHandle,
-    _instruction: &str,
-) -> Result<OutputResult, CommandError> {
-    Err(CommandError::new(
-        "selection_transform_unsupported",
-        "Selected-text transform is currently implemented for Windows only.",
-    ))
 }
 
 #[tauri::command]

@@ -1139,7 +1139,6 @@ fn handle_note_chord(app: &AppHandle) {
 /// recording for the spoken instruction. Aborts with a friendly notice when
 /// Local AI is off or nothing is selected, so the user never records an
 /// instruction for an empty selection. Runs on the dictation worker.
-#[cfg(windows)]
 pub(crate) fn start_transform(app: &AppHandle) -> Result<(), CommandError> {
     // Second guard behind registration: never copy a selection while Local AI
     // is off.
