@@ -1,4 +1,4 @@
-import type { AppSettings } from "./backend";
+import type { AppSettings, OutputResult } from "./backend";
 
 export type ViewName =
   | "Home"
@@ -27,6 +27,9 @@ export type ViewActions = {
   clearingLastTranscript: boolean;
   copyLastTranscript: () => Promise<void>;
   copyingLastTranscript: boolean;
+  // What the most recent paste or copy actually did, so the Last transcript
+  // card can describe the outcome rather than the current settings.
+  lastOutput: OutputResult | null;
   recordingBusy: boolean;
   pasteLastTranscript: () => Promise<void>;
   pastingLastTranscript: boolean;

@@ -137,6 +137,7 @@ export function DashboardView({
         <LastTranscriptCard
           clearing={actions.clearingLastTranscript}
           copying={actions.copyingLastTranscript}
+          lastOutput={actions.lastOutput}
           onClear={actions.clearLastTranscript}
           onCopy={actions.copyLastTranscript}
           onPaste={actions.pasteLastTranscript}

@@ -7,6 +7,7 @@ import type {
   ModelDownloadProgress,
   ModelInfo,
   OutputMode,
+  OutputResult,
   Transcript,
 } from "../backend";
 
@@ -101,6 +102,20 @@ export function clipboardStatus(settings: AppSettings) {
       return settings.pasteMethod === "direct_insert"
         ? "Types it out"
         : "Clipboard restored";
+  }
+}
+
+// Short, honest label for what one paste or copy actually did to the
+// clipboard. Unlike clipboardStatus, this reflects the outcome: a paste that
+// was blocked (switched windows, admin target) leaves the text on the clipboard.
+export function clipboardOutcome(result: OutputResult) {
+  switch (result.clipboardPreservation) {
+    case "restored_after_paste":
+      return "Clipboard restored";
+    case "untouched":
+      return result.pasted ? "Typed out" : "Clipboard untouched";
+    default:
+      return "On your clipboard";
   }
 }
 

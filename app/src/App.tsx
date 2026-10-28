@@ -191,6 +191,7 @@ function App() {
   const [clearingLastTranscript, setClearingLastTranscript] = useState(false);
   const [pastingLastTranscript, setPastingLastTranscript] = useState(false);
   const [copyingLastTranscript, setCopyingLastTranscript] = useState(false);
+  const [lastOutput, setLastOutput] = useState<OutputResult | null>(null);
   const [recordingBusy, setRecordingBusy] = useState(false);
   const [microphones, setMicrophones] = useState<MicrophoneInfo[] | null>(null);
   const [models, setModels] = useState<ModelInfo[] | null>(null);
@@ -667,6 +668,7 @@ function App() {
           scheduleRefresh();
         }),
         listen<OutputResult>("scribe:output-completed", (event) => {
+          setLastOutput(event.payload);
           if (event.payload.status === "paste_skipped") {
             // The text didn't land where the user expected: always say so,
             // and say it outside the app too, since they're in another window.
@@ -809,6 +811,7 @@ function App() {
 
   const handleOutputResult = useCallback(
     async (result: OutputResult) => {
+      setLastOutput(result);
       await refresh();
       if (result.clipboardRestoreError) {
         setSaveError(result.clipboardRestoreError);
@@ -909,6 +912,7 @@ function App() {
     clearingLastTranscript,
     copyLastTranscript: handleCopyLastTranscript,
     copyingLastTranscript,
+    lastOutput,
     recordingBusy,
     openSettings,
     pasteLastTranscript: handlePasteLastTranscript,
