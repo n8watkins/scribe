@@ -15,6 +15,7 @@ on:
     paths:
       - ".github/workflows/**"
       - "app/src-tauri/tauri.macos.conf.json"
+      - "app/src-tauri/Info.plist"
 
 permissions:
   contents: read
@@ -213,6 +214,18 @@ jobs:
             fi
             codesign --verify --strict --verbose=2 "$app/Contents/Resources/bin/macos/$name"
           done
+          # The keys from app/src-tauri/Info.plist must reach the bundle:
+          # without NSMicrophoneUsageDescription macOS ends the app the first
+          # time it opens the microphone.
+          plist="$app/Contents/Info.plist"
+          plutil -lint "$plist"
+          mic="$(plutil -extract NSMicrophoneUsageDescription raw -o - "$plist")"
+          echo "NSMicrophoneUsageDescription: $mic"
+          minimum="$(plutil -extract LSMinimumSystemVersion raw -o - "$plist")"
+          if [ "$minimum" != "$MACOSX_DEPLOYMENT_TARGET" ]; then
+            echo "LSMinimumSystemVersion is $minimum, not $MACOSX_DEPLOYMENT_TARGET" >&2
+            exit 1
+          fi
           codesign --verify --deep --strict --verbose=2 "$app"
           codesign --display --verbose=2 "$app" 2>&1
           # Expected to reject: the app is ad-hoc signed and not notarized.
