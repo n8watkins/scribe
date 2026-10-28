@@ -491,7 +491,7 @@ export function SyncView({
         title="Export to a file"
       >
         <p className="muted vocab-hint">
-          Save your transcripts to a local file. No account needed — this writes
+          Save your transcripts to a local file. No account needed: this writes
           straight to a folder you pick.
         </p>
         <SettingRow

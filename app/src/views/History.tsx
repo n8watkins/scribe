@@ -570,7 +570,7 @@ export function HistoryView({
             {notesOnly ? (
               <span className="notes-hint">
                 <NotebookPen aria-hidden="true" size={12} />
-                Dictate notes — hold ~ and tap Q
+                Dictate notes: hold ~ and tap Q
               </span>
             ) : null}
           </span>

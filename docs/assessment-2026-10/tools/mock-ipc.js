@@ -210,7 +210,7 @@
     shortcut,
     normalizedShortcut: shortcut,
     trigger: action === "holdToTalk" ? null : action === "toggleDictation" ? "release" : "press",
-    registered: true,
+    registered: action !== S.failedHotkey,
     error: null,
   }));
 

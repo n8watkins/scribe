@@ -205,6 +205,7 @@ export function AudioView({
             <label>
               Microphone
               <select
+                className="microphone-select"
                 disabled={actions.savingSettings}
                 onChange={(event) =>
                   actions.updateSettings({
@@ -320,7 +321,7 @@ export function AudioView({
             />
           </SettingRow>
           <SettingRow
-            description="Split a phrase at a pause while you talk. Off: phrases split only when they get long (see below) — fewer sentence breaks, but text appears in larger jumps."
+            description="Split a phrase at a pause while you talk. Off: phrases split only when they get long (see below): fewer sentence breaks, but text appears in larger jumps."
             label="Split on pause"
           >
             <Toggle
@@ -432,7 +433,7 @@ export function AudioView({
           title="GPU acceleration"
         >
           <SettingRow
-            description="Use your GPU (Vulkan) to transcribe — a big speedup on the large models. Falls back to CPU automatically if the GPU is unavailable."
+            description="Use your GPU (Vulkan) to transcribe, a big speedup on the large models. Falls back to CPU automatically if the GPU is unavailable."
             label="Use GPU acceleration"
           >
             <Toggle
@@ -452,9 +453,9 @@ export function AudioView({
             {gpuProbing
               ? "Detecting GPU…"
               : !gpuProbe?.probed
-                ? "Couldn't detect — download a model to check your GPU."
+                ? "Couldn't detect. Download a model to check your GPU."
                 : !gpuProbe.available
-                  ? "No Vulkan GPU found — transcription runs on CPU."
+                  ? "No Vulkan GPU found, so transcription runs on CPU."
                   : `Detected: ${gpuProbe.devices
                       .map((device) => device.name)
                       .join(", ")}`}

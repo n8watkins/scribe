@@ -702,7 +702,7 @@ fn disconnect_recording_for_app(app: &AppHandle, session_id: &str) -> Result<(),
         CommandError::new(
             "microphone_unavailable",
             "The microphone stopped sending audio (it may have been unplugged or disabled). \
-             Anything captured was saved to your History (not pasted) — reconnect the mic and record again.",
+             Anything captured was saved to your History (not pasted). Reconnect the mic and record again.",
         ),
     );
 

@@ -60,7 +60,7 @@ export function UpdateOverlay({
               state.percent,
             )}%`;
       case "restarting":
-        return "Installing and restarting—this only takes a moment.";
+        return "Installing and restarting. This only takes a moment.";
       case "error":
         return state.message;
     }

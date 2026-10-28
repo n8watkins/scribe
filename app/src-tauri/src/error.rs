@@ -26,12 +26,14 @@ impl CommandError {
         Self::new("invalid_settings", error.to_string())
     }
 
-    pub fn hotkey_registration_failed(shortcut: &str, error: impl std::fmt::Display) -> Self {
+    /// The OS error ("HotKey already registered: HotKey { mods: ... }") is
+    /// for the log only; users see which shortcut failed and what to do.
+    pub fn hotkey_registration_failed(shortcut: &str) -> Self {
         Self::new(
             "hotkey_registration_failed",
             format!(
-                "Could not register {}. Another app may already be using this shortcut. Choose a different hotkey. {}",
-                shortcut, error
+                "Could not register {}. Another app may already be using this shortcut. Choose a different hotkey.",
+                shortcut
             ),
         )
     }

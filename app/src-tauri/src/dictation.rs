@@ -28,7 +28,7 @@ use crate::{
 const ERROR_RECOVERY_DELAY: Duration = Duration::from_secs(5);
 
 /// Info-toast message for a dictation that produced no text.
-pub(crate) const EMPTY_DICTATION_MESSAGE: &str = "Nothing heard — no text to insert.";
+pub(crate) const EMPTY_DICTATION_MESSAGE: &str = "Nothing heard, so there is no text to insert.";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]

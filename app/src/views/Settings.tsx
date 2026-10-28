@@ -140,7 +140,7 @@ export function SettingsView({
             <h3 className="settings-subhead">Filler suppression</h3>
             <SettingRow
               description={
-                'Remove filler words (um, uh, …) — but only when there’s a real pause around them, so fluent uses ("oh no", "like this") are kept. Deterministic; runs on the device, no LLM.'
+                'Remove filler words (um, uh, …), but only when there’s a real pause around them, so fluent uses ("oh no", "like this") are kept. Deterministic; runs on the device, no LLM.'
               }
               label="Remove pause-bracketed filler words"
             >
@@ -154,7 +154,7 @@ export function SettingsView({
               />
             </SettingRow>
             <SettingRow
-              description="The words to remove, comma-separated. Add the risky ones (oh, like, so) only if you want — the pause check guards them. Clearing this removes nothing."
+              description="The words to remove, comma-separated. Add the risky ones (oh, like, so) only if you want; the pause check guards them. Clearing this removes nothing."
               label="Filler words"
             >
               <BlurSavedTextArea
@@ -370,7 +370,7 @@ export function SettingsView({
           <p className="muted vocab-hint">
             A short, natural-language note that <em>primes</em> Whisper toward
             your names, jargon, and spellings, e.g. "Tauri, natkins,
-            whisper.cpp". It nudges recognition toward these words — it is not
+            whisper.cpp". It nudges recognition toward these words; it is not
             find-and-replace, so it can't guarantee an exact output. For
             guaranteed swaps, use Replacements below.
           </p>
@@ -387,7 +387,7 @@ export function SettingsView({
           <h3 className="dictionary-subhead">Replacements</h3>
           <p className="muted vocab-hint">
             Deterministic: whenever you say the phrase on the left, Scribe writes
-            the text on the right — applied after transcription. E.g. "my email"
+            the text on the right, applied after transcription. E.g. "my email"
             → your address, or fix "clawed" → "Claude". Matching is
             case-insensitive and on whole words.
           </p>
@@ -450,7 +450,7 @@ export function SettingsView({
           />
         </SettingRow>
         <p className="muted vocab-hint">
-          Analysis prompt — the note text is sent along with this instruction,
+          Analysis prompt. The note text is sent along with this instruction,
           so it alone decides what analysis produces (summary, action items,
           tags, ...).
         </p>

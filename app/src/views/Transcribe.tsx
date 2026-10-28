@@ -323,7 +323,7 @@ function FileTranscribeCard() {
         </button>
       </div>
       {busy ? (
-        <p className="muted">Transcribing — large files can take a while.</p>
+        <p className="muted">Transcribing. Large files can take a while.</p>
       ) : null}
       {error ? (
         <div className="inline-error">

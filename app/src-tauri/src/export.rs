@@ -26,7 +26,7 @@ pub fn to_markdown(transcripts: &[Transcript]) -> String {
             "Dictation"
         };
         out.push_str(&format!(
-            "## {} — {}\n\n",
+            "## {} - {}\n\n",
             kind,
             format_local(transcript.created_at)
         ));
