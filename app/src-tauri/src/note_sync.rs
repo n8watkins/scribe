@@ -38,13 +38,13 @@ pub fn collect_and_sync(app: &AppHandle, service: &str) -> Result<SyncReport, Co
         if !crate::github_oauth::has_stored_token(service) {
             return Err(CommandError::new(
                 "github_not_signed_in",
-                "Sign in to GitHub in Settings → Sync first.",
+                "Connect GitHub on the GitHub backup page first.",
             ));
         }
         if settings.github_repo.trim().is_empty() {
             return Err(CommandError::new(
                 "github_repo_unset",
-                "Set a GitHub repository (owner/name) in Settings → Sync first.",
+                "Set a GitHub repository (owner/name) on the GitHub backup page first.",
             ));
         }
         // The daily GitHub file is a clean notes-only log.
@@ -117,13 +117,13 @@ pub fn collect_and_sync_all_transcripts(
         if !crate::github_oauth::has_stored_token(service) {
             return Err(CommandError::new(
                 "github_not_signed_in",
-                "Sign in to GitHub in Settings → Sync first.",
+                "Connect GitHub on the GitHub backup page first.",
             ));
         }
         if settings.github_repo.trim().is_empty() {
             return Err(CommandError::new(
                 "github_repo_unset",
-                "Set a GitHub repository (owner/name) in Settings → Sync first.",
+                "Set a GitHub repository (owner/name) on the GitHub backup page first.",
             ));
         }
         let dictations = db.search_dictation_transcripts(100_000, 0)?.transcripts;

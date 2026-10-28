@@ -13,32 +13,25 @@ import {
   type TriggerEdge,
 } from "../backend";
 import type { ViewActions } from "../types";
-import { formatHotkey, hotkeyRows } from "../lib/format";
+import { formatHotkey, HOTKEY_LABELS, hotkeyRows } from "../lib/format";
 import { InlineError } from "../components/feedback";
 import "./hotkeys.css";
 
-const hotkeyActionLabels: Record<string, string> = {
-  holdToTalk: "Hold-to-Talk",
-  toggleDictation: "Toggle Dictation",
-  pasteLastTranscript: "Paste Last Transcript",
-  openDashboard: "Open Dashboard",
-  discardDictation: "Discard / Cancel",
-  transformSelection: "Transform Selection",
-};
+const hotkeyActionLabels: Record<string, string> = HOTKEY_LABELS;
 
 const hotkeyActionHints: Record<string, string> = {
   holdToTalk: "Hold to record, release to transcribe",
   toggleDictation: "Toggle dictation on and off",
-  pasteLastTranscript: "Insert the Last Transcript Buffer",
-  openDashboard: "Bring up this dashboard",
+  pasteLastTranscript: "Paste your last dictation again",
+  openDashboard: "Show this window",
   discardDictation: "Cancel the current recording without transcribing",
   transformSelection:
-    "Tap, speak an instruction for the highlighted text, then tap again (or pause). Scribe rewrites it in place. Or type one in the Dashboard panel.",
+    "Tap, speak an instruction for the highlighted text, then tap again (or pause). Scribe rewrites it in place. You can also type one on the Local AI page.",
 };
 
 const triggerLabels: Record<TriggerEdge, string> = {
-  press: "On press",
-  release: "On release",
+  press: "Press",
+  release: "Release",
 };
 
 /** The Toggle hint explains the note-chord trade-off right where the user
@@ -329,7 +322,7 @@ export function HotkeysView({
 
   return (
     <section className="view-grid">
-      <article className="panel-card span-2">
+      <article className="panel-card span-2" data-setting="Hotkeys">
         <div className="hotkeys-toolbar">
           <button
             className="secondary-button"
@@ -376,6 +369,7 @@ export function HotkeysView({
               return (
                 <div
                   className={`hotkeys-row${failed ? " hotkeys-row-failed" : ""}`}
+                  data-setting={bindLabel}
                   key={binding.action}
                 >
                   <div className="hotkeys-row-info">
@@ -409,7 +403,7 @@ export function HotkeysView({
                       <div
                         className="trigger-segments segmented-control"
                         role="group"
-                        aria-label="Trigger edge"
+                        aria-label="Act on key press or release"
                       >
                         {(["press", "release"] as const).map((edge) => (
                           <button

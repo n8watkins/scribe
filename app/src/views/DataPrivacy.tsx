@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   Check,
   ChevronDown,
@@ -33,9 +33,12 @@ import "./dataprivacy.css";
 
 export function DataPrivacyView({
   actions,
+  children,
   settings,
 }: {
   actions: ViewActions;
+  /** Extra panels (export and restore) placed before the delete section. */
+  children?: ReactNode;
   settings: AppSettings;
 }) {
   const [clearingHistory, setClearingHistory] = useState(false);
@@ -44,9 +47,7 @@ export function DataPrivacyView({
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [logsDir, setLogsDir] = useState<string | null>(null);
   const [failedDir, setFailedDir] = useState<string | null>(null);
-  const [savingWindowSize, setSavingWindowSize] = useState(false);
-  const [windowSizeSaved, setWindowSizeSaved] = useState(false);
-  const [foldersOpen, setFoldersOpen] = useState(true);
+  const [foldersOpen, setFoldersOpen] = useState(false);
 
   // The models folder is the data dir's "models" subfolder (see the Rust
   // model_manager::models_dir). Derive it for display/copy using whichever
@@ -107,37 +108,20 @@ export function DataPrivacyView({
     }
   }, []);
 
-  const handleSaveWindowSize = useCallback(async () => {
-    setDataError(null);
-    setSavingWindowSize(true);
-    setWindowSizeSaved(false);
-
-    try {
-      await saveWindowSize();
-      await actions.refresh();
-      setWindowSizeSaved(true);
-      window.setTimeout(() => setWindowSizeSaved(false), 2500);
-    } catch (error) {
-      setDataError(commandErrorMessage(error));
-    } finally {
-      setSavingWindowSize(false);
-    }
-  }, [actions]);
-
   return (
-    <section className="view-grid">
+    <section className="view-grid align-start">
       <SectionPanel
         icon={<ShieldCheck aria-hidden="true" size={16} />}
-        title="History & retention"
+        title="History and audio clips"
       >
         <SettingRow
-          description="Keep searchable local transcript records."
-          label="History enabled"
+          description="Save each dictation on this computer so you can search it later in History."
+          label="Keep history"
         >
           <Toggle
             checked={settings.historyEnabled}
             disabled={actions.savingSettings}
-            label="History enabled"
+            label="Keep history"
             onChange={(historyEnabled) => actions.updateSettings({ historyEnabled })}
           />
         </SettingRow>
@@ -187,117 +171,154 @@ export function DataPrivacyView({
         </SettingRow>
         <SettingRow
           description="Keep each recording so you can play it back. Clips are deleted with their transcript, or after the transcript retention period for notes. Turn this off to stop saving new recordings."
-          label="Save raw audio clips"
+          label="Save audio clips"
         >
           <Toggle
             checked={settings.saveAudioClips}
             disabled={actions.savingSettings}
-            label="Save raw audio clips"
+            label="Save audio clips"
             onChange={(saveAudioClips) => actions.updateSettings({ saveAudioClips })}
           />
         </SettingRow>
       </SectionPanel>
 
-      <SectionPanel
-        icon={<HardDrive aria-hidden="true" size={16} />}
-        title="Local data"
-      >
-        {dataError ? (
-          <InlineError message={dataError} onRetry={actions.refresh} />
-        ) : null}
-        <button
-          aria-expanded={foldersOpen}
-          className="accordion-toggle"
-          onClick={() => setFoldersOpen((open) => !open)}
-          type="button"
+      <div className="stack">
+        <SectionPanel
+          icon={<HardDrive aria-hidden="true" size={16} />}
+          title="Local data"
         >
-          <span className="accordion-toggle-label">
-            <FolderOpen aria-hidden="true" size={15} />
-            Folders on this device
-          </span>
-          <span className="accordion-toggle-meta">
-            <span className="muted">where Scribe keeps your data</span>
-            <ChevronDown
-              aria-hidden="true"
-              className={foldersOpen ? "accordion-chevron is-open" : "accordion-chevron"}
-              size={16}
-            />
-          </span>
-        </button>
+          {dataError ? (
+            <InlineError message={dataError} onRetry={actions.refresh} />
+          ) : null}
+          <button
+            aria-expanded={foldersOpen}
+            className="accordion-toggle"
+            onClick={() => setFoldersOpen((open) => !open)}
+            type="button"
+          >
+            <span className="accordion-toggle-label">
+              <FolderOpen aria-hidden="true" size={15} />
+              Folders on this device
+            </span>
+            <span className="accordion-toggle-meta">
+              <ChevronDown
+                aria-hidden="true"
+                className={foldersOpen ? "accordion-chevron is-open" : "accordion-chevron"}
+                size={16}
+              />
+            </span>
+          </button>
 
-        {foldersOpen ? (
-          <div className="local-data-accordion">
-            <FolderRow
-              label="Local data folder"
-              note="Database and audio clips."
-              onOpen={() => void handleOpenFolder(openDataFolder)}
-              path={dataDir}
-            />
-            <hr className="local-data-divider" />
-            <FolderRow
-              label="Local models folder"
-              note="Downloaded Whisper models."
-              onOpen={() => void handleOpenFolder(openModelsFolder)}
-              path={modelsDir}
-            />
-            <hr className="local-data-divider" />
-            <FolderRow
-              label="Local logs folder"
-              note="Rotating diagnostic logs for bug reports."
-              onOpen={() => void handleOpenFolder(openLogsFolder)}
-              path={logsDir}
-            />
-            <hr className="local-data-divider" />
-            <FolderRow
-              label="Failed recordings folder"
-              note="Audio kept when a transcription fails, so it isn't lost. Up to 20, deleted after the transcript retention period."
-              onOpen={() => void handleOpenFolder(openFailedRecordingsFolder)}
-              path={failedDir}
-            />
+          {foldersOpen ? (
+            <div className="local-data-accordion">
+              <FolderRow
+                label="Local data folder"
+                note="Database and audio clips."
+                onOpen={() => void handleOpenFolder(openDataFolder)}
+                path={dataDir}
+              />
+              <hr className="local-data-divider" />
+              <FolderRow
+                label="Local models folder"
+                note="Downloaded Whisper models."
+                onOpen={() => void handleOpenFolder(openModelsFolder)}
+                path={modelsDir}
+              />
+              <hr className="local-data-divider" />
+              <FolderRow
+                label="Local logs folder"
+                note="Rotating diagnostic logs for bug reports."
+                onOpen={() => void handleOpenFolder(openLogsFolder)}
+                path={logsDir}
+              />
+              <hr className="local-data-divider" />
+              <FolderRow
+                label="Failed recordings folder"
+                note="Audio kept when a transcription fails, so it isn't lost. Up to 20, deleted after the transcript retention period."
+                onOpen={() => void handleOpenFolder(openFailedRecordingsFolder)}
+                path={failedDir}
+              />
+            </div>
+          ) : null}
+        </SectionPanel>
+
+        <SectionPanel
+          icon={<Trash2 aria-hidden="true" size={16} />}
+          title="Delete data"
+        >
+          <div className="button-row data-delete-actions">
+            <button
+              className="secondary-button"
+              disabled={actions.clearingLastTranscript}
+              onClick={() => void actions.clearLastTranscript()}
+              type="button"
+            >
+              <Eraser aria-hidden="true" size={15} />
+              {actions.clearingLastTranscript
+                ? "Clearing..."
+                : "Clear last transcript"}
+            </button>
+            <button
+              className="ghost-button danger"
+              disabled={clearingHistory}
+              onClick={() => setConfirmClearHistory(true)}
+              type="button"
+            >
+              <Trash2 aria-hidden="true" size={15} />
+              {clearingHistory ? "Clearing..." : "Clear transcript history"}
+            </button>
           </div>
-        ) : null}
+        </SectionPanel>
+      </div>
 
-        <div className="setting-control">
-          <button
-            className="secondary-button"
-            disabled={actions.clearingLastTranscript}
-            onClick={() => void actions.clearLastTranscript()}
-            type="button"
-          >
-            <Eraser aria-hidden="true" size={15} />
-            {actions.clearingLastTranscript
-              ? "Clearing..."
-              : "Clear last transcript buffer"}
-          </button>
-          <button
-            className="ghost-button danger"
-            disabled={clearingHistory}
-            onClick={() => setConfirmClearHistory(true)}
-            type="button"
-          >
-            <Trash2 aria-hidden="true" size={15} />
-            {clearingHistory ? "Clearing..." : "Clear transcript history"}
-          </button>
-        </div>
-      </SectionPanel>
+      {children}
 
       <ConfirmDialog
         busy={clearingHistory}
         confirmLabel="Clear history"
         danger
-        message="This permanently deletes every saved dictation on this device, with its audio, plus the last transcript buffer, failed recordings and copies opened in an editor. Saved notes are kept. This can't be undone."
+        message="This permanently deletes every saved dictation on this computer, with its audio, plus the last transcript, failed recordings and copies opened in an editor. Saved notes are kept. This can't be undone."
         onCancel={() => setConfirmClearHistory(false)}
         onConfirm={() => void handleClearHistory()}
         open={confirmClearHistory}
         title="Clear transcript history?"
       />
 
+    </section>
+  );
+}
+
+/** Saves the current window size as the default (Appearance). */
+export function WindowSizeSettings({ actions }: { actions: ViewActions }) {
+  const [dataError, setDataError] = useState<string | null>(null);
+  const [savingWindowSize, setSavingWindowSize] = useState(false);
+  const [windowSizeSaved, setWindowSizeSaved] = useState(false);
+
+  const handleSaveWindowSize = useCallback(async () => {
+    setDataError(null);
+    setSavingWindowSize(true);
+    setWindowSizeSaved(false);
+
+    try {
+      await saveWindowSize();
+      await actions.refresh();
+      setWindowSizeSaved(true);
+      window.setTimeout(() => setWindowSizeSaved(false), 2500);
+    } catch (error) {
+      setDataError(commandErrorMessage(error));
+    } finally {
+      setSavingWindowSize(false);
+    }
+  }, [actions]);
+
+  return (
+    <>
       <SectionPanel
         icon={<Maximize2 aria-hidden="true" size={16} />}
-        title="Window"
+        title="Window size"
       >
         <SettingRow
-          description="Reopen Scribe at the window's current size."
+          description="Open Scribe at the size the window is now."
           label="Default window size"
         >
           <button
@@ -311,11 +332,14 @@ export function DataPrivacyView({
               ? "Saving..."
               : windowSizeSaved
                 ? "Saved"
-                : "Save current size as default"}
+                : "Save current size"}
           </button>
         </SettingRow>
       </SectionPanel>
-    </section>
+      {dataError ? (
+        <InlineError message={dataError} onRetry={actions.refresh} />
+      ) : null}
+    </>
   );
 }
 

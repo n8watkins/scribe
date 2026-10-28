@@ -497,7 +497,7 @@ fn load_credential(service: &str) -> Result<StoredCredential, CommandError> {
         Ok(encoded) => decode_credential(&encoded),
         Err(keyring::Error::NoEntry) => Err(CommandError::new(
             "github_not_signed_in",
-            "Not signed in to GitHub. Open Settings → Sync and connect GitHub.",
+            "Not signed in to GitHub. Connect it on the GitHub backup page.",
         )),
         Err(error) => Err(failure(format!(
             "Could not read the saved GitHub token. {error}"
@@ -580,7 +580,7 @@ fn not_configured() -> CommandError {
 fn unauthorized() -> CommandError {
     CommandError::new(
         "github_unauthorized",
-        "Your GitHub connection expired or was revoked. Reconnect GitHub in Settings → Sync.",
+        "Your GitHub connection expired or was revoked. Reconnect it on the GitHub backup page.",
     )
 }
 

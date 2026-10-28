@@ -1151,7 +1151,7 @@ pub fn open_release_page(app: tauri::AppHandle, url: Option<String>) -> Result<(
         .map_err(|error| CommandError::new("open_url_failed", error.to_string()))
 }
 
-/// Connection / configuration status for the Settings → Sync panel.
+/// Connection / configuration status for the GitHub backup page.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GithubStatus {

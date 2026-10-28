@@ -6,48 +6,66 @@ import {
   Gauge,
   Keyboard,
   Mic,
-  Wand2,
 } from "lucide-react";
 import {
-  commandErrorMessage,
   getHotkeyStatus,
-  transformSelection,
   type DashboardData,
   type MicrophoneInfo,
   type ModelInfo,
+  type PartialTranscriptEvent,
 } from "../backend";
-import type { ToastNotice, ViewActions, ViewName } from "../types";
+import type { ViewActions, ViewName } from "../types";
 import {
-  formatHotkey,
-  isAutoInsert,
+  afterDictationOf,
   isSelectedModelReady,
   microphoneDisplayName,
   statusCardValue,
 } from "../lib/format";
-import { HotkeyList, StatusCard } from "../components/layout";
-import { LastTranscriptCard } from "../components/transcript";
+import { HotkeyList, StatsRow, StatusCard } from "../components/layout";
+import { LastTranscriptCard, LiveTranscript } from "../components/transcript";
+
+/** The hotkeys Home always lists; any other hotkey shows up only when it
+ * failed to register, so a conflict is never hidden. */
+const HOME_HOTKEYS = ["holdToTalk", "toggleDictation", "pasteLastTranscript"];
+
+const AFTER_DICTATION_LABELS = {
+  insert: "Insert at cursor",
+  copy: "Copy only",
+  save: "Save only",
+} as const;
 
 export function DashboardView({
   actions,
   data,
+  liveTranscript,
   microphones,
   models,
   setActiveView,
-  showNotice,
 }: {
   actions: ViewActions;
   data: DashboardData;
+  liveTranscript: PartialTranscriptEvent | null;
   microphones: MicrophoneInfo[] | null;
   models: ModelInfo[] | null;
   setActiveView: (view: ViewName) => void;
-  showNotice?: (message: string, tone?: ToastNotice["tone"]) => void;
 }) {
-  const { appState, lastTranscript, settings } = data;
+  const { appState, lastTranscript, settings, stats } = data;
   const modelReady = isSelectedModelReady(models, settings.selectedModelId);
   const failedHotkeys = useFailedHotkeys(
     JSON.stringify(settings.hotkeys),
     settings.notesAnalysisEnabled,
   );
+  const shownHotkeys = new Set([...HOME_HOTKEYS, ...failedHotkeys]);
+  const modelName =
+    models?.find((model) => model.id === settings.selectedModelId)?.name ??
+    settings.selectedModelId ??
+    "Choose a model";
+  const liveText = liveTranscript?.text.trim() ?? "";
+  const showLive =
+    liveText.length > 0 &&
+    (appState.status === "Recording" ||
+      appState.status === "Stopping" ||
+      appState.status === "Transcribing");
 
   return (
     <>
@@ -62,7 +80,7 @@ export function DashboardView({
           </div>
           <button
             className="primary-button"
-            onClick={() => setActiveView("Models")}
+            onClick={() => setActiveView("Models & language")}
             type="button"
           >
             Get a model
@@ -72,35 +90,46 @@ export function DashboardView({
 
       <section className="status-grid" aria-label="Current setup">
         <StatusCard
-          action="Open Transcribe"
+          action="Open Dictation settings"
           Icon={Gauge}
           label="Status"
-          onAction={() => setActiveView("Transcribe")}
+          onAction={() => setActiveView("Dictation")}
           value={statusCardValue(appState.status)}
         />
         <StatusCard
-          action="Open Audio"
+          action="Open Microphone"
           Icon={Mic}
-          label="Active mic"
-          onAction={() => setActiveView("Audio")}
+          label="Microphone"
+          onAction={() => setActiveView("Microphone")}
           status={<span className="status-dot success" />}
           value={microphoneDisplayName(microphones, settings.selectedMicId)}
         />
         <StatusCard
-          action="Open Models"
+          action="Open Models and language"
           Icon={Database}
-          label="Active model"
-          onAction={() => setActiveView("Models")}
-          value={settings.selectedModelId ?? "Choose a model"}
+          label="Model"
+          onAction={() => setActiveView("Models & language")}
+          value={modelName}
         />
         <StatusCard
-          action="Open Settings"
+          action="Open Dictation settings"
           Icon={Clipboard}
-          label="Auto-insert"
-          onAction={() => setActiveView("Settings")}
-          value={isAutoInsert(settings.outputMode) ? "On" : "Off"}
+          label="After dictation"
+          onAction={() => setActiveView("Dictation")}
+          value={AFTER_DICTATION_LABELS[afterDictationOf(settings.outputMode)]}
         />
       </section>
+
+      <StatsRow stats={stats} />
+
+      {showLive ? (
+        <article className="panel-card live-card">
+          <div className="section-heading compact">
+            <h2>Hearing you</h2>
+          </div>
+          <LiveTranscript text={liveText} />
+        </article>
+      ) : null}
 
       <section className="main-grid">
         <LastTranscriptCard
@@ -123,31 +152,32 @@ export function DashboardView({
               type="button"
             >
               <Keyboard aria-hidden="true" size={15} />
-              Rebind
+              All hotkeys
             </button>
           </div>
           <HotkeyList
             compact
             failedActions={failedHotkeys}
+            only={shownHotkeys}
             settings={settings}
           />
+          {failedHotkeys.size > 0 ? (
+            <p className="hotkey-summary-note" role="status">
+              {failedHotkeys.size === 1
+                ? "One hotkey isn't working. Another app may use it."
+                : `${failedHotkeys.size} hotkeys aren't working. Another app may use them.`}
+            </p>
+          ) : null}
         </article>
-
-        {settings.notesAnalysisEnabled ? (
-          <TransformSelectionPanel
-            shortcut={settings.hotkeys.transformSelection}
-            showNotice={showNotice}
-          />
-        ) : null}
       </section>
     </>
   );
 }
 
-/** Actions whose shortcut is bound but not registered, so the Dashboard can
- * flag a conflict instead of listing a hotkey that does nothing. Reloads when
- * the bindings or the Local AI switch change. Status errors are left to the
- * Hotkeys view, which reports them in full. */
+/** Actions whose shortcut is bound but not registered, so Home can flag a
+ * conflict instead of listing a hotkey that does nothing. Reloads when the
+ * bindings or the Local AI switch change. Status errors are left to the
+ * Hotkeys page, which reports them in full. */
 function useFailedHotkeys(
   hotkeysKey: string,
   aiEnabled: boolean,
@@ -173,86 +203,4 @@ function useFailedHotkeys(
     };
   }, [hotkeysKey, aiEnabled]);
   return failed;
-}
-
-/** Inline AI editor: the user highlights text in another app, types an
- * instruction here, and Scribe hands focus back to that app, copies the
- * selection, rewrites it with the local LLM, and pastes the result back over
- * the selection. Shown only while Local AI is on. */
-function TransformSelectionPanel({
-  shortcut,
-  showNotice,
-}: {
-  shortcut: string;
-  showNotice?: (message: string, tone?: ToastNotice["tone"]) => void;
-}) {
-  const [instruction, setInstruction] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const run = async () => {
-    const trimmed = instruction.trim();
-    if (!trimmed || busy) {
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      // The other app keeps the highlighted selection; the backend refocuses
-      // it, copies the selection, transforms it, and pastes the result back.
-      const result = await transformSelection(trimmed);
-      showNotice?.(result.message ?? "Selection transformed.", "success");
-    } catch (caught) {
-      const message = commandErrorMessage(caught);
-      setError(message);
-      showNotice?.(message, "error");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <article className="panel-card">
-      <div className="section-heading compact">
-        <h2>Transform selection</h2>
-        <span className="muted">{formatHotkey(shortcut)}</span>
-      </div>
-      <p className="muted">
-        Highlight text in another app, then describe the change here. Scribe
-        switches back to that app and rewrites the text in place with your local
-        AI.
-      </p>
-      <textarea
-        className="transform-instruction"
-        aria-label="Transform instruction"
-        placeholder="e.g. make this concise, translate to Spanish, fix grammar"
-        rows={2}
-        value={instruction}
-        onChange={(event) => setInstruction(event.target.value)}
-        onKeyDown={(event) => {
-          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-            event.preventDefault();
-            void run();
-          }
-        }}
-        disabled={busy}
-      />
-      <div className="section-heading compact">
-        <button
-          className="primary-button"
-          onClick={() => void run()}
-          type="button"
-          disabled={busy || instruction.trim().length === 0}
-        >
-          <Wand2 aria-hidden="true" size={15} />
-          {busy ? "Transforming..." : "Transform selection"}
-        </button>
-      </div>
-      {error ? (
-        <p className="muted" role="alert">
-          {error}
-        </p>
-      ) : null}
-    </article>
-  );
 }

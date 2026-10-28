@@ -9,52 +9,58 @@ import {
   hotkeyRows,
 } from "../lib/format";
 
-export function StatsCard({
-  expanded = false,
-  stats,
-}: {
-  expanded?: boolean;
-  stats: BasicStats;
-}) {
-  const statRows = [
+/** Home's one-line summary of the local stats. The most used model is left
+ * out: the Model card above already names the model in use. */
+export function StatsRow({ stats }: { stats: BasicStats }) {
+  const items = [
     { label: "Words today", value: formatNumber(stats.wordsToday) },
     { label: "Dictations today", value: formatNumber(stats.dictationsToday) },
-    { label: "Average WPM", value: formatOptionalNumber(stats.averageWpm) },
     {
-      label: "Latency avg",
+      label: "Speaking speed",
+      value:
+        stats.averageWpm === null
+          ? "None"
+          : `${formatOptionalNumber(stats.averageWpm)} wpm`,
+    },
+    {
+      label: "Transcribe time",
       value: formatOptionalDuration(stats.averageTranscriptionLatencyMs),
     },
     {
-      label: "Recording avg",
+      label: "Recording length",
       value: formatOptionalDuration(stats.averageRecordingDurationMs),
     },
-    { label: "Most used model", value: stats.mostUsedModel ?? "None" },
-    {
-      label: "Total words",
-      value: formatNumber(stats.totalWordsTranscribed),
-    },
+    { label: "Total words", value: formatNumber(stats.totalWordsTranscribed) },
   ];
 
   return (
-    <div className={expanded ? "stats-grid wide" : "stats-grid"}>
-      {statRows.map((stat) => (
-        <div className="stat-tile" key={stat.label}>
-          <span>{stat.label}</span>
-          <strong title={stat.value}>{stat.value}</strong>
+    <section
+      aria-label="Your stats"
+      className="stats-row"
+      data-setting="Your stats"
+      title="Averages and totals from the history on this device"
+    >
+      {items.map((item) => (
+        <div className="stats-row-item" key={item.label}>
+          <span>{item.label}</span>
+          <strong>{item.value}</strong>
         </div>
       ))}
-    </div>
+    </section>
   );
 }
 
 export function HotkeyList({
   compact = false,
   failedActions,
+  only,
   settings,
 }: {
   compact?: boolean;
   /** Actions whose shortcut failed to register (another app holds it). */
   failedActions?: ReadonlySet<string>;
+  /** When set, list only these actions. */
+  only?: ReadonlySet<string>;
   settings: AppSettings;
 }) {
   return (
@@ -63,8 +69,9 @@ export function HotkeyList({
         // Transform Selection is only bound while Local AI is on.
         .filter(
           (hotkey) =>
-            hotkey.action !== "transformSelection" ||
-            settings.notesAnalysisEnabled,
+            (hotkey.action !== "transformSelection" ||
+              settings.notesAnalysisEnabled) &&
+            (!only || only.has(hotkey.action)),
         )
         .map((hotkey) => {
           const failed = failedActions?.has(hotkey.action) ?? false;
@@ -132,15 +139,21 @@ export function StatusCard({
 
 export function SectionPanel({
   children,
+  className,
   icon,
   title,
 }: {
   children: ReactNode;
+  /** Extra classes for the card, such as `span-2` to take a full grid row. */
+  className?: string;
   icon?: ReactNode;
   title: string;
 }) {
   return (
-    <article className="panel-card">
+    <article
+      className={className ? `panel-card ${className}` : "panel-card"}
+      data-setting={title}
+    >
       <div className="section-heading compact">
         <h2>
           {icon}
@@ -156,13 +169,19 @@ export function SettingRow({
   children,
   description,
   label,
+  stacked = false,
 }: {
   children: ReactNode;
   description: string;
   label: string;
+  /** Put a wide control (text field, text area) under the label. */
+  stacked?: boolean;
 }) {
   return (
-    <div className="settings-row">
+    <div
+      className={stacked ? "settings-row stacked" : "settings-row"}
+      data-setting={label}
+    >
       <span>
         <strong>{label}</strong>
         <small>{description}</small>

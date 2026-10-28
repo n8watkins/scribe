@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   Check,
@@ -35,10 +42,13 @@ import { EmptyState, InlineError } from "../components/feedback";
 import { IconButton } from "../components/primitives";
 
 export function ModelsView({
+  children,
   actions,
   settings,
 }: {
   actions: ViewActions;
+  /** Language and GPU panels shown under the model list. */
+  children?: ReactNode;
   settings: AppSettings;
 }) {
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -231,7 +241,7 @@ export function ModelsView({
 
   return (
     <section className="view-grid">
-      <article className="panel-card span-2">
+      <article className="panel-card span-2" data-setting="Models">
         <div className="section-heading compact">
           <div className="row-actions">
             <button
@@ -506,6 +516,7 @@ export function ModelsView({
           </>
         ) : null}
       </article>
+      {children}
     </section>
   );
 }

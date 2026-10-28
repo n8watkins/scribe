@@ -52,9 +52,12 @@ import "./sync.css";
  */
 export function SyncView({
   actions,
+  part,
   settings,
 }: {
   actions: ViewActions;
+  /** "github" shows only the backup panels, "files" only export and restore. */
+  part?: "github" | "files";
   settings: AppSettings;
 }) {
   const [status, setStatus] = useState<GithubStatus | null>(null);
@@ -265,304 +268,314 @@ export function SyncView({
     }
   }, [actions, importPreview, replaceExisting]);
 
-  return (
-    <section className="view-grid">
-      <SectionPanel
-        icon={<Cloud aria-hidden="true" size={16} />}
-        title="Connection"
-      >
-        <div className="sync-destination-head">
-          <span className="sync-destination-icon" aria-hidden="true">
-            <GitBranch size={18} />
-          </span>
-          <span className="sync-destination-meta">
-            <strong>GitHub</strong>
-            <small>
-              Back up your notes as dated Markdown to a private GitHub repo.
-            </small>
-          </span>
-          <span className="sync-destination-state">
-            {unconfigured ? (
-              <span className="pill error">
-                <CloudOff aria-hidden="true" size={13} />
-                Unavailable
+  const content = (
+    <>
+      {part !== "files" ? (
+        <>
+          <SectionPanel
+            icon={<Cloud aria-hidden="true" size={16} />}
+            title="Connection"
+          >
+            <div className="sync-destination-head">
+              <span className="sync-destination-icon" aria-hidden="true">
+                <GitBranch size={18} />
               </span>
-            ) : connected ? (
+              <span className="sync-destination-meta">
+                <strong>GitHub</strong>
+                <small>
+                  Back up your notes as dated Markdown to a private GitHub repo.
+                </small>
+              </span>
+              <span className="sync-destination-state">
+                {unconfigured ? (
+                  <span className="pill error">
+                    <CloudOff aria-hidden="true" size={13} />
+                    Unavailable
+                  </span>
+                ) : connected ? (
+                  <>
+                    <span className="status-dot success" aria-hidden="true" />
+                    <span className="pill ready">Connected</span>
+                  </>
+                ) : (
+                  <span className="pill idle">Not connected</span>
+                )}
+              </span>
+            </div>
+
+            {unconfigured ? (
+              <p className="muted vocab-hint">
+                This build isn't configured for GitHub sync.
+              </p>
+            ) : device != null ? (
+              <div className="setting-control sync-device-flow">
+                <p className="muted vocab-hint">
+                  Go to <strong>{device.verificationUri}</strong> and enter this
+                  code:
+                </p>
+                <span className="pill preserve">{device.userCode}</span>
+                <p className="muted vocab-hint">Waiting for authorization…</p>
+                <button
+                  className="secondary-button"
+                  onClick={handleCancelConnect}
+                  type="button"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : !connected ? (
               <>
-                <span className="status-dot success" aria-hidden="true" />
-                <span className="pill ready">Connected</span>
+                <p className="muted vocab-hint">
+                  Connect a GitHub account to back up your notes. We'll open GitHub
+                  in your browser to enter a one-time code. GitHub will ask for
+                  access to the private repositories where you install Scribe. The
+                  app only writes to the private backup repository you select.
+                </p>
+                <div className="setting-control">
+                  <button
+                    className="primary-button"
+                    disabled={busy}
+                    onClick={() => void handleConnect()}
+                    type="button"
+                  >
+                    <GitBranch aria-hidden="true" size={15} />
+                    {busy ? "Connecting…" : "Connect GitHub"}
+                  </button>
+                </div>
               </>
             ) : (
-              <span className="pill idle">Not connected</span>
-            )}
-          </span>
-        </div>
-
-        {unconfigured ? (
-          <p className="muted vocab-hint">
-            This build isn't configured for GitHub sync.
-          </p>
-        ) : device != null ? (
-          <div className="setting-control sync-device-flow">
-            <p className="muted vocab-hint">
-              Go to <strong>{device.verificationUri}</strong> and enter this
-              code:
-            </p>
-            <span className="pill preserve">{device.userCode}</span>
-            <p className="muted vocab-hint">Waiting for authorization…</p>
-            <button
-              className="secondary-button"
-              onClick={handleCancelConnect}
-              type="button"
-            >
-              Cancel
-            </button>
-          </div>
-        ) : !connected ? (
-          <>
-            <p className="muted vocab-hint">
-              Connect a GitHub account to back up your notes. We'll open GitHub
-              in your browser to enter a one-time code. GitHub will ask for
-              access to the private repositories where you install Scribe. The
-              app only writes to the private backup repository you select.
-            </p>
-            <div className="setting-control">
-              <button
-                className="primary-button"
-                disabled={busy}
-                onClick={() => void handleConnect()}
-                type="button"
+              <SettingRow
+                description="The connected GitHub account that your backups are written with."
+                label="Connected account"
               >
-                <GitBranch aria-hidden="true" size={15} />
-                {busy ? "Connecting…" : "Connect GitHub"}
-              </button>
-            </div>
-          </>
-        ) : (
-          <SettingRow
-            description="The connected GitHub account that your backups are written with."
-            label="Connected account"
+                <div className="button-row">
+                  <span className="pill preserve">
+                    {settings.githubAccountLogin || status?.username || "Connected"}
+                  </span>
+                  <button
+                    className="secondary-button"
+                    disabled={busy}
+                    onClick={() => void handleDisconnect()}
+                    type="button"
+                  >
+                    {busy ? "Working…" : "Disconnect"}
+                  </button>
+                </div>
+              </SettingRow>
+            )}
+          </SectionPanel>
+
+          {connected && !unconfigured ? (
+            <SectionPanel
+              icon={<GitBranch aria-hidden="true" size={16} />}
+              title="What to back up"
+            >
+              <p className="muted vocab-hint">
+                Choose what Scribe writes to GitHub. Backups are written
+                automatically as you go, and you can force one any time.
+              </p>
+              <SettingRow
+                description="An existing private repo installed for Scribe Local Backup, as owner/name, for example alice/scribe-notes."
+                label="Repository"
+                stacked
+              >
+                <RepoInput
+                  disabled={actions.savingSettings || busy}
+                  onSave={(githubRepo) => {
+                    // Clearing the repo must also disable sync, or validate()
+                    // rejects an empty-repo-with-sync-on save (and we'd keep
+                    // pushing to nowhere). A non-empty value saves as-is.
+                    const trimmed = githubRepo.trim();
+                    if (trimmed !== settings.githubRepo.trim()) {
+                      setLastActivity(null);
+                    }
+                    actions.updateSettings(
+                      trimmed.length === 0
+                        ? {
+                            githubRepo: "",
+                            githubSyncEnabled: false,
+                            githubSyncAllTranscripts: false,
+                          }
+                        : { githubRepo: trimmed },
+                    );
+                  }}
+                  value={settings.githubRepo}
+                />
+              </SettingRow>
+              <SettingRow
+                description={
+                  repoValid
+                    ? "Save a copy to GitHub whenever a note is saved or analyzed."
+                    : "Set a valid owner/name repository above first."
+                }
+                label="Back up notes"
+              >
+                <Toggle
+                  checked={settings.githubSyncEnabled}
+                  disabled={actions.savingSettings || busy || !repoValid}
+                  label="Back up notes"
+                  onChange={(githubSyncEnabled) =>
+                    actions.updateSettings({ githubSyncEnabled })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
+                description={
+                  repoValid
+                    ? "Also back up every dictation, not just notes, to a separate transcripts folder in the repository."
+                    : "Set a valid owner/name repository above first."
+                }
+                label="Back up all transcripts"
+              >
+                <Toggle
+                  checked={settings.githubSyncAllTranscripts}
+                  disabled={actions.savingSettings || busy || !repoValid}
+                  label="Back up all transcripts"
+                  onChange={(githubSyncAllTranscripts) =>
+                    actions.updateSettings({ githubSyncAllTranscripts })
+                  }
+                />
+              </SettingRow>
+              <div className="setting-control">
+                <button
+                  className="secondary-button"
+                  disabled={busy || !syncReady}
+                  onClick={() => void handleSyncNow()}
+                  type="button"
+                >
+                  <RefreshCw aria-hidden="true" size={15} />
+                  {busy ? "Syncing…" : "Sync now"}
+                </button>
+              </div>
+              {!backupSelected ? (
+                <p className="muted vocab-hint sync-inline-hint">
+                  Choose at least one backup type to run a manual backup.
+                </p>
+              ) : null}
+            </SectionPanel>
+          ) : null}
+
+          {connected && !unconfigured ? (
+            <SectionPanel
+              className="span-2"
+              icon={
+                currentActivity?.outcome === "error" ? (
+                  <TriangleAlert aria-hidden="true" size={16} />
+                ) : (
+                  <CheckCircle2 aria-hidden="true" size={16} />
+                )
+              }
+              title="Backup status"
+            >
+              <div className="sync-health-grid">
+                <SyncHealthItem
+                  label="Readiness"
+                  tone={syncReady ? "success" : "warning"}
+                  value={
+                    syncReady
+                      ? "Ready to back up"
+                      : backupReadiness(settings, repoValid)
+                  }
+                />
+                <SyncHealthItem label="Coverage" value={backupCoverage(settings)} />
+                <SyncHealthItem
+                  label="Last backup attempt"
+                  tone={currentActivity?.outcome === "error" ? "error" : undefined}
+                  value={formatActivity(currentActivity, settings.githubRepo)}
+                />
+              </div>
+              {lastActivityError ? (
+                <p className="sync-persisted-error">{lastActivityError}</p>
+              ) : null}
+              <p className="muted vocab-hint sync-inline-hint">
+                Includes both automatic backups and Sync now attempts.
+              </p>
+            </SectionPanel>
+          ) : null}
+
+        </>
+      ) : null}
+      {part !== "github" ? (
+        <>
+          <SectionPanel
+            icon={<Download aria-hidden="true" size={16} />}
+            title="Export to a file"
           >
+            <p className="muted vocab-hint">
+              Save your transcripts to a local file. No account needed: this writes
+              straight to a folder you pick.
+            </p>
+            <SettingRow
+              description="Markdown for reading, CSV for spreadsheets, JSON for the full raw data."
+              label="Format"
+            >
+              <select
+                disabled={exporting}
+                onChange={(event) =>
+                  setExportFormat(event.currentTarget.value as ExportFormat)
+                }
+                value={exportFormat}
+              >
+                <option value="markdown">Markdown (.md)</option>
+                <option value="csv">CSV (.csv)</option>
+                <option value="json">JSON (.json)</option>
+              </select>
+            </SettingRow>
+            <SettingRow
+              description="Which transcripts to include in the export."
+              label="What to export"
+            >
+              <select
+                disabled={exporting}
+                onChange={(event) =>
+                  setExportScope(event.currentTarget.value as ExportScope)
+                }
+                value={exportScope}
+              >
+                <option value="all">All transcripts</option>
+                <option value="notes">Notes only</option>
+                <option value="dictation">Dictation only</option>
+              </select>
+            </SettingRow>
             <div className="setting-control">
-              <span className="pill preserve">
-                {settings.githubAccountLogin || status?.username || "Connected"}
-              </span>
               <button
                 className="secondary-button"
-                disabled={busy}
-                onClick={() => void handleDisconnect()}
+                disabled={exporting}
+                onClick={() => void handleExport()}
                 type="button"
               >
-                {busy ? "Working…" : "Disconnect"}
+                <Download aria-hidden="true" size={15} />
+                {exporting ? "Exporting…" : "Export…"}
               </button>
             </div>
-          </SettingRow>
-        )}
-      </SectionPanel>
+          </SectionPanel>
 
-      {connected && !unconfigured ? (
-        <SectionPanel
-          icon={<GitBranch aria-hidden="true" size={16} />}
-          title="What to back up"
-        >
-          <p className="muted vocab-hint">
-            Choose what Scribe writes to GitHub. Backups are written
-            automatically as you go, and you can force one any time.
-          </p>
-          <SettingRow
-            description="An existing private repo installed for Scribe Local Backup, as owner/name (e.g. alice/scribe-notes)."
-            label="Repository"
+          <SectionPanel
+            icon={<Upload aria-hidden="true" size={16} />}
+            title="Restore from a backup"
           >
-            <RepoInput
-              disabled={actions.savingSettings || busy}
-              onSave={(githubRepo) => {
-                // Clearing the repo must also disable sync, or validate()
-                // rejects an empty-repo-with-sync-on save (and we'd keep
-                // pushing to nowhere). A non-empty value saves as-is.
-                const trimmed = githubRepo.trim();
-                if (trimmed !== settings.githubRepo.trim()) {
-                  setLastActivity(null);
-                }
-                actions.updateSettings(
-                  trimmed.length === 0
-                    ? {
-                        githubRepo: "",
-                        githubSyncEnabled: false,
-                        githubSyncAllTranscripts: false,
-                      }
-                    : { githubRepo: trimmed },
-                );
-              }}
-              value={settings.githubRepo}
-            />
-          </SettingRow>
-          <SettingRow
-            description={
-              repoValid
-                ? "Write a GitHub copy whenever a note is saved or analyzed."
-                : "Set a valid owner/name repository above first."
-            }
-            label="Sync notes to GitHub"
-          >
-            <Toggle
-              checked={settings.githubSyncEnabled}
-              disabled={actions.savingSettings || busy || !repoValid}
-              label="Sync notes to GitHub"
-              onChange={(githubSyncEnabled) =>
-                actions.updateSettings({ githubSyncEnabled })
-              }
-            />
-          </SettingRow>
-          <SettingRow
-            description={
-              repoValid
-                ? "Also back up every dictation transcript (not just notes) to a separate “transcripts” folder in the repo, for a full-history backup."
-                : "Set a valid owner/name repository above first."
-            }
-            label="Back up all transcripts"
-          >
-            <Toggle
-              checked={settings.githubSyncAllTranscripts}
-              disabled={actions.savingSettings || busy || !repoValid}
-              label="Back up all transcripts"
-              onChange={(githubSyncAllTranscripts) =>
-                actions.updateSettings({ githubSyncAllTranscripts })
-              }
-            />
-          </SettingRow>
-          <div className="setting-control">
-            <button
-              className="secondary-button"
-              disabled={busy || !syncReady}
-              onClick={() => void handleSyncNow()}
-              type="button"
-            >
-              <RefreshCw aria-hidden="true" size={15} />
-              {busy ? "Syncing…" : "Sync now"}
-            </button>
-          </div>
-          {!backupSelected ? (
-            <p className="muted vocab-hint sync-inline-hint">
-              Choose at least one backup type to run a manual backup.
+            <p className="muted vocab-hint">
+              Restore a JSON file previously exported by Scribe. The file is
+              validated and previewed before local history changes.
             </p>
-          ) : null}
-        </SectionPanel>
+            <SettingRow
+              description="Existing transcripts are skipped by default. Audio file paths from another device are never imported."
+              label="Scribe JSON export"
+            >
+              <button
+                className="secondary-button"
+                disabled={importing}
+                onClick={() => void handlePreviewImport()}
+                type="button"
+              >
+                <FileJson aria-hidden="true" size={15} />
+                {importing && !importPreview ? "Checking…" : "Choose backup…"}
+              </button>
+            </SettingRow>
+          </SectionPanel>
+
+        </>
       ) : null}
-
-      {connected && !unconfigured ? (
-        <SectionPanel
-          icon={
-            currentActivity?.outcome === "error" ? (
-              <TriangleAlert aria-hidden="true" size={16} />
-            ) : (
-              <CheckCircle2 aria-hidden="true" size={16} />
-            )
-          }
-          title="Backup status"
-        >
-          <div className="sync-health-grid">
-            <SyncHealthItem
-              label="Readiness"
-              tone={syncReady ? "success" : "warning"}
-              value={
-                syncReady
-                  ? "Ready to back up"
-                  : backupReadiness(settings, repoValid)
-              }
-            />
-            <SyncHealthItem label="Coverage" value={backupCoverage(settings)} />
-            <SyncHealthItem
-              label="Last backup attempt"
-              tone={currentActivity?.outcome === "error" ? "error" : undefined}
-              value={formatActivity(currentActivity, settings.githubRepo)}
-            />
-          </div>
-          {lastActivityError ? (
-            <p className="sync-persisted-error">{lastActivityError}</p>
-          ) : null}
-          <p className="muted vocab-hint sync-inline-hint">
-            Includes both automatic backups and Sync now attempts.
-          </p>
-        </SectionPanel>
-      ) : null}
-
-      <SectionPanel
-        icon={<Download aria-hidden="true" size={16} />}
-        title="Export to a file"
-      >
-        <p className="muted vocab-hint">
-          Save your transcripts to a local file. No account needed: this writes
-          straight to a folder you pick.
-        </p>
-        <SettingRow
-          description="Markdown for reading, CSV for spreadsheets, JSON for the full raw data."
-          label="Format"
-        >
-          <select
-            disabled={exporting}
-            onChange={(event) =>
-              setExportFormat(event.currentTarget.value as ExportFormat)
-            }
-            value={exportFormat}
-          >
-            <option value="markdown">Markdown (.md)</option>
-            <option value="csv">CSV (.csv)</option>
-            <option value="json">JSON (.json)</option>
-          </select>
-        </SettingRow>
-        <SettingRow
-          description="Which transcripts to include in the export."
-          label="What to export"
-        >
-          <select
-            disabled={exporting}
-            onChange={(event) =>
-              setExportScope(event.currentTarget.value as ExportScope)
-            }
-            value={exportScope}
-          >
-            <option value="all">All transcripts</option>
-            <option value="notes">Notes only</option>
-            <option value="dictation">Dictation only</option>
-          </select>
-        </SettingRow>
-        <div className="setting-control">
-          <button
-            className="secondary-button"
-            disabled={exporting}
-            onClick={() => void handleExport()}
-            type="button"
-          >
-            <Download aria-hidden="true" size={15} />
-            {exporting ? "Exporting…" : "Export…"}
-          </button>
-        </div>
-      </SectionPanel>
-
-      <SectionPanel
-        icon={<Upload aria-hidden="true" size={16} />}
-        title="Restore from a backup"
-      >
-        <p className="muted vocab-hint">
-          Restore a JSON file previously exported by Scribe. The file is
-          validated and previewed before local history changes.
-        </p>
-        <SettingRow
-          description="Existing transcripts are skipped by default. Audio file paths from another device are never imported."
-          label="Scribe JSON export"
-        >
-          <button
-            className="secondary-button"
-            disabled={importing}
-            onClick={() => void handlePreviewImport()}
-            type="button"
-          >
-            <FileJson aria-hidden="true" size={15} />
-            {importing && !importPreview ? "Checking…" : "Choose backup…"}
-          </button>
-        </SettingRow>
-      </SectionPanel>
-
       {notice ? (
         <p aria-live="polite" className="muted vocab-hint sync-status-line">
           {notice}
@@ -573,11 +586,6 @@ export function SyncView({
           {error}
         </p>
       ) : null}
-
-      <p className="muted vocab-hint sync-more-note">
-        More backup &amp; export destinations are coming. For now, everything
-        syncs to GitHub.
-      </p>
 
       <ConfirmDialog
         busy={importing}
@@ -621,7 +629,13 @@ export function SyncView({
           </label>
         ) : null}
       </ConfirmDialog>
-    </section>
+    </>
+  );
+
+  // On the Your data page the export and restore panels sit inside that
+  // page's grid; on their own they get the view grid.
+  return part === "files" ? content : (
+    <section className="view-grid align-start">{content}</section>
   );
 }
 

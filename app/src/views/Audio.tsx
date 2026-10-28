@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Cpu, Mic, Play, RefreshCw } from "lucide-react";
+import { Cpu, Mic, Play } from "lucide-react";
 import {
   commandErrorMessage,
   getTestClipAudio,
@@ -16,12 +16,12 @@ import {
 } from "../backend";
 import type { ViewActions } from "../types";
 import { cleanMicName, selectedMicrophoneLabel } from "../lib/format";
-import { EmptyState, InlineError } from "../components/feedback";
+import { InlineError } from "../components/feedback";
 import { SectionPanel, SettingRow } from "../components/layout";
 import { MsInput, Toggle } from "../components/primitives";
 import { Waveform } from "../components/transcript";
 
-export function AudioView({
+export function MicrophoneView({
   actions,
   settings,
 }: {
@@ -36,23 +36,6 @@ export function AudioView({
   const [hasTestClip, setHasTestClip] = useState(false);
   const [playingTestClip, setPlayingTestClip] = useState(false);
   const [testClipError, setTestClipError] = useState<string | null>(null);
-  const [gpuProbe, setGpuProbe] = useState<GpuProbe | null>(null);
-  const [gpuProbing, setGpuProbing] = useState(true);
-
-  const loadGpuProbe = useCallback(async () => {
-    setGpuProbing(true);
-    try {
-      setGpuProbe(await probeGpuDevices());
-    } catch {
-      setGpuProbe(null);
-    } finally {
-      setGpuProbing(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadGpuProbe();
-  }, [loadGpuProbe]);
 
   const loadMicrophones = useCallback(async () => {
     setMicrophonesLoading(true);
@@ -169,7 +152,7 @@ export function AudioView({
       {/* Inlined (not <SectionPanel>) so the status badge can sit to the RIGHT
           of the "Input" title: the `.section-heading` is space-between, so the
           <h2> anchors left and the pill is pushed to the right edge. */}
-      <article className="panel-card">
+      <article className="panel-card" data-setting="Microphone">
         <div className="section-heading compact">
           <h2>Input</h2>
           <span
@@ -262,9 +245,8 @@ export function AudioView({
           ) : null}
         </div>
       </article>
-
       <div className="stack">
-        <SectionPanel title="Audio processing">
+        <SectionPanel title="Recording">
           <SettingRow
             description="Remove quiet space around speech."
             label="Silence trim"
@@ -279,7 +261,7 @@ export function AudioView({
             />
           </SettingRow>
           <SettingRow
-            description="End toggle/manual recordings after a long pause. Off: keep listening through pauses; phrases still transcribe live in the background."
+            description="End a hands-free recording after a long pause. Off: keep listening through pauses."
             label="Auto-stop on silence"
           >
             <Toggle
@@ -289,22 +271,6 @@ export function AudioView({
               onChange={(silenceAutoStopEnabled) =>
                 actions.updateSettings({ silenceAutoStopEnabled })
               }
-            />
-          </SettingRow>
-          <SettingRow
-            description="Pause length that ends the recording, in milliseconds."
-            label="Auto-stop pause (ms)"
-          >
-            <MsInput
-              ariaLabel="Auto-stop pause length in milliseconds"
-              disabled={
-                actions.savingSettings || !settings.silenceAutoStopEnabled
-              }
-              min={1000}
-              onCommit={(silenceAutoStopMs) =>
-                actions.updateSettings({ silenceAutoStopMs })
-              }
-              value={settings.silenceAutoStopMs}
             />
           </SettingRow>
           <SettingRow
@@ -320,225 +286,219 @@ export function AudioView({
               }
             />
           </SettingRow>
-          <SettingRow
-            description="Split a phrase at a pause while you talk. Off: phrases split only when they get long (see below): fewer sentence breaks, but text appears in larger jumps."
-            label="Split on pause"
-          >
-            <Toggle
-              checked={settings.segmentPauseEnabled}
-              disabled={
-                actions.savingSettings ||
-                !settings.incrementalTranscriptionEnabled
-              }
-              label="Split on pause"
-              onChange={(segmentPauseEnabled) =>
-                actions.updateSettings({ segmentPauseEnabled })
-              }
-            />
-          </SettingRow>
-          <SettingRow
-            description="How long a pause must be to split a phrase. Higher = fewer stray periods/commas when you pause mid-sentence, slightly more delay before text is ready (200–10000 ms)."
-            label="Pause before splitting (ms)"
-          >
-            <MsInput
-              ariaLabel="Pause length before splitting a phrase, in milliseconds"
-              disabled={
-                actions.savingSettings ||
-                !settings.incrementalTranscriptionEnabled ||
-                !settings.segmentPauseEnabled
-              }
-              max={10000}
-              min={200}
-              onCommit={(segmentPauseMs) =>
-                actions.updateSettings({ segmentPauseMs })
-              }
-              value={settings.segmentPauseMs}
-            />
-          </SettingRow>
-          <SettingRow
-            description="Longest a single phrase can run before it is split anyway. Capped at 25 s because Whisper can only transcribe ~30 s at once (10000–25000 ms)."
-            label="Max phrase length (ms)"
-          >
-            <MsInput
-              ariaLabel="Maximum phrase length before forced split, in milliseconds"
-              disabled={
-                actions.savingSettings ||
-                !settings.incrementalTranscriptionEnabled
-              }
-              max={25000}
-              min={10000}
-              onCommit={(segmentMaxMs) =>
-                actions.updateSettings({ segmentMaxMs })
-              }
-              value={settings.segmentMaxMs}
-            />
-          </SettingRow>
-          <SettingRow
-            description="Ignore captures below this length, in milliseconds."
-            label="Minimum duration (ms)"
-          >
-            <MsInput
-              ariaLabel="Minimum duration in milliseconds"
-              disabled={actions.savingSettings}
-              min={1}
-              onCommit={(minRecordingMs) =>
-                actions.updateSettings({ minRecordingMs })
-              }
-              value={settings.minRecordingMs}
-            />
-          </SettingRow>
-          <SettingRow
-            description="Cap single dictation sessions, in milliseconds (600000 = 10 minutes)."
-            label="Maximum duration (ms)"
-          >
-            <MsInput
-              ariaLabel="Maximum duration in milliseconds"
-              disabled={actions.savingSettings}
-              min={settings.minRecordingMs}
-              onCommit={(maxRecordingMs) =>
-                actions.updateSettings({ maxRecordingMs })
-              }
-              value={settings.maxRecordingMs}
-            />
-          </SettingRow>
-          <SettingRow description="Keep original clips for review." label="Save raw audio">
-            <Toggle
-              checked={settings.saveAudioClips}
-              disabled={actions.savingSettings}
-              label="Save raw audio"
-              onChange={(saveAudioClips) =>
-                actions.updateSettings({ saveAudioClips })
-              }
-            />
-          </SettingRow>
-        </SectionPanel>
-        <SectionPanel
-          icon={
-            <span
-              className={
-                gpuProbing
-                  ? "pill pending"
-                  : gpuProbe?.available
-                    ? "pill ready"
-                    : "pill preserve"
-              }
-            >
-              {gpuProbing
-                ? "Detecting"
-                : gpuProbe?.available
-                  ? "GPU"
-                  : "CPU"}
-            </span>
-          }
-          title="GPU acceleration"
-        >
-          <SettingRow
-            description="Use your GPU (Vulkan) to transcribe, a big speedup on the large models. Falls back to CPU automatically if the GPU is unavailable."
-            label="Use GPU acceleration"
-          >
-            <Toggle
-              checked={settings.gpuAcceleration !== "off"}
-              disabled={actions.savingSettings}
-              label="Use GPU acceleration"
-              onChange={(on) =>
-                actions.updateSettings({ gpuAcceleration: on ? "auto" : "off" })
-              }
-            />
-          </SettingRow>
-          <p
-            className="muted"
-            style={{ display: "flex", alignItems: "center", gap: 6 }}
-          >
-            <Cpu aria-hidden="true" size={14} />
-            {gpuProbing
-              ? "Detecting GPU…"
-              : !gpuProbe?.probed
-                ? "Couldn't detect. Download a model to check your GPU."
-                : !gpuProbe.available
-                  ? "No Vulkan GPU found, so transcription runs on CPU."
-                  : `Detected: ${gpuProbe.devices
-                      .map((device) => device.name)
-                      .join(", ")}`}
-          </p>
-          {gpuProbe && gpuProbe.devices.length > 1 ? (
-            <div className="control-grid single">
-              <label>
-                GPU device
-                <select
+          <details className="advanced-disclosure">
+            <summary>Advanced timing</summary>
+            <div className="settings-list">
+              <SettingRow
+                description="How long a pause ends the recording."
+                label="Auto-stop pause (ms)"
+              >
+                <MsInput
+                  ariaLabel="Auto-stop pause length in milliseconds"
                   disabled={
-                    actions.savingSettings || settings.gpuAcceleration === "off"
+                    actions.savingSettings || !settings.silenceAutoStopEnabled
                   }
-                  onChange={(event) =>
-                    actions.updateSettings({
-                      gpuDeviceIndex:
-                        event.currentTarget.value === "auto"
-                          ? null
-                          : Number(event.currentTarget.value),
-                    })
+                  min={1000}
+                  onCommit={(silenceAutoStopMs) =>
+                    actions.updateSettings({ silenceAutoStopMs })
                   }
-                  value={settings.gpuDeviceIndex ?? "auto"}
-                >
-                  <option value="auto">Automatic (recommended)</option>
-                  {gpuProbe.devices.map((device) => (
-                    <option key={device.index} value={device.index}>
-                      {device.name}
-                      {device.integrated ? " (integrated)" : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  value={settings.silenceAutoStopMs}
+                />
+              </SettingRow>
+              <SettingRow
+                description="Start a new phrase when you pause. Off: phrases split only at the longest phrase length, so fewer sentence breaks but text arrives in bigger chunks."
+                label="Split on pause"
+              >
+                <Toggle
+                  checked={settings.segmentPauseEnabled}
+                  disabled={
+                    actions.savingSettings ||
+                    !settings.incrementalTranscriptionEnabled
+                  }
+                  label="Split on pause"
+                  onChange={(segmentPauseEnabled) =>
+                    actions.updateSettings({ segmentPauseEnabled })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
+                description="How long a pause starts a new phrase. Higher means fewer stray periods when you pause mid-sentence, with a little more delay (200 to 10000 ms)."
+                label="Pause before splitting (ms)"
+              >
+                <MsInput
+                  ariaLabel="Pause length before splitting a phrase, in milliseconds"
+                  disabled={
+                    actions.savingSettings ||
+                    !settings.incrementalTranscriptionEnabled ||
+                    !settings.segmentPauseEnabled
+                  }
+                  max={10000}
+                  min={200}
+                  onCommit={(segmentPauseMs) =>
+                    actions.updateSettings({ segmentPauseMs })
+                  }
+                  value={settings.segmentPauseMs}
+                />
+              </SettingRow>
+              <SettingRow
+                description="A phrase is split after this long even without a pause. The speech model handles about 30 seconds at once (10000 to 25000 ms)."
+                label="Longest phrase (ms)"
+              >
+                <MsInput
+                  ariaLabel="Maximum phrase length before forced split, in milliseconds"
+                  disabled={
+                    actions.savingSettings ||
+                    !settings.incrementalTranscriptionEnabled
+                  }
+                  max={25000}
+                  min={10000}
+                  onCommit={(segmentMaxMs) =>
+                    actions.updateSettings({ segmentMaxMs })
+                  }
+                  value={settings.segmentMaxMs}
+                />
+              </SettingRow>
+              <SettingRow
+                description="Recordings shorter than this are ignored."
+                label="Shortest recording (ms)"
+              >
+                <MsInput
+                  ariaLabel="Minimum duration in milliseconds"
+                  disabled={actions.savingSettings}
+                  min={1}
+                  onCommit={(minRecordingMs) =>
+                    actions.updateSettings({ minRecordingMs })
+                  }
+                  value={settings.minRecordingMs}
+                />
+              </SettingRow>
+              <SettingRow
+                description="Recording stops after this long (600000 ms is 10 minutes)."
+                label="Longest recording (ms)"
+              >
+                <MsInput
+                  ariaLabel="Maximum duration in milliseconds"
+                  disabled={actions.savingSettings}
+                  min={settings.minRecordingMs}
+                  onCommit={(maxRecordingMs) =>
+                    actions.updateSettings({ maxRecordingMs })
+                  }
+                  value={settings.maxRecordingMs}
+                />
+              </SettingRow>
             </div>
-          ) : null}
-        </SectionPanel>
-        <SectionPanel
-          icon={
-            <span className={microphonesError ? "pill error" : "pill ready"}>
-              {microphonesError ? "Unavailable" : "Available"}
-            </span>
-          }
-          title="Device health"
-        >
-          {microphonesLoading ? (
-            <div className="pending-panel">
-              <RefreshCw aria-hidden="true" size={16} />
-              <span>Scanning Windows input devices...</span>
-            </div>
-          ) : null}
-          {!microphonesLoading && microphones.length === 0 ? (
-            <EmptyState message="No input devices were reported by Windows. Connect a microphone and refresh." />
-          ) : null}
-          {!microphonesLoading && microphones.length > 0 ? (
-            <div className="device-list">
-              {microphones.map((microphone) => (
-                <div className="device-row" key={microphone.id}>
-                  <div>
-                    <strong title={microphone.name}>{microphone.name}</strong>
-                  </div>
-                  <span
-                    className={
-                      microphone.isSelected
-                        ? "pill selected"
-                        : microphone.isDefault
-                          ? "pill preserve"
-                          : microphone.isAvailable
-                            ? "pill ready"
-                            : "pill error"
-                    }
-                  >
-                    {microphone.isSelected
-                      ? "Selected"
-                      : microphone.isDefault
-                        ? "Default"
-                        : microphone.isAvailable
-                          ? "Available"
-                          : "Unavailable"}
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : null}
+          </details>
         </SectionPanel>
       </div>
     </section>
+  );
+}
+
+/** GPU acceleration, shown on the Models and language page because it decides
+ * how fast the chosen model runs. */
+export function GpuSettings({
+  actions,
+  settings,
+}: {
+  actions: ViewActions;
+  settings: AppSettings;
+}) {
+  const [gpuProbe, setGpuProbe] = useState<GpuProbe | null>(null);
+  const [gpuProbing, setGpuProbing] = useState(true);
+
+  const loadGpuProbe = useCallback(async () => {
+    setGpuProbing(true);
+    try {
+      setGpuProbe(await probeGpuDevices());
+    } catch {
+      setGpuProbe(null);
+    } finally {
+      setGpuProbing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadGpuProbe();
+  }, [loadGpuProbe]);
+
+  return (
+    <SectionPanel
+      icon={
+        <span
+          className={
+            gpuProbing
+              ? "pill pending"
+              : gpuProbe?.available
+                ? "pill ready"
+                : "pill preserve"
+          }
+        >
+          {gpuProbing
+            ? "Detecting"
+            : gpuProbe?.available
+              ? "GPU"
+              : "CPU"}
+        </span>
+      }
+      title="GPU acceleration"
+    >
+      <SettingRow
+        description="Transcribe on your graphics card, a big speedup for the larger models. Scribe falls back to the processor if the card isn't available."
+        label="Use GPU acceleration"
+      >
+        <Toggle
+          checked={settings.gpuAcceleration !== "off"}
+          disabled={actions.savingSettings}
+          label="Use GPU acceleration"
+          onChange={(on) =>
+            actions.updateSettings({ gpuAcceleration: on ? "auto" : "off" })
+          }
+        />
+      </SettingRow>
+      <p
+        className="muted"
+        style={{ display: "flex", alignItems: "center", gap: 6 }}
+      >
+        <Cpu aria-hidden="true" size={14} />
+        {gpuProbing
+          ? "Detecting your graphics card..."
+          : !gpuProbe?.probed
+            ? "Couldn't check yet. Download a model first."
+            : !gpuProbe.available
+              ? "No supported graphics card found, so Scribe uses the processor."
+              : `Detected: ${gpuProbe.devices
+                  .map((device) => device.name)
+                  .join(", ")}`}
+      </p>
+      {gpuProbe && gpuProbe.devices.length > 1 ? (
+        <div className="control-grid single">
+          <label>
+            Graphics card
+            <select
+              disabled={
+                actions.savingSettings || settings.gpuAcceleration === "off"
+              }
+              onChange={(event) =>
+                actions.updateSettings({
+                  gpuDeviceIndex:
+                    event.currentTarget.value === "auto"
+                      ? null
+                      : Number(event.currentTarget.value),
+                })
+              }
+              value={settings.gpuDeviceIndex ?? "auto"}
+            >
+              <option value="auto">Automatic</option>
+              {gpuProbe.devices.map((device) => (
+                <option key={device.index} value={device.index}>
+                  {device.name}
+                  {device.integrated ? " (integrated)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      ) : null}
+    </SectionPanel>
   );
 }

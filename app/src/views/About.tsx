@@ -74,15 +74,15 @@ const SETUP_STEPS: {
 }[] = [
   {
     title: "Download a model",
-    text: "Scribe transcribes with a local Whisper model. Open Models and download one. A smaller model is faster, a larger one is more accurate.",
+    text: "Scribe transcribes with a local Whisper model. Open Models and language and download one. A smaller model is faster, a larger one is more accurate.",
     action: "Download a model",
-    target: "Models",
+    target: "Models & language",
   },
   {
     title: "Choose a microphone",
-    text: "Pick the input device Scribe records from under Audio, then run the level test so you know your voice is coming through.",
+    text: "Pick the input device Scribe records from under Microphone, then run the level test so you know your voice is coming through.",
     action: "Choose a microphone",
-    target: "Audio",
+    target: "Microphone",
   },
   {
     title: "Set your hotkeys",
@@ -238,7 +238,7 @@ export function AboutView({
             </small>
           </div>
 
-          <div className="about-block">
+          <div className="about-block" data-setting="Updates">
             <div className="about-block-head">
               <strong>Updates</strong>
             </div>

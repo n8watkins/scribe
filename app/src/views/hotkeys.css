@@ -117,8 +117,12 @@
 /* Compact two-segment press/release, sitting to the LEFT of the bind. */
 .hotkeys-row-controls .trigger-segments {
   margin: 0;
-  width: 168px;
+  width: 150px;
   flex: 0 0 auto;
+}
+
+.hotkeys-row-controls .trigger-segments button {
+  white-space: nowrap;
 }
 
 /* ---------------------------------------------------------------------------
@@ -130,7 +134,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 132px;
+  /* Wide enough for the usual three-key binds, so the Press/Release switches
+     line up from row to row. */
+  min-width: 148px;
   min-height: 38px;
   padding: 7px 14px;
   color: var(--scribe-text);

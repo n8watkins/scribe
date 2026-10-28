@@ -367,12 +367,22 @@ button {
 }
 
 .titlebar-brand {
-  padding-left: 12px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: var(--scribe-text-faint);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-left: 11px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  color: var(--scribe-accent-strong);
   pointer-events: none;
+}
+
+.titlebar-mark {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 6px var(--scribe-accent-soft));
 }
 
 .window-controls {
@@ -416,39 +426,15 @@ button {
   flex: 0 0 190px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 14px 11px;
+  gap: 10px;
+  padding: 10px;
   border-right: 1px solid var(--scribe-border);
   background: var(--scribe-sidebar-bg);
   backdrop-filter: blur(20px);
   overflow-y: auto;
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  min-height: 42px;
-  margin-bottom: 2px;
-}
-
-.brand-mark {
-  width: 48px;
-  height: 48px;
-  object-fit: contain;
-  flex: 0 0 auto;
-  filter: drop-shadow(0 0 14px var(--scribe-accent-soft));
-}
-
-.brand-name {
-  font-size: 19px;
-  font-weight: 800;
-  letter-spacing: -0.01em;
-  color: var(--scribe-accent-strong);
-}
-
 .brand-badge {
-  margin-left: 6px;
   padding: 1px 5px;
   border: 1px solid var(--scribe-accent-soft);
   border-radius: 4px;
@@ -456,22 +442,34 @@ button {
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.08em;
-  vertical-align: 1px;
 }
 
-.brand-subtitle {
-  margin-top: 1px;
-  color: var(--scribe-text-faint);
-  font-size: 11px;
-}
-
+/* Grouped sidebar. Every entry, Developer included, fits the 820x540
+   minimum window without scrolling: keep the item height, label height and
+   gaps in step with that budget when changing them. */
 .nav-list {
   display: grid;
-  gap: 4px;
+  gap: 8px;
+}
+
+.nav-group {
+  display: grid;
+}
+
+.nav-group-label {
+  height: 16px;
+  padding: 0 9px 2px;
+  color: var(--scribe-text-faint);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .nav-item {
-  height: 30px;
+  height: 24px;
+  white-space: nowrap;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -919,12 +917,6 @@ button:disabled {
   line-height: 1.6;
 }
 
-.compact-text {
-  min-height: 64px;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
 /* Clamp the Last Transcript Buffer preview so a long transcript can't stretch
    the dashboard. ~5 lines, then ellipsis (a full viewer comes in a later
    phase). max-height is a fallback for browsers without line-clamp. */
@@ -947,9 +939,9 @@ button:disabled {
 
 .metadata-row span {
   padding: 3px 6px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
+  border: 1px solid var(--scribe-border);
   border-radius: 5px;
-  background: rgba(15, 23, 42, 0.56);
+  background: rgba(var(--scribe-surface-rgb), 0.56);
 }
 
 .panel-card {
@@ -1164,30 +1156,6 @@ textarea {
   padding: 7px 8px;
   resize: vertical;
   line-height: 1.45;
-}
-
-.recording-stage {
-  display: grid;
-  grid-template-columns: 105px minmax(0, 1fr);
-  gap: 12px;
-  align-items: center;
-  min-height: 86px;
-  margin-bottom: 10px;
-  padding: 10px 12px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  border-radius: 6px;
-  background: rgba(var(--scribe-surface-rgb),0.36);
-}
-
-.recording-stage strong,
-.standout {
-  display: block;
-  color: var(--scribe-text);
-  font-size: 13px;
-}
-
-.recording-stage p {
-  margin: 3px 0 0;
 }
 
 .live-transcript {
@@ -2362,58 +2330,44 @@ kbd {
   white-space: nowrap;
 }
 
-.stats-grid {
+/* Home's stats: one compact row of six numbers that wraps to two rows of
+   three on narrow windows. */
+.stats-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.stats-grid.wide {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.stats-grid.wide .stat-tile {
-  min-height: 64px;
-  padding: 10px 12px;
-}
-
-.stats-grid.wide .stat-tile strong {
-  margin-top: 6px;
-  font-size: 20px;
-}
-
-.stat-tile {
-  min-width: 0;
-}
-
-.stat-tile strong {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 1px;
+  margin-bottom: 8px;
   overflow: hidden;
+  border: 1px solid var(--scribe-border);
+  border-radius: 8px;
+  background: var(--scribe-border);
+}
+
+.stats-row-item {
+  min-width: 0;
+  padding: 6px 10px 7px;
+  background: var(--scribe-bg-elevated);
+}
+
+.stats-row-item span {
+  display: block;
+  overflow: hidden;
+  color: var(--scribe-text-muted);
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.stat-tile {
-  min-height: 48px;
-  padding: 7px 9px;
-  border: 1px solid rgba(148, 163, 184, 0.13);
-  border-radius: 6px;
-  background: rgba(var(--scribe-surface-rgb),0.32);
-}
-
-.stat-tile span {
+.stats-row-item strong {
   display: block;
-  color: var(--scribe-text-muted);
-  font-size: 11px;
-}
-
-.stat-tile strong {
-  display: block;
-  margin-top: 4px;
+  margin-top: 1px;
+  overflow: hidden;
   color: var(--scribe-text);
-  font-size: 16px;
-  /* Room below the baseline: overflow: hidden clips underscores at 1. */
-  line-height: 1.25;
+  font-size: 14px;
+  /* Room below the baseline: overflow: hidden clips descenders at 1. */
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Themes view: a responsive grid of theme cards. Each card previews a theme's
@@ -2542,6 +2496,10 @@ kbd {
 }
 
 @media (max-width: 880px) {
+  .stats-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   /* .status-grid intentionally not overridden here — its auto-fit track
      handles wrapping (4/3/2/1) on its own, with no hard 2-column jump. */
 
@@ -2592,7 +2550,6 @@ kbd {
   }
 
   .status-grid,
-  .stats-grid,
   .control-grid {
     grid-template-columns: 1fr;
   }
@@ -2602,8 +2559,7 @@ kbd {
   .history-row,
   .history-row:has(.history-row-select),
   .hotkey-editor-row,
-  .settings-row,
-  .recording-stage {
+  .settings-row {
     grid-template-columns: 1fr;
   }
 
@@ -2706,4 +2662,226 @@ kbd {
 
 ::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/* Settings search at the top of the sidebar; Ctrl+K focuses it. */
+.settings-search {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.settings-search-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 6px 0 8px;
+  border: 1px solid var(--scribe-border);
+  border-radius: 6px;
+  background: rgba(var(--scribe-surface-rgb), 0.55);
+  color: var(--scribe-text-faint);
+  cursor: text;
+}
+
+.settings-search-field:focus-within {
+  border-color: var(--scribe-accent);
+  box-shadow: 0 0 0 2px var(--scribe-accent-ring);
+}
+
+.settings-search-field input,
+.settings-search-field input:focus {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--scribe-text);
+  font-size: 12px;
+  box-shadow: none;
+}
+
+.settings-search-field kbd {
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 15px;
+  color: var(--scribe-text-faint);
+}
+
+.settings-search-results {
+  position: absolute;
+  z-index: 20;
+  top: 32px;
+  left: 0;
+  right: 0;
+  display: grid;
+  gap: 1px;
+  padding: 4px;
+  border: 1px solid var(--scribe-border);
+  border-radius: 7px;
+  background: var(--scribe-surface-raised);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+}
+
+.settings-search-result {
+  display: grid;
+  gap: 1px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  color: var(--scribe-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.settings-search-result span {
+  min-width: 0;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.settings-search-result small {
+  color: var(--scribe-text-muted);
+  font-size: 10.5px;
+}
+
+.settings-search-result.is-active small {
+  color: var(--scribe-text-secondary);
+}
+
+/* Delete data: two buttons that wrap as a pair rather than squeezing. */
+.data-delete-actions .secondary-button,
+.data-delete-actions .ghost-button {
+  white-space: nowrap;
+}
+
+.settings-search-result.is-active {
+  background: var(--scribe-accent-soft);
+}
+
+.settings-search-empty {
+  padding: 6px 8px;
+  color: var(--scribe-text-faint);
+  font-size: 12px;
+}
+
+/* The row or panel a search result jumped to. */
+.search-hit {
+  outline: 2px solid var(--scribe-accent);
+  outline-offset: 2px;
+  animation: search-hit-fade 1800ms ease forwards;
+}
+
+@keyframes search-hit-fade {
+  0%,
+  60% {
+    outline-color: var(--scribe-accent);
+  }
+  100% {
+    outline-color: transparent;
+  }
+}
+
+/* Rarely changed rows tucked behind a disclosure (Microphone timing, filler
+   pause). */
+.advanced-disclosure {
+  border-top: 1px solid var(--scribe-border);
+  padding-top: 4px;
+}
+
+.advanced-disclosure > summary {
+  width: fit-content;
+  padding: 4px 2px;
+  color: var(--scribe-text-secondary);
+  font-size: 12.5px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.advanced-disclosure[open] > summary {
+  margin-bottom: 6px;
+}
+
+/* A setting whose control needs the full width (text fields, text areas)
+   puts it under the label. */
+.settings-row.stacked {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.settings-row.stacked .setting-control {
+  justify-content: stretch;
+}
+
+.settings-row.stacked .setting-control input,
+.settings-row.stacked .setting-control textarea {
+  max-width: none;
+  width: 100%;
+}
+
+/* Selects size to their longest option instead of cutting it off. */
+.setting-control select,
+.control-grid select {
+  width: auto;
+  max-width: 100%;
+}
+
+/* Local AI: the features the server powers, with their on/off state. */
+.feature-list {
+  display: grid;
+  gap: 10px;
+}
+
+.feature-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  color: var(--scribe-accent);
+}
+
+.feature-row strong {
+  display: block;
+  color: var(--scribe-text);
+  font-size: 13px;
+}
+
+.feature-row small {
+  display: block;
+  color: var(--scribe-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.transform-intro {
+  margin: 0;
+}
+
+/* History's Dictations / Notes switch. */
+.page-tabs {
+  width: fit-content;
+}
+
+/* Home: live text while recording, and the hotkey conflict note. */
+.live-card {
+  margin-bottom: 8px;
+}
+
+.hotkey-summary-note {
+  margin: 8px 0 0;
+  color: var(--scribe-danger);
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .search-hit {
+    animation: none;
+  }
+}
+
+/* A two-column page whose cards keep their own height instead of stretching
+   to match the tallest card in the row. */
+.view-grid.align-start {
+  align-items: start;
 }

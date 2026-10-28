@@ -1,11 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import {
-  BookOpen,
-  Plus,
-  SlidersHorizontal,
-  Sparkles,
-  X,
-} from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Plus, X } from "lucide-react";
 import {
   commandErrorMessage,
   LANGUAGE_AUTO,
@@ -19,23 +13,20 @@ import {
 } from "../backend";
 import type { ViewActions } from "../types";
 import { SettingRow } from "../components/layout";
-import { OutputSettingRows } from "../components/OutputSettings";
 import { MsInput, Toggle } from "../components/primitives";
 
-export function SettingsView({
-  actions,
-  initialTabId,
-  settings,
-}: {
-  actions: ViewActions;
-  initialTabId?: string | null;
-  settings: AppSettings;
-}) {
-  // The selected model's multilingual capability drives the pair-guard notice
-  // shown when a non-English language (or translate) is chosen against an
-  // English-only model. Loaded from the catalog; null while it loads (the
-  // notice stays hidden until we actually know the model is English-only, so it
-  // never flashes for the default English/English-model setup).
+// Groups of setting rows. The sidebar pages in views/pages.tsx place them:
+// Dictation, Words, Models & language, Local AI, Appearance and General.
+
+type GroupProps = { actions: ViewActions; settings: AppSettings };
+
+/** Spoken language and translation, shown next to the model that decides
+ * whether they work. */
+export function LanguageSettings({ actions, settings }: GroupProps) {
+  // The selected model's multilingual capability drives the notice shown when
+  // a non-English language (or translation) is chosen with an English-only
+  // model. Null while the catalog loads, so the notice never flashes for the
+  // default English setup.
   const [selectedModelMultilingual, setSelectedModelMultilingual] = useState<
     boolean | null
   >(null);
@@ -47,8 +38,7 @@ export function SettingsView({
           return;
         }
         const active = models.find(
-          (model) =>
-            model.selected || model.id === settings.selectedModelId,
+          (model) => model.selected || model.id === settings.selectedModelId,
         );
         setSelectedModelMultilingual(active ? active.multilingual : null);
       })
@@ -63,8 +53,8 @@ export function SettingsView({
     };
   }, [settings.selectedModelId]);
 
-  // The user asked for non-English work (a specific non-English language, or
-  // auto-detect, or translate-to-English) but the active model is English-only.
+  // The user asked for non-English work (a specific non-English language,
+  // auto-detect, or translation) but the active model is English-only.
   const wantsMultilingual =
     settings.translateToEnglish ||
     settings.language === LANGUAGE_AUTO ||
@@ -72,388 +62,377 @@ export function SettingsView({
   const showMultilingualNotice =
     wantsMultilingual && selectedModelMultilingual === false;
 
-  const tabs: {
-    id: string;
-    title: string;
-    icon: ReactNode;
-    render: () => ReactNode;
-  }[] = [
-    {
-      id: "output",
-      title: "App & output",
-      icon: <SlidersHorizontal aria-hidden="true" size={16} />,
-      render: () => (
-      <article className="panel-card">
-        <div className="settings-list">
-          <div className="settings-subsection">
-            <h3 className="settings-subhead">Output</h3>
-            <OutputSettingRows
-              disabled={actions.savingSettings}
-              onChange={(patch) => actions.updateSettings(patch)}
-              settings={settings}
-            />
-            <SettingRow
-              description="Spoken language Scribe transcribes. Auto-detect and any non-English language need a multilingual model (see Models)."
-              label="Language"
-            >
-              <select
-                disabled={actions.savingSettings}
-                onChange={(event) =>
-                  actions.updateSettings({
-                    language: event.currentTarget.value,
-                  })
-                }
-                value={settings.language}
-              >
-                <option value="auto">Auto-detect</option>
-                {SUPPORTED_LANGUAGES.map(([code, label]) => (
-                  <option key={code} value={code}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </SettingRow>
-            <SettingRow
-              description="Transcribe any spoken language and output English instead (Whisper's translate task). Needs a multilingual model."
-              label="Translate to English"
-            >
-              <Toggle
-                checked={settings.translateToEnglish}
-                disabled={actions.savingSettings}
-                label="Translate to English"
-                onChange={(translateToEnglish) =>
-                  actions.updateSettings({ translateToEnglish })
-                }
-              />
-            </SettingRow>
-            {showMultilingualNotice ? (
-              <p className="muted vocab-hint" role="status">
-                Your selected model is English-only, so this setting won't take
-                effect. Download and select a multilingual model (e.g. Base or
-                Small Multilingual) from the Models tab.
-              </p>
-            ) : null}
-          </div>
-
-          {/* FILLER: pause-aware filler suppression */}
-          <div className="settings-subsection">
-            <h3 className="settings-subhead">Filler suppression</h3>
-            <SettingRow
-              description={
-                'Remove filler words (um, uh, …), but only when there’s a real pause around them, so fluent uses ("oh no", "like this") are kept. Deterministic; runs on the device, no LLM.'
-              }
-              label="Remove pause-bracketed filler words"
-            >
-              <Toggle
-                checked={settings.fillerSuppressionEnabled}
-                disabled={actions.savingSettings}
-                label="Remove pause-bracketed filler words"
-                onChange={(fillerSuppressionEnabled) =>
-                  actions.updateSettings({ fillerSuppressionEnabled })
-                }
-              />
-            </SettingRow>
-            <SettingRow
-              description="The words to remove, comma-separated. Add the risky ones (oh, like, so) only if you want; the pause check guards them. Clearing this removes nothing."
-              label="Filler words"
-            >
-              <BlurSavedTextArea
-                ariaLabel="Filler words, comma-separated"
-                onSave={(raw) =>
-                  actions.updateSettings({ fillerWords: parseFillerWords(raw) })
-                }
-                placeholder="um, uh, er, hmm"
-                rows={2}
-                value={settings.fillerWords.join(", ")}
-              />
-            </SettingRow>
-            <SettingRow
-              description="How long an adjacent silence must be (ms) for a filler to count as a hesitation worth removing. Lower = more aggressive (100–1500 ms)."
-              label="Pause before removing (ms)"
-            >
-              <MsInput
-                ariaLabel="Pause length before removing a filler, in milliseconds"
-                disabled={
-                  actions.savingSettings || !settings.fillerSuppressionEnabled
-                }
-                max={1500}
-                min={100}
-                onCommit={(fillerPauseThresholdMs) =>
-                  actions.updateSettings({ fillerPauseThresholdMs })
-                }
-                value={settings.fillerPauseThresholdMs}
-              />
-            </SettingRow>
-            <p className="muted vocab-hint">
-              Uses Whisper's own word timings; no LLM, and it runs on the warm
-              transcription server, so there's no real speed cost.
-            </p>
-          </div>
-
-          <div className="settings-subsection">
-            <h3 className="settings-subhead">Floating pill</h3>
-            <SettingRow
-              description="Always-on-top capture status overlay."
-              label="Show floating status pill"
-            >
-              <Toggle
-                checked={settings.showFloatingPill}
-                disabled={actions.savingSettings}
-                label="Show floating status pill"
-                onChange={(showFloatingPill) =>
-                  actions.updateSettings({ showFloatingPill })
-                }
-              />
-            </SettingRow>
-            <SettingRow
-              description="What the pill shows while you dictate."
-              label="Pill display mode"
-            >
-              <select
-                disabled={actions.savingSettings}
-                onChange={(event) =>
-                  actions.updateSettings({
-                    pillDisplayMode:
-                      event.currentTarget.value === "dot"
-                        ? "dot"
-                        : event.currentTarget.value === "visualizer"
-                          ? "visualizer"
-                          : "visualizer_with_text",
-                  })
-                }
-                value={settings.pillDisplayMode}
-              >
-                <option value="dot">Dot</option>
-                <option value="visualizer">Visualizer</option>
-                <option value="visualizer_with_text">Visualizer + text</option>
-              </select>
-            </SettingRow>
-            <SettingRow
-              description="Waveform and dot color for normal dictation on the pill."
-              label="Pill color"
-            >
-              <input
-                aria-label="Pill color"
-                disabled={actions.savingSettings}
-                onChange={(event) =>
-                  actions.updateSettings({
-                    pillColorNormal: event.currentTarget.value,
-                  })
-                }
-                type="color"
-                value={settings.pillColorNormal}
-              />
-            </SettingRow>
-            <SettingRow
-              description="Waveform and dot color while taking a note (tilde+Q)."
-              label="Note pill color"
-            >
-              <input
-                aria-label="Note pill color"
-                disabled={actions.savingSettings}
-                onChange={(event) =>
-                  actions.updateSettings({
-                    pillColorNote: event.currentTarget.value,
-                  })
-                }
-                type="color"
-                value={settings.pillColorNote}
-              />
-            </SettingRow>
-            <SettingRow
-              description="Background color of the floating pill."
-              label="Pill background"
-            >
-              <input
-                aria-label="Pill background color"
-                disabled={actions.savingSettings}
-                onChange={(event) =>
-                  actions.updateSettings({
-                    pillColorBackground: event.currentTarget.value,
-                  })
-                }
-                type="color"
-                value={settings.pillColorBackground}
-              />
-            </SettingRow>
-          </div>
-
-          <div className="settings-subsection">
-            <h3 className="settings-subhead">App</h3>
-            <SettingRow
-              description="Start Scribe when Windows starts."
-              label="Launch at startup"
-            >
-              <Toggle
-                checked={settings.launchAtStartup}
-                disabled={actions.savingSettings}
-                label="Launch at startup"
-                onChange={(launchAtStartup) =>
-                  actions.updateSettings({ launchAtStartup })
-                }
-              />
-            </SettingRow>
-            <SettingRow
-              description="Keep the app available from the system tray."
-              label="Minimize to tray"
-            >
-              <Toggle
-                checked={settings.minimizeToTray}
-                disabled={actions.savingSettings}
-                label="Minimize to tray"
-                onChange={(minimizeToTray) =>
-                  actions.updateSettings({ minimizeToTray })
-                }
-              />
-            </SettingRow>
-            <SettingRow
-              description="The dashboard hotkey minimizes the window again when it is already focused."
-              label="Dashboard hotkey toggles"
-            >
-              <Toggle
-                checked={settings.dashboardHotkeyToggles}
-                disabled={actions.savingSettings}
-                label="Dashboard hotkey toggles"
-                onChange={(dashboardHotkeyToggles) =>
-                  actions.updateSettings({ dashboardHotkeyToggles })
-                }
-              />
-            </SettingRow>
-            <SettingRow
-              description="Display completion and failure notices."
-              label="Notifications"
-            >
-              <Toggle
-                checked={settings.notificationsEnabled}
-                disabled={actions.savingSettings}
-                label="Notifications"
-                onChange={(notificationsEnabled) =>
-                  actions.updateSettings({ notificationsEnabled })
-                }
-              />
-            </SettingRow>
-            <SettingRow description="Play start and stop capture tones." label="Sounds">
-              <Toggle
-                checked={settings.soundsEnabled}
-                disabled={actions.savingSettings}
-                label="Sounds"
-                onChange={(soundsEnabled) => actions.updateSettings({ soundsEnabled })}
-              />
-            </SettingRow>
-            <SettingRow
-              description="Show a Developer panel in the sidebar with diagnostics like the live window resolution."
-              label="Enable developer settings"
-            >
-              <Toggle
-                checked={settings.developerSettingsEnabled}
-                disabled={actions.savingSettings}
-                label="Enable developer settings"
-                onChange={(developerSettingsEnabled) =>
-                  actions.updateSettings({ developerSettingsEnabled })
-                }
-              />
-            </SettingRow>
-          </div>
-        </div>
-      </article>
-      ),
-    },
-    {
-      id: "dictionary",
-      title: "Dictionary",
-      icon: <BookOpen aria-hidden="true" size={16} />,
-      render: () => (
-      <article className="panel-card">
-        <div className="settings-list">
-        <div className="dictionary-subsection">
-          <h3 className="dictionary-subhead">Context hint</h3>
-          <p className="muted vocab-hint">
-            A short, natural-language note that <em>primes</em> Whisper toward
-            your names, jargon, and spellings, e.g. "Tauri, natkins,
-            whisper.cpp". It nudges recognition toward these words; it is not
-            find-and-replace, so it can't guarantee an exact output. For
-            guaranteed swaps, use Replacements below.
-          </p>
-          <BlurSavedTextArea
-            ariaLabel="Context hint"
-            onSave={(vocabularyPrompt) =>
-              actions.updateSettings({ vocabularyPrompt })
-            }
-            placeholder="Tauri, natkins, whisper.cpp"
-            value={settings.vocabularyPrompt}
-          />
-        </div>
-        <div className="dictionary-subsection">
-          <h3 className="dictionary-subhead">Replacements</h3>
-          <p className="muted vocab-hint">
-            Deterministic: whenever you say the phrase on the left, Scribe writes
-            the text on the right, applied after transcription. E.g. "my email"
-            → your address, or fix "clawed" → "Claude". Matching is
-            case-insensitive and on whole words.
-          </p>
-          <ReplacementsEditor
-            disabled={actions.savingSettings}
-            onChange={(textReplacements) =>
-              actions.updateSettings({ textReplacements })
-            }
-            value={settings.textReplacements}
-          />
-        </div>
-        </div>
-      </article>
-      ),
-    },
-    {
-      id: "notes",
-      title: "Notes",
-      icon: <Sparkles aria-hidden="true" size={16} />,
-      render: () => (
-      <article className="panel-card">
-        <div className="settings-list">
-        <SettingRow
-          description="Analyze notes on demand from the Notes view using a local LLM server (LM Studio, Ollama, or any OpenAI-compatible API). Nothing leaves this machine."
-          label="Analyze notes with a local LLM"
+  return (
+    <>
+      <SettingRow
+        description="The language you speak. Auto-detect and any language other than English need a multilingual model."
+        label="Language"
+      >
+        <select
+          aria-label="Language"
+          disabled={actions.savingSettings}
+          onChange={(event) =>
+            actions.updateSettings({ language: event.currentTarget.value })
+          }
+          value={settings.language}
         >
-          <Toggle
-            checked={settings.notesAnalysisEnabled}
-            disabled={actions.savingSettings}
-            label="Analyze notes with a local LLM"
-            onChange={(notesAnalysisEnabled) =>
-              actions.updateSettings({ notesAnalysisEnabled })
-            }
-          />
-        </SettingRow>
-        <SettingRow
-          description="Base URL of the local server's OpenAI-compatible API. LM Studio's default is http://127.0.0.1:1234/v1."
-          label="Server endpoint"
-        >
-          <BlurSavedInput
-            ariaLabel="Notes analysis server endpoint"
-            onSave={(notesAnalysisEndpoint) =>
-              actions.updateSettings({ notesAnalysisEndpoint })
-            }
-            placeholder="http://127.0.0.1:1234/v1"
-            value={settings.notesAnalysisEndpoint}
-          />
-        </SettingRow>
-        <SettingRow
-          description="Leave empty to use whatever model the server has loaded."
-          label="Model"
-        >
-          <BlurSavedInput
-            ariaLabel="Notes analysis model"
-            onSave={(notesAnalysisModel) =>
-              actions.updateSettings({ notesAnalysisModel })
-            }
-            placeholder="Loaded model (automatic)"
-            value={settings.notesAnalysisModel}
-          />
-        </SettingRow>
-        <p className="muted vocab-hint">
-          Analysis prompt. The note text is sent along with this instruction,
-          so it alone decides what analysis produces (summary, action items,
-          tags, ...).
+          <option value="auto">Auto-detect</option>
+          {SUPPORTED_LANGUAGES.map(([code, label]) => (
+            <option key={code} value={code}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </SettingRow>
+      <SettingRow
+        description="Speak any language and get the text in English. Needs a multilingual model."
+        label="Translate to English"
+      >
+        <Toggle
+          checked={settings.translateToEnglish}
+          disabled={actions.savingSettings}
+          label="Translate to English"
+          onChange={(translateToEnglish) =>
+            actions.updateSettings({ translateToEnglish })
+          }
+        />
+      </SettingRow>
+      {showMultilingualNotice ? (
+        <p className="muted vocab-hint" role="status">
+          Your model only understands English, so this won't take effect.
+          Download and choose a multilingual model above, such as Base or Small
+          Multilingual.
         </p>
+      ) : null}
+    </>
+  );
+}
+
+/** Filler word removal, which only removes a filler when the speaker paused
+ * around it. */
+export function FillerSettings({ actions, settings }: GroupProps) {
+  return (
+    <>
+      <SettingRow
+        description={
+          'Remove words like "um" and "uh", but only when you pause around them, so fluent uses ("oh no", "like this") stay. Runs on this computer.'
+        }
+        label="Remove filler words"
+      >
+        <Toggle
+          checked={settings.fillerSuppressionEnabled}
+          disabled={actions.savingSettings}
+          label="Remove filler words"
+          onChange={(fillerSuppressionEnabled) =>
+            actions.updateSettings({ fillerSuppressionEnabled })
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        description="The words to remove, separated by commas. Riskier ones such as oh, like and so are safe to add because of the pause check."
+        label="Filler words"
+        stacked
+      >
+        <BlurSavedTextArea
+          ariaLabel="Filler words, comma-separated"
+          onSave={(raw) =>
+            actions.updateSettings({ fillerWords: parseFillerWords(raw) })
+          }
+          placeholder="um, uh, er, hmm"
+          rows={2}
+          value={settings.fillerWords.join(", ")}
+        />
+      </SettingRow>
+      <details className="advanced-disclosure">
+        <summary>Advanced</summary>
+        <div className="settings-list">
+          <SettingRow
+            description="How long the pause next to a filler word must be before it is removed. Lower removes more (100 to 1500 ms)."
+            label="Pause before removing (ms)"
+          >
+            <MsInput
+              ariaLabel="Pause length before removing a filler, in milliseconds"
+              disabled={
+                actions.savingSettings || !settings.fillerSuppressionEnabled
+              }
+              max={1500}
+              min={100}
+              onCommit={(fillerPauseThresholdMs) =>
+                actions.updateSettings({ fillerPauseThresholdMs })
+              }
+              value={settings.fillerPauseThresholdMs}
+            />
+          </SettingRow>
+        </div>
+      </details>
+    </>
+  );
+}
+
+/** Whether the floating pill shows, and what it shows. */
+export function PillSettings({ actions, settings }: GroupProps) {
+  return (
+    <>
+      <SettingRow
+        description="A small bar that stays on top of other windows and shows when Scribe is listening."
+        label="Show floating pill"
+      >
+        <Toggle
+          checked={settings.showFloatingPill}
+          disabled={actions.savingSettings}
+          label="Show floating pill"
+          onChange={(showFloatingPill) =>
+            actions.updateSettings({ showFloatingPill })
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        description="What the pill shows while you dictate."
+        label="Pill style"
+      >
+        <select
+          aria-label="Pill style"
+          disabled={actions.savingSettings}
+          onChange={(event) =>
+            actions.updateSettings({
+              pillDisplayMode:
+                event.currentTarget.value === "dot"
+                  ? "dot"
+                  : event.currentTarget.value === "visualizer"
+                    ? "visualizer"
+                    : "visualizer_with_text",
+            })
+          }
+          value={settings.pillDisplayMode}
+        >
+          <option value="dot">Dot</option>
+          <option value="visualizer">Waveform</option>
+          <option value="visualizer_with_text">Waveform and text</option>
+        </select>
+      </SettingRow>
+    </>
+  );
+}
+
+/** The floating pill's colors (Appearance). */
+export function PillColorSettings({ actions, settings }: GroupProps) {
+  return (
+    <>
+      <SettingRow
+        description="Waveform and dot color while you dictate."
+        label="Pill color"
+      >
+        <input
+          aria-label="Pill color"
+          disabled={actions.savingSettings}
+          onChange={(event) =>
+            actions.updateSettings({ pillColorNormal: event.currentTarget.value })
+          }
+          type="color"
+          value={settings.pillColorNormal}
+        />
+      </SettingRow>
+      <SettingRow
+        description="Waveform and dot color while you take a note."
+        label="Note pill color"
+      >
+        <input
+          aria-label="Note pill color"
+          disabled={actions.savingSettings}
+          onChange={(event) =>
+            actions.updateSettings({ pillColorNote: event.currentTarget.value })
+          }
+          type="color"
+          value={settings.pillColorNote}
+        />
+      </SettingRow>
+      <SettingRow
+        description="Background color of the pill."
+        label="Pill background"
+      >
+        <input
+          aria-label="Pill background color"
+          disabled={actions.savingSettings}
+          onChange={(event) =>
+            actions.updateSettings({
+              pillColorBackground: event.currentTarget.value,
+            })
+          }
+          type="color"
+          value={settings.pillColorBackground}
+        />
+      </SettingRow>
+    </>
+  );
+}
+
+/** Startup, tray, notifications, sounds and developer mode (General). */
+export function AppBehaviorSettings({ actions, settings }: GroupProps) {
+  return (
+    <>
+      <SettingRow
+        description="Start Scribe when you sign in to Windows."
+        label="Launch at startup"
+      >
+        <Toggle
+          checked={settings.launchAtStartup}
+          disabled={actions.savingSettings}
+          label="Launch at startup"
+          onChange={(launchAtStartup) => actions.updateSettings({ launchAtStartup })}
+        />
+      </SettingRow>
+      <SettingRow
+        description="Keep Scribe available from the system tray."
+        label="Minimize to tray"
+      >
+        <Toggle
+          checked={settings.minimizeToTray}
+          disabled={actions.savingSettings}
+          label="Minimize to tray"
+          onChange={(minimizeToTray) => actions.updateSettings({ minimizeToTray })}
+        />
+      </SettingRow>
+      <SettingRow
+        description="Pressing the Open Scribe hotkey while this window is in front hides it again."
+        label="Open Scribe hotkey hides it"
+      >
+        <Toggle
+          checked={settings.dashboardHotkeyToggles}
+          disabled={actions.savingSettings}
+          label="Open Scribe hotkey hides it"
+          onChange={(dashboardHotkeyToggles) =>
+            actions.updateSettings({ dashboardHotkeyToggles })
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        description="Show a short message when a dictation finishes or fails."
+        label="Notifications"
+      >
+        <Toggle
+          checked={settings.notificationsEnabled}
+          disabled={actions.savingSettings}
+          label="Notifications"
+          onChange={(notificationsEnabled) =>
+            actions.updateSettings({ notificationsEnabled })
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        description="Play a tone when recording starts and stops."
+        label="Sounds"
+      >
+        <Toggle
+          checked={settings.soundsEnabled}
+          disabled={actions.savingSettings}
+          label="Sounds"
+          onChange={(soundsEnabled) => actions.updateSettings({ soundsEnabled })}
+        />
+      </SettingRow>
+      <SettingRow
+        description="Add a Developer page to the sidebar with diagnostics such as the window size."
+        label="Developer settings"
+      >
+        <Toggle
+          checked={settings.developerSettingsEnabled}
+          disabled={actions.savingSettings}
+          label="Developer settings"
+          onChange={(developerSettingsEnabled) =>
+            actions.updateSettings({ developerSettingsEnabled })
+          }
+        />
+      </SettingRow>
+    </>
+  );
+}
+
+/** Names and words the speech model should expect. */
+export function ContextHintSettings({ actions, settings }: GroupProps) {
+  return (
+    <>
+      <p className="muted vocab-hint">
+        Names, jargon and spellings Scribe should expect, for example "Tauri,
+        natkins, whisper.cpp". This nudges recognition toward them but can't
+        guarantee an exact result; for that, use Replacements.
+      </p>
+      <BlurSavedTextArea
+        ariaLabel="Context hint"
+        onSave={(vocabularyPrompt) => actions.updateSettings({ vocabularyPrompt })}
+        placeholder="Tauri, natkins, whisper.cpp"
+        value={settings.vocabularyPrompt}
+      />
+    </>
+  );
+}
+
+/** "Say this, write that" replacements. */
+export function ReplacementsSettings({ actions, settings }: GroupProps) {
+  return (
+    <>
+      <p className="muted vocab-hint">
+        Whenever you say the phrase on the left, Scribe writes the text on the
+        right. For example, "my email" can become your address, or "clawed"
+        can become "Claude". Case doesn't matter, and only whole words match.
+      </p>
+      <ReplacementsEditor
+        disabled={actions.savingSettings}
+        onChange={(textReplacements) => actions.updateSettings({ textReplacements })}
+        value={settings.textReplacements}
+      />
+    </>
+  );
+}
+
+/** The one Local AI switch, the server connection, and the analysis prompt. */
+export function LocalAiSettings({ actions, settings }: GroupProps) {
+  return (
+    <>
+      <SettingRow
+        description="Turns on Notes analysis and Transform selection, and their hotkey. Text goes only to the server below; with a local address it never leaves this computer."
+        label="Use local AI"
+      >
+        <Toggle
+          checked={settings.notesAnalysisEnabled}
+          disabled={actions.savingSettings}
+          label="Use local AI"
+          onChange={(notesAnalysisEnabled) =>
+            actions.updateSettings({ notesAnalysisEnabled })
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        description="Where your AI server (LM Studio, Ollama or another OpenAI-compatible server) listens. LM Studio uses http://127.0.0.1:1234/v1."
+        label="Server address"
+        stacked
+      >
+        <BlurSavedInput
+          ariaLabel="Local AI server address"
+          onSave={(notesAnalysisEndpoint) =>
+            actions.updateSettings({ notesAnalysisEndpoint })
+          }
+          placeholder="http://127.0.0.1:1234/v1"
+          value={settings.notesAnalysisEndpoint}
+        />
+      </SettingRow>
+      <SettingRow
+        description="Leave empty to use whichever model the server has loaded."
+        label="Model"
+        stacked
+      >
+        <BlurSavedInput
+          ariaLabel="Local AI model"
+          onSave={(notesAnalysisModel) =>
+            actions.updateSettings({ notesAnalysisModel })
+          }
+          placeholder="Loaded model (automatic)"
+          value={settings.notesAnalysisModel}
+        />
+      </SettingRow>
+      <SettingRow
+        description="Sent with each note when you analyze it, so it decides what you get back (a summary, action items, tags)."
+        label="Analysis prompt"
+        stacked
+      >
         <BlurSavedTextArea
           ariaLabel="Notes analysis prompt"
           onSave={(notesAnalysisPrompt) =>
@@ -463,61 +442,12 @@ export function SettingsView({
           rows={4}
           value={settings.notesAnalysisPrompt}
         />
-        <LlmConnectionCard
-          endpoint={settings.notesAnalysisEndpoint}
-          model={settings.notesAnalysisModel}
-        />
-        </div>
-      </article>
-      ),
-    },
-  ];
-
-  const [activeTab, setActiveTab] = useState(
-    initialTabId && tabs.some((tab) => tab.id === initialTabId)
-      ? initialTabId
-      : tabs[0].id,
-  );
-  const active = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
-
-  // Deep-links from other views (e.g. the Notes/History "Settings" buttons)
-  // pass a target tab id; select it whenever it changes to a known tab.
-  useEffect(() => {
-    if (initialTabId && tabs.some((tab) => tab.id === initialTabId)) {
-      setActiveTab(initialTabId);
-    }
-    // `tabs` is rebuilt every render; key the effect on the id alone.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialTabId]);
-
-  return (
-    <section className="view-grid">
-      <div className="settings-tabs" role="tablist" aria-label="Settings sections">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            role="tab"
-            id={`settings-tab-${tab.id}`}
-            aria-controls={`settings-panel-${tab.id}`}
-            aria-selected={tab.id === active.id}
-            className={`settings-tab${tab.id === active.id ? " is-active" : ""}`}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {tab.icon}
-            <span>{tab.title}</span>
-          </button>
-        ))}
-      </div>
-      <div
-        className="settings-tabpanel"
-        role="tabpanel"
-        id={`settings-panel-${active.id}`}
-        aria-labelledby={`settings-tab-${active.id}`}
-      >
-        {active.render()}
-      </div>
-    </section>
+      </SettingRow>
+      <LlmConnectionCard
+        endpoint={settings.notesAnalysisEndpoint}
+        model={settings.notesAnalysisModel}
+      />
+    </>
   );
 }
 
@@ -569,7 +499,7 @@ function LlmConnectionCard({
               </span>
             </>
           ) : (
-            <span className="muted">Local LLM server connection</span>
+            <span className="muted">Local AI server</span>
           )}
         </div>
         <button
@@ -578,7 +508,7 @@ function LlmConnectionCard({
           onClick={() => void handleTest()}
           type="button"
         >
-          {checking ? "Checking…" : "Test connection"}
+          {checking ? "Checking..." : "Test connection"}
         </button>
       </div>
 
@@ -588,7 +518,7 @@ function LlmConnectionCard({
             <p className="muted vocab-hint">
               {model.trim()
                 ? `Available models (set to "${model.trim()}"):`
-                : "Available models (empty Model field uses the first/loaded one):"}
+                : "Available models (an empty Model field uses the loaded one):"}
             </p>
             <div className="llm-model-pills">
               {status.models.map((id) => (
@@ -603,18 +533,18 @@ function LlmConnectionCard({
           </div>
         ) : (
           <p className="muted vocab-hint">
-            The server is reachable but has no models loaded. Load a model (e.g.
-            in LM Studio) so analysis has something to run.
+            The server answered but has no model loaded. Load one, for example
+            in LM Studio, so Scribe has something to run.
           </p>
         )
       ) : null}
 
       {status && !reachable ? (
         <p className="muted vocab-hint">
-          No local LLM server answered at{" "}
+          No local AI server answered at{" "}
           <code>{status.endpoint || endpoint || "the configured endpoint"}</code>
-          . Start LM Studio (or Ollama), load a model, and make sure its local
-          server is running at the endpoint above (LM Studio's default is{" "}
+          . Start LM Studio or Ollama, load a model, and make sure its local
+          server is running at the address above (LM Studio uses{" "}
           <code>http://127.0.0.1:1234/v1</code>).
           {status.error ? ` ${status.error}` : ""}
         </p>
@@ -862,7 +792,7 @@ function replacementsEqual(a: TextReplacement[], b: TextReplacement[]): boolean 
 // FILLER: parse the filler list into a clean, lowercased, de-duplicated array of
 // single words. Split on commas, newlines, AND spaces, so "um, uh" and "um uh"
 // both work. Matching is one transcribed word at a time, so multi-word entries
-// ("you know") can't match — they're split into separate words here instead of
+// ("you know") can't match; they're split into separate words here instead of
 // silently stored as dead config.
 function parseFillerWords(raw: string): string[] {
   const seen = new Set<string>();
