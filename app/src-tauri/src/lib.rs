@@ -21,6 +21,7 @@ pub mod note_analysis;
 pub mod note_sync;
 pub mod output;
 pub mod selection_transform;
+pub mod self_test;
 pub mod settings;
 pub mod state_server;
 pub mod stats;
@@ -433,6 +434,14 @@ pub fn run() {
             // second app (T-Hub) always has a file to read, even before the
             // first dictation.
             status_file::publish_idle(app.handle());
+
+            // `--self-test-transcribe <audio> <result>` (the release smoke
+            // test) transcribes one file through the normal path, writes the
+            // outcome and exits. Plain launches never take this branch.
+            if let Some(request) = self_test::parse_args(std::env::args()) {
+                log::info!("Starting self-test run");
+                self_test::spawn(app.handle(), request);
+            }
 
             log::info!("Scribe setup complete");
             Ok(())
