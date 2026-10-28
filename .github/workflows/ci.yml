@@ -48,13 +48,16 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: app/package-lock.json
 
+      # Same install as the release build: scripts off, esbuild's run on its own.
       - name: Install dependencies
         working-directory: app
-        run: npm ci
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild esbuild
 
       - name: Audit dependencies
         working-directory: app
@@ -106,13 +109,15 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: integrations/mcp-server/package-lock.json
 
       - name: Install dependencies
         working-directory: integrations/mcp-server
-        run: npm ci
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild esbuild
 
       - name: Audit dependencies
         working-directory: integrations/mcp-server
@@ -132,4 +137,6 @@ jobs:
         run: cargo install cargo-audit --version 0.22.2 --locked
 
       - name: Audit Rust dependencies
-        run: cargo audit --file app/src-tauri/Cargo.lock
+        run: |
+          cargo audit --file app/src-tauri/Cargo.lock
+          cargo audit --file cli/Cargo.lock
