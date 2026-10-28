@@ -112,18 +112,24 @@ fn run(app: &AppHandle, audio: &Path) -> SelfTestResult {
 /// it is not on disk yet, so the self-test covers model download too.
 fn ensure_selected_model(app: &AppHandle, result: &mut SelfTestResult) -> Result<(), String> {
     let state = app.state::<BackendState>();
-    let db = state.db().map_err(|error| error.message)?;
-    let model_id = db
-        .get_settings()
-        .map_err(|error| error.message)?
-        .selected_model_id
-        .unwrap_or_else(|| crate::models::DEFAULT_MODEL_ID.to_string());
+    // The download takes the database lock for each short step, so the lock
+    // is released before it starts.
+    let (model_id, present) = {
+        let db = state.db().map_err(|error| error.message)?;
+        let model_id = db
+            .get_settings()
+            .map_err(|error| error.message)?
+            .selected_model_id
+            .unwrap_or_else(|| crate::models::DEFAULT_MODEL_ID.to_string());
+        let present = model_manager::selected_model_path(app, &db).is_ok();
+        (model_id, present)
+    };
     result.model_id = Some(model_id.clone());
-    if model_manager::selected_model_path(app, &db).is_ok() {
+    if present {
         return Ok(());
     }
     log::info!("Self-test: downloading model {}", model_id);
-    model_manager::download_model(app, &db, state.model_downloads(), &model_id)
+    model_manager::download_model(app, &state, &model_id)
         .map(|_| ())
         .map_err(|error| error.message)
 }
