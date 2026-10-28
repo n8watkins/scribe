@@ -45,10 +45,10 @@ const triggerLabels: Record<TriggerEdge, string> = {
  * flips the edge: it is only available while Toggle acts on release. */
 function toggleHint(trigger: TriggerEdge | null, noteChordActive: boolean): string {
   if (trigger === "press") {
-    return "Acts on press — the hold-and-tap-Q note chord is off in this mode";
+    return "Acts on press. The hold-and-tap-Q note chord is off in this mode";
   }
   return noteChordActive
-    ? "Acts on release — hold it and tap Q to dictate a note"
+    ? "Acts on release. Hold it and tap Q to dictate a note"
     : "Acts on release";
 }
 
@@ -440,7 +440,7 @@ export function HotkeysView({
                         disabled={bindDisabled}
                         aria-label={
                           isCapturing
-                            ? `Capturing new keys for ${bindLabel} — press Escape to cancel`
+                            ? `Capturing new keys for ${bindLabel}. Press Escape to cancel`
                             : `${bindLabel}: ${formatHotkey(binding.shortcut)}. Click to change.`
                         }
                         title={isCapturing ? "Press Esc to cancel" : "Click to change"}

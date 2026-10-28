@@ -459,7 +459,7 @@ function App() {
         const tick = () => {
           if (Date.now() - lastActivity > STALL_MS) {
             reject(
-              new Error("The update download stalled — check your connection."),
+              new Error("The update download stalled. Check your connection."),
             );
           } else {
             stallTimer = window.setTimeout(tick, 5000);
@@ -571,7 +571,7 @@ function App() {
             // in-app notifications setting.
             pushToast({
               tone: "info",
-              message: `Scribe ${result.latestVersion} is available — open About to install it.`,
+              message: `Scribe ${result.latestVersion} is available. Open About to install it.`,
             });
             void notifyUpdateAvailable(result.latestVersion);
           }
@@ -750,7 +750,7 @@ function App() {
             const details = event.payload.failures
               .map(
                 (failure) =>
-                  `${formatHotkey(failure.shortcut)} — ${failure.message}`,
+                  `${formatHotkey(failure.shortcut)}: ${failure.message}`,
               )
               .join("; ");
             // Always surface hotkey failures, regardless of notification setting.
@@ -1001,7 +1001,7 @@ function App() {
               <button
                 className="secondary-button update-available-button"
                 onClick={() => setActiveView("About")}
-                title={`Scribe v${updateInfo.latestVersion} is available — open About to install it`}
+                title={`Scribe v${updateInfo.latestVersion} is available. Open About to install it`}
                 type="button"
               >
                 <Download aria-hidden="true" size={14} />

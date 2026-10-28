@@ -37,7 +37,7 @@ const FEATURES = [
   {
     Icon: Keyboard,
     title: "Dictate anywhere",
-    text: "Hold-to-talk or toggle with a global hotkey — your voice lands as text in any app, no window switching.",
+    text: "Hold-to-talk or toggle with a global hotkey. Your voice lands as text in any app, no window switching.",
   },
   {
     Icon: Mic,
@@ -47,7 +47,7 @@ const FEATURES = [
   {
     Icon: Clock,
     title: "Last Transcript Buffer",
-    text: "Your latest dictation stays parked and ready to paste on demand — without ever clobbering your clipboard.",
+    text: "Your latest dictation stays parked and ready to paste on demand, without ever clobbering your clipboard.",
   },
   {
     Icon: StickyNote,
@@ -57,7 +57,7 @@ const FEATURES = [
   {
     Icon: History,
     title: "Searchable history",
-    text: "Every transcript is kept in a fast, local, searchable log — with retention limits you control.",
+    text: "Every transcript is kept in a fast, local, searchable log, with retention limits you control.",
   },
   {
     Icon: Replace,
@@ -74,7 +74,7 @@ const SETUP_STEPS: {
 }[] = [
   {
     title: "Download a model",
-    text: "Scribe transcribes with a local Whisper model. Open Models and download one — a smaller model is faster, a larger one is more accurate.",
+    text: "Scribe transcribes with a local Whisper model. Open Models and download one. A smaller model is faster, a larger one is more accurate.",
     action: "Download a model",
     target: "Models",
   },
@@ -160,7 +160,7 @@ export function AboutView({
       if (!update) {
         setInstallStatus(null);
         setUpdateError(
-          "The latest release has no signed update package — use View release to download the installer.",
+          "The latest release has no signed update package. Use View release to download the installer.",
         );
         return;
       }
@@ -207,7 +207,7 @@ export function AboutView({
     installStatus ??
     (effectiveUpdate
       ? effectiveUpdate.updateAvailable
-        ? `You're on an old version — v${effectiveUpdate.latestVersion} is available.`
+        ? `You're on an old version. v${effectiveUpdate.latestVersion} is available.`
         : "You're on the latest version."
       : "Compare this install against the latest GitHub release.");
 
@@ -301,7 +301,7 @@ export function AboutView({
             </div>
             <small className="about-autoinstall-hint">
               Downloads and installs new versions on launch, with a Scribe screen
-              — no Windows installer popups.
+              and no Windows installer popups.
             </small>
           </div>
 
@@ -350,7 +350,7 @@ export function AboutView({
         <article className="panel-card about-features-card">
           <p className="about-lead">
             Fast, private voice-to-text that lives in your tray and works in
-            every app — here's what you get.
+            every app. Here's what you get.
           </p>
           <ul className="feature-grid">
             {FEATURES.map(({ Icon, title, text }) => (

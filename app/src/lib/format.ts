@@ -282,7 +282,7 @@ export function selectedMicrophoneLabel(
   // Never render raw device IDs; show a neutral placeholder until resolved.
   return (
     microphones.find((microphone) => microphone.id === selectedMicId)?.name ??
-    "—"
+    "-"
   );
 }
 
@@ -301,7 +301,7 @@ export function microphoneDisplayName(
   // The list is still loading; show a neutral placeholder rather than a
   // generic "Default input device" that might be wrong.
   if (!microphones) {
-    return "—";
+    return "-";
   }
 
   // No explicit selection: resolve the actual default device's real name so
