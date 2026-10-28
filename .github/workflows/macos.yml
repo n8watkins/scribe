@@ -66,7 +66,7 @@ jobs:
 
       - name: Restore whisper.cpp build
         id: whisper-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/whisper-macos
           key: whisper-macos-${{ env.WHISPER_CPP_COMMIT }}-${{ env.WHISPER_MACOS_BUILD }}-${{ env.MACOSX_DEPLOYMENT_TARGET }}
@@ -115,6 +115,15 @@ jobs:
             lipo -create "$src/build-arm64/bin/$name" "$src/build-x86_64/bin/$name" -output "$out/$name"
           done
 
+      # Saved straight away, so a later failure in the job does not throw the
+      # whisper.cpp build away.
+      - name: Save whisper.cpp build
+        if: steps.whisper-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/whisper-macos
+          key: ${{ steps.whisper-cache.outputs.cache-primary-key }}
+
       - name: Stage, sign and check whisper.cpp binaries
         run: |
           set -euo pipefail
@@ -132,7 +141,9 @@ jobs:
             done
             # Nothing but system libraries and frameworks may be left to
             # resolve at run time.
-            if otool -L "$dest/$name" | tail -n +2 | grep -vE '^\s+/(usr/lib|System/Library)/'; then
+            # otool prints one "(architecture ...)" header per slice; the
+            # library lines below each header are indented.
+            if otool -L "$dest/$name" | grep -E '^[[:space:]]' | grep -vE '^[[:space:]]+/(usr/lib|System/Library)/'; then
               echo "$name links a library the bundle does not ship" >&2
               exit 1
             fi
