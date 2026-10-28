@@ -435,6 +435,8 @@ export type HotkeyStatus = {
   bindings: HotkeyBinding[];
   /** Whether the hold-toggle-key + tap-Q note chord is currently usable. */
   noteChordActive: boolean;
+  /** False where the note chord can't work at all (it needs Windows). */
+  noteChordSupported: boolean;
   holdReleaseVerificationRequired: boolean;
 };
 

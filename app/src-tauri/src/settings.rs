@@ -572,16 +572,47 @@ pub struct HotkeySettings {
     pub transform_selection_trigger: TriggerEdge,
 }
 
+/// The dictation binds a new install starts with: (hold to talk, toggle,
+/// toggle trigger). Saved hotkeys never change with these.
+///
+/// Linux can't register Ctrl+Win (modifier-only chords are polled from the
+/// keyboard state, which only Windows does), and a bare Backquote is an X11
+/// key grab that steals every backtick typed in other apps. Both Linux
+/// binds use Ctrl+Alt, which desktops leave free for these keys and which
+/// typing never produces. Toggle fires on press there: the hold-and-tap-Q
+/// note chord that needs the release edge is Windows-only.
+#[cfg(target_os = "linux")]
+const DEFAULT_DICTATION_BINDS: (&str, &str, TriggerEdge) =
+    ("Ctrl+Alt+Space", "Ctrl+Alt+Backquote", TriggerEdge::Press);
+#[cfg(not(target_os = "linux"))]
+const DEFAULT_DICTATION_BINDS: (&str, &str, TriggerEdge) =
+    ("Ctrl+Win", "Backquote", TriggerEdge::Release);
+
+/// The Dev flavor's dictation binds: the defaults above plus Shift.
+#[cfg(target_os = "linux")]
+const DEV_DICTATION_BINDS: (&str, &str, TriggerEdge) = (
+    "Ctrl+Alt+Shift+Space",
+    "Ctrl+Alt+Shift+Backquote",
+    TriggerEdge::Press,
+);
+#[cfg(not(target_os = "linux"))]
+const DEV_DICTATION_BINDS: (&str, &str, TriggerEdge) = (
+    "Ctrl+Shift+Win",
+    "Ctrl+Shift+Backquote",
+    TriggerEdge::Release,
+);
+
 impl Default for HotkeySettings {
     fn default() -> Self {
+        let (hold_to_talk, toggle_dictation, toggle_dictation_trigger) = DEFAULT_DICTATION_BINDS;
         Self {
-            hold_to_talk: "Ctrl+Win".to_string(),
-            toggle_dictation: "Backquote".to_string(),
+            hold_to_talk: hold_to_talk.to_string(),
+            toggle_dictation: toggle_dictation.to_string(),
             paste_last_transcript: "Ctrl+Alt+V".to_string(),
             open_dashboard: "Ctrl+Alt+F".to_string(),
             discard_dictation: default_discard_dictation(),
             transform_selection: default_transform_selection(),
-            toggle_dictation_trigger: TriggerEdge::Release,
+            toggle_dictation_trigger,
             paste_last_transcript_trigger: TriggerEdge::Press,
             open_dashboard_trigger: TriggerEdge::Press,
             discard_dictation_trigger: TriggerEdge::Press,
@@ -618,14 +649,15 @@ impl HotkeySettings {
     /// stable Scribe doesn't fight over the same global shortcuts. Each differs
     /// from the production default by an extra Shift.
     pub fn dev_defaults() -> Self {
+        let (hold_to_talk, toggle_dictation, toggle_dictation_trigger) = DEV_DICTATION_BINDS;
         Self {
-            hold_to_talk: "Ctrl+Shift+Win".to_string(),
-            toggle_dictation: "Ctrl+Shift+Backquote".to_string(),
+            hold_to_talk: hold_to_talk.to_string(),
+            toggle_dictation: toggle_dictation.to_string(),
             paste_last_transcript: "Ctrl+Alt+Shift+V".to_string(),
             open_dashboard: "Ctrl+Alt+Shift+F".to_string(),
             discard_dictation: "Ctrl+Alt+Shift+X".to_string(),
             transform_selection: "Ctrl+Alt+Shift+R".to_string(),
-            toggle_dictation_trigger: TriggerEdge::Release,
+            toggle_dictation_trigger,
             paste_last_transcript_trigger: TriggerEdge::Press,
             open_dashboard_trigger: TriggerEdge::Press,
             discard_dictation_trigger: TriggerEdge::Press,
@@ -1569,12 +1601,12 @@ mod tests {
     #[test]
     fn hotkey_trigger_defaults_preserve_current_behavior() {
         let defaults = HotkeySettings::default();
-        assert_eq!(defaults.toggle_dictation_trigger, TriggerEdge::Release);
+        assert_eq!(defaults.toggle_dictation_trigger, DEFAULT_DICTATION_BINDS.2);
         assert_eq!(defaults.paste_last_transcript_trigger, TriggerEdge::Press);
         assert_eq!(defaults.open_dashboard_trigger, TriggerEdge::Press);
 
         let dev = HotkeySettings::dev_defaults();
-        assert_eq!(dev.toggle_dictation_trigger, TriggerEdge::Release);
+        assert_eq!(dev.toggle_dictation_trigger, DEFAULT_DICTATION_BINDS.2);
         assert_eq!(dev.paste_last_transcript_trigger, TriggerEdge::Press);
         assert_eq!(dev.open_dashboard_trigger, TriggerEdge::Press);
     }
@@ -1660,8 +1692,18 @@ mod tests {
     fn default_hotkeys_avoid_windows_reserved_shortcuts() {
         let hotkeys = HotkeySettings::default();
 
-        assert_eq!(hotkeys.hold_to_talk, "Ctrl+Win");
-        assert_eq!(hotkeys.toggle_dictation, "Backquote");
+        #[cfg(not(target_os = "linux"))]
+        {
+            assert_eq!(hotkeys.hold_to_talk, "Ctrl+Win");
+            assert_eq!(hotkeys.toggle_dictation, "Backquote");
+            assert_eq!(hotkeys.toggle_dictation_trigger, TriggerEdge::Release);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(hotkeys.hold_to_talk, "Ctrl+Alt+Space");
+            assert_eq!(hotkeys.toggle_dictation, "Ctrl+Alt+Backquote");
+            assert_eq!(hotkeys.toggle_dictation_trigger, TriggerEdge::Press);
+        }
         assert_eq!(hotkeys.paste_last_transcript, "Ctrl+Alt+V");
         assert_eq!(hotkeys.open_dashboard, "Ctrl+Alt+F");
     }
