@@ -34,6 +34,8 @@ The UI was driven with synthetic X11 clicks (XTest) and captured window by windo
 - Updates cannot reach Linux: the published `latest.json` has only a `windows-x86_64` entry and the Linux bundles carry no updater artifacts, so a newer stable release would make the check fail instead of offering an update.
 - No tray icon was visible under WSLg, which has no system tray, so closing to the tray could not be checked.
 - Global hotkeys are X11 grabs, so on a native Wayland desktop they only fire while an X11 window has focus.
+- Without a compositing window manager (for example a bare X server or a nested Xephyr session), the floating pill and its result toast draw as an opaque dark rectangle, because their transparent background needs compositing.
+  On desktops with a compositor (GNOME, KDE, most others) this does not apply; seen while testing paste in Xephyr on 2026-10-28.
 - Copy written in the UI still speaks of Windows (for example "Use Windows 10 or 11", "Windows clipboard history", "Scribe is a Windows tray utility").
 
 ## What a usable Linux release would need
