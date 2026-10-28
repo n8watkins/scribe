@@ -13,6 +13,9 @@
 //! - Clipboard: `ClipboardSnapshot`, `save_clipboard_snapshot`,
 //!   `restore_clipboard_snapshot`, `clipboard_sequence_number`,
 //!   `set_private_clipboard_text`.
+//! - Audio: `audio_endpoint_ids_by_name`, `microphone_id` and
+//!   `microphone_label` (which devices to offer and how to name them;
+//!   recording itself is cross-platform through cpal).
 //!
 //! An operation a system can't do yet returns a `CommandError` from
 //! [`unsupported`], never a panic.

@@ -998,8 +998,6 @@ export function commandErrorMessage(error: unknown): string {
 
 function friendlyCommandErrorMessage(code: string): string | null {
   const messages: Record<string, string> = {
-    audio_platform_unsupported:
-      "Audio capture is available in the Windows build. Use Windows 10 or 11 for V1 recording.",
     no_microphone_selected:
       "Choose a microphone before recording, or switch back to the default input device.",
     microphone_permission_denied:

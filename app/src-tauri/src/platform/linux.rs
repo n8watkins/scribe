@@ -3,6 +3,8 @@
 //! so pastes and selection copies report that they are unsupported and the
 //! clipboard is never borrowed.
 
+use std::collections::HashMap;
+
 use super::{unsupported, PasteTarget, WindowId};
 use crate::error::CommandError;
 
@@ -77,4 +79,76 @@ pub fn set_private_clipboard_text(
     text: &str,
 ) -> Result<(), arboard::Error> {
     clipboard.set_text(text.to_string())
+}
+
+/// No system endpoint ids on Linux: microphones are identified by their cpal
+/// names.
+pub fn audio_endpoint_ids_by_name() -> HashMap<String, Vec<String>> {
+    HashMap::new()
+}
+
+/// The microphones worth offering out of everything ALSA lists, and what to
+/// call them. ALSA also lists resamplers, mixers, surround layouts and each
+/// card several times over (`hw:`, `plughw:`, `front:`, `dsnoop:`). Kept are
+/// the system default, the sound servers (which follow the input chosen in
+/// the desktop's sound settings) and each card once, by its `sysdefault`
+/// entry.
+pub fn microphone_label(device_name: &str) -> Option<String> {
+    match device_name {
+        "default" => Some("System default".to_string()),
+        "pipewire" => Some("PipeWire".to_string()),
+        "pulse" => Some("PulseAudio".to_string()),
+        _ => device_name
+            .strip_prefix("sysdefault:CARD=")
+            .filter(|card| !card.is_empty())
+            .map(str::to_string),
+    }
+}
+
+/// The ALSA device name is stable across restarts, unlike its position in
+/// the list.
+pub fn microphone_id(device_name: &str) -> Option<String> {
+    Some(format!("alsa:{device_name}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offers_the_default_the_sound_servers_and_each_card_once() {
+        assert_eq!(
+            microphone_label("default").as_deref(),
+            Some("System default")
+        );
+        assert_eq!(microphone_label("pipewire").as_deref(), Some("PipeWire"));
+        assert_eq!(microphone_label("pulse").as_deref(), Some("PulseAudio"));
+        assert_eq!(
+            microphone_label("sysdefault:CARD=C920").as_deref(),
+            Some("C920")
+        );
+        for plumbing in [
+            "null",
+            "samplerate",
+            "speexrate",
+            "lavrate",
+            "jack",
+            "oss",
+            "upmix",
+            "vdownmix",
+            "hw:CARD=PCH,DEV=0",
+            "plughw:CARD=PCH,DEV=0",
+            "front:CARD=PCH,DEV=0",
+            "dsnoop:CARD=PCH,DEV=0",
+            "surround51:CARD=PCH,DEV=0",
+            "sysdefault:CARD=",
+        ] {
+            assert_eq!(microphone_label(plumbing), None, "{plumbing}");
+        }
+    }
+
+    #[test]
+    fn microphone_ids_are_the_alsa_names() {
+        assert_eq!(microphone_id("pulse").as_deref(), Some("alsa:pulse"));
+    }
 }

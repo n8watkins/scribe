@@ -208,7 +208,9 @@ export function MicrophoneView({
                     value={microphone.id}
                   >
                     {microphone.name}
-                    {microphone.isDefault ? " (default)" : ""}
+                    {microphone.isDefault && !/default/i.test(microphone.name)
+                      ? " (default)"
+                      : ""}
                   </option>
                 ))}
               </select>
