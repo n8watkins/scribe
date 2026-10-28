@@ -7,12 +7,12 @@
 //!
 //! - Focus and identity: `foreground_window`, `foreground_target`,
 //!   `is_own_window`, `is_console_window`, `runs_elevated_above_us`,
-//!   `ensure_foreign_focus`.
+//!   `ensure_foreign_focus`, `paste_unavailable`.
 //! - Keystrokes: `send_paste_shortcut`, `send_copy_shortcut`, `type_text`,
 //!   `can_capture_selection`.
 //! - Clipboard: `ClipboardSnapshot`, `save_clipboard_snapshot`,
 //!   `restore_clipboard_snapshot`, `clipboard_sequence_number`,
-//!   `set_private_clipboard_text`.
+//!   `set_private_clipboard_text`, `open_clipboard`.
 //! - Audio: `audio_endpoint_ids_by_name`, `microphone_id` and
 //!   `microphone_label` (which devices to offer and how to name them;
 //!   recording itself is cross-platform through cpal).

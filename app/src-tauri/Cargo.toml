@@ -74,6 +74,12 @@ windows = { version = "0.58", features = [
     "Win32_System_Threading",
 ] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Window identity, focus and synthetic keystrokes (XTEST) on X11 and
+# XWayland; XFIXES tells when the clipboard changes. Already in the tree
+# through arboard.
+x11rb = { version = "0.13", features = ["xtest", "xfixes"] }
+
 [dev-dependencies]
 tempfile = "3"
 
