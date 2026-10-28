@@ -35,3 +35,22 @@ windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_F
 
 [dev-dependencies]
 tempfile = "3"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = "none"
+
+[profile.test]
+debug = "line-tables-only"
+
+[profile.test.package."*"]
+debug = "none"
+
+[profile.full-debug]
+inherits = "dev"
+debug = "full"
+
+[profile.full-debug.package."*"]
+debug = "full"
