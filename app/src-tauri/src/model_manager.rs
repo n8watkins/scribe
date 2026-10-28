@@ -246,11 +246,14 @@ pub fn select_model(
         ));
     }
 
+    // Verify before saving the selection: a file that fails the hash check must
+    // never become the active model.
+    verify_model_file_checksum(catalog_model, &path)?;
+
     let mut settings = db.get_settings()?;
     settings.selected_model_id = Some(model_id.to_string());
     db.save_settings(&settings)?;
 
-    verify_model_file_checksum(catalog_model, &path)?;
     let record = ModelRecord {
         id: catalog_model.id.to_string(),
         name: catalog_model.name.to_string(),
