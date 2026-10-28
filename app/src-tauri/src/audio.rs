@@ -100,6 +100,9 @@ pub struct RecordingSessionInfo {
     pub is_test_clip: bool,
     pub is_note: bool,
     pub is_transform: bool,
+    /// True when the microphone chosen in Settings isn't connected and this
+    /// recording fell back to the system default, so the UI can say so.
+    pub microphone_fallback: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -273,7 +276,14 @@ impl AudioService {
             .microphone_id
             .as_deref()
             .or(settings.selected_mic_id.as_deref());
-        let candidate = select_input_device(selected_mic_id)?;
+        let (candidate, microphone_fallback) = select_input_device(selected_mic_id)?;
+        if microphone_fallback {
+            log::warn!(
+                "Selected microphone {:?} is not connected; recording with {} instead",
+                selected_mic_id,
+                candidate.info.name
+            );
+        }
         let supported_config = candidate
             .device
             .default_input_config()
@@ -299,6 +309,7 @@ impl AudioService {
             is_test_clip,
             is_note: request.is_note && !is_test_clip,
             is_transform: request.is_transform && !is_test_clip,
+            microphone_fallback,
         };
         let (chunk_tx, chunk_rx) = unbounded::<AudioChunk>();
         let (control_tx, control_rx) = unbounded::<WorkerControl>();
@@ -1329,39 +1340,45 @@ fn device_candidates(selected_mic_id: Option<&str>) -> Result<Vec<DeviceCandidat
     Ok(candidates)
 }
 
-#[cfg(windows)]
-fn select_input_device(selected_mic_id: Option<&str>) -> Result<DeviceCandidate, CommandError> {
-    let mut candidates = device_candidates(selected_mic_id)?;
-
+/// Which input device to record from. Prefers the microphone chosen in
+/// Settings; when it isn't connected (a headset was unplugged), falls back to
+/// the system default, then to the first device, instead of failing every
+/// dictation. Returns the index and whether that fallback happened.
+fn choose_input_index(
+    candidates: &[&MicrophoneInfo],
+    selected_mic_id: Option<&str>,
+) -> Option<(usize, bool)> {
     if let Some(selected_mic_id) = selected_mic_id {
-        if let Some(index) = candidates.iter().position(|candidate| {
-            candidate.info.id == selected_mic_id || candidate.info.name == selected_mic_id
-        }) {
-            return Ok(candidates.remove(index));
+        if let Some(index) = candidates
+            .iter()
+            .position(|info| info.id == selected_mic_id || info.name == selected_mic_id)
+        {
+            return Some((index, false));
         }
-
-        return Err(CommandError::new(
-            "microphone_unavailable",
-            format!(
-                "Selected microphone is not available: {}. Choose another microphone.",
-                selected_mic_id
-            ),
-        ));
     }
 
-    if let Some(index) = candidates
+    let fell_back = selected_mic_id.is_some();
+    let index = candidates
         .iter()
-        .position(|candidate| candidate.info.is_default)
-    {
-        return Ok(candidates.remove(index));
-    }
+        .position(|info| info.is_default)
+        .or_else(|| (!candidates.is_empty()).then_some(0))?;
+    Some((index, fell_back))
+}
 
-    candidates.into_iter().next().ok_or_else(|| {
+#[cfg(windows)]
+fn select_input_device(
+    selected_mic_id: Option<&str>,
+) -> Result<(DeviceCandidate, bool), CommandError> {
+    let mut candidates = device_candidates(selected_mic_id)?;
+    let infos: Vec<&MicrophoneInfo> = candidates.iter().map(|candidate| &candidate.info).collect();
+
+    let (index, fell_back) = choose_input_index(&infos, selected_mic_id).ok_or_else(|| {
         CommandError::new(
             "no_microphone_selected",
             "No microphone is available. Connect or enable a microphone, then try again.",
         )
-    })
+    })?;
+    Ok((candidates.remove(index), fell_back))
 }
 
 #[cfg(windows)]
@@ -1624,6 +1641,44 @@ fn unsupported_audio_platform() -> CommandError {
 
 #[cfg(test)]
 mod tests {
+    fn mic(id: &str, is_default: bool) -> MicrophoneInfo {
+        MicrophoneInfo {
+            id: id.to_string(),
+            name: format!("{id} name"),
+            endpoint_id: None,
+            is_default,
+            is_selected: false,
+            is_available: true,
+        }
+    }
+
+    #[test]
+    fn uses_the_selected_microphone_when_connected() {
+        let (a, b) = (mic("a", true), mic("b", false));
+        assert_eq!(choose_input_index(&[&a, &b], Some("b")), Some((1, false)));
+        // Matching by display name also counts as the selected mic.
+        assert_eq!(choose_input_index(&[&a, &b], Some("b name")), Some((1, false)));
+    }
+
+    #[test]
+    fn falls_back_to_the_default_when_the_selected_mic_is_missing() {
+        let (a, b) = (mic("a", false), mic("b", true));
+        assert_eq!(choose_input_index(&[&a, &b], Some("headset")), Some((1, true)));
+    }
+
+    #[test]
+    fn falls_back_to_the_first_device_without_a_default() {
+        let (a, b) = (mic("a", false), mic("b", false));
+        assert_eq!(choose_input_index(&[&a, &b], Some("headset")), Some((0, true)));
+        assert_eq!(choose_input_index(&[&a, &b], None), Some((0, false)));
+    }
+
+    #[test]
+    fn no_devices_means_no_choice() {
+        assert_eq!(choose_input_index(&[], Some("headset")), None);
+        assert_eq!(choose_input_index(&[], None), None);
+    }
+
     use super::*;
 
     #[test]

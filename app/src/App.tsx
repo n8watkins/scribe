@@ -219,6 +219,9 @@ function App() {
   // Epoch (ms) until which routine dictation notices are suppressed because a
   // mic-disconnect just explained the situation in one toast. 0 = not active.
   const suppressRoutineNoticesUntilRef = useRef(0);
+  // True once the "your microphone isn't connected" notice has been shown, so
+  // it appears once per unplugging rather than on every dictation.
+  const micFallbackNoticeShownRef = useRef(false);
   const [isDevFlavor, setIsDevFlavor] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
   // Drives the branded auto-update screen. Non-null while an on-launch silent
@@ -628,6 +631,17 @@ function App() {
           if (soundsEnabledRef.current) {
             playStartCue();
           }
+          if (event.payload.microphoneFallback) {
+            if (!micFallbackNoticeShownRef.current) {
+              micFallbackNoticeShownRef.current = true;
+              pushToast({
+                tone: "info",
+                message: `Your chosen microphone isn't connected, so Scribe is using ${event.payload.microphoneName}.`,
+              });
+            }
+            return;
+          }
+          micFallbackNoticeShownRef.current = false;
           showNotice(`Recording with ${event.payload.microphoneName}.`);
         }),
         listen<PartialTranscriptEvent>(

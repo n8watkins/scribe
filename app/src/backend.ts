@@ -336,6 +336,9 @@ export type RecordingSessionInfo = {
   maxDurationMs: number;
   isTestClip: boolean;
   isNote: boolean;
+  // The microphone chosen in Settings isn't connected, so this recording
+  // uses the system default instead.
+  microphoneFallback: boolean;
 };
 
 export type RecordingResultStatus =
