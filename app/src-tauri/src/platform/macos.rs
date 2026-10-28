@@ -55,6 +55,15 @@ pub fn send_copy_shortcut(_console: bool) -> Result<(), CommandError> {
     ))
 }
 
+/// Synthetic keystrokes aren't implemented on macOS yet.
+pub fn paste_unavailable() -> Option<&'static str> {
+    Some("Scribe can't paste into other apps on macOS yet.")
+}
+
+pub fn open_clipboard() -> Result<arboard::Clipboard, arboard::Error> {
+    arboard::Clipboard::new()
+}
+
 /// Selection capture needs synthetic keystrokes, which macOS lacks so far.
 pub fn can_capture_selection() -> bool {
     false

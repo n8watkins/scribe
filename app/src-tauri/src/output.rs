@@ -45,16 +45,24 @@ pub enum PasteBlock {
     /// The app in front runs as administrator. Windows silently drops input
     /// sent to it from a normal process (UIPI), so a paste would vanish.
     Elevated,
+    /// The system can't send keystrokes to the app in front (a Wayland app
+    /// on Linux). Holds the one-sentence reason.
+    Unavailable(&'static str),
 }
 
 impl PasteBlock {
-    fn message(self) -> &'static str {
+    fn message(self) -> String {
         match self {
             PasteBlock::FocusChanged => {
                 "You switched windows, so Scribe didn't paste. Copied. Press Ctrl+V to paste."
+                    .to_string()
             }
             PasteBlock::Elevated => {
                 "That window runs as administrator, which blocks Scribe from pasting. Copied. Press Ctrl+V to paste."
+                    .to_string()
+            }
+            PasteBlock::Unavailable(reason) => {
+                format!("{reason} Copied. Press Ctrl+V to paste.")
             }
         }
     }
@@ -76,8 +84,10 @@ pub fn paste_block_reason(
     }
     match (pinned, current) {
         (None, _) => None,
+        // A process id of 0 means unknown and never matches.
         (Some(pinned), Some(current))
-            if pinned.window == current.window || pinned.process_id == current.process_id =>
+            if pinned.window == current.window
+                || (pinned.process_id != 0 && pinned.process_id == current.process_id) =>
         {
             None
         }
@@ -94,6 +104,9 @@ pub fn current_paste_target() -> Option<PasteTarget> {
 /// Whether to skip the paste, checked after the focus guard so it sees the
 /// window the keystrokes would really go to.
 fn paste_block(pinned: Option<PasteTarget>) -> Option<PasteBlock> {
+    if let Some(reason) = platform::paste_unavailable() {
+        return Some(PasteBlock::Unavailable(reason));
+    }
     let current = platform::foreground_target();
     let elevated = current
         .map(|target| platform::runs_elevated_above_us(target.process_id))
@@ -532,7 +545,7 @@ fn set_clipboard_text(text: &str) -> Result<(), CommandError> {
 }
 
 fn open_clipboard() -> Result<arboard::Clipboard, CommandError> {
-    arboard::Clipboard::new().map_err(|error| {
+    platform::open_clipboard().map_err(|error| {
         CommandError::new(
             "clipboard_unavailable",
             format!("Could not access the clipboard. {}", error),
@@ -574,7 +587,7 @@ fn paste_skipped_result(
         clipboard_restored: None,
         clipboard_preservation: ClipboardPreservation::ReplacedWithTranscript,
         clipboard_restore_error: None,
-        message: block.message().to_string(),
+        message: block.message(),
     }
 }
 
@@ -732,6 +745,22 @@ mod tests {
     }
 
     #[test]
+    fn unknown_process_ids_never_match() {
+        let unknown = |window| PasteTarget {
+            window,
+            process_id: 0,
+        };
+        assert_eq!(
+            paste_block_reason(Some(unknown(10)), Some(unknown(20)), false),
+            Some(PasteBlock::FocusChanged)
+        );
+        assert_eq!(
+            paste_block_reason(Some(unknown(10)), Some(unknown(10)), false),
+            None
+        );
+    }
+
+    #[test]
     fn without_a_pinned_window_any_target_is_fine() {
         assert_eq!(paste_block_reason(None, Some(CHAT), false), None);
         assert_eq!(paste_block_reason(None, None, false), None);
@@ -751,7 +780,11 @@ mod tests {
 
     #[test]
     fn skipped_paste_messages_tell_the_user_what_to_do() {
-        for block in [PasteBlock::FocusChanged, PasteBlock::Elevated] {
+        for block in [
+            PasteBlock::FocusChanged,
+            PasteBlock::Elevated,
+            PasteBlock::Unavailable("Scribe can't paste into Wayland apps yet."),
+        ] {
             assert!(block.message().ends_with("Copied. Press Ctrl+V to paste."));
         }
     }
