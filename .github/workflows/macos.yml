@@ -29,8 +29,11 @@ env:
   WHISPER_CPP_COMMIT: f049fff95a089aa9969deb009cdd4892b3e74916
   # Bump when the whisper.cpp build flags below change, so the cache rebuilds.
   WHISPER_MACOS_BUILD: metal-static-universal-1
-  # The oldest macOS that runs on Apple Silicon.
-  MACOSX_DEPLOYMENT_TARGET: "11.0"
+  # The oldest macOS the build supports: ggml's Accelerate path calls the
+  # new LAPACK interface (cblas_sgemm), which macOS has only since 13.3, the
+  # same floor upstream whisper.cpp and llama.cpp use. Keep it in step with
+  # minimumSystemVersion in tauri.macos.conf.json.
+  MACOSX_DEPLOYMENT_TARGET: "13.3"
 
 jobs:
   build-macos:
@@ -76,8 +79,7 @@ jobs:
       # The Metal shaders are compiled into the binary (GGML_METAL_EMBED_LIBRARY)
       # so there is no default.metallib to find at run time. Each architecture
       # is built on its own and the two are joined with lipo. The Intel slice
-      # targets Haswell (AVX2/FMA/F16C), which every Intel Mac that runs
-      # macOS 11 has except the 2013 Mac Pro.
+      # targets AVX2/FMA/F16C, which every Intel Mac that runs macOS 13 has.
       - name: Build reviewed whisper.cpp source with Metal
         if: steps.whisper-cache.outputs.cache-hit != 'true'
         run: |
@@ -127,6 +129,11 @@ jobs:
       - name: Stage, sign and check whisper.cpp binaries
         run: |
           set -euo pipefail
+          want="$(jq -r .bundle.macOS.minimumSystemVersion app/src-tauri/tauri.macos.conf.json)"
+          if [ "$want" != "$MACOSX_DEPLOYMENT_TARGET" ]; then
+            echo "tauri.macos.conf.json wants macOS $want but whisper.cpp targets $MACOSX_DEPLOYMENT_TARGET" >&2
+            exit 1
+          fi
           dest=app/src-tauri/resources/bin/macos
           mkdir -p "$dest"
           for name in whisper-cli whisper-server; do
@@ -147,6 +154,13 @@ jobs:
               echo "$name links a library the bundle does not ship" >&2
               exit 1
             fi
+            for arch in arm64 x86_64; do
+              minos="$(vtool -arch "$arch" -show-build "$dest/$name" | awk '$1 == "minos" { print $2 }')"
+              if [ "$minos" != "$MACOSX_DEPLOYMENT_TARGET" ]; then
+                echo "$name ($arch) needs macOS $minos, not $MACOSX_DEPLOYMENT_TARGET" >&2
+                exit 1
+              fi
+            done
             codesign --force --sign - --timestamp=none "$dest/$name"
             codesign --verify --strict --verbose=2 "$dest/$name"
           done
@@ -248,7 +262,29 @@ jobs:
             jq -e --arg v "$version" '.appVersion == $v' "$result" > /dev/null || { echo "The self-test ($label) ran the wrong version" >&2; return 1; }
           }
 
+          # The bundled whisper-cli on its own, per slice, with and without
+          # Metal, for the record: which backend ggml picked and how long the
+          # clip took. Informational only.
+          diagnose() {
+            local model start end
+            model="$(find "$HOME/Library/Application Support/com.natkins.scribe/models" -name '*.bin' | head -n 1)"
+            for arch in arm64 x86_64; do
+              for gpu in "" --no-gpu; do
+                start=$(date +%s)
+                echo "::group::whisper-cli $arch ${gpu:-(gpu on)}"
+                perl -e 'alarm shift; exec @ARGV or die "exec failed: $!"' 300 \
+                  arch "-$arch" "$apps/Scribe.app/Contents/Resources/bin/macos/whisper-cli" \
+                  -m "$model" -f "$clip" --no-timestamps $gpu 2>&1 |
+                  grep -iE 'metal|gpu|backend|system_info|total time|country|error|fail' || true
+                end=$(date +%s)
+                echo "::endgroup::"
+                echo "whisper-cli $arch ${gpu:-(gpu on)}: $((end - start)) s"
+              done
+            done
+          }
+
           self_test arm64 env
+          diagnose
           self_test x86_64 arch -x86_64
 
       - name: Stage .dmg
