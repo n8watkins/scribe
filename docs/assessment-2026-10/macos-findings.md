@@ -47,7 +47,7 @@ The job mounts the `.dmg`, copies `Scribe.app` into a temporary Applications fol
 ## What is missing for real Mac support
 
 1. Microphone access: audio capture (`cpal`) is compiled for Windows only, so recording, dictation, notes and the level test do not work.
-   macOS will also need `NSMicrophoneUsageDescription` in `Info.plist`, or the system kills the app the first time it opens the microphone.
+   `NSMicrophoneUsageDescription` is already in `app/src-tauri/Info.plist` (without it macOS ends the app the first time it opens the microphone), and the workflow checks that it reaches the bundle.
 2. Paste, Direct Insert and selection capture: the macOS platform layer (`src/platform/macos.rs`) is a stub that reports them as unsupported.
    A real one will post key events (CGEvent), which needs the Accessibility permission, and a Hold-to-Talk key listener needs Input Monitoring.
    Neither can be granted to an ad-hoc signed app permanently: macOS ties the grant to the code signature, and an ad-hoc signature changes with every build, so users would have to grant it again after each update.
@@ -67,4 +67,4 @@ The job mounts the `.dmg`, copies `Scribe.app` into a temporary Applications fol
 - File transcription from the UI, with Metal on and off, and the real speed on an Apple Silicon Mac.
 - The same `.dmg` on an Intel Mac, if one is available.
 - Whether registering global hotkeys triggers any permission prompt, and whether they fire while other apps are in front.
-- Once the platform and audio work lands: the microphone prompt, the Accessibility and Input Monitoring prompts, and whether those grants survive installing a newer build.
+- Once the platform and audio work lands: the microphone prompt and its wording, the Accessibility and Input Monitoring prompts, and whether those grants survive installing a newer build.
