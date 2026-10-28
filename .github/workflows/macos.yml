@@ -94,7 +94,7 @@ jobs:
             if [ "$arch" = x86_64 ]; then
               extra=(-DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON)
             fi
-            cmake -S "$src" -B "$src/build-$arch" -G Ninja \
+            cmake -S "$src" -B "$src/build-$arch" \
               -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_OSX_ARCHITECTURES="$arch" \
               -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
@@ -106,8 +106,8 @@ jobs:
               -DWHISPER_BUILD_EXAMPLES=ON \
               -DWHISPER_BUILD_TESTS=OFF \
               -DWHISPER_BUILD_SERVER=ON \
-              "${extra[@]}"
-            cmake --build "$src/build-$arch" -j --target whisper-cli whisper-server
+              ${extra[@]+"${extra[@]}"}
+            cmake --build "$src/build-$arch" -j "$(sysctl -n hw.ncpu)" --target whisper-cli whisper-server
           done
           out="$RUNNER_TEMP/whisper-macos"
           mkdir -p "$out"
