@@ -713,7 +713,7 @@ export function HistoryView({
         message={
           notesOnly
             ? "This permanently deletes every saved note (and its audio clip) on this device. Your dictation transcripts and Last Transcript Buffer are untouched. This can't be undone."
-            : "This permanently deletes every saved dictation transcript (and its audio clip) on this device. Your notes and Last Transcript Buffer are untouched. This can't be undone."
+            : "This permanently deletes every saved dictation on this device, with its audio, plus the Last Transcript Buffer, failed recordings and copies opened in an editor. Your notes are kept. This can't be undone."
         }
         onCancel={() => setConfirmClear(false)}
         onConfirm={() => void handleClearHistory()}
