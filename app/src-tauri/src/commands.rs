@@ -53,16 +53,26 @@ impl BackendState {
         }
     }
 
-    /// Stashes the selection captured at the start of a voice transform. One-shot
-    /// and overwritten on each transform trigger; a leftover entry (e.g. the
-    /// recording was too short to transcribe) is only ever read by the next
-    /// transform recording — ordinary dictation never consults it — so it can
-    /// never be misapplied.
+    /// Stashes the selection captured at the start of a voice transform. Every
+    /// way a transform recording ends takes it back out (`take_pending_transform`
+    /// on transcription, `discard_pending_transform` on cancel or a too-short
+    /// recording). A leftover found here is stale: it is dropped without
+    /// restoring, because its snapshot is older than the clipboard the new
+    /// capture just saved.
     #[cfg(windows)]
     pub fn set_pending_transform(&self, captured: crate::selection_transform::CapturedSelection) {
         if let Ok(mut slot) = self.pending_transform.lock() {
-            *slot = Some(captured);
+            if let Some(stale) = slot.replace(captured) {
+                stale.forget();
+            }
         }
+    }
+
+    /// Drops the pending transform, which puts the user's pre-capture clipboard
+    /// back. Called when a transform recording ends without a transcription.
+    #[cfg(windows)]
+    pub fn discard_pending_transform(&self) {
+        drop(self.take_pending_transform());
     }
 
     /// Takes the pending transform selection, if any (consumed exactly once).
@@ -153,9 +163,21 @@ pub fn update_settings(
         apply_autostart(&app, settings.launch_at_startup)?;
     }
 
+    // Transform Selection is only bound while Local AI is on, so turning it on
+    // or off re-registers the hotkey set too.
+    let transform_toggled = previous.notes_analysis_enabled != settings.notes_analysis_enabled;
+    let rebind = previous.hotkeys != settings.hotkeys || transform_toggled;
     let mut hotkey_failures = Vec::new();
-    if previous.hotkeys != settings.hotkeys {
-        hotkey_failures = hotkeys::replace_hotkeys(&app, &previous.hotkeys, &settings.hotkeys)?;
+    if rebind {
+        hotkeys::set_transform_enabled(&app, settings.notes_analysis_enabled);
+        hotkey_failures = match hotkeys::replace_hotkeys(&app, &previous.hotkeys, &settings.hotkeys)
+        {
+            Ok(failures) => failures,
+            Err(error) => {
+                hotkeys::set_transform_enabled(&app, previous.notes_analysis_enabled);
+                return Err(error);
+            }
+        };
     }
 
     let save_result = if previous.github_repo != settings.github_repo {
@@ -166,7 +188,8 @@ pub fn update_settings(
         state.db()?.save_settings(&settings)
     };
     if let Err(error) = save_result {
-        if previous.hotkeys != settings.hotkeys {
+        if rebind {
+            hotkeys::set_transform_enabled(&app, previous.notes_analysis_enabled);
             let _ = hotkeys::replace_hotkeys(&app, &settings.hotkeys, &previous.hotkeys);
         }
         if previous.launch_at_startup != settings.launch_at_startup {
@@ -1389,23 +1412,36 @@ fn transform_selection_blocking(
     let (endpoint, model) = {
         let state = app.state::<BackendState>();
         let settings = state.db()?.get_settings()?;
+        selection_transform::ensure_enabled(&settings)?;
         (
             settings.notes_analysis_endpoint,
             settings.notes_analysis_model,
         )
     };
 
-    // 1. Copy the current selection out of the focused app, remembering the
-    //    user's prior clipboard so it can be restored.
-    let captured = selection_transform::capture_selection()?;
+    // 1. The button click left Scribe in front: hand focus back to the app the
+    //    user was in, so the copy reads their selection and not Scribe's.
+    selection_transform::focus_previous_app()?;
 
-    // 2. Rewrite it with the local LLM.
+    // 2. Copy the current selection out of that app, remembering the user's
+    //    prior clipboard so it can be restored.
+    let captured = selection_transform::capture_selection()?
+        .filter(|captured| !captured.selection.trim().is_empty())
+        .ok_or_else(|| {
+            CommandError::new(
+                "selection_empty",
+                "No text was selected. Highlight some text in the other app first, then transform it.",
+            )
+        })?;
+
+    // 3. Rewrite it with the local LLM. On failure, dropping `captured`
+    //    restores the clipboard.
     let transformed =
         selection_transform::transform(&captured.selection, instruction, &endpoint, &model)?;
 
-    // 3. Paste the result back over the still-selected original, then restore
+    // 4. Paste the result back over the still-selected original, then restore
     //    the pre-capture clipboard.
-    selection_transform::apply_result(app, &transformed, &captured, true)
+    selection_transform::apply_result(app, &transformed, captured)
 }
 
 #[cfg(not(windows))]

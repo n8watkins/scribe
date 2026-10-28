@@ -129,6 +129,13 @@ pub fn restore_clipboard_snapshot(snapshot: &[(u32, Vec<u8>)]) -> Result<(), Com
     platform::restore_clipboard_snapshot(snapshot)
 }
 
+/// When one of Scribe's own windows is in front, hands focus back to the app
+/// the user was in before (the same focus guard the paste path uses). Used by
+/// the typed transform, whose button click leaves Scribe focused.
+pub fn focus_previous_app() -> Result<(), CommandError> {
+    platform::ensure_foreign_focus()
+}
+
 pub fn paste_last_transcript(app: &AppHandle) -> Result<OutputResult, CommandError> {
     let state = app.state::<BackendState>();
     let (transcript, paste_method) = {

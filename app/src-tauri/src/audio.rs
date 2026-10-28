@@ -558,8 +558,13 @@ pub fn cancel_recording_for_app(app: &AppHandle) -> Result<(), CommandError> {
             result.session_id,
             result.duration_ms
         );
-        // No transcription will follow: drop any incremental session.
+        // No transcription will follow: drop any incremental session, and give
+        // a transform recording's captured selection back to the clipboard.
         state.incremental().discard(&result.session_id);
+        #[cfg(windows)]
+        if result.is_transform {
+            state.discard_pending_transform();
+        }
         let _ = app.emit("audio://recording-stopped", &result);
     }
 
@@ -767,8 +772,12 @@ fn stop_recording_with_reason(
         result.status,
         RecordingResultStatus::Completed | RecordingResultStatus::TimedOut
     ) {
-        // No transcription will follow: drop any incremental session.
+        // No transcription will follow: drop any incremental session, and give
+        // a transform recording's captured selection back to the clipboard.
         state.incremental().discard(&result.session_id);
+        if result.is_transform {
+            state.discard_pending_transform();
+        }
     }
     let _ = app.emit("audio://recording-stopped", &result);
 

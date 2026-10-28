@@ -66,6 +66,12 @@ pub fn transcribe_recording_for_app(
         .take(&recording.session_id);
 
     let result = transcribe_recording_checked(app, &recording, incremental, stopped);
+    // A transform recording that failed before reaching the transform engine
+    // still holds the captured selection; dropping it restores the clipboard.
+    #[cfg(windows)]
+    if recording.is_transform {
+        app.state::<BackendState>().discard_pending_transform();
+    }
     if result.is_err() {
         // Whatever failed (validation, model lookup, whisper, the database),
         // a Transcribing state must not be stranded: fail over to Error,
@@ -408,6 +414,8 @@ fn finish_selection_transform(
 ) -> Result<Option<DictationResult>, CommandError> {
     let state = app.state::<BackendState>();
 
+    // Taking the selection first means every early return below drops it,
+    // which restores the user's clipboard.
     let Some(captured) = state.take_pending_transform() else {
         log::warn!("Transform recording finished but no selection was captured.");
         transition_after_empty(app);
@@ -418,15 +426,18 @@ fn finish_selection_transform(
         return Ok(None);
     };
 
-    let outcome = crate::selection_transform::transform(
-        &captured.selection,
-        instruction,
-        &settings.notes_analysis_endpoint,
-        &settings.notes_analysis_model,
-    )
-    .and_then(|text| {
-        crate::selection_transform::apply_result(app, &text, &captured, true).map(|_| text)
-    });
+    let outcome = crate::selection_transform::ensure_enabled(settings)
+        .and_then(|()| {
+            crate::selection_transform::transform(
+                &captured.selection,
+                instruction,
+                &settings.notes_analysis_endpoint,
+                &settings.notes_analysis_model,
+            )
+        })
+        .and_then(|text| {
+            crate::selection_transform::apply_result(app, &text, captured).map(|_| text)
+        });
 
     // Done either way: return to Idle. A failure toasts rather than parking the
     // app in Error, since a missed LLM call is routine and recoverable.

@@ -5,12 +5,14 @@
 //!
 //! The flow has three pieces, kept deliberately separable so the LLM assembly
 //! is unit-testable without any OS input:
-//!   1. `capture_selection` — copy the current selection out of the focused app
-//!      (Ctrl+C), remembering what was on the clipboard so it can be restored.
-//!   2. `transform` — send (selection, instruction) to the local LLM via the
+//!   1. `capture_selection`: copy the current selection out of the focused app
+//!      (Ctrl+C, or Ctrl+Shift+C in a console), remembering what was on the
+//!      clipboard so it can be restored. The clipboard sequence number tells a
+//!      real copy apart from "nothing was selected".
+//!   2. `transform`: send (selection, instruction) to the local LLM via the
 //!      reused `note_analysis::analyze_text` client and return the rewritten
 //!      text.
-//!   3. `apply_result` — paste the rewritten text back over the still-selected
+//!   3. `apply_result`: paste the rewritten text back over the still-selected
 //!      original (Ctrl+V, via the proven `output` paste path), then restore the
 //!      pre-capture clipboard.
 //!
@@ -18,17 +20,93 @@
 //! Windows-only, mirroring the rest of the app's input code. The LLM assembly
 //! (`build_messages`) and the round-trip (`transform`) are platform-independent.
 
+use std::time::Duration;
+
 use crate::error::CommandError;
+use crate::settings::AppSettings;
 
 #[cfg(windows)]
 use crate::output::OutputResult;
 #[cfg(windows)]
 use tauri::AppHandle;
 
+/// A transform is an interactive edit, so a stalled local server must not hold
+/// the user's selection hostage for minutes. Notes analysis keeps its longer
+/// budget in `note_analysis`.
+pub const TRANSFORM_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long the target app gets to publish the copied selection, and how often
+/// the clipboard sequence number is checked while waiting.
+#[cfg(windows)]
+const COPY_TIMEOUT: Duration = Duration::from_millis(500);
+#[cfg(windows)]
+const COPY_POLL: Duration = Duration::from_millis(15);
+/// Some apps publish the copy in several steps (text first, then rich
+/// formats); a short settle after the first change lets them finish.
+#[cfg(windows)]
+const COPY_SETTLE: Duration = Duration::from_millis(30);
+
+/// Window classes of console hosts, where a bare Ctrl+C with nothing selected
+/// interrupts the running program instead of copying. Those get Ctrl+Shift+C.
+const CONSOLE_WINDOW_CLASSES: [&str; 3] = [
+    "ConsoleWindowClass",
+    "CASCADIA_HOSTING_WINDOW_CLASS",
+    "mintty",
+];
+
+/// Transform Selection rides on the Local AI connection; with that switched
+/// off, no selection may be copied or sent anywhere.
+pub fn ensure_enabled(settings: &AppSettings) -> Result<(), CommandError> {
+    if settings.notes_analysis_enabled {
+        Ok(())
+    } else {
+        Err(CommandError::new(
+            "local_ai_off",
+            "Turn on Local AI in Settings to use Transform selection.",
+        ))
+    }
+}
+
+/// True when the window class belongs to a console host (see
+/// `CONSOLE_WINDOW_CLASSES`).
+pub fn is_console_window_class(class_name: &str) -> bool {
+    CONSOLE_WINDOW_CLASSES.contains(&class_name)
+}
+
+/// Waits for the clipboard sequence number to move past `before`, checking
+/// every `poll` for at most `timeout`. Returns false when it never changed,
+/// which means the copy put nothing on the clipboard (nothing was selected).
+/// `read` and `sleep` are injected so the logic is testable without Win32.
+pub fn wait_for_sequence_change(
+    mut read: impl FnMut() -> u32,
+    before: u32,
+    timeout: Duration,
+    poll: Duration,
+    mut sleep: impl FnMut(Duration),
+) -> bool {
+    let attempts = (timeout.as_millis() / poll.as_millis().max(1)).max(1);
+    for _ in 0..attempts {
+        sleep(poll);
+        if read() != before {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the transformed text may be pasted into the current foreground
+/// window. The window the selection came from is fine; so is one of Scribe's
+/// own windows (the user clicked the pill to stop), because the paste focus
+/// guard then returns focus to the app underneath. Any other app means the
+/// user moved on, and pasting there would drop text into the wrong place.
+pub fn may_paste_into(foreground: isize, source: isize, foreground_is_own: bool) -> bool {
+    foreground == source || foreground_is_own
+}
+
 /// System prompt that pins the model to a pure text editor: output the
-/// transformed text and nothing else. Kept terse on purpose — small local
+/// transformed text and nothing else. Kept terse on purpose: small local
 /// models follow short, blunt instructions best.
-const SYSTEM_PROMPT: &str = "You are a precise text editor. Apply the user's instruction to the text below. Output ONLY the transformed text — no preamble, no explanations, no quotes.";
+const SYSTEM_PROMPT: &str = "You are a precise text editor. Apply the user's instruction to the text below. Output ONLY the transformed text, with no preamble, no explanations, no quotes.";
 
 /// Assembles the (system, user) chat messages for a transform. Pure and
 /// unit-tested: the instruction and the selection are laid out so the model
@@ -73,87 +151,161 @@ pub fn transform(
     }
 
     let (system, user) = build_messages(selection, instruction);
-    let outcome = crate::note_analysis::analyze_text(endpoint, model, &system, &user)?;
+    let outcome = crate::note_analysis::analyze_text_with_timeout(
+        endpoint,
+        model,
+        &system,
+        &user,
+        TRANSFORM_TIMEOUT,
+    )?;
     Ok(outcome.analysis.trim().to_string())
 }
 
 /// The original selection plus the clipboard contents that were displaced to
-/// capture it, so `apply_result` can put the user's clipboard back afterwards.
+/// capture it. Dropping it without `settle` puts the user's clipboard back, so
+/// every path that abandons a transform (LLM failure, discard, a too-short
+/// instruction, an empty selection) restores the clipboard without having to
+/// remember to.
 #[cfg(windows)]
 pub struct CapturedSelection {
     pub selection: String,
     /// Raw, full-fidelity snapshot of every clipboard format that was present
-    /// before we copied the selection (text, image, files, ...). Restored
-    /// verbatim after the transformed text is pasted.
+    /// before we copied the selection (text, image, files, ...).
     prev_clipboard: Vec<(u32, Vec<u8>)>,
+    /// The foreground window the selection was copied from (an HWND value).
+    source_window: isize,
+    restore_on_drop: bool,
 }
 
-/// Copies the current selection out of the focused app and returns it together
-/// with a snapshot of the previous clipboard.
-///
-/// Sequence: snapshot the clipboard (so it can be restored) -> synthesize
-/// Ctrl+C -> wait briefly for the target app to publish the copied text ->
-/// read the clipboard back as the selection.
 #[cfg(windows)]
-pub fn capture_selection() -> Result<CapturedSelection, CommandError> {
-    use std::{thread, time::Duration};
+impl CapturedSelection {
+    /// Drops the capture without touching the clipboard.
+    pub fn forget(mut self) {
+        self.restore_on_drop = false;
+    }
 
-    // Snapshot everything currently on the clipboard so the user's prior
-    // clipboard survives the round-trip. An empty snapshot (capture failed /
-    // nothing there) just means "nothing to restore".
-    let prev_clipboard = crate::output::save_clipboard_snapshot();
-
-    // Copy the selection. Force-release any modifiers still physically held
-    // from the trigger chord first, so the synthetic Ctrl+C lands clean
-    // (mirrors the paste path's modifier handling).
-    platform::send_copy_shortcut()?;
-
-    // Let the target app put the selection on the clipboard before we read it.
-    thread::sleep(Duration::from_millis(120));
-
-    let selection = read_clipboard_text().unwrap_or_default();
-
-    Ok(CapturedSelection {
-        selection,
-        prev_clipboard,
-    })
-}
-
-/// Pastes `text` over the still-selected original (replacing it) and then,
-/// when `restore` is true, puts the pre-capture clipboard back.
-///
-/// The paste itself reuses `output::paste_text` — the same borrow-the-clipboard,
-/// focus-guard, send-Ctrl+V machinery used for normal dictation output — so the
-/// transformed text lands as a single atomic paste over the selection. The
-/// clipboard restore here layers the user's *original* (pre-capture) clipboard
-/// back on top, overriding `paste_text`'s own transient restore.
-#[cfg(windows)]
-pub fn apply_result(
-    app: &AppHandle,
-    text: &str,
-    captured: &CapturedSelection,
-    restore: bool,
-) -> Result<OutputResult, CommandError> {
-    // Paste the transformed text. This replaces the highlighted selection in
-    // the focused app (the selection is still active because capture only sent
-    // Ctrl+C). `paste_text` handles the foreign-focus guard and modifier
-    // release internally.
-    let result = crate::output::paste_text(app, text)?;
-
-    if restore {
-        // Put the user's ORIGINAL clipboard back. `paste_text` already restored
-        // whatever it borrowed, but for the transform flow the meaningful thing
-        // to preserve is what the user had before the Ctrl+C capture, so restore
-        // that snapshot last. A failure here is non-fatal: the paste succeeded.
-        if let Err(error) = crate::output::restore_clipboard_snapshot(&captured.prev_clipboard) {
+    /// Puts the pre-capture clipboard back now and disarms the drop restore.
+    fn restore_now(&mut self) {
+        self.restore_on_drop = false;
+        if let Err(error) = crate::output::restore_clipboard_snapshot(&self.prev_clipboard) {
             log::warn!(
-                "Selection transform pasted, but could not restore the pre-capture clipboard: {}",
+                "Could not restore the clipboard after a selection transform: {}",
                 error.message
             );
         }
     }
+}
+
+#[cfg(windows)]
+impl Drop for CapturedSelection {
+    fn drop(&mut self) {
+        if self.restore_on_drop {
+            self.restore_now();
+        }
+    }
+}
+
+/// Copies the current selection out of the focused app and returns it together
+/// with a snapshot of the previous clipboard. Returns None when nothing was
+/// selected: the copy left the clipboard sequence number unchanged, so the
+/// clipboard was never touched and there is nothing to restore.
+///
+/// Sequence: snapshot the clipboard -> synthesize the copy shortcut (Ctrl+C,
+/// or Ctrl+Shift+C in a console) -> wait for the clipboard sequence number to
+/// change -> read the clipboard back as the selection.
+#[cfg(windows)]
+pub fn capture_selection() -> Result<Option<CapturedSelection>, CommandError> {
+    use std::thread;
+
+    let source_window = platform::foreground_window();
+    let console = platform::is_console_window(source_window);
+
+    // Snapshot everything currently on the clipboard so the user's prior
+    // clipboard survives the round-trip.
+    let prev_clipboard = crate::output::save_clipboard_snapshot();
+    let before = platform::clipboard_sequence_number();
+
+    platform::send_copy_shortcut(console)?;
+
+    let copied = wait_for_sequence_change(
+        platform::clipboard_sequence_number,
+        before,
+        COPY_TIMEOUT,
+        COPY_POLL,
+        thread::sleep,
+    );
+    if !copied {
+        log::info!("Transform selection: the copy changed nothing, so no text is selected.");
+        return Ok(None);
+    }
+    thread::sleep(COPY_SETTLE);
+
+    Ok(Some(CapturedSelection {
+        selection: read_clipboard_text().unwrap_or_default(),
+        prev_clipboard,
+        source_window,
+        restore_on_drop: true,
+    }))
+}
+
+/// Brings back the app the user was in before Scribe's own window took focus,
+/// so the typed Dashboard panel copies from that app instead of from Scribe.
+#[cfg(windows)]
+pub fn focus_previous_app() -> Result<(), CommandError> {
+    crate::output::focus_previous_app()
+}
+
+/// Pastes `text` over the still-selected original and then puts the
+/// pre-capture clipboard back.
+///
+/// When the user has moved to another app while the model was working, the
+/// text is left on the clipboard instead (the error says so), because pasting
+/// into whatever is in front now would drop it in the wrong place.
+#[cfg(windows)]
+pub fn apply_result(
+    app: &AppHandle,
+    text: &str,
+    mut captured: CapturedSelection,
+) -> Result<OutputResult, CommandError> {
+    let foreground = platform::foreground_window();
+    if !may_paste_into(
+        foreground,
+        captured.source_window,
+        platform::is_own_window(foreground),
+    ) {
+        set_clipboard_text(text)?;
+        // The rewritten text must stay on the clipboard for the user to paste.
+        captured.restore_on_drop = false;
+        return Err(CommandError::new(
+            "transform_target_changed",
+            "You switched windows while Scribe was rewriting. The result is on your clipboard: press Ctrl+V to paste it.",
+        ));
+    }
+
+    // Paste the transformed text over the highlighted selection (capture only
+    // sent a copy, so the selection is still active). `paste_text` handles the
+    // focus guard and modifier release. On failure, dropping `captured`
+    // restores the clipboard.
+    let result = crate::output::paste_text(app, text)?;
+
+    // `paste_text` restored whatever it borrowed; for the transform flow the
+    // meaningful thing to preserve is the clipboard from before the capture.
+    captured.restore_now();
 
     Ok(result)
+}
+
+/// Puts plain text on the clipboard (the "press Ctrl+V" fallback).
+#[cfg(windows)]
+fn set_clipboard_text(text: &str) -> Result<(), CommandError> {
+    arboard::Clipboard::new()
+        .and_then(|mut clipboard| clipboard.set_text(text.to_string()))
+        .map_err(|error| {
+            CommandError::new(
+                "clipboard_write_failed",
+                format!("Could not put the result on the clipboard: {error}"),
+            )
+        })
 }
 
 /// Reads the current clipboard as text (arboard). Returns None when the
@@ -168,10 +320,16 @@ fn read_clipboard_text() -> Option<String> {
 mod platform {
     use crate::error::CommandError;
     use std::mem::size_of;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
+    use windows::Win32::System::Threading::GetCurrentProcessId;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
         VIRTUAL_KEY, VK_C, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU,
         VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetForegroundWindow, GetWindowThreadProcessId,
     };
 
     /// Same modifier set the paste path force-releases: every key whose held
@@ -206,19 +364,65 @@ mod platform {
         send_inputs(&releases, "modifier release")
     }
 
-    /// Synthesizes Ctrl+C to copy the current selection. Releases held
-    /// modifiers first so the chord that triggered the transform doesn't fuse
-    /// with the injected C.
-    pub fn send_copy_shortcut() -> Result<(), CommandError> {
+    /// Synthesizes the copy shortcut for the current selection: Ctrl+C, or
+    /// Ctrl+Shift+C in a console, where a bare Ctrl+C interrupts the running
+    /// program when nothing is selected. Releases held modifiers first so the
+    /// chord that triggered the transform doesn't fuse with the injected C.
+    pub fn send_copy_shortcut(console: bool) -> Result<(), CommandError> {
         release_held_modifiers()?;
 
-        let inputs = [
-            keyboard_input(VK_CONTROL, Default::default()),
-            keyboard_input(VK_C, Default::default()),
-            keyboard_input(VK_C, KEYEVENTF_KEYUP),
-            keyboard_input(VK_CONTROL, KEYEVENTF_KEYUP),
-        ];
+        let inputs: Vec<INPUT> = if console {
+            vec![
+                keyboard_input(VK_CONTROL, Default::default()),
+                keyboard_input(VK_SHIFT, Default::default()),
+                keyboard_input(VK_C, Default::default()),
+                keyboard_input(VK_C, KEYEVENTF_KEYUP),
+                keyboard_input(VK_SHIFT, KEYEVENTF_KEYUP),
+                keyboard_input(VK_CONTROL, KEYEVENTF_KEYUP),
+            ]
+        } else {
+            vec![
+                keyboard_input(VK_CONTROL, Default::default()),
+                keyboard_input(VK_C, Default::default()),
+                keyboard_input(VK_C, KEYEVENTF_KEYUP),
+                keyboard_input(VK_CONTROL, KEYEVENTF_KEYUP),
+            ]
+        };
         send_inputs(&inputs, "copy shortcut")
+    }
+
+    /// The clipboard's change counter; it moves on every write by any app.
+    pub fn clipboard_sequence_number() -> u32 {
+        unsafe { GetClipboardSequenceNumber() }
+    }
+
+    /// The current foreground window as a plain HWND value.
+    pub fn foreground_window() -> isize {
+        unsafe { GetForegroundWindow() }.0 as isize
+    }
+
+    /// True when the window belongs to this process (the main window or pill).
+    pub fn is_own_window(hwnd: isize) -> bool {
+        if hwnd == 0 {
+            return false;
+        }
+        let mut process_id = 0u32;
+        unsafe { GetWindowThreadProcessId(HWND(hwnd as *mut _), Some(&mut process_id)) };
+        process_id == unsafe { GetCurrentProcessId() }
+    }
+
+    /// True when the window is a console host (see `CONSOLE_WINDOW_CLASSES`).
+    pub fn is_console_window(hwnd: isize) -> bool {
+        if hwnd == 0 {
+            return false;
+        }
+        let mut buffer = [0u16; 128];
+        let length = unsafe { GetClassNameW(HWND(hwnd as *mut _), &mut buffer) };
+        if length <= 0 {
+            return false;
+        }
+        let class_name = String::from_utf16_lossy(&buffer[..length as usize]);
+        super::is_console_window_class(&class_name)
     }
 
     fn keyboard_input(
@@ -285,6 +489,84 @@ mod tests {
 
         assert!(user.starts_with("Instruction: fix grammar\n\n"));
         assert!(user.ends_with("Text:\n  keep my spaces  "));
+    }
+
+    #[test]
+    fn ensure_enabled_requires_local_ai() {
+        let mut settings = AppSettings {
+            notes_analysis_enabled: false,
+            ..Default::default()
+        };
+        let error = ensure_enabled(&settings).unwrap_err();
+        assert_eq!(error.code, "local_ai_off");
+        assert!(error.message.contains("Turn on Local AI"));
+
+        settings.notes_analysis_enabled = true;
+        assert!(ensure_enabled(&settings).is_ok());
+    }
+
+    #[test]
+    fn console_hosts_are_recognized_by_window_class() {
+        assert!(is_console_window_class("ConsoleWindowClass"));
+        assert!(is_console_window_class("CASCADIA_HOSTING_WINDOW_CLASS"));
+        assert!(is_console_window_class("mintty"));
+        assert!(!is_console_window_class("Chrome_WidgetWin_1"));
+        assert!(!is_console_window_class("Notepad"));
+        assert!(!is_console_window_class(""));
+    }
+
+    #[test]
+    fn sequence_change_is_detected_on_a_later_poll() {
+        let mut reads = vec![7, 7, 8].into_iter();
+        let mut slept = Vec::new();
+        let changed = wait_for_sequence_change(
+            || reads.next().unwrap_or(8),
+            7,
+            Duration::from_millis(500),
+            Duration::from_millis(15),
+            |delay| slept.push(delay),
+        );
+        assert!(changed);
+        assert_eq!(slept.len(), 3);
+    }
+
+    #[test]
+    fn unchanged_sequence_means_nothing_was_selected() {
+        let mut polls = 0;
+        let changed = wait_for_sequence_change(
+            || 42,
+            42,
+            Duration::from_millis(500),
+            Duration::from_millis(15),
+            |_| polls += 1,
+        );
+        assert!(!changed);
+        // 500 ms at 15 ms per poll: the wait is bounded, not endless.
+        assert_eq!(polls, 33);
+    }
+
+    #[test]
+    fn sequence_wait_polls_at_least_once_for_tiny_timeouts() {
+        let mut polls = 0;
+        let changed = wait_for_sequence_change(
+            || 2,
+            1,
+            Duration::from_millis(1),
+            Duration::from_millis(15),
+            |_| polls += 1,
+        );
+        assert!(changed);
+        assert_eq!(polls, 1);
+    }
+
+    #[test]
+    fn paste_goes_to_the_source_window_or_through_scribe() {
+        // The window the selection came from.
+        assert!(may_paste_into(100, 100, false));
+        // One of Scribe's own windows (the pill was clicked to stop).
+        assert!(may_paste_into(200, 100, true));
+        // The user moved to another app: keep the result on the clipboard.
+        assert!(!may_paste_into(300, 100, false));
     }
 
     #[test]

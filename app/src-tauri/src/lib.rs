@@ -373,7 +373,7 @@ pub fn run() {
             }
             // Background worker that debounces note saves into GitHub auto-syncs.
             app.manage(note_sync::NoteSyncWorker::spawn(app.handle().clone()));
-            hotkeys::setup(app.handle(), &settings.hotkeys)?;
+            hotkeys::setup(app.handle(), &settings.hotkeys, settings.notes_analysis_enabled)?;
             tray::setup(app.handle())?;
             // Restore the user's saved default window size (physical pixels),
             // mirroring how the pill restores its saved position. Absent values

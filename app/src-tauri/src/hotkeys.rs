@@ -164,6 +164,10 @@ pub struct HotkeyBindingStatus {
     pub trigger: Option<TriggerEdge>,
     pub registered: bool,
     pub error: Option<String>,
+    /// Set when the binding is intentionally not registered (Transform
+    /// Selection while Local AI is off), so the UI shows why instead of a
+    /// registration failure.
+    pub disabled_reason: Option<String>,
 }
 
 /// One hotkey binding that could not be registered. Serialized into the
@@ -298,6 +302,9 @@ pub struct HotkeyRuntimeState {
     /// True while the toggle watcher owns the toggle key; plugin events for
     /// ToggleDictation are ignored then.
     toggle_watched: AtomicBool,
+    /// Mirrors the Local AI switch: Transform Selection is only registered
+    /// while it is on, so its chord is free for other apps otherwise.
+    transform_enabled: AtomicBool,
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -420,15 +427,27 @@ impl HotkeyRuntimeState {
     }
 }
 
-pub fn setup(app: &AppHandle, hotkeys: &HotkeySettings) -> Result<(), CommandError> {
-    app.manage(HotkeyRuntimeState::default());
+pub fn setup(
+    app: &AppHandle,
+    hotkeys: &HotkeySettings,
+    transform_enabled: bool,
+) -> Result<(), CommandError> {
+    let runtime = HotkeyRuntimeState::default();
+    runtime
+        .transform_enabled
+        .store(transform_enabled, Ordering::SeqCst);
+    app.manage(runtime);
     validate_hotkeys(hotkeys)?;
 
     let failures = register_hotkey_set(app, hotkeys);
+    let active = HOTKEY_ACTIONS
+        .into_iter()
+        .filter(|action| action_enabled(*action, transform_enabled))
+        .count();
     log::info!(
         "Registered {} of {} hotkey bindings",
-        HOTKEY_ACTIONS.len() - failures.len(),
-        HOTKEY_ACTIONS.len()
+        active - failures.len(),
+        active
     );
     emit_registration_failures(app, &failures);
 
@@ -683,6 +702,27 @@ pub fn validate_hotkeys(hotkeys: &HotkeySettings) -> Result<(), CommandError> {
     Ok(())
 }
 
+/// Whether `action` should be registered at all. Transform Selection is only
+/// bound while Local AI is on; every other action always is.
+fn action_enabled(action: HotkeyAction, transform_enabled: bool) -> bool {
+    action != HotkeyAction::TransformSelection || transform_enabled
+}
+
+fn transform_enabled(app: &AppHandle) -> bool {
+    app.try_state::<HotkeyRuntimeState>()
+        .map(|runtime| runtime.transform_enabled.load(Ordering::SeqCst))
+        .unwrap_or(false)
+}
+
+/// Records whether Local AI is on, which decides whether Transform Selection
+/// gets registered. Returns the previous value. Callers re-register the hotkey
+/// set (`replace_hotkeys`) afterwards for the change to take effect.
+pub fn set_transform_enabled(app: &AppHandle, enabled: bool) -> bool {
+    app.try_state::<HotkeyRuntimeState>()
+        .map(|runtime| runtime.transform_enabled.swap(enabled, Ordering::SeqCst))
+        .unwrap_or(false)
+}
+
 /// Swaps the registered hotkey set. Registration is best-effort per binding:
 /// the returned vector lists the bindings in `next` that could not be
 /// registered (working bindings stay registered). Returns Err only when
@@ -718,7 +758,11 @@ fn register_hotkey_set(
         });
     };
 
+    let transform_enabled = transform_enabled(app);
     for action in HOTKEY_ACTIONS {
+        if !action_enabled(action, transform_enabled) {
+            continue;
+        }
         let shortcut_text = action.shortcut(hotkeys);
 
         match parse_shortcut(shortcut_text) {
@@ -851,10 +895,30 @@ fn configure_chord_watcher(app: &AppHandle, bindings: Vec<(ModifierChord, Hotkey
 
 pub fn status(app: &AppHandle, hotkeys: &HotkeySettings) -> Result<HotkeyStatus, CommandError> {
     let runtime = app.try_state::<HotkeyRuntimeState>();
+    let transform_enabled = transform_enabled(app);
     let mut bindings = Vec::new();
 
     for action in HOTKEY_ACTIONS {
         let shortcut = action.shortcut(hotkeys);
+        if !action_enabled(action, transform_enabled) {
+            bindings.push(HotkeyBindingStatus {
+                action,
+                shortcut: shortcut.to_string(),
+                normalized_shortcut: match parse_shortcut(shortcut) {
+                    Ok(ParsedShortcut::Plugin(parsed)) => Some(parsed.to_string()),
+                    Ok(ParsedShortcut::ModifierChord(chord)) => Some(chord.label()),
+                    Err(_) => None,
+                },
+                trigger: action.trigger(hotkeys),
+                registered: false,
+                error: None,
+                disabled_reason: Some(
+                    "Off while Local AI is off. Turn on Local AI in Settings to use it."
+                        .to_string(),
+                ),
+            });
+            continue;
+        }
         let registration_error = runtime
             .as_ref()
             .and_then(|runtime| runtime.registration_error_for(action));
@@ -892,6 +956,7 @@ pub fn status(app: &AppHandle, hotkeys: &HotkeySettings) -> Result<HotkeyStatus,
             trigger: action.trigger(hotkeys),
             registered,
             error,
+            disabled_reason: None,
         });
     }
 
@@ -1101,7 +1166,16 @@ fn toggle_transform(app: &AppHandle) -> Result<(), CommandError> {
     let state = app.state::<BackendState>();
     let status = state.app_state()?.status().clone();
     match status {
-        AppStatus::Idle | AppStatus::Ready | AppStatus::Error => start_transform(app),
+        AppStatus::Idle | AppStatus::Ready | AppStatus::Error => {
+            // Second guard behind registration: never copy a selection while
+            // Local AI is off.
+            let settings = state.db()?.get_settings()?;
+            if let Err(error) = crate::selection_transform::ensure_enabled(&settings) {
+                let _ = app.emit("scribe:selection-transform-failed", &error.message);
+                return Ok(());
+            }
+            start_transform(app)
+        }
         AppStatus::Recording => tray::stop_dictation(app),
         _ => Ok(()),
     }
@@ -1120,23 +1194,28 @@ fn toggle_transform(app: &AppHandle) -> Result<(), CommandError> {
 /// selection.
 #[cfg(windows)]
 fn start_transform(app: &AppHandle) -> Result<(), CommandError> {
-    let captured = crate::selection_transform::capture_selection()?;
-    if captured.selection.trim().is_empty() {
+    // An empty or non-text selection drops `captured`, which restores the
+    // user's clipboard; a copy that changed nothing comes back as None.
+    let captured = crate::selection_transform::capture_selection()?
+        .filter(|captured| !captured.selection.trim().is_empty());
+    let Some(captured) = captured else {
         let _ = app.emit(
             "scribe:selection-transform-failed",
             "Highlight some text first, then trigger Transform Selection.",
         );
         return Ok(());
-    }
-
-    let state = app.state::<BackendState>();
-    state.set_pending_transform(captured);
+    };
 
     let request = audio::StartRecordingRequest {
         is_transform: true,
         ..Default::default()
     };
+    // If the recording can't start, `captured` drops here and the clipboard
+    // is put back.
     audio::start_recording_for_app(app, Some(request), true)?;
+
+    let state = app.state::<BackendState>();
+    state.set_pending_transform(captured);
     let status = state.app_state()?.status().clone();
     tray::update_tray_status(app, status);
     Ok(())
@@ -1428,6 +1507,17 @@ mod windows_chord {
 mod tests {
     use super::*;
     use crate::settings::AppSettings;
+
+    #[test]
+    fn transform_selection_is_only_registered_with_local_ai_on() {
+        assert!(!action_enabled(HotkeyAction::TransformSelection, false));
+        assert!(action_enabled(HotkeyAction::TransformSelection, true));
+        for action in HOTKEY_ACTIONS {
+            if action != HotkeyAction::TransformSelection {
+                assert!(action_enabled(action, false), "{action:?} must stay bound");
+            }
+        }
+    }
 
     fn expect_plugin(shortcut: &str) -> Shortcut {
         match parse_shortcut(shortcut).unwrap() {
