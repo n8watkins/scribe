@@ -131,6 +131,7 @@ dependencies = [
  "tiny_http",
  "uuid",
  "windows 0.58.0",
+ "x11rb",
 ]
 
 [[package]]
