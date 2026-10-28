@@ -237,7 +237,7 @@ jobs:
             jq -e --arg v "$version" '.appVersion == $v' "$result" > /dev/null || { echo "The self-test ($label) ran the wrong version" >&2; return 1; }
           }
 
-          self_test arm64
+          self_test arm64 env
           self_test x86_64 arch -x86_64
 
       - name: Stage .dmg
