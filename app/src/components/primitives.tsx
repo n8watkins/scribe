@@ -122,18 +122,20 @@ export function MsInput({
 }
 
 export function SegmentedControl<T extends string>({
+  className,
   disabled = false,
   onChange,
   options,
   selected,
 }: {
+  className?: string;
   disabled?: boolean;
   onChange: (selected: T) => void;
   options: { label: string; value: T }[];
   selected: T;
 }) {
   return (
-    <div className="segmented-control">
+    <div className={className ? `segmented-control ${className}` : "segmented-control"}>
       {options.map((option) => (
         <button
           aria-pressed={option.value === selected}

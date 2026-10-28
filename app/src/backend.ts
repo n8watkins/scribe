@@ -230,7 +230,12 @@ export type OutputAction =
   | "paste"
   | "copy_and_paste";
 
-export type OutputStatus = "completed" | "clipboard_restore_failed";
+export type OutputStatus =
+  | "completed"
+  | "clipboard_restore_failed"
+  // Scribe left the text on the clipboard instead of pasting: the user
+  // switched apps mid-dictation, or the target runs as administrator.
+  | "paste_skipped";
 
 export type ClipboardPreservation =
   // The system clipboard was never read or written (the opt-in keystroke insert).
@@ -336,6 +341,9 @@ export type RecordingSessionInfo = {
   maxDurationMs: number;
   isTestClip: boolean;
   isNote: boolean;
+  // The microphone chosen in Settings isn't connected, so this recording
+  // uses the system default instead.
+  microphoneFallback: boolean;
 };
 
 export type RecordingResultStatus =
@@ -391,7 +399,7 @@ export type TranscribeFileResult = {
 
 export type DictationResult = {
   sessionId: string;
-  status: "saved";
+  status: "saved" | "not_saved";
   transcript: Transcript;
   modelId: string;
   durationMs: number;

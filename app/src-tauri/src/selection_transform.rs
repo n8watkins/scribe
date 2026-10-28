@@ -273,7 +273,9 @@ pub fn apply_result(
         captured.source_window,
         platform::is_own_window(foreground),
     ) {
-        set_clipboard_text(text)?;
+        // Private like every clipboard write Scribe makes on the user's
+        // behalf: kept out of Clipboard History and the cloud clipboard.
+        crate::output::set_private_clipboard_text(text)?;
         // The rewritten text must stay on the clipboard for the user to paste.
         captured.restore_on_drop = false;
         return Err(CommandError::new(
@@ -287,25 +289,18 @@ pub fn apply_result(
     // focus guard and modifier release. On failure, dropping `captured`
     // restores the clipboard.
     let result = crate::output::paste_text(app, text)?;
+    if result.status == crate::output::OutputStatus::PasteSkipped {
+        // Windows would have blocked the paste (an administrator window), so
+        // the result was left on the clipboard. Keep it there and say so.
+        captured.restore_on_drop = false;
+        return Err(CommandError::new("transform_paste_blocked", result.message));
+    }
 
     // `paste_text` restored whatever it borrowed; for the transform flow the
     // meaningful thing to preserve is the clipboard from before the capture.
     captured.restore_now();
 
     Ok(result)
-}
-
-/// Puts plain text on the clipboard (the "press Ctrl+V" fallback).
-#[cfg(windows)]
-fn set_clipboard_text(text: &str) -> Result<(), CommandError> {
-    arboard::Clipboard::new()
-        .and_then(|mut clipboard| clipboard.set_text(text.to_string()))
-        .map_err(|error| {
-            CommandError::new(
-                "clipboard_write_failed",
-                format!("Could not put the result on the clipboard: {error}"),
-            )
-        })
 }
 
 /// Reads the current clipboard as text (arboard). Returns None when the

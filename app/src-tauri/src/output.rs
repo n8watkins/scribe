@@ -29,6 +29,72 @@ pub enum OutputStatus {
     /// not be put back afterwards (the borrow-and-restore default). The paste
     /// itself succeeded; only the restore step failed.
     ClipboardRestoreFailed,
+    /// Scribe did not paste, because the window in front was not the one the
+    /// dictation started in, or Windows would have blocked the paste. The
+    /// text was left on the clipboard for the user to paste themselves.
+    PasteSkipped,
+}
+
+/// The window a dictation started in. Held so the result is pasted back
+/// there, and only there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PasteTarget {
+    pub window: isize,
+    pub process_id: u32,
+}
+
+/// Why Scribe chose to leave the text on the clipboard instead of pasting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasteBlock {
+    /// The user moved to another app while the dictation was transcribing.
+    FocusChanged,
+    /// The app in front runs as administrator. Windows silently drops input
+    /// sent to it from a normal process (UIPI), so a paste would vanish.
+    Elevated,
+}
+
+impl PasteBlock {
+    fn message(self) -> &'static str {
+        match self {
+            PasteBlock::FocusChanged => {
+                "You switched windows, so Scribe didn't paste. Copied. Press Ctrl+V to paste."
+            }
+            PasteBlock::Elevated => {
+                "That window runs as administrator, which blocks Scribe from pasting. Copied. Press Ctrl+V to paste."
+            }
+        }
+    }
+}
+
+/// Decides whether pasting into the window in front is safe. `pinned` is the
+/// window the dictation started in (`None` when Scribe itself had focus, so
+/// there is nothing to hold to), `current` is the window in front now
+/// (`None` when it can't be read), and `current_elevated` says whether it runs
+/// at a higher integrity level than Scribe. Windows of the same app count as
+/// the same target, so switching tabs or panes inside one app still pastes.
+pub fn paste_block_reason(
+    pinned: Option<PasteTarget>,
+    current: Option<PasteTarget>,
+    current_elevated: bool,
+) -> Option<PasteBlock> {
+    if current_elevated {
+        return Some(PasteBlock::Elevated);
+    }
+    match (pinned, current) {
+        (None, _) => None,
+        (Some(pinned), Some(current))
+            if pinned.window == current.window || pinned.process_id == current.process_id =>
+        {
+            None
+        }
+        (Some(_), _) => Some(PasteBlock::FocusChanged),
+    }
+}
+
+/// The window in front right now, or `None` when it is one of Scribe's own
+/// windows or there is none. Recorded when a dictation starts.
+pub fn current_paste_target() -> Option<PasteTarget> {
+    platform::foreground_target()
 }
 
 /// Honest description of what each output path did to the system clipboard.
@@ -71,6 +137,9 @@ pub fn handle_transcription_output(
     transcript: &Transcript,
     settings: &AppSettings,
 ) -> Result<Option<OutputResult>, CommandError> {
+    // Taken whatever the output mode, so a stale target never carries over
+    // to a later dictation.
+    let pinned = app.state::<BackendState>().take_paste_target();
     let result = match settings.output_mode {
         OutputMode::SaveOnly => return Ok(None),
         OutputMode::AutoPaste => paste_transcript_text(
@@ -78,12 +147,13 @@ pub fn handle_transcription_output(
             transcript,
             OutputMode::AutoPaste,
             settings.paste_method.clone(),
+            pinned,
             true,
         ),
         OutputMode::CopyClipboard => {
             copy_transcript_text(app, transcript, OutputMode::CopyClipboard, true)
         }
-        OutputMode::CopyAndPaste => copy_and_paste_transcript_text(app, transcript, true),
+        OutputMode::CopyAndPaste => copy_and_paste_transcript_text(app, transcript, pinned, true),
     };
 
     result.map(Some)
@@ -112,7 +182,14 @@ pub fn paste_text(app: &AppHandle, text: &str) -> Result<OutputResult, CommandEr
         .map(|settings| settings.paste_method)
         .unwrap_or(PasteMethod::ClipboardPaste);
 
-    paste_transcript_text(app, &transcript, OutputMode::AutoPaste, paste_method, false)
+    paste_transcript_text(
+        app,
+        &transcript,
+        OutputMode::AutoPaste,
+        paste_method,
+        None,
+        false,
+    )
 }
 
 /// Snapshots every clipboard format as raw bytes (text, image, files, ...) so
@@ -138,22 +215,22 @@ pub fn focus_previous_app() -> Result<(), CommandError> {
 
 pub fn paste_last_transcript(app: &AppHandle) -> Result<OutputResult, CommandError> {
     let state = app.state::<BackendState>();
-    let (transcript, paste_method) = {
-        let db = state.db()?;
-        let transcript = db.get_last_transcript()?.ok_or_else(no_last_transcript)?;
-        let settings = db.get_settings()?;
-        (transcript, settings.paste_method)
-    };
+    let transcript = state.last_transcript()?.ok_or_else(no_last_transcript)?;
+    let paste_method = state.db()?.get_settings()?.paste_method;
 
-    paste_transcript_text(app, &transcript, OutputMode::AutoPaste, paste_method, true)
+    paste_transcript_text(
+        app,
+        &transcript,
+        OutputMode::AutoPaste,
+        paste_method,
+        None,
+        true,
+    )
 }
 
 pub fn copy_last_transcript(app: &AppHandle) -> Result<OutputResult, CommandError> {
     let state = app.state::<BackendState>();
-    let transcript = state
-        .db()?
-        .get_last_transcript()?
-        .ok_or_else(no_last_transcript)?;
+    let transcript = state.last_transcript()?.ok_or_else(no_last_transcript)?;
 
     copy_transcript_text(app, &transcript, OutputMode::CopyClipboard, true)
 }
@@ -169,7 +246,14 @@ pub fn paste_transcript(app: &AppHandle, id: &str) -> Result<OutputResult, Comma
         (transcript, settings.paste_method)
     };
 
-    paste_transcript_text(app, &transcript, OutputMode::AutoPaste, paste_method, true)
+    paste_transcript_text(
+        app,
+        &transcript,
+        OutputMode::AutoPaste,
+        paste_method,
+        None,
+        true,
+    )
 }
 
 pub fn copy_transcript(app: &AppHandle, id: &str) -> Result<OutputResult, CommandError> {
@@ -187,6 +271,7 @@ fn paste_transcript_text(
     transcript: &Transcript,
     output_mode: OutputMode,
     paste_method: PasteMethod,
+    pinned: Option<PasteTarget>,
     emit_events: bool,
 ) -> Result<OutputResult, CommandError> {
     emit_output_started(
@@ -202,6 +287,16 @@ fn paste_transcript_text(
         // The paste hotkey can fire while one of our own windows is focused;
         // the transcript must never be typed into Scribe itself.
         platform::ensure_foreign_focus()?;
+
+        if let Some(block) = platform::paste_block(pinned) {
+            set_private_clipboard_text(&transcript.text)?;
+            return Ok(paste_skipped_result(
+                transcript,
+                output_mode,
+                paste_method.clone(),
+                block,
+            ));
+        }
 
         match paste_method {
             PasteMethod::DirectInsert => {
@@ -290,6 +385,7 @@ fn copy_transcript_text(
 fn copy_and_paste_transcript_text(
     app: &AppHandle,
     transcript: &Transcript,
+    pinned: Option<PasteTarget>,
     emit_events: bool,
 ) -> Result<OutputResult, CommandError> {
     let output_mode = OutputMode::CopyAndPaste;
@@ -309,6 +405,15 @@ fn copy_and_paste_transcript_text(
         // the transcript must never be typed into Scribe itself. The
         // clipboard copy above is kept either way so a manual paste still works.
         platform::ensure_foreign_focus()?;
+        if let Some(block) = platform::paste_block(pinned) {
+            // The text is already on the clipboard, where this mode keeps it.
+            return Ok(paste_skipped_result(
+                transcript,
+                output_mode,
+                PasteMethod::ClipboardPaste,
+                block,
+            ));
+        }
         platform::send_paste_shortcut()?;
 
         Ok(OutputResult {
@@ -371,7 +476,9 @@ fn clipboard_paste(
     // is treated as "nothing to restore" so the paste still proceeds.
     let snapshot = platform::save_clipboard_snapshot();
 
-    set_clipboard_text(&transcript.text)?;
+    // The transcript is only borrowing the clipboard, so keep it out of
+    // Clipboard History, the cloud clipboard and clipboard managers.
+    set_private_clipboard_text(&transcript.text)?;
     // Let the clipboard write settle before the paste reads it.
     // NOTE: the 60ms (pre-paste settle) and 180ms (post-paste settle below) are
     // timing knobs; slow targets may need them raised.
@@ -424,23 +531,82 @@ fn clipboard_paste(
     }
 }
 
+/// Text Scribe puts on the clipboard only to paste on the user's behalf. It
+/// is marked so Windows keeps it out of Clipboard History (Win+V) and the
+/// cloud clipboard, and clipboard managers skip it. Public so the selected-text
+/// transform can make the same private writes.
+pub fn set_private_clipboard_text(text: &str) -> Result<(), CommandError> {
+    let mut clipboard = open_clipboard()?;
+
+    #[cfg(windows)]
+    let written = {
+        use arboard::SetExtWindows;
+        clipboard
+            .set()
+            .exclude_from_monitoring()
+            .exclude_from_cloud()
+            .exclude_from_history()
+            .text(text.to_string())
+    };
+    #[cfg(not(windows))]
+    let written = clipboard.set_text(text.to_string());
+
+    written.map_err(clipboard_write_failed)
+}
+
+/// Text the user asked to keep on the clipboard (Copy, Copy only, Paste and
+/// leave it): an ordinary write that Clipboard History may keep.
 fn set_clipboard_text(text: &str) -> Result<(), CommandError> {
-    let mut clipboard = arboard::Clipboard::new().map_err(|error| {
+    open_clipboard()?
+        .set_text(text.to_string())
+        .map_err(clipboard_write_failed)
+}
+
+fn open_clipboard() -> Result<arboard::Clipboard, CommandError> {
+    arboard::Clipboard::new().map_err(|error| {
         CommandError::new(
             "clipboard_unavailable",
             format!("Could not access the clipboard. {}", error),
         )
-    })?;
-
-    clipboard.set_text(text.to_string()).map_err(|error| {
-        CommandError::new(
-            "clipboard_write_failed",
-            format!(
-                "Could not write transcript text to the clipboard. {}",
-                error
-            ),
-        )
     })
+}
+
+fn clipboard_write_failed(error: arboard::Error) -> CommandError {
+    CommandError::new(
+        "clipboard_write_failed",
+        format!(
+            "Could not write transcript text to the clipboard. {}",
+            error
+        ),
+    )
+}
+
+/// The honest result when Scribe left the text on the clipboard instead of
+/// pasting it.
+fn paste_skipped_result(
+    transcript: &Transcript,
+    output_mode: OutputMode,
+    paste_method: PasteMethod,
+    block: PasteBlock,
+) -> OutputResult {
+    log::info!(
+        "Paste skipped for transcript {} ({:?}); left on the clipboard",
+        transcript.id,
+        block
+    );
+    OutputResult {
+        transcript_id: transcript.id.clone(),
+        action: OutputAction::CopyClipboard,
+        status: OutputStatus::PasteSkipped,
+        output_mode,
+        paste_method: Some(paste_method),
+        copied: true,
+        pasted: false,
+        clipboard_restored: None,
+        clipboard_preservation: ClipboardPreservation::ReplacedWithTranscript,
+        clipboard_restore_error: None,
+        message: block.message().to_string(),
+    }
 }
 
 fn emit_output_started(
@@ -558,18 +724,27 @@ impl Drop for PasteStateGuard<'_> {
 
 #[cfg(windows)]
 mod platform {
+    use super::{paste_block_reason, PasteBlock, PasteTarget};
     use crate::error::CommandError;
-    use std::{mem::size_of, thread, time::Duration};
-    use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND};
+    use std::{ffi::c_void, mem::size_of, thread, time::Duration};
+    use windows::core::w;
+    use windows::Win32::Foundation::{CloseHandle, GlobalFree, HANDLE, HGLOBAL, HWND};
     use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    use windows::Win32::Security::{
+        GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TokenIntegrityLevel,
+        TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
+    };
     use windows::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData, OpenClipboard,
-        SetClipboardData,
+        RegisterClipboardFormatW, SetClipboardData,
     };
     use windows::Win32::System::Memory::{
         GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
     };
-    use windows::Win32::System::Threading::GetCurrentProcessId;
+    use windows::Win32::System::Threading::{
+        GetCurrentProcess, GetCurrentProcessId, OpenProcess, OpenProcessToken,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
         KEYEVENTF_UNICODE, VIRTUAL_KEY, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN,
@@ -630,6 +805,81 @@ mod platform {
             "paste_target_unavailable",
             "Could not find another app window to paste into. Click into the target app and try again.",
         ))
+    }
+
+    pub fn foreground_target() -> Option<PasteTarget> {
+        let foreground = unsafe { GetForegroundWindow() };
+        if foreground.is_invalid() || is_own_window(foreground) {
+            return None;
+        }
+        let mut process_id = 0u32;
+        unsafe { GetWindowThreadProcessId(foreground, Some(&mut process_id)) };
+        Some(PasteTarget {
+            window: foreground.0 as isize,
+            process_id,
+        })
+    }
+
+    /// Whether to skip the paste, checked after the focus guard so it sees
+    /// the window the keystrokes would really go to.
+    pub fn paste_block(pinned: Option<PasteTarget>) -> Option<PasteBlock> {
+        let current = foreground_target();
+        let elevated = current
+            .map(|target| runs_above_our_integrity(target.process_id))
+            .unwrap_or(false);
+        paste_block_reason(pinned, current, elevated)
+    }
+
+    /// True when `process_id` runs at a higher integrity level than Scribe
+    /// (an app started as administrator while Scribe isn't). Windows drops
+    /// SendInput into such windows without an error. When either level can't
+    /// be read, assumes not, which keeps today's behavior.
+    fn runs_above_our_integrity(process_id: u32) -> bool {
+        let Some(ours) = integrity_level(unsafe { GetCurrentProcess() }) else {
+            return false;
+        };
+        let Ok(process) =
+            (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) })
+        else {
+            return false;
+        };
+        let theirs = integrity_level(process);
+        let _ = unsafe { CloseHandle(process) };
+        theirs.is_some_and(|theirs| theirs > ours)
+    }
+
+    /// The mandatory integrity level RID of a process (for example 0x2000 for
+    /// medium, 0x3000 for high).
+    fn integrity_level(process: HANDLE) -> Option<u32> {
+        let mut token = HANDLE::default();
+        unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) }.ok()?;
+
+        let mut needed = 0u32;
+        let _ = unsafe { GetTokenInformation(token, TokenIntegrityLevel, None, 0, &mut needed) };
+        let mut buffer = vec![0u8; needed as usize];
+        let read = unsafe {
+            GetTokenInformation(
+                token,
+                TokenIntegrityLevel,
+                Some(buffer.as_mut_ptr() as *mut c_void),
+                needed,
+                &mut needed,
+            )
+        };
+        let _ = unsafe { CloseHandle(token) };
+        if read.is_err() || buffer.len() < size_of::<TOKEN_MANDATORY_LABEL>() {
+            return None;
+        }
+
+        let label = unsafe { &*(buffer.as_ptr() as *const TOKEN_MANDATORY_LABEL) };
+        let sid = label.Label.Sid;
+        unsafe {
+            let count = *GetSidSubAuthorityCount(sid);
+            if count == 0 {
+                return None;
+            }
+            Some(*GetSidSubAuthority(sid, u32::from(count - 1)))
+        }
     }
 
     fn is_own_window(hwnd: HWND) -> bool {
@@ -922,7 +1172,44 @@ mod platform {
             }
         }
 
+        // Putting the user's own clipboard back must not add a second copy of
+        // it to Clipboard History or upload it again.
+        mark_clipboard_private();
+
         Ok(())
+    }
+
+    /// Adds the formats that keep the current clipboard item out of Clipboard
+    /// History, the cloud clipboard and clipboard managers. Needs the clipboard
+    /// open. Best effort: a failure only means Windows may keep a copy.
+    fn mark_clipboard_private() {
+        let markers = [
+            w!("ExcludeClipboardContentFromMonitorProcessing"),
+            w!("CanIncludeInClipboardHistory"),
+            w!("CanUploadToCloudClipboard"),
+        ];
+        for name in markers {
+            let format = unsafe { RegisterClipboardFormatW(name) };
+            if format == 0 {
+                log::warn!("Could not register a clipboard privacy format");
+                continue;
+            }
+            // Each marker is a DWORD of 0 ("no").
+            let Ok(hglobal) = (unsafe { GlobalAlloc(GMEM_MOVEABLE, size_of::<u32>()) }) else {
+                continue;
+            };
+            let ptr = unsafe { GlobalLock(hglobal) };
+            if ptr.is_null() {
+                let _ = unsafe { GlobalFree(hglobal) };
+                continue;
+            }
+            unsafe { std::ptr::write_unaligned(ptr as *mut u32, 0) };
+            let _ = unsafe { GlobalUnlock(hglobal) };
+            if unsafe { SetClipboardData(format, HANDLE(hglobal.0)) }.is_err() {
+                let _ = unsafe { GlobalFree(hglobal) };
+                log::warn!("Could not mark the restored clipboard as private");
+            }
+        }
     }
 
     pub fn send_paste_shortcut() -> Result<(), CommandError> {
@@ -985,10 +1272,19 @@ mod platform {
 
 #[cfg(not(windows))]
 mod platform {
+    use super::{PasteBlock, PasteTarget};
     use crate::error::CommandError;
 
     pub fn ensure_foreign_focus() -> Result<(), CommandError> {
         Ok(())
+    }
+
+    pub fn foreground_target() -> Option<PasteTarget> {
+        None
+    }
+
+    pub fn paste_block(_pinned: Option<PasteTarget>) -> Option<PasteBlock> {
+        None
     }
 
     pub fn direct_insert_text(_text: &str) -> Result<(), CommandError> {
@@ -1022,6 +1318,67 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const EDITOR: PasteTarget = PasteTarget {
+        window: 10,
+        process_id: 100,
+    };
+    const EDITOR_OTHER_WINDOW: PasteTarget = PasteTarget {
+        window: 11,
+        process_id: 100,
+    };
+    const CHAT: PasteTarget = PasteTarget {
+        window: 20,
+        process_id: 200,
+    };
+
+    #[test]
+    fn pastes_into_the_window_the_dictation_started_in() {
+        assert_eq!(paste_block_reason(Some(EDITOR), Some(EDITOR), false), None);
+        // Another window or tab of the same app still counts.
+        assert_eq!(
+            paste_block_reason(Some(EDITOR), Some(EDITOR_OTHER_WINDOW), false),
+            None
+        );
+    }
+
+    #[test]
+    fn copies_instead_when_the_user_switched_apps() {
+        assert_eq!(
+            paste_block_reason(Some(EDITOR), Some(CHAT), false),
+            Some(PasteBlock::FocusChanged)
+        );
+        // An unreadable foreground window is treated as a switch, not a match.
+        assert_eq!(
+            paste_block_reason(Some(EDITOR), None, false),
+            Some(PasteBlock::FocusChanged)
+        );
+    }
+
+    #[test]
+    fn without_a_pinned_window_any_target_is_fine() {
+        assert_eq!(paste_block_reason(None, Some(CHAT), false), None);
+        assert_eq!(paste_block_reason(None, None, false), None);
+    }
+
+    #[test]
+    fn never_pastes_into_an_elevated_window() {
+        assert_eq!(
+            paste_block_reason(Some(EDITOR), Some(EDITOR), true),
+            Some(PasteBlock::Elevated)
+        );
+        assert_eq!(
+            paste_block_reason(None, Some(CHAT), true),
+            Some(PasteBlock::Elevated)
+        );
+    }
+
+    #[test]
+    fn skipped_paste_messages_tell_the_user_what_to_do() {
+        for block in [PasteBlock::FocusChanged, PasteBlock::Elevated] {
+            assert!(block.message().ends_with("Copied. Press Ctrl+V to paste."));
+        }
+    }
 
     #[test]
     fn direct_insert_result_reports_clipboard_untouched() {
