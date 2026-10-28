@@ -36,6 +36,9 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 crossbeam-channel = "0.5"
 hound = "3.5"
+# Microphone capture: WASAPI on Windows, ALSA on Linux (which reaches
+# PulseAudio and PipeWire through their ALSA plugins), Core Audio on macOS.
+cpal = "0.15"
 rubato = "0.15"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "multipart"] }
 sha2 = "0.10"
@@ -50,7 +53,6 @@ keyring = { version = "3", features = ["windows-native"] }
 tiny_http = "0.12"
 
 [target.'cfg(windows)'.dependencies]
-cpal = "0.15"
 # Native folder picker for choosing the data directory. Windows-only (the app
 # ships for Windows); the picker command errors elsewhere. xdg-portal feature
 # disabled so no GTK/portal system libs are pulled in.
@@ -71,6 +73,12 @@ windows = { version = "0.58", features = [
     "Win32_System_Memory",
     "Win32_System_Threading",
 ] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Window identity, focus and synthetic keystrokes (XTEST) on X11 and
+# XWayland; XFIXES tells when the clipboard changes. Already in the tree
+# through arboard.
+x11rb = { version = "0.13", features = ["xtest", "xfixes"] }
 
 [dev-dependencies]
 tempfile = "3"

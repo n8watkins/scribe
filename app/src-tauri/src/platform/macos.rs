@@ -2,6 +2,8 @@
 //! lands. Pastes and selection copies report that they are unsupported and
 //! the clipboard is never borrowed.
 
+use std::collections::HashMap;
+
 use super::{unsupported, PasteTarget, WindowId};
 use crate::error::CommandError;
 
@@ -53,6 +55,15 @@ pub fn send_copy_shortcut(_console: bool) -> Result<(), CommandError> {
     ))
 }
 
+/// Synthetic keystrokes aren't implemented on macOS yet.
+pub fn paste_unavailable() -> Option<&'static str> {
+    Some("Scribe can't paste into other apps on macOS yet.")
+}
+
+pub fn open_clipboard() -> Result<arboard::Clipboard, arboard::Error> {
+    arboard::Clipboard::new()
+}
+
 /// Selection capture needs synthetic keystrokes, which macOS lacks so far.
 pub fn can_capture_selection() -> bool {
     false
@@ -76,4 +87,19 @@ pub fn set_private_clipboard_text(
     text: &str,
 ) -> Result<(), arboard::Error> {
     clipboard.set_text(text.to_string())
+}
+
+/// No system endpoint ids on macOS: microphones are identified by their cpal
+/// names.
+pub fn audio_endpoint_ids_by_name() -> HashMap<String, Vec<String>> {
+    HashMap::new()
+}
+
+/// Core Audio lists only real inputs, shown under their own names.
+pub fn microphone_label(device_name: &str) -> Option<String> {
+    Some(device_name.to_string())
+}
+
+pub fn microphone_id(_device_name: &str) -> Option<String> {
+    None
 }

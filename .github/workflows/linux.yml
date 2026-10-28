@@ -10,6 +10,8 @@ on:
     paths:
       - ".github/workflows/**"
       - "app/src-tauri/tauri.linux.conf.json"
+      - "app/src-tauri/src/platform/**"
+      - "app/src-tauri/src/audio.rs"
 
 permissions:
   contents: read
@@ -24,6 +26,44 @@ env:
   WHISPER_CPP_COMMIT: f049fff95a089aa9969deb009cdd4892b3e74916
 
 jobs:
+  # The Linux-only Rust code (platform/linux.rs and everything cfg'd for it)
+  # is otherwise never compiled, linted or tested in CI.
+  backend-linux:
+    name: Desktop backend (Linux, experimental)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libasound2-dev \
+            libssl-dev
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: app/src-tauri
+          key: backend
+
+      - name: Run clippy
+        working-directory: app/src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Run backend tests
+        working-directory: app/src-tauri
+        run: cargo test --locked
+
   build-linux:
     name: Build Linux bundles (experimental)
     # The oldest supported runner, so the AppImage runs on older glibc too.
@@ -41,6 +81,7 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libxdo-dev \
+            libasound2-dev \
             libssl-dev \
             patchelf \
             file \
