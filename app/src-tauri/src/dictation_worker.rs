@@ -24,7 +24,11 @@
 
 use std::{
     panic::{catch_unwind, AssertUnwindSafe},
-    sync::mpsc::{channel, Sender},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc::{channel, Sender},
+        Arc,
+    },
     thread,
 };
 
@@ -108,13 +112,20 @@ pub enum Outcome {
 /// Turns an intent into a command against the status the user saw when they
 /// pressed the key. `None` means the press does nothing in that status (for
 /// example a toggle while Transcribing), which matches how hotkeys behaved
-/// before the worker existed.
-pub fn resolve(status: &AppStatus, intent: Intent) -> Option<DictationCommand> {
-    let startable = matches!(
+/// before the worker existed. `start_pending` says a start is queued but has
+/// not run yet: the user already asked to record, so a quick second toggle
+/// means stop, not a second start.
+pub fn resolve(
+    status: &AppStatus,
+    start_pending: bool,
+    intent: Intent,
+) -> Option<DictationCommand> {
+    let idle = matches!(
         status,
         AppStatus::Idle | AppStatus::Ready | AppStatus::Error
     );
-    let recording = *status == AppStatus::Recording;
+    let startable = idle && !start_pending;
+    let recording = *status == AppStatus::Recording || (idle && start_pending);
     let toggle = |start: DictationCommand| {
         if startable {
             Some(start)
@@ -206,6 +217,17 @@ struct Job {
 /// Handle to the worker thread, kept in Tauri's managed state.
 pub struct DictationWorker {
     sender: Sender<Job>,
+    /// Start commands queued but not yet run (see [`resolve`]).
+    pending_starts: Arc<AtomicUsize>,
+}
+
+fn is_start(command: &DictationCommand) -> bool {
+    matches!(
+        command,
+        DictationCommand::Start { .. }
+            | DictationCommand::StartNote
+            | DictationCommand::StartTransform
+    )
 }
 
 impl DictationWorker {
@@ -216,15 +238,43 @@ impl DictationWorker {
 
     pub(crate) fn spawn_with<E: Executor>(executor: E) -> std::io::Result<Self> {
         let (sender, receiver) = channel::<Job>();
+        let pending_starts = Arc::new(AtomicUsize::new(0));
+        let pending = Arc::clone(&pending_starts);
         thread::Builder::new()
             .name("scribe-dictation".to_string())
             .spawn(move || {
                 // Ends when every sender is gone, which is app shutdown.
                 for job in receiver {
-                    run_job(&executor, job);
+                    let start = is_start(&job.command);
+                    run_job(&executor, job, || {
+                        if start {
+                            pending.fetch_sub(1, Ordering::SeqCst);
+                        }
+                    });
                 }
             })?;
-        Ok(Self { sender })
+        Ok(Self {
+            sender,
+            pending_starts,
+        })
+    }
+
+    /// Resolves `intent` against `status` (and any start still queued) and
+    /// queues the resulting command without waiting for it.
+    pub(crate) fn submit_intent(
+        &self,
+        intent: Intent,
+        status: impl FnOnce() -> Result<AppStatus, CommandError>,
+    ) -> Result<(), CommandError> {
+        // Read the pending count before the status: a start that finishes in
+        // between has already moved the status to Recording.
+        let start_pending = self.pending_starts.load(Ordering::SeqCst) > 0;
+        let status = status()?;
+        match resolve(&status, start_pending, intent) {
+            Some(command) => self.send(command),
+            None => log::debug!("Ignored {:?} while {:?}", intent, status),
+        }
+        Ok(())
     }
 
     /// Queues a command without waiting. Its error, if any, is reported as a
@@ -242,7 +292,14 @@ impl DictationWorker {
     }
 
     fn enqueue(&self, command: DictationCommand, reply: Option<Reply>) {
+        let start = is_start(&command);
+        if start {
+            self.pending_starts.fetch_add(1, Ordering::SeqCst);
+        }
         if let Err(error) = self.sender.send(Job { command, reply }) {
+            if start {
+                self.pending_starts.fetch_sub(1, Ordering::SeqCst);
+            }
             // The worker thread is gone; tell a waiting caller instead of
             // leaving it blocked.
             log::error!(
@@ -263,7 +320,9 @@ fn worker_gone() -> CommandError {
     )
 }
 
-fn run_job<E: Executor>(executor: &E, job: Job) {
+/// Runs one job. `finished` runs once the command is done (or skipped), before
+/// a waiting caller hears back.
+fn run_job<E: Executor>(executor: &E, job: Job, finished: impl FnOnce()) {
     let Job { command, reply } = job;
     let result = match executor.status() {
         Ok(status) if admits(&status, &command) => {
@@ -283,6 +342,7 @@ fn run_job<E: Executor>(executor: &E, job: Job) {
         }
         Err(error) => Err(error),
     };
+    finished();
 
     match reply {
         Some(reply) => {
@@ -300,16 +360,13 @@ fn run_job<E: Executor>(executor: &E, job: Job) {
 /// command. Safe to call from any thread, including the main thread and the
 /// audio callback thread: it never waits for the command to run.
 pub fn submit(app: &AppHandle, intent: Intent) {
-    let status = match app.state::<BackendState>().app_state() {
-        Ok(machine) => machine.status().clone(),
-        Err(error) => {
-            audio::emit_recording_error(app, error);
-            return;
-        }
+    let Some(worker) = app.try_state::<DictationWorker>() else {
+        log::error!("Dictation worker is not running; dropped {:?}", intent);
+        return;
     };
-    match resolve(&status, intent) {
-        Some(command) => dispatch(app, command),
-        None => log::debug!("Ignored {:?} while {:?}", intent, status),
+    let status = || Ok(app.state::<BackendState>().app_state()?.status().clone());
+    if let Err(error) = worker.submit_intent(intent, status) {
+        audio::emit_recording_error(app, error);
     }
 }
 
@@ -480,7 +537,7 @@ mod tests {
     }
 
     fn resolved(status: AppStatus, intent: Intent) -> Option<&'static str> {
-        resolve(&status, intent).as_ref().map(label)
+        resolve(&status, false, intent).as_ref().map(label)
     }
 
     #[test]
@@ -522,6 +579,18 @@ mod tests {
                     "{intent:?} in {status:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_toggle_behind_a_queued_start_stops_but_a_busy_press_is_still_ignored() {
+        for intent in [Intent::Toggle, Intent::ToggleNote, Intent::ToggleTransform] {
+            let command = resolve(&AppStatus::Idle, true, intent);
+            assert_eq!(command.as_ref().map(label), Some("stop"));
+            assert_eq!(
+                resolve(&AppStatus::Transcribing, true, intent).map(|c| label(&c)),
+                None
+            );
         }
     }
 
@@ -607,6 +676,8 @@ mod tests {
         status: Arc<Mutex<Option<AppStatus>>>,
         ran: Arc<Mutex<Vec<&'static str>>>,
         reported: Arc<Mutex<Vec<String>>>,
+        /// Time each start takes to open the mic.
+        start_delay: Duration,
         /// Time each stop "transcribes" for.
         stop_delay: Duration,
         panic_on_cancel: bool,
@@ -640,7 +711,10 @@ mod tests {
             match command {
                 DictationCommand::Start { .. }
                 | DictationCommand::StartNote
-                | DictationCommand::StartTransform => self.set(AppStatus::Recording),
+                | DictationCommand::StartTransform => {
+                    thread::sleep(self.start_delay);
+                    self.set(AppStatus::Recording);
+                }
                 DictationCommand::Stop => {
                     self.set(AppStatus::Transcribing);
                     thread::sleep(self.stop_delay);
@@ -684,6 +758,34 @@ mod tests {
         assert!(matches!(outcome, Outcome::Skipped));
         assert_eq!(fake.ran(), vec!["start", "stop"]);
         assert_eq!(fake.current(), AppStatus::Idle);
+    }
+
+    #[test]
+    fn a_fast_double_toggle_starts_then_stops() {
+        let fake = Fake {
+            start_delay: Duration::from_millis(50),
+            ..Fake::default()
+        };
+        let worker = DictationWorker::spawn_with(fake.clone()).unwrap();
+
+        // The second press lands while the first start is still opening the
+        // mic, so the status the user's key sees is still Idle.
+        worker
+            .submit_intent(Intent::Toggle, || Ok(fake.current()))
+            .unwrap();
+        worker
+            .submit_intent(Intent::Toggle, || Ok(fake.current()))
+            .unwrap();
+        // Queued last, so it returns once both toggles have run.
+        worker
+            .call(DictationCommand::FinishTimedOut {
+                session_id: String::new(),
+            })
+            .unwrap();
+
+        assert_eq!(fake.ran(), vec!["start", "stop", "timed-out"]);
+        assert_eq!(fake.current(), AppStatus::Idle);
+        assert_eq!(worker.pending_starts.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -767,7 +869,10 @@ mod tests {
     fn the_caller_is_never_left_waiting_when_the_worker_is_gone() {
         let (sender, receiver) = channel::<Job>();
         drop(receiver);
-        let worker = DictationWorker { sender };
+        let worker = DictationWorker {
+            sender,
+            pending_starts: Arc::new(AtomicUsize::new(0)),
+        };
         let error = worker.call(DictationCommand::Stop).unwrap_err();
         assert_eq!(error.code, "dictation_worker_unavailable");
     }
