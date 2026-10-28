@@ -139,7 +139,13 @@ pub(crate) fn transcribe_with_output_prefix(
 }
 
 /// The resource folder that holds this platform's whisper.cpp binaries.
-const BUNDLED_BIN_DIR: &str = if cfg!(windows) { "windows" } else { "linux" };
+const BUNDLED_BIN_DIR: &str = if cfg!(windows) {
+    "windows"
+} else if cfg!(target_os = "macos") {
+    "macos"
+} else {
+    "linux"
+};
 
 /// Maps a Windows executable name (`whisper-cli.exe`) to this platform's name
 /// for the same binary (`whisper-cli` outside Windows).
@@ -153,8 +159,8 @@ fn platform_executable_name(file_name: &str) -> &str {
 
 /// Resolves a bundled whisper.cpp executable (e.g. `whisper-cli.exe` or
 /// `whisper-server.exe`) under `$RESOURCE/bin/windows/`, or the same binary
-/// without the `.exe` under `$RESOURCE/bin/linux/` on the experimental Linux
-/// build.
+/// without the `.exe` under `$RESOURCE/bin/linux/` or `$RESOURCE/bin/macos/`
+/// on the experimental Linux and macOS builds.
 pub(crate) fn resolve_bundled_executable(
     app: &AppHandle,
     file_name: &str,
@@ -474,6 +480,9 @@ mod tests {
                 "whisper-cli.exe"
             );
             assert_eq!(BUNDLED_BIN_DIR, "windows");
+        } else if cfg!(target_os = "macos") {
+            assert_eq!(platform_executable_name("whisper-cli.exe"), "whisper-cli");
+            assert_eq!(BUNDLED_BIN_DIR, "macos");
         } else {
             assert_eq!(platform_executable_name("whisper-cli.exe"), "whisper-cli");
             assert_eq!(platform_executable_name("whisper-server"), "whisper-server");
