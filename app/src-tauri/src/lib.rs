@@ -3,6 +3,7 @@ pub mod audio;
 pub mod commands;
 pub mod data_hygiene;
 pub mod db;
+pub mod diagnostics;
 pub mod dictation;
 pub mod dictation_state;
 pub mod dictation_worker;
@@ -482,6 +483,7 @@ pub fn run() {
             commands::get_app_state,
             release_notes::whats_new_pending,
             release_notes::dismiss_whats_new,
+            diagnostics::collect_diagnostics,
             commands::get_settings,
             commands::patch_settings,
             commands::get_last_transcript,

@@ -937,6 +937,12 @@ export function restoreTranscriptImport(
   });
 }
 
+/** A plain-text diagnostics report for bug reports (no transcripts, tokens
+ * or personal paths). */
+export function collectDiagnostics(): Promise<string> {
+  return invoke("collect_diagnostics");
+}
+
 export function openReleasePage(url?: string): Promise<void> {
   return invoke("open_release_page", { url });
 }
