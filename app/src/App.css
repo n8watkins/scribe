@@ -659,11 +659,18 @@ button:disabled {
 
 .status-grid {
   display: grid;
-  /* Auto-fit: tiles wrap to 4/3/2/1 columns by available width and never clip
-     their badge or action button. Owner can fine-tune the 240px floor later. */
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  /* Home has four status tiles: two by two, or one row of four on wide
+     windows. Auto-fit left a lone tile on a second row (3 + 1) at the default
+     window size. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 8px;
+}
+
+@media (min-width: 1280px) {
+  .status-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 .main-grid {
@@ -1839,10 +1846,6 @@ textarea {
   white-space: nowrap;
 }
 
-.models-summary-note {
-  margin: 8px 0 0;
-}
-
 /* Accordion header for the collapsible "Browse models" catalog. */
 .accordion-toggle {
   display: flex;
@@ -2499,9 +2502,6 @@ kbd {
   .stats-row {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-
-  /* .status-grid intentionally not overridden here — its auto-fit track
-     handles wrapping (4/3/2/1) on its own, with no hard 2-column jump. */
 
   .main-grid {
     grid-template-columns: 1fr;
