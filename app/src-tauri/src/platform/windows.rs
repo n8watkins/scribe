@@ -572,6 +572,16 @@ pub fn send_copy_shortcut(console: bool) -> Result<(), CommandError> {
     send_inputs(&inputs, SELECTION_COPY_FAILED, "copy shortcut")
 }
 
+/// Windows can always send input; elevated windows are handled by
+/// `runs_elevated_above_us`.
+pub fn paste_unavailable() -> Option<&'static str> {
+    None
+}
+
+pub fn open_clipboard() -> Result<arboard::Clipboard, arboard::Error> {
+    arboard::Clipboard::new()
+}
+
 /// Whether `send_copy_shortcut` and the clipboard snapshot work here, so the
 /// Transform Selection hotkey can copy the selection out of another app.
 pub fn can_capture_selection() -> bool {

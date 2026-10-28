@@ -283,7 +283,7 @@ pub fn apply_result(
 /// Reads the current clipboard as text (arboard). Returns None when the
 /// clipboard holds no text or could not be read.
 fn read_clipboard_text() -> Option<String> {
-    let mut clipboard = arboard::Clipboard::new().ok()?;
+    let mut clipboard = platform::open_clipboard().ok()?;
     clipboard.get_text().ok()
 }
 
