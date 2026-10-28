@@ -699,6 +699,17 @@ pub fn audio_endpoint_ids_by_name() -> HashMap<String, Vec<String>> {
     endpoints
 }
 
+/// Every capture device cpal lists on Windows is a real input, shown under
+/// its own name.
+pub fn microphone_label(device_name: &str) -> Option<String> {
+    Some(device_name.to_string())
+}
+
+/// Windows ids come from `audio_endpoint_ids_by_name`.
+pub fn microphone_id(_device_name: &str) -> Option<String> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -85,3 +85,12 @@ pub fn set_private_clipboard_text(
 pub fn audio_endpoint_ids_by_name() -> HashMap<String, Vec<String>> {
     HashMap::new()
 }
+
+/// Core Audio lists only real inputs, shown under their own names.
+pub fn microphone_label(device_name: &str) -> Option<String> {
+    Some(device_name.to_string())
+}
+
+pub fn microphone_id(_device_name: &str) -> Option<String> {
+    None
+}

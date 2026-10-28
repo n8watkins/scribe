@@ -1295,6 +1295,11 @@ fn device_candidates(selected_mic_id: Option<&str>) -> Result<Vec<DeviceCandidat
         let name = device
             .name()
             .unwrap_or_else(|_| format!("Microphone {}", index + 1));
+        // Systems list plumbing devices too (ALSA resamplers, mixers and raw
+        // hardware nodes on Linux); only real inputs are offered.
+        let Some(label) = crate::platform::microphone_label(&name) else {
+            continue;
+        };
         let endpoint_id = endpoint_ids_by_name.get(&name).and_then(|ids| {
             let position = endpoint_positions.entry(name.clone()).or_default();
             let id = ids.get(*position).cloned();
@@ -1303,15 +1308,16 @@ fn device_candidates(selected_mic_id: Option<&str>) -> Result<Vec<DeviceCandidat
         });
         let id = endpoint_id
             .clone()
+            .or_else(|| crate::platform::microphone_id(&name))
             .unwrap_or_else(|| fallback_microphone_id(index, &name));
         let is_selected = selected_mic_id
-            .map(|selected| selected == id || selected == name)
+            .map(|selected| selected == id || selected == label)
             .unwrap_or(false);
 
         candidates.push(DeviceCandidate {
             info: MicrophoneInfo {
                 id,
-                name: name.clone(),
+                name: label,
                 endpoint_id,
                 is_default: default_name.as_deref() == Some(name.as_str()),
                 is_selected,
