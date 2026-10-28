@@ -138,26 +138,46 @@ pub(crate) fn transcribe_with_output_prefix(
     Ok(WhisperTranscription { text, latency_ms })
 }
 
+/// The resource folder that holds this platform's whisper.cpp binaries.
+const BUNDLED_BIN_DIR: &str = if cfg!(windows) { "windows" } else { "linux" };
+
+/// Maps a Windows executable name (`whisper-cli.exe`) to this platform's name
+/// for the same binary (`whisper-cli` outside Windows).
+fn platform_executable_name(file_name: &str) -> &str {
+    if cfg!(windows) {
+        file_name
+    } else {
+        file_name.strip_suffix(".exe").unwrap_or(file_name)
+    }
+}
+
 /// Resolves a bundled whisper.cpp executable (e.g. `whisper-cli.exe` or
-/// `whisper-server.exe`) under `$RESOURCE/bin/windows/`.
+/// `whisper-server.exe`) under `$RESOURCE/bin/windows/`, or the same binary
+/// without the `.exe` under `$RESOURCE/bin/linux/` on the experimental Linux
+/// build.
 pub(crate) fn resolve_bundled_executable(
     app: &AppHandle,
     file_name: &str,
 ) -> Result<PathBuf, CommandError> {
+    let file_name = platform_executable_name(file_name);
     let resource_dir = app.path().resource_dir().map_err(|error| {
         CommandError::new(
             "missing_whisper_executable",
             format!("Could not locate bundled app resources. {}", error),
         )
     })?;
-    let executable = resource_dir.join("bin").join("windows").join(file_name);
+    let executable = resource_dir
+        .join("bin")
+        .join(BUNDLED_BIN_DIR)
+        .join(file_name);
 
     if !executable.is_file() {
         return Err(CommandError::new(
             "missing_whisper_executable",
             format!(
-                "Bundled whisper.cpp executable is missing at {}. Install the app build that includes resources/bin/windows/{}.",
+                "Bundled whisper.cpp executable is missing at {}. Install the app build that includes resources/bin/{}/{}.",
                 executable.display(),
+                BUNDLED_BIN_DIR,
                 file_name
             ),
         ));
@@ -445,6 +465,21 @@ fn strip_noise_annotations(line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundled_executables_use_the_platform_file_name() {
+        if cfg!(windows) {
+            assert_eq!(
+                platform_executable_name("whisper-cli.exe"),
+                "whisper-cli.exe"
+            );
+            assert_eq!(BUNDLED_BIN_DIR, "windows");
+        } else {
+            assert_eq!(platform_executable_name("whisper-cli.exe"), "whisper-cli");
+            assert_eq!(platform_executable_name("whisper-server"), "whisper-server");
+            assert_eq!(BUNDLED_BIN_DIR, "linux");
+        }
+    }
 
     #[test]
     fn parses_words_with_timing_from_json_full() {
