@@ -117,25 +117,31 @@ const navItems: { label: ViewName; Icon: LucideIcon }[] = [
   { label: "About", Icon: Info },
 ];
 
-/** Fires an OS notification that an update is available, so the user sees it
- * even when Scribe is minimized to the tray (the in-app topbar button can't
- * reach a backgrounded window). Best-effort: requests notification permission
- * once if needed and silently no-ops if denied or unavailable. */
-async function notifyUpdateAvailable(version: string) {
+/** Best-effort OS notification for news the user needs while they're in
+ * another app. Silently no-ops when notifications are unavailable or denied. */
+async function notifyOutsideApp(title: string, body: string) {
   try {
     let granted = await isPermissionGranted();
     if (!granted) {
       granted = (await requestPermission()) === "granted";
     }
     if (granted) {
-      sendNotification({
-        title: "Scribe update available",
-        body: `Version ${version} is ready to install. Open Scribe → About to update.`,
-      });
+      sendNotification({ title, body });
     }
   } catch {
     // Notifications can be unavailable (permissions, platform); fail quietly.
   }
+}
+
+/** Fires an OS notification that an update is available, so the user sees it
+ * even when Scribe is minimized to the tray (the in-app topbar button can't
+ * reach a backgrounded window). Best-effort: requests notification permission
+ * once if needed and silently no-ops if denied or unavailable. */
+async function notifyUpdateAvailable(version: string) {
+  await notifyOutsideApp(
+    "Scribe update available",
+    `Version ${version} is ready to install. Open Scribe → About to update.`,
+  );
 }
 
 /** Custom window title bar (the main window runs with `decorations: false`).
@@ -692,9 +698,18 @@ function App() {
           scheduleRefresh();
         }),
         listen<OutputResult>("scribe:output-completed", (event) => {
-          if (Date.now() >= suppressRoutineNoticesUntilRef.current) {
+          if (event.payload.status === "paste_skipped") {
+            // The text didn't land where the user expected: always say so,
+            // and say it outside the app too, since they're in another window.
+            pushToast({ tone: "info", message: event.payload.message });
+            void notifyOutsideApp("Scribe didn't paste", event.payload.message);
+          } else if (Date.now() >= suppressRoutineNoticesUntilRef.current) {
             showNotice(event.payload.message, "success");
           }
+          scheduleRefresh();
+        }),
+        listen<{ message: string }>("scribe:dictation-save-failed", (event) => {
+          pushToast({ tone: "error", message: event.payload.message });
           scheduleRefresh();
         }),
         listen<{ message: string }>("scribe:dictation-empty", (event) => {

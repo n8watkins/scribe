@@ -38,6 +38,13 @@ pub struct BackendState {
     pending_transform: Mutex<Option<crate::selection_transform::CapturedSelection>>,
     /// The folders Scribe writes to, for cleanup that touches files.
     dirs: crate::data_hygiene::DataDirs,
+    /// The window that had focus when the current dictation started, so its
+    /// text goes back there and nowhere else. Taken once by the output step.
+    paste_target: Mutex<Option<output::PasteTarget>>,
+    /// The latest dictation when saving it to the database failed. It was
+    /// still pasted; this keeps it reachable for Paste last until the next
+    /// successful save.
+    unsaved_last_transcript: Mutex<Option<Transcript>>,
 }
 
 impl BackendState {
@@ -57,6 +64,46 @@ impl BackendState {
             github_sync_lock: Mutex::new(()),
             #[cfg(windows)]
             pending_transform: Mutex::new(None),
+            paste_target: Mutex::new(None),
+            unsaved_last_transcript: Mutex::new(None),
+        }
+    }
+
+    /// Records where the dictation that is starting should paste. `None`
+    /// means "no window to hold it to" (Scribe itself had focus).
+    pub fn set_paste_target(&self, target: Option<output::PasteTarget>) {
+        if let Ok(mut slot) = self.paste_target.lock() {
+            *slot = target;
+        }
+    }
+
+    /// Takes the paste target recorded at dictation start (consumed once).
+    pub fn take_paste_target(&self) -> Option<output::PasteTarget> {
+        self.paste_target
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take())
+    }
+
+    /// Remembers (or, with `None`, forgets) a dictation that could not be
+    /// saved.
+    pub fn set_unsaved_last_transcript(&self, transcript: Option<Transcript>) {
+        if let Ok(mut slot) = self.unsaved_last_transcript.lock() {
+            *slot = transcript;
+        }
+    }
+
+    /// The Last Transcript Buffer: an unsaved dictation when the last save
+    /// failed (it is newer than anything in the database), else the saved one.
+    pub fn last_transcript(&self) -> Result<Option<Transcript>, CommandError> {
+        let unsaved = self
+            .unsaved_last_transcript
+            .lock()
+            .ok()
+            .and_then(|slot| slot.clone());
+        match unsaved {
+            Some(transcript) => Ok(Some(transcript)),
+            None => self.db()?.get_last_transcript(),
         }
     }
 
@@ -257,11 +304,12 @@ pub(crate) fn apply_autostart(app: &tauri::AppHandle, enabled: bool) -> Result<(
 pub fn get_last_transcript(
     state: tauri::State<'_, BackendState>,
 ) -> Result<Option<Transcript>, CommandError> {
-    state.db()?.get_last_transcript()
+    state.last_transcript()
 }
 
 #[tauri::command]
 pub fn clear_last_transcript(state: tauri::State<'_, BackendState>) -> Result<(), CommandError> {
+    state.set_unsaved_last_transcript(None);
     state.db()?.clear_last_transcript()
 }
 

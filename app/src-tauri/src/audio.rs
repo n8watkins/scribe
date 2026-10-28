@@ -527,6 +527,9 @@ pub fn start_recording_for_app(
         )?;
 
         if outcome.started {
+            // Remember where the user is dictating, so the text goes back
+            // there even if they switch apps while it transcribes.
+            state.set_paste_target(crate::output::current_paste_target());
             let snapshot = state.transition_app_state(AppEvent::StartRecording)?;
             emit_state_snapshot(app, &snapshot);
         }

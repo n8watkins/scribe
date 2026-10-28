@@ -34,6 +34,16 @@ pub(crate) const EMPTY_DICTATION_MESSAGE: &str = "Nothing heard — no text to i
 #[serde(rename_all = "snake_case")]
 pub enum DictationStatus {
     Saved,
+    /// Transcribed (and pasted, if the output mode pastes) but the database
+    /// save failed; the text is held in memory for Paste last.
+    NotSaved,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DictationSaveFailedPayload {
+    transcript_id: String,
+    message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -339,6 +349,22 @@ fn transcribe_recording_inner(
         }
     }
 
+    transition_after_success(app);
+
+    // Paste first, then save: the user is waiting at the cursor, and a failed
+    // save (disk full, database error) must never also cost them the text.
+    // Output fires exactly once here, on the final assembled transcript, never
+    // per partial. Notes are for the archive, not the cursor: never auto-paste
+    // them. A disconnect salvage is likewise saved (below) but never pasted:
+    // the mic died on dead air, so auto-pasting would dump Whisper's silence
+    // hallucinations into the focused app. It's in History; Paste-Last can
+    // recover it if the user really did say something before the drop.
+    if !transcript.is_note && !recording.disconnected {
+        if let Err(error) = output::handle_transcription_output(app, &transcript, &settings) {
+            output::emit_output_failed(app, transcript.id.clone(), &error);
+        }
+    }
+
     let save_result = state.db().and_then(|db| {
         if transcript.is_note {
             db.save_note_transcript(&transcript)
@@ -347,12 +373,38 @@ fn transcribe_recording_inner(
         }
     });
     if let Err(error) = save_result {
+        log::error!(
+            "Could not save transcript {} ({}): {}",
+            transcript.id,
+            error.code,
+            error.message
+        );
         // A clip whose transcript was never saved would be orphaned forever.
-        if let Some(path) = transcript.audio_path.as_deref() {
+        if let Some(path) = transcript.audio_path.take() {
             let _ = fs::remove_file(path);
         }
-        return Err(error);
+        // Keep it reachable for Paste last until a later save succeeds.
+        state.set_unsaved_last_transcript(Some(transcript.clone()));
+        let _ = app.emit(
+            "scribe:dictation-save-failed",
+            DictationSaveFailedPayload {
+                transcript_id: transcript.id.clone(),
+                message: format!(
+                    "Scribe couldn't save this dictation to History. {} still has it until you close Scribe.",
+                    if transcript.is_note { "Copy last" } else { "Paste last" }
+                ),
+            },
+        );
+        return Ok(Some(DictationResult {
+            session_id: recording.session_id.clone(),
+            status: DictationStatus::NotSaved,
+            transcript,
+            model_id,
+            duration_ms: recording.duration_ms,
+            transcription_latency_ms: whisper_result.latency_ms,
+        }));
     }
+    state.set_unsaved_last_transcript(None);
 
     // A saved transcript flows to GitHub automatically when a relevant backup
     // is on: notes go to the curated notes log (github_sync_enabled), and
@@ -371,8 +423,6 @@ fn transcribe_recording_inner(
         }
     }
 
-    transition_after_success(app);
-
     let result = DictationResult {
         session_id: recording.session_id.clone(),
         status: DictationStatus::Saved,
@@ -383,19 +433,6 @@ fn transcribe_recording_inner(
     };
 
     let _ = app.emit("scribe:dictation-transcribed", &result);
-    // Output fires exactly once here, on the final assembled transcript — never
-    // per partial. Any "streaming" feel comes from the DirectInsert keystroke
-    // injection, not from multiple output passes.
-    // Notes are for the archive, not the cursor: never auto-paste them. A
-    // disconnect salvage is likewise saved (above) but never pasted — the mic
-    // died on dead air, so auto-pasting would dump Whisper's silence
-    // hallucinations into the focused app. It's in History; Paste-Last can
-    // recover it if the user really did say something before the drop.
-    if !transcript.is_note && !recording.disconnected {
-        if let Err(error) = output::handle_transcription_output(app, &transcript, &settings) {
-            output::emit_output_failed(app, transcript.id.clone(), &error);
-        }
-    }
     Ok(Some(result))
 }
 
