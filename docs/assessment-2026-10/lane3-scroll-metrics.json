@@ -1,0 +1,182 @@
+[
+  {
+    "name": "01-dashboard",
+    "scrollHeight": 676,
+    "clientHeight": 648,
+    "screens": 1.04
+  },
+  {
+    "name": "02-transcribe",
+    "scrollHeight": 648,
+    "clientHeight": 648,
+    "screens": 1
+  },
+  {
+    "name": "03-history",
+    "scrollHeight": 680,
+    "clientHeight": 648,
+    "screens": 1.05
+  },
+  {
+    "name": "04-notes",
+    "scrollHeight": 680,
+    "clientHeight": 648,
+    "screens": 1.05
+  },
+  {
+    "name": "05-sync",
+    "scrollHeight": 1040,
+    "clientHeight": 648,
+    "screens": 1.6
+  },
+  {
+    "name": "06-stats",
+    "scrollHeight": 648,
+    "clientHeight": 648,
+    "screens": 1
+  },
+  {
+    "name": "07-settings",
+    "scrollHeight": 1596,
+    "clientHeight": 648,
+    "screens": 2.46
+  },
+  {
+    "name": "08-data-privacy",
+    "scrollHeight": 835,
+    "clientHeight": 648,
+    "screens": 1.29
+  },
+  {
+    "name": "09-hotkeys",
+    "scrollHeight": 648,
+    "clientHeight": 648,
+    "screens": 1
+  },
+  {
+    "name": "10-models",
+    "scrollHeight": 648,
+    "clientHeight": 648,
+    "screens": 1
+  },
+  {
+    "name": "11-audio",
+    "scrollHeight": 1784,
+    "clientHeight": 648,
+    "screens": 2.75
+  },
+  {
+    "name": "12-themes",
+    "scrollHeight": 648,
+    "clientHeight": 648,
+    "screens": 1
+  },
+  {
+    "name": "13-about",
+    "scrollHeight": 648,
+    "clientHeight": 648,
+    "screens": 1
+  },
+  {
+    "name": "14-developer",
+    "scrollHeight": 648,
+    "clientHeight": 648,
+    "screens": 1
+  },
+  {
+    "name": "07-settings-dictionary",
+    "scrollHeight": 648,
+    "clientHeight": 648,
+    "screens": 1
+  },
+  {
+    "name": "07-settings-notes",
+    "scrollHeight": 648,
+    "clientHeight": 648,
+    "screens": 1
+  },
+  {
+    "name": "10-models-browse",
+    "scrollHeight": 655,
+    "clientHeight": 648,
+    "screens": 1.01
+  },
+  {
+    "name": "13-about-what-scribe-does",
+    "scrollHeight": 648,
+    "clientHeight": 648,
+    "screens": 1
+  },
+  {
+    "name": "13-about-setup",
+    "scrollHeight": 648,
+    "clientHeight": 648,
+    "screens": 1
+  },
+  {
+    "name": "size-min-820x540-dashboard",
+    "scrollHeight": 886,
+    "clientHeight": 508,
+    "screens": 1.74
+  },
+  {
+    "name": "size-min-820x540-settings",
+    "scrollHeight": 1698,
+    "clientHeight": 508,
+    "screens": 3.34
+  },
+  {
+    "name": "size-min-820x540-history",
+    "scrollHeight": 576,
+    "clientHeight": 508,
+    "screens": 1.13
+  },
+  {
+    "name": "size-min-820x540-models",
+    "scrollHeight": 508,
+    "clientHeight": 508,
+    "screens": 1
+  },
+  {
+    "name": "size-min-820x540-hotkeys",
+    "scrollHeight": 677,
+    "clientHeight": 508,
+    "screens": 1.33
+  },
+  {
+    "name": "size-large-1440x900-dashboard",
+    "scrollHeight": 868,
+    "clientHeight": 868,
+    "screens": 1
+  },
+  {
+    "name": "size-large-1440x900-settings",
+    "scrollHeight": 1507,
+    "clientHeight": 868,
+    "screens": 1.74
+  },
+  {
+    "name": "size-large-1440x900-history",
+    "scrollHeight": 871,
+    "clientHeight": 868,
+    "screens": 1
+  },
+  {
+    "name": "size-large-1440x900-models",
+    "scrollHeight": 868,
+    "clientHeight": 868,
+    "screens": 1
+  },
+  {
+    "name": "size-large-1440x900-hotkeys",
+    "scrollHeight": 868,
+    "clientHeight": 868,
+    "screens": 1
+  },
+  {
+    "name": "state-first-run-models",
+    "scrollHeight": 655,
+    "clientHeight": 648,
+    "screens": 1.01
+  }
+]
