@@ -86,7 +86,8 @@ Transcripts live in a local SQLite database under `%APPDATA%\com.natkins.scribe\
 **Data & Privacy** can open the folder, turn history off, or clear history, which deletes every dictation with its audio, failed recordings and copies opened in an editor, and keeps your notes.
 
 Dictated text reaches the app you're typing in through the clipboard.
-Scribe restores what you had copied afterwards and marks its own clipboard entries so Windows clipboard history and cloud clipboard sync skip them.
+Scribe restores what you had copied afterwards, and marks the text it borrows the clipboard for so Windows clipboard history and cloud clipboard sync skip it.
+Copy buttons and the **Copy only** setting still make a normal copy.
 
 The AI tools (selected-text transform and note analysis) are off by default.
 When you turn them on, the selected text or note is sent to the server address you set, which defaults to a local LM Studio server on this PC.
