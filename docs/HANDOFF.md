@@ -52,6 +52,10 @@ Current product and operations docs are listed in the [documentation index](READ
    A Windows worktree for validating it exists at `/mnt/c/Users/natha/Projects/Tools/scribe-rust-storage-validation` (branch `validation/scribe-rust-storage-windows`).
    Decide whether to revive it (rebase onto `main`, open a new PR) or drop it; don't delete the Windows worktree without the owner.
 
+6. **CI runs on Node 20 (low).**
+   The frontend CI steps pin Node 20, which has been end-of-life since April 2026 and no longer gets security fixes.
+   Move them to Node 24; the app itself doesn't ship Node, so users aren't affected.
+
 ### Blocked on the owner
 
 - **Go-ahead for the next release** (v0.8.1 or v0.9.0), because releases auto-update installed copies.
@@ -68,6 +72,7 @@ Current product and operations docs are listed in the [documentation index](READ
 5. Act on the assessment findings the owner picks.
 6. When `tauri-plugin-updater` 3 is stable, upgrade and remove the `.cargo/audit.toml` ignores; when Tauri moves to `glib` 0.20, the last alert closes.
 7. Code signing once the owner has a certificate.
+8. Move CI to Node 24 (open problem 6).
 
 ## Release process (release-kit)
 
