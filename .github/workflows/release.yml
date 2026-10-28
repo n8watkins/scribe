@@ -310,7 +310,10 @@ jobs:
           } else {
             $installer = @(Get-ChildItem $candidate -Filter "*.msi")
             if ($installer.Count -ne 1) { throw "Expected one MSI installer" }
-            $process = Start-Process msiexec.exe -ArgumentList @("/i", $installer[0].FullName, "/qn", "/norestart", "/L*V", "$env:RUNNER_TEMP\scribe-msi-install.log") -Wait -PassThru
+            # Start-Process joins ArgumentList with spaces and never quotes, so
+            # quote the paths: "Scribe Dev_..." otherwise reaches msiexec as
+            # two arguments and it waits forever on its modal usage dialog.
+            $process = Start-Process msiexec.exe -ArgumentList @("/i", "`"$($installer[0].FullName)`"", "/qn", "/norestart", "/L*V", "`"$env:RUNNER_TEMP\scribe-msi-install.log`"") -Wait -PassThru
             if ($process.ExitCode -notin @(0, 3010)) { throw "MSI install failed with $($process.ExitCode)" }
           }
 
@@ -352,7 +355,7 @@ jobs:
           Stop-Process -Id $app.Id -Force
 
           if ("${{ matrix.kind }}" -eq "msi") {
-            $uninstall = Start-Process msiexec.exe -ArgumentList @("/x", $entry.PSChildName, "/qn", "/norestart", "/L*V", "$env:RUNNER_TEMP\scribe-msi-uninstall.log") -Wait -PassThru
+            $uninstall = Start-Process msiexec.exe -ArgumentList @("/x", $entry.PSChildName, "/qn", "/norestart", "/L*V", "`"$env:RUNNER_TEMP\scribe-msi-uninstall.log`"") -Wait -PassThru
           } else {
             # Run the uninstaller directly: UninstallString is a quoted path,
             # and passing it through cmd.exe breaks on spaces in that path.
