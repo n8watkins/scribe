@@ -60,6 +60,9 @@ pub fn check_status(endpoint: &str) -> LlmStatus {
 
     let client = match reqwest::blocking::Client::builder()
         .user_agent(concat!("Scribe/", env!("CARGO_PKG_VERSION")))
+        // Never follow redirects: a 307/308 would re-send the note or selection
+        // text to whatever host the endpoint points at next.
+        .redirect(reqwest::redirect::Policy::none())
         .build()
     {
         Ok(client) => client,
@@ -146,6 +149,9 @@ pub fn analyze_text_with_timeout(
 
     let client = reqwest::blocking::Client::builder()
         .user_agent(concat!("Scribe/", env!("CARGO_PKG_VERSION")))
+        // Never follow redirects: a 307/308 would re-send the note or selection
+        // text to whatever host the endpoint points at next.
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| failure(error.to_string()))?;
 

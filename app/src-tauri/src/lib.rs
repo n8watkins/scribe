@@ -1,6 +1,7 @@
 pub mod app_state;
 pub mod audio;
 pub mod commands;
+pub mod data_hygiene;
 pub mod db;
 pub mod dictation;
 pub mod dictation_state;
@@ -66,17 +67,9 @@ pub fn display_name(app: &tauri::AppHandle) -> &'static str {
 fn migrate_pre_rebrand_data(app: &tauri::AppHandle, new_data_dir: &std::path::Path) {
     // Derive the old identifier from the current one. If they match, this build
     // wasn't renamed (or is the old flavor) and there's nothing to migrate.
-    let old_identifier = app.config().identifier.replace(".scribe", ".localdictate");
-    if old_identifier == app.config().identifier {
-        return;
-    }
-
-    // The data dir lives directly under %APPDATA%; the old install used the
-    // same parent with the old identifier as the folder name.
-    let Some(parent) = new_data_dir.parent() else {
+    let Some(old_data_dir) = pre_rebrand_data_dir(app, new_data_dir) else {
         return;
     };
-    let old_data_dir = parent.join(&old_identifier);
     if !old_data_dir.is_dir() {
         return;
     }
@@ -163,6 +156,22 @@ fn migrate_pre_rebrand_data(app: &tauri::AppHandle, new_data_dir: &std::path::Pa
     } else {
         log::warn!("Rebrand migration incomplete; it will retry on the next launch");
     }
+}
+
+/// The pre-rename data folder (`com.natkins.localdictate`, or `.dev` for the
+/// Dev flavor) next to the current one, or None when this build was never
+/// renamed.
+fn pre_rebrand_data_dir(
+    app: &tauri::AppHandle,
+    new_data_dir: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let old_identifier = app.config().identifier.replace(".scribe", ".localdictate");
+    if old_identifier == app.config().identifier {
+        return None;
+    }
+    // The data dir lives directly under %APPDATA%; the old install used the
+    // same parent with the old identifier as the folder name.
+    Some(new_data_dir.parent()?.join(old_identifier))
 }
 
 /// Recursively copy `from` into `to`, creating `to` (and subdirectories) as
@@ -357,7 +366,27 @@ pub fn run() {
                     }
                 }
             }
-            app.manage(BackendState::new(db, audio_temp_dir));
+            let dirs = data_hygiene::DataDirs {
+                data_dir: app_data_dir.clone(),
+                cache_dir: app.path().app_cache_dir()?,
+            };
+            app.manage(BackendState::new(db, audio_temp_dir, dirs));
+            // Folder cleanup (pre-rename paths, orphaned clips, stale temp
+            // files) touches the disk, so it runs off the startup path.
+            {
+                let handle = app.handle().clone();
+                let pre_rebrand_dir = pre_rebrand_data_dir(&handle, &app_data_dir);
+                let migration_complete = app_data_dir.join(".rebrand-migrated").exists();
+                std::thread::Builder::new()
+                    .name("data-cleanup".into())
+                    .spawn(move || {
+                        data_hygiene::run_startup_maintenance(
+                            &handle,
+                            pre_rebrand_dir,
+                            migration_complete,
+                        )
+                    })?;
+            }
             app.manage(whisper_server::WarmTranscriber::new());
             // Offer Scribe's live dictation state to external tools over an
             // in-process loopback HTTP+SSE server. Additive and best-effort: a

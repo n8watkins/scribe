@@ -36,11 +36,18 @@ pub struct BackendState {
     /// held until that recording's transcription consumes it.
     #[cfg(windows)]
     pending_transform: Mutex<Option<crate::selection_transform::CapturedSelection>>,
+    /// The folders Scribe writes to, for cleanup that touches files.
+    dirs: crate::data_hygiene::DataDirs,
 }
 
 impl BackendState {
-    pub fn new(db: Database, audio_temp_dir: std::path::PathBuf) -> Self {
+    pub fn new(
+        db: Database,
+        audio_temp_dir: std::path::PathBuf,
+        dirs: crate::data_hygiene::DataDirs,
+    ) -> Self {
         Self {
+            dirs,
             app_state: Mutex::new(AppStateMachine::default()),
             audio: Mutex::new(audio::AudioService::new(audio_temp_dir)),
             db: Mutex::new(db),
@@ -100,6 +107,10 @@ impl BackendState {
         self.audio.lock().map_err(|_| {
             CommandError::new("audio_lock_poisoned", "Could not access audio service.")
         })
+    }
+
+    pub fn dirs(&self) -> &crate::data_hygiene::DataDirs {
+        &self.dirs
     }
 
     pub fn model_downloads(&self) -> &DownloadRegistry {
@@ -312,17 +323,28 @@ pub fn delete_transcript(
     state: tauri::State<'_, BackendState>,
     id: String,
 ) -> Result<(), CommandError> {
-    state.db()?.delete_transcript(&id)
+    state.db()?.delete_transcript(&id)?;
+    // "Open in editor" may have left a plain-text copy; it goes with the
+    // transcript.
+    let _ = std::fs::remove_file(state.dirs().editor_copy(&id));
+    Ok(())
 }
 
+/// Clears dictation history and everything that still holds a copy of it:
+/// the Last Transcript Buffer, failed recordings and editor copies. Notes are
+/// kept.
 #[tauri::command]
 pub fn clear_transcript_history(state: tauri::State<'_, BackendState>) -> Result<(), CommandError> {
-    state.db()?.clear_transcript_history()
+    let db = state.db()?;
+    db.clear_transcript_history()?;
+    crate::data_hygiene::clear_history_leftovers(&db, state.dirs())
 }
 
 #[tauri::command]
 pub fn clear_notes(state: tauri::State<'_, BackendState>) -> Result<(), CommandError> {
-    state.db()?.clear_notes()
+    let db = state.db()?;
+    db.clear_notes()?;
+    db.vacuum()
 }
 
 /// Loads the given transcripts, orders them oldest-first, and joins their text
@@ -370,16 +392,7 @@ pub fn open_transcript_externally(
         .get_transcript_by_id(&id)?
         .ok_or_else(|| CommandError::new("transcript_not_found", "Transcript was not found."))?;
 
-    let export_dir = app
-        .path()
-        .app_cache_dir()
-        .map_err(|error| {
-            CommandError::new(
-                "app_cache_dir_unavailable",
-                format!("Could not locate Scribe cache directory. {}", error),
-            )
-        })?
-        .join("scribe-export");
+    let export_dir = state.dirs().editor_copies();
     std::fs::create_dir_all(&export_dir).map_err(|error| {
         CommandError::new(
             "transcript_export_failed",
@@ -391,7 +404,7 @@ pub fn open_transcript_externally(
         )
     })?;
 
-    let path = export_dir.join(format!("{}.txt", id));
+    let path = state.dirs().editor_copy(&id);
     std::fs::write(&path, transcript.text.as_bytes()).map_err(|error| {
         CommandError::new(
             "transcript_export_failed",

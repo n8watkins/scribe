@@ -55,33 +55,46 @@ impl Database {
             .map_err(CommandError::database)?;
 
         match value {
-            Some(value) => match serde_json::from_str(&value) {
+            Some(value) => match serde_json::from_str::<AppSettings>(&value) {
                 Ok(settings) => Ok(settings),
                 Err(error) => {
-                    // A corrupt or partially-written settings value must never
-                    // make the app unlaunchable: setup() calls `get_settings()?`
-                    // and an error there aborts startup (and run() .expect()s,
-                    // i.e. panics). Preserve the bad value under a timestamped
-                    // key for diagnosis, then fall back to — and persist —
-                    // defaults so this and every later launch is clean. Mirrors
-                    // the missing-row path below.
+                    // A corrupt or partly unreadable settings value must never
+                    // make the app unlaunchable, and one bad field (say an enum
+                    // value from a newer build) must not cost the user every
+                    // other choice. Keep each field that still reads, fall back
+                    // to the default only for the ones that don't, back up the
+                    // raw value for diagnosis, and persist the repaired
+                    // settings so later launches are clean.
+                    let (settings, dropped) = lenient_settings(&value);
+                    // The repaired settings are saved below, which validates;
+                    // a combination that reads but doesn't validate must not
+                    // turn into a startup failure, so it falls back to defaults.
+                    let settings = if settings.validate().is_ok() {
+                        settings
+                    } else {
+                        AppSettings::default()
+                    };
                     log::error!(
-                        "Stored settings are corrupt ({}); backing them up and resetting to defaults. Raw value: {}",
+                        "Stored settings could not be read as a whole ({}); reset {} to defaults and kept the rest. Raw value: {}",
                         error,
+                        if dropped.is_empty() {
+                            "everything".to_string()
+                        } else {
+                            dropped.join(", ")
+                        },
                         value
                     );
                     // A single fixed key (overwritten, not timestamped): if
-                    // save_settings below keeps failing across launches — e.g.
-                    // an unwritable DB — this can never accumulate unbounded
-                    // backup rows. The row's updated_at records when it was
-                    // captured.
+                    // save_settings below keeps failing across launches, for
+                    // example an unwritable DB, this can never accumulate
+                    // unbounded backup rows. The row's updated_at records when
+                    // it was captured.
                     if let Err(backup_error) = self.upsert_setting(CORRUPT_SETTINGS_KEY, &value) {
                         log::warn!(
                             "Could not back up corrupt settings: {}",
                             backup_error.message
                         );
                     }
-                    let settings = AppSettings::default();
                     self.save_settings(&settings)?;
                     Ok(settings)
                 }
@@ -830,6 +843,22 @@ impl Database {
             )
             .map_err(CommandError::database)?;
         remove_clip_files(clips);
+
+        // Notes keep their text, but their audio follows the same window as
+        // dictation clips, so recordings never pile up forever.
+        let note_clips = self.clip_paths(
+            "SELECT audio_path FROM transcripts \
+             WHERE created_at < ?1 AND audio_path IS NOT NULL AND is_note = 1",
+            [&cutoff],
+        )?;
+        self.conn
+            .execute(
+                "UPDATE transcripts SET audio_path = NULL \
+                 WHERE created_at < ?1 AND audio_path IS NOT NULL AND is_note = 1",
+                [&cutoff],
+            )
+            .map_err(CommandError::database)?;
+        remove_clip_files(note_clips);
         Ok(())
     }
 
@@ -856,6 +885,77 @@ impl Database {
             .map_err(CommandError::database)?;
         remove_clip_files(clips);
         Ok(())
+    }
+
+    /// Every audio clip the database still points at: transcript and note
+    /// clips plus the Last Transcript Buffer's clip.
+    pub fn referenced_clip_paths(&self) -> Result<Vec<String>, CommandError> {
+        let mut paths = self.clip_paths(
+            "SELECT audio_path FROM transcripts WHERE audio_path IS NOT NULL",
+            [],
+        )?;
+        if let Some(buffer) = self.buffer_transcript()? {
+            paths.extend(buffer.audio_path);
+        }
+        Ok(paths)
+    }
+
+    /// Every file path the database stores: downloaded model files and all
+    /// referenced audio clips.
+    pub fn stored_file_paths(&self) -> Result<Vec<String>, CommandError> {
+        let mut paths = self.clip_paths(
+            "SELECT local_path FROM models WHERE local_path IS NOT NULL",
+            [],
+        )?;
+        paths.extend(self.referenced_clip_paths()?);
+        Ok(paths)
+    }
+
+    /// Points every stored reference to the file `old` at `new`: model rows,
+    /// transcript clips and the Last Transcript Buffer. Returns how many
+    /// references changed.
+    pub fn replace_stored_path(&self, old: &str, new: &str) -> Result<usize, CommandError> {
+        let mut changed = self
+            .conn
+            .execute(
+                "UPDATE models SET local_path = ?2 WHERE local_path = ?1",
+                [old, new],
+            )
+            .map_err(CommandError::database)?;
+        changed += self
+            .conn
+            .execute(
+                "UPDATE transcripts SET audio_path = ?2 WHERE audio_path = ?1",
+                [old, new],
+            )
+            .map_err(CommandError::database)?;
+        if let Some(mut buffer) = self.buffer_transcript()? {
+            if buffer.audio_path.as_deref() == Some(old) {
+                buffer.audio_path = Some(new.to_string());
+                self.upsert_setting(LAST_TRANSCRIPT_BUFFER_KEY, &serde_json::to_string(&buffer)?)?;
+                changed += 1;
+            }
+        }
+        Ok(changed)
+    }
+
+    /// Rebuilds the database file so space freed by deletions is returned to
+    /// the disk and no deleted text survives in the file.
+    pub fn vacuum(&self) -> Result<(), CommandError> {
+        self.conn
+            .execute_batch("VACUUM")
+            .map_err(CommandError::database)
+    }
+
+    /// The Last Transcript Buffer as stored, if any and readable.
+    fn buffer_transcript(&self) -> Result<Option<Transcript>, CommandError> {
+        let Some(value) = self.get_setting_value(LAST_TRANSCRIPT_BUFFER_KEY)? else {
+            return Ok(None);
+        };
+        if value.trim().is_empty() {
+            return Ok(None);
+        }
+        Ok(serde_json::from_str::<Transcript>(&value).ok())
     }
 
     /// Audio-clip paths matched by `sql` (which must select exactly the
@@ -898,27 +998,184 @@ impl Database {
     }
 }
 
+/// The schema version this build writes, stored in `PRAGMA user_version`.
+/// Versions 1 to 4 are the four files in `migrations/`; a later migration gets
+/// the next number and an entry in [`LATER_MIGRATIONS`].
+const SCHEMA_VERSION: i32 = 4;
+
+/// Migrations after the version-4 baseline, as `(version, sql)`. Each runs in
+/// its own transaction together with the `user_version` bump, so an
+/// interrupted migration rolls back and runs again on the next launch.
+const LATER_MIGRATIONS: &[(i32, &str)] = &[];
+
+/// Brings the database up to [`SCHEMA_VERSION`].
+///
+/// Databases from before versioning have `user_version` 0 and any subset of
+/// the columns from migrations 2 to 4 (an interrupted multi-statement
+/// migration could leave some added and some missing), so the baseline checks
+/// each column instead of trusting an error message, adds only what is
+/// missing, and stamps version 4, all in one transaction.
 fn apply_migrations(conn: &Connection) -> Result<(), CommandError> {
-    conn.execute_batch(INITIAL_MIGRATION)
+    // WAL keeps readers and the writer from blocking each other and survives a
+    // crash mid-write; secure_delete overwrites deleted rows so cleared text
+    // does not linger in free pages. Both are per-connection or persistent
+    // settings that are safe to repeat on every open. In-memory databases
+    // report "memory" for the journal mode, which is fine.
+    conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(CommandError::database)?;
-    // SQLite has no ADD COLUMN IF NOT EXISTS: a duplicate-column error means
-    // the migration already ran on this database.
-    if let Err(error) = conn.execute_batch(AUDIO_CLIPS_MIGRATION) {
-        if !error.to_string().contains("duplicate column name") {
-            return Err(CommandError::database(error));
+    conn.pragma_update(None, "secure_delete", "ON")
+        .map_err(CommandError::database)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(CommandError::database)?;
+
+    let version: i32 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(CommandError::database)?;
+    if version > SCHEMA_VERSION {
+        // A newer Scribe wrote this database and the user went back to an older
+        // build. Leave the schema alone rather than guess.
+        log::warn!(
+            "Database schema version {} is newer than this build ({}); opening it as is",
+            version,
+            SCHEMA_VERSION
+        );
+        return Ok(());
+    }
+
+    if version < 4 {
+        run_in_transaction(conn, |tx| {
+            tx.execute_batch(INITIAL_MIGRATION)?;
+            for migration in [
+                AUDIO_CLIPS_MIGRATION,
+                NOTES_MIGRATION,
+                NOTE_ANALYSIS_MIGRATION,
+            ] {
+                for (table, column, statement) in add_column_statements(migration) {
+                    if !has_column(tx, table, column)? {
+                        tx.execute_batch(statement)?;
+                    }
+                }
+            }
+            tx.pragma_update(None, "user_version", 4)
+        })?;
+        if version > 0 {
+            log::info!("Upgraded database schema from version {} to 4", version);
         }
     }
-    if let Err(error) = conn.execute_batch(NOTES_MIGRATION) {
-        if !error.to_string().contains("duplicate column name") {
-            return Err(CommandError::database(error));
+
+    for (target, sql) in LATER_MIGRATIONS {
+        let current: i32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .map_err(CommandError::database)?;
+        if *target <= current {
+            continue;
         }
-    }
-    if let Err(error) = conn.execute_batch(NOTE_ANALYSIS_MIGRATION) {
-        if !error.to_string().contains("duplicate column name") {
-            return Err(CommandError::database(error));
-        }
+        run_in_transaction(conn, |tx| {
+            tx.execute_batch(sql)?;
+            tx.pragma_update(None, "user_version", *target)
+        })?;
+        log::info!("Applied database migration {}", target);
     }
     Ok(())
+}
+
+fn run_in_transaction(
+    conn: &Connection,
+    work: impl FnOnce(&Connection) -> rusqlite::Result<()>,
+) -> Result<(), CommandError> {
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(CommandError::database)?;
+    match work(conn) {
+        Ok(()) => conn.execute_batch("COMMIT").map_err(CommandError::database),
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(CommandError::database(error))
+        }
+    }
+}
+
+/// Splits a migration made of `ALTER TABLE <table> ADD COLUMN <column> ...;`
+/// statements into `(table, column, statement)` triples.
+fn add_column_statements(migration: &str) -> Vec<(&str, &str, &str)> {
+    migration
+        .split(';')
+        .map(str::trim)
+        .filter(|statement| !statement.is_empty())
+        .filter_map(|statement| {
+            let words: Vec<&str> = statement.split_whitespace().collect();
+            match words.as_slice() {
+                ["ALTER", "TABLE", table, "ADD", "COLUMN", column, ..] => {
+                    Some((*table, *column, statement))
+                }
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+    let mut statement = conn.prepare(&format!("PRAGMA table_info({})", table))?;
+    let names = statement.query_map([], |row| row.get::<_, String>(1))?;
+    for name in names {
+        if name? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Reads stored settings field by field, keeping every field that deserializes
+/// and dropping the ones that don't. Returns the settings and the names of the
+/// dropped fields (`hotkeys.toggleDictation` for a nested one).
+///
+/// Fields absent from the stored value keep their serde defaults exactly as a
+/// normal read would (so `defaultsVersion` stays 0 when missing and the
+/// one-time defaults migrations still run). A value that is not a JSON object
+/// at all falls back to full defaults.
+fn lenient_settings(raw: &str) -> (AppSettings, Vec<String>) {
+    use serde_json::{Map, Value};
+
+    let Ok(Value::Object(stored)) = serde_json::from_str::<Value>(raw) else {
+        return (AppSettings::default(), Vec::new());
+    };
+    let reads = |object: &Map<String, Value>| {
+        serde_json::from_value::<AppSettings>(Value::Object(object.clone())).is_ok()
+    };
+    let defaults = serde_json::to_value(AppSettings::default()).unwrap_or(Value::Null);
+
+    let mut kept = Map::new();
+    let mut dropped = Vec::new();
+    for (key, value) in stored {
+        let single = Map::from_iter([(key.clone(), value.clone())]);
+        if reads(&single) {
+            kept.insert(key, value);
+            continue;
+        }
+        // A nested object (hotkeys, the custom theme) may have just one bad
+        // member: rebuild it on top of its defaults, keeping each member that
+        // reads.
+        if let (Value::Object(members), Some(Value::Object(base))) = (&value, defaults.get(&key)) {
+            let mut repaired = base.clone();
+            for (member, member_value) in members {
+                let mut candidate = repaired.clone();
+                candidate.insert(member.clone(), member_value.clone());
+                let probe = Map::from_iter([(key.clone(), Value::Object(candidate.clone()))]);
+                if reads(&probe) {
+                    repaired = candidate;
+                } else {
+                    dropped.push(format!("{}.{}", key, member));
+                }
+            }
+            let probe = Map::from_iter([(key.clone(), Value::Object(repaired.clone()))]);
+            if reads(&probe) {
+                kept.insert(key, Value::Object(repaired));
+                continue;
+            }
+        }
+        dropped.push(key);
+    }
+    let settings = serde_json::from_value(Value::Object(kept)).unwrap_or_default();
+    (settings, dropped)
 }
 
 /// Removes saved clip files for transcripts that are being deleted. A clip
@@ -1364,6 +1621,221 @@ mod tests {
         db.save_settings(&settings).unwrap();
 
         assert_eq!(db.get_settings().unwrap(), settings);
+    }
+
+    fn user_version(conn: &Connection) -> i32 {
+        conn.pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap()
+    }
+
+    fn transcript_columns(conn: &Connection) -> Vec<String> {
+        let mut statement = conn.prepare("PRAGMA table_info(transcripts)").unwrap();
+        let names = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        names
+    }
+
+    /// Builds a database file the way an older Scribe left it: migrations up
+    /// to `applied` (1 to 4) run with no user_version, plus optionally only the
+    /// first statement of 004, as an interrupted batch would leave it.
+    fn historic_db(path: &Path, applied: usize, partial_004: bool) {
+        let conn = Connection::open(path).unwrap();
+        let migrations = [
+            INITIAL_MIGRATION,
+            AUDIO_CLIPS_MIGRATION,
+            NOTES_MIGRATION,
+            NOTE_ANALYSIS_MIGRATION,
+        ];
+        for migration in &migrations[..applied] {
+            conn.execute_batch(migration).unwrap();
+        }
+        if partial_004 {
+            conn.execute_batch("ALTER TABLE transcripts ADD COLUMN analysis TEXT;")
+                .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO transcripts (id, text, created_at, word_count, character_count) \
+             VALUES ('old', 'kept text', '2026-06-12T00:00:00+00:00', 2, 9)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(user_version(&conn), 0);
+    }
+
+    #[test]
+    fn opens_databases_at_every_historic_schema_shape() {
+        let cases = [(1, false), (2, false), (3, false), (3, true), (4, false)];
+        for (applied, partial) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("scribe.sqlite3");
+            historic_db(&path, applied, partial);
+
+            let db = Database::open(&path).unwrap();
+
+            assert_eq!(
+                user_version(&db.conn),
+                SCHEMA_VERSION,
+                "case {applied}/{partial}"
+            );
+            for column in [
+                "audio_path",
+                "is_note",
+                "analysis",
+                "analysis_model",
+                "analysis_created_at",
+            ] {
+                assert!(
+                    transcript_columns(&db.conn)
+                        .iter()
+                        .any(|name| name == column),
+                    "case {applied}/{partial} is missing {column}"
+                );
+            }
+            let kept = db.get_transcript_by_id("old").unwrap().unwrap();
+            assert_eq!(kept.text, "kept text");
+            drop(db);
+            // Reopening a current database is a no-op.
+            let db = Database::open(&path).unwrap();
+            assert_eq!(user_version(&db.conn), SCHEMA_VERSION);
+        }
+    }
+
+    #[test]
+    fn file_databases_use_wal_and_secure_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path().join("scribe.sqlite3")).unwrap();
+        let mode: String = db
+            .conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
+        let secure: i64 = db
+            .conn
+            .pragma_query_value(None, "secure_delete", |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
+        assert_eq!(secure, 1);
+    }
+
+    #[test]
+    fn a_newer_schema_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scribe.sqlite3");
+        drop(Database::open(&path).unwrap());
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+            .unwrap();
+
+        let db = Database::open(&path).unwrap();
+
+        assert_eq!(user_version(&db.conn), SCHEMA_VERSION + 1);
+    }
+
+    #[test]
+    fn add_column_statements_cover_every_migration_column() {
+        let all: Vec<_> = [
+            AUDIO_CLIPS_MIGRATION,
+            NOTES_MIGRATION,
+            NOTE_ANALYSIS_MIGRATION,
+        ]
+        .iter()
+        .flat_map(|migration| add_column_statements(migration))
+        .map(|(table, column, _)| format!("{table}.{column}"))
+        .collect();
+        assert_eq!(
+            all,
+            [
+                "transcripts.audio_path",
+                "transcripts.is_note",
+                "transcripts.analysis",
+                "transcripts.analysis_model",
+                "transcripts.analysis_created_at"
+            ]
+        );
+    }
+
+    #[test]
+    fn retention_expires_note_audio_but_keeps_the_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let clip = dir.path().join("note.wav");
+        std::fs::write(&clip, b"audio").unwrap();
+        let db = Database::in_memory().unwrap();
+        let mut note = Transcript::new_last_buffer("an old note", None, None, None).unwrap();
+        note.is_note = true;
+        note.audio_path = Some(clip.to_string_lossy().into_owned());
+        note.created_at = Utc::now() - chrono::Duration::days(45);
+        db.save_note_transcript(&note).unwrap();
+
+        db.enforce_history_retention(Some(30)).unwrap();
+
+        let kept = db.get_transcript_by_id(&note.id).unwrap().unwrap();
+        assert_eq!(kept.text, "an old note");
+        assert_eq!(kept.audio_path, None);
+        assert!(!clip.exists());
+    }
+
+    #[test]
+    fn replace_stored_path_updates_models_transcripts_and_buffer() {
+        let db = Database::in_memory().unwrap();
+        let mut transcript = Transcript::new_last_buffer("hello", None, None, None).unwrap();
+        transcript.audio_path = Some(r"C:\old\clips\a.wav".to_string());
+        db.save_last_transcript(&transcript).unwrap();
+
+        let changed = db
+            .replace_stored_path(r"C:\old\clips\a.wav", r"C:\new\clips\a.wav")
+            .unwrap();
+
+        assert_eq!(changed, 2, "the history row and the buffer");
+        assert_eq!(
+            db.referenced_clip_paths().unwrap(),
+            vec![r"C:\new\clips\a.wav".to_string(); 2]
+        );
+    }
+
+    #[test]
+    fn one_bad_setting_keeps_the_rest() {
+        let db = Database::in_memory().unwrap();
+        let custom = AppSettings {
+            history_retention_days: Some(90),
+            theme: "ocean".to_string(),
+            ..AppSettings::default()
+        };
+        let mut stored = serde_json::to_value(&custom).unwrap();
+        stored["outputMode"] = serde_json::json!("teleport");
+        stored["hotkeys"]["toggleDictation"] = serde_json::json!(42);
+        db.upsert_setting(SETTINGS_KEY, &stored.to_string())
+            .unwrap();
+
+        let recovered = db.get_settings().unwrap();
+
+        assert_eq!(recovered.history_retention_days, Some(90));
+        assert_eq!(recovered.theme, "ocean");
+        assert_eq!(recovered.output_mode, AppSettings::default().output_mode);
+        assert_eq!(
+            recovered.hotkeys.toggle_dictation,
+            AppSettings::default().hotkeys.toggle_dictation
+        );
+        assert_eq!(
+            recovered.hotkeys.hold_to_talk, custom.hotkeys.hold_to_talk,
+            "the other hotkeys survive"
+        );
+        // The repaired value is persisted, so the next load reads cleanly.
+        assert_eq!(db.get_settings().unwrap(), recovered);
+    }
+
+    #[test]
+    fn lenient_settings_keeps_missing_fields_at_their_serde_defaults() {
+        let (settings, dropped) =
+            lenient_settings(r#"{"historyRetentionDays": 7, "outputMode": 5}"#);
+        assert_eq!(settings.history_retention_days, Some(7));
+        assert_eq!(
+            settings.defaults_version, 0,
+            "one-time migrations still run"
+        );
+        assert_eq!(dropped, vec!["outputMode".to_string()]);
     }
 
     #[test]

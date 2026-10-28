@@ -142,7 +142,7 @@ export function DataPrivacyView({
           />
         </SettingRow>
         <SettingRow
-          description="Auto-delete dictation transcripts older than this."
+          description="Delete dictations, their audio and failed recordings older than this. Notes keep their text, but their audio is deleted after this long too."
           label="Transcript retention"
         >
           <select
@@ -164,7 +164,7 @@ export function DataPrivacyView({
           </select>
         </SettingRow>
         <SettingRow
-          description="Auto-delete saved notes older than this. Tracked separately from transcripts — notes are kept forever by default."
+          description="Delete saved notes older than this. Notes are kept forever by default."
           label="Notes retention"
         >
           <select
@@ -186,7 +186,7 @@ export function DataPrivacyView({
           </select>
         </SettingRow>
         <SettingRow
-          description="Store source clips beside transcript metadata."
+          description="Keep each recording so you can play it back. Clips are deleted with their transcript, or after the transcript retention period for notes. Turn this off to stop saving new recordings."
           label="Save raw audio clips"
         >
           <Toggle
@@ -250,7 +250,7 @@ export function DataPrivacyView({
             <hr className="local-data-divider" />
             <FolderRow
               label="Failed recordings folder"
-              note="Audio kept when a transcription fails, so it isn't lost."
+              note="Audio kept when a transcription fails, so it isn't lost. Up to 20, deleted after the transcript retention period."
               onOpen={() => void handleOpenFolder(openFailedRecordingsFolder)}
               path={failedDir}
             />
@@ -285,7 +285,7 @@ export function DataPrivacyView({
         busy={clearingHistory}
         confirmLabel="Clear history"
         danger
-        message="This permanently deletes every saved transcript record on this device. Your last transcript buffer and saved notes are untouched. This can't be undone."
+        message="This permanently deletes every saved dictation on this device, with its audio, plus the last transcript buffer, failed recordings and copies opened in an editor. Saved notes are kept. This can't be undone."
         onCancel={() => setConfirmClearHistory(false)}
         onConfirm={() => void handleClearHistory()}
         open={confirmClearHistory}
