@@ -86,7 +86,7 @@ export function ThemesView({
 
   return (
     <section className="stack">
-      <article className="panel-card">
+      <article className="panel-card" data-setting="Color theme">
         <div className="section-heading compact">
           <h2>
             <Palette aria-hidden="true" size={15} />
@@ -94,8 +94,8 @@ export function ThemesView({
           </h2>
         </div>
         <p className="muted" style={{ margin: "0 0 4px" }}>
-          Choose a color theme for the main window. The floating pill keeps its
-          own colors (set those in Audio &rarr; Pill).
+          Choose a color theme for this window. The floating pill has its own
+          colors, under Pill colors below.
         </p>
 
         <div className="theme-grid" role="radiogroup" aria-label="Color theme">

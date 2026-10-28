@@ -1,6 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import type { AppStateSnapshot } from "../backend";
-import { formatMsReadable, stateTone } from "../lib/format";
+import { formatMsReadable } from "../lib/format";
 
 export function Toggle({
   checked,
@@ -149,16 +148,5 @@ export function SegmentedControl<T extends string>({
         </button>
       ))}
     </div>
-  );
-}
-
-export function StatePill({ appState }: { appState: AppStateSnapshot }) {
-  const className = `pill ${stateTone(appState.status)}`;
-  const label = appState.error?.message ?? appState.status;
-
-  return (
-    <span className={className} title={label}>
-      {appState.status}
-    </span>
   );
 }

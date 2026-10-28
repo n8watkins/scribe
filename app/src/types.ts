@@ -1,18 +1,19 @@
 import type { AppSettings } from "./backend";
 
 export type ViewName =
-  | "Dashboard"
-  | "Transcribe"
+  | "Home"
   | "History"
-  | "Notes"
-  | "Sync"
-  | "Stats"
-  | "Settings"
-  | "Data & Privacy"
+  | "Transcribe a file"
+  | "Dictation"
+  | "Words"
+  | "Microphone"
+  | "Models & language"
   | "Hotkeys"
-  | "Models"
-  | "Audio"
-  | "Themes"
+  | "Local AI"
+  | "GitHub backup"
+  | "Your data"
+  | "Appearance"
+  | "General"
   | "Developer"
   | "About";
 

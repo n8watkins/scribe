@@ -476,7 +476,7 @@ export function HistoryView({
           )}
           <button
             className="ghost-button"
-            onClick={() => actions.openSettings(notesOnly ? "notes" : "output")}
+            onClick={() => actions.openSettings(notesOnly ? "notes" : "history")}
             type="button"
           >
             <SettingsIcon aria-hidden="true" size={15} />

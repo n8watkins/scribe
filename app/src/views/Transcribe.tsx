@@ -1,224 +1,17 @@
-import { useState, type ReactNode } from "react";
-import {
-  AlertCircle,
-  Copy,
-  Download,
-  Eraser,
-  FileAudio,
-  Mic,
-  Play,
-  Square,
-} from "lucide-react";
+import { useState } from "react";
+import { AlertCircle, Copy, Download, FileAudio, Play } from "lucide-react";
 import {
   commandErrorMessage,
   saveTextFile,
   transcribeFile,
-  type DashboardData,
-  type PartialTranscriptEvent,
   type TranscribeFileResult,
 } from "../backend";
-import type { ViewActions } from "../types";
-import {
-  canStartRecording,
-  formatHotkey,
-  formatMsReadable,
-  recordingStageTitle,
-} from "../lib/format";
-import { OutputSettingRows } from "../components/OutputSettings";
-import { StatePill } from "../components/primitives";
-import {
-  LastTranscriptCard,
-  LiveTranscript,
-  Waveform,
-} from "../components/transcript";
+import { formatMsReadable } from "../lib/format";
 import "./transcribe.css";
 
-export function TranscribeView({
-  actions,
-  data,
-  liveTranscript,
-}: {
-  actions: ViewActions;
-  data: DashboardData;
-  liveTranscript: PartialTranscriptEvent | null;
-}) {
-  const tabs: {
-    id: string;
-    title: string;
-    icon: ReactNode;
-    render: () => ReactNode;
-  }[] = [
-    {
-      id: "record",
-      title: "Record",
-      icon: <Mic aria-hidden="true" size={16} />,
-      render: () => (
-        <RecordTab
-          actions={actions}
-          data={data}
-          liveTranscript={liveTranscript}
-        />
-      ),
-    },
-    {
-      id: "file",
-      title: "Transcribe a file",
-      icon: <FileAudio aria-hidden="true" size={16} />,
-      render: () => <FileTranscribeCard />,
-    },
-  ];
-
-  const [activeTab, setActiveTab] = useState(tabs[0].id);
-  const active = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
-
-  return (
-    <section className="view-grid">
-      <div
-        className="settings-tabs transcribe-tabs"
-        role="tablist"
-        aria-label="Transcribe sections"
-      >
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            role="tab"
-            id={`transcribe-tab-${tab.id}`}
-            aria-controls={`transcribe-panel-${tab.id}`}
-            aria-selected={tab.id === active.id}
-            className={`settings-tab${tab.id === active.id ? " is-active" : ""}`}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {tab.icon}
-            <span>{tab.title}</span>
-          </button>
-        ))}
-      </div>
-      <div
-        className="settings-tabpanel transcribe-tabpanel"
-        role="tabpanel"
-        id={`transcribe-panel-${active.id}`}
-        aria-labelledby={`transcribe-tab-${active.id}`}
-      >
-        {active.render()}
-      </div>
-    </section>
-  );
-}
-
-/** "Record" tab: live push-to-talk capture, output behavior toggles, and the
- * last-transcript buffer — the original Transcribe content, unchanged in
- * behavior. */
-function RecordTab({
-  actions,
-  data,
-  liveTranscript,
-}: {
-  actions: ViewActions;
-  data: DashboardData;
-  liveTranscript: PartialTranscriptEvent | null;
-}) {
-  const { appState, lastTranscript, settings } = data;
-  const liveText = liveTranscript?.text.trim() ?? "";
-  const showLiveTranscript =
-    liveText.length > 0 &&
-    (appState.status === "Recording" ||
-      appState.status === "Stopping" ||
-      appState.status === "Transcribing");
-
-  return (
-    <section className="split-grid">
-      <article className="buffer-card">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Recording</p>
-            <h2>Push-to-talk capture</h2>
-          </div>
-          <StatePill appState={appState} />
-        </div>
-
-        <div className="recording-stage">
-          <Waveform />
-          <div>
-            <strong>{recordingStageTitle(appState.status)}</strong>
-            <p className="muted">
-              Hold {formatHotkey(settings.hotkeys.holdToTalk)} or use toggle
-              mode. Audio is transcribed locally.
-            </p>
-            {showLiveTranscript ? <LiveTranscript text={liveText} /> : null}
-          </div>
-        </div>
-
-        <div className="button-row">
-          <button
-            className="primary-button"
-            disabled={actions.recordingBusy || !canStartRecording(data)}
-            onClick={() => void actions.startRecording()}
-            type="button"
-          >
-            <Mic aria-hidden="true" size={16} />
-            {actions.recordingBusy ? "Working..." : "Start"}
-          </button>
-          {appState.status === "Recording" ? (
-            <>
-              <button
-                className="secondary-button"
-                disabled={actions.recordingBusy}
-                onClick={() => void actions.stopRecording()}
-                type="button"
-              >
-                <Square aria-hidden="true" size={15} />
-                Stop
-              </button>
-              <button
-                className="ghost-button"
-                disabled={actions.recordingBusy}
-                onClick={() => void actions.cancelRecording()}
-                type="button"
-              >
-                <Eraser aria-hidden="true" size={15} />
-                Discard
-              </button>
-            </>
-          ) : null}
-        </div>
-      </article>
-
-      <div className="stack">
-        <article className="panel-card">
-          <div className="section-heading compact">
-            <h2>Output behavior</h2>
-          </div>
-          <div className="settings-list transcribe-output-settings">
-            <OutputSettingRows
-              disabled={actions.savingSettings}
-              onChange={(patch) => actions.updateSettings(patch)}
-              settings={settings}
-            />
-          </div>
-        </article>
-
-        <div className="transcribe-buffer-scroll">
-          <LastTranscriptCard
-            clearing={actions.clearingLastTranscript}
-            compact
-            copying={actions.copyingLastTranscript}
-            onClear={actions.clearLastTranscript}
-            onCopy={actions.copyLastTranscript}
-            onPaste={actions.pasteLastTranscript}
-            pasting={actions.pastingLastTranscript}
-            settings={settings}
-            transcript={lastTranscript}
-          />
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/** "Transcribe a file" tab: transcribe an existing audio/video file locally.
- * Owns its own local state and talks to the backend directly. */
-function FileTranscribeCard() {
+/** The "Transcribe a file" page: transcribe an existing audio or video file
+ * on this computer. Owns its own state and talks to the backend directly. */
+export function FileTranscribeCard() {
   const [path, setPath] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -280,7 +73,7 @@ function FileTranscribeCard() {
   };
 
   return (
-    <article className="panel-card file-transcribe-card">
+    <article className="panel-card file-transcribe-card" data-setting="Transcribe a file">
       <div className="section-heading compact">
         <h2>
           <FileAudio aria-hidden="true" size={16} />
@@ -293,9 +86,9 @@ function FileTranscribeCard() {
         ) : null}
       </div>
       <p className="muted">
-        Transcribe an existing audio or video file locally. WAV, MP3, FLAC,
-        and OGG work out of the box; other formats (MP4, MKV, M4A, ...) need
-        ffmpeg on PATH.
+        Turn an audio or video file into text, on this computer. WAV, MP3, FLAC
+        and OGG work as they are; other formats such as MP4, MKV and M4A need
+        ffmpeg installed.
       </p>
       <div className="toolbar-row">
         <input
@@ -356,7 +149,7 @@ function FileTranscribeCard() {
               type="button"
             >
               <Download aria-hidden="true" size={15} />
-              {saving ? "Saving..." : "Save as .txt next to the source file"}
+              {saving ? "Saving..." : "Save as .txt next to the file"}
             </button>
           </div>
           {savedPath ? <p className="muted">Saved to {savedPath}</p> : null}

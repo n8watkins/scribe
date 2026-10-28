@@ -9,7 +9,6 @@ import type {
   OutputMode,
   Transcript,
 } from "../backend";
-import type { ViewName } from "../types";
 
 /// Renders a millisecond value as a human-readable duration, e.g.
 /// 300 -> "0.3 s", 5000 -> "5 s", 600000 -> "10 min".
@@ -105,26 +104,6 @@ export function clipboardStatus(settings: AppSettings) {
   }
 }
 
-export function routeToView(route: string): ViewName | null {
-  const normalized = route.trim().toLowerCase();
-  const routes: Record<string, ViewName> = {
-    dashboard: "Dashboard",
-    transcribe: "Transcribe",
-    history: "History",
-    stats: "Stats",
-    settings: "Settings",
-    data: "Data & Privacy",
-    privacy: "Data & Privacy",
-    hotkeys: "Hotkeys",
-    models: "Models",
-    audio: "Audio",
-    notes: "Notes",
-    about: "About",
-  };
-
-  return routes[normalized] ?? null;
-}
-
 export function canStartRecording(data: DashboardData | null) {
   if (!data) {
     return false;
@@ -135,26 +114,6 @@ export function canStartRecording(data: DashboardData | null) {
     data.appState.status === "Ready" ||
     data.appState.status === "Error"
   );
-}
-
-export function stateTone(status: AppStateSnapshot["status"]) {
-  switch (status) {
-    case "Recording":
-      return "recording";
-    case "Stopping":
-    case "Transcribing":
-    case "Pasting":
-      return "pending";
-    case "Ready":
-      return "ready";
-    case "Error":
-      return "error";
-    case "Paused":
-      return "preserve";
-    case "Idle":
-    default:
-      return "idle";
-  }
 }
 
 export function isSelectedModelReady(
@@ -341,61 +300,24 @@ export function statusCardValue(status: AppStateSnapshot["status"]) {
   }
 }
 
-export function recordingStageTitle(status: AppStateSnapshot["status"]) {
-  switch (status) {
-    case "Recording":
-      return "Recording";
-    case "Stopping":
-      return "Stopping recording";
-    case "Transcribing":
-      return "Transcribing locally";
-    case "Pasting":
-      return "Inserting transcript";
-    case "Ready":
-      return "Transcript ready";
-    case "Error":
-      return "Needs attention";
-    case "Paused":
-      return "Paused";
-    case "Idle":
-    default:
-      return "Ready for dictation";
-  }
-}
+/** What each hotkey action is called everywhere it is shown. */
+export const HOTKEY_LABELS = {
+  holdToTalk: "Hold to talk",
+  toggleDictation: "Toggle dictation",
+  pasteLastTranscript: "Paste last transcript",
+  openDashboard: "Open Scribe",
+  discardDictation: "Discard recording",
+  transformSelection: "Transform selection",
+} as const;
+
+export type HotkeyAction = keyof typeof HOTKEY_LABELS;
 
 export function hotkeyRows(settings: AppSettings) {
-  return [
-    {
-      action: "holdToTalk",
-      label: "Hold-to-Talk",
-      value: settings.hotkeys.holdToTalk,
-    },
-    {
-      action: "toggleDictation",
-      label: "Toggle Dictation",
-      value: settings.hotkeys.toggleDictation,
-    },
-    {
-      action: "pasteLastTranscript",
-      label: "Paste Last",
-      value: settings.hotkeys.pasteLastTranscript,
-    },
-    {
-      action: "openDashboard",
-      label: "Open Dashboard",
-      value: settings.hotkeys.openDashboard,
-    },
-    {
-      action: "discardDictation",
-      label: "Discard / Cancel",
-      value: settings.hotkeys.discardDictation,
-    },
-    {
-      action: "transformSelection",
-      label: "Transform Selection",
-      value: settings.hotkeys.transformSelection,
-    },
-  ];
+  return (Object.keys(HOTKEY_LABELS) as HotkeyAction[]).map((action) => ({
+    action,
+    label: HOTKEY_LABELS[action],
+    value: settings.hotkeys[action],
+  }));
 }
 
 export function retentionToValue(retention: HistoryRetentionDays) {

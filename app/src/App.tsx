@@ -11,28 +11,7 @@ import { check as checkUpdaterPackage } from "@tauri-apps/plugin-updater";
 import { detectUpdate } from "./lib/updates";
 import { deriveCustomThemeVars } from "./lib/customTheme";
 import { relaunch } from "@tauri-apps/plugin-process";
-import {
-  BarChart3,
-  Cloud,
-  Database,
-  Download,
-  Eraser,
-  Gauge,
-  History as HistoryIcon,
-  Info,
-  Keyboard,
-  Mic,
-  Minus,
-  MonitorCog,
-  NotebookPen,
-  Palette,
-  Radio,
-  Settings as SettingsIcon,
-  ShieldCheck,
-  Square,
-  X,
-  type LucideIcon,
-} from "lucide-react";
+import { Download, Eraser, Mic, Minus, Square, X } from "lucide-react";
 import {
   cancelRecording,
   clearLastTranscript,
@@ -70,26 +49,36 @@ import type {
   ViewActions,
   ViewName,
 } from "./types";
-import { canStartRecording, formatHotkey, routeToView } from "./lib/format";
+import { canStartRecording, formatHotkey } from "./lib/format";
 import { changedSettings, settingsFor } from "./lib/settingsPatch";
+import {
+  routeToView,
+  settingsTabToView,
+  visibleNavGroups,
+} from "./lib/navigation";
 import { ErrorPanel, InlineError, LoadingPanel, Toast } from "./components/feedback";
 import {
   UpdateOverlay,
   type UpdateOverlayState,
 } from "./components/UpdateOverlay";
 import { DashboardView } from "./views/Dashboard";
-import { TranscribeView } from "./views/Transcribe";
-import { HistoryView } from "./views/History";
-import { StatsView } from "./views/Stats";
-import { SettingsView } from "./views/Settings";
-import { DataPrivacyView } from "./views/DataPrivacy";
 import { HotkeysView } from "./views/Hotkeys";
-import { ModelsView } from "./views/Models";
-import { AudioView } from "./views/Audio";
-import { ThemesView } from "./views/Themes";
 import { AboutView } from "./views/About";
 import { DeveloperView } from "./views/Developer";
-import { SyncView } from "./views/Sync";
+import {
+  AppearancePage,
+  DictationPage,
+  GeneralPage,
+  GitHubBackupPage,
+  HistoryPage,
+  LocalAiPage,
+  MicrophonePage,
+  ModelsAndLanguagePage,
+  TranscribeFilePage,
+  WordsPage,
+  YourDataPage,
+} from "./views/pages";
+import { SettingsSearch } from "./components/SettingsSearch";
 import scribeIcon from "./assets/scribe-icon.png";
 
 // Dummy colors used only to enumerate the `--scribe-*` keys the custom theme
@@ -102,22 +91,6 @@ const EMPTY_CUSTOM_THEME = {
   text: "#000000",
   textMuted: "#000000",
 } as const;
-
-const navItems: { label: ViewName; Icon: LucideIcon }[] = [
-  { label: "Dashboard", Icon: Gauge },
-  { label: "Transcribe", Icon: Mic },
-  { label: "History", Icon: HistoryIcon },
-  { label: "Notes", Icon: NotebookPen },
-  { label: "Sync", Icon: Cloud },
-  { label: "Stats", Icon: BarChart3 },
-  { label: "Settings", Icon: SettingsIcon },
-  { label: "Data & Privacy", Icon: ShieldCheck },
-  { label: "Hotkeys", Icon: Keyboard },
-  { label: "Models", Icon: Database },
-  { label: "Audio", Icon: Radio },
-  { label: "Themes", Icon: Palette },
-  { label: "About", Icon: Info },
-];
 
 /** Best-effort OS notification for news the user needs while they're in
  * another app. Silently no-ops when notifications are unavailable or denied. */
@@ -155,7 +128,9 @@ function TitleBar({ isDev }: { isDev: boolean }) {
   return (
     <div className="titlebar" data-tauri-drag-region>
       <span className="titlebar-brand" data-tauri-drag-region>
-        Scribe{isDev ? " Dev" : ""}
+        <img alt="" aria-hidden="true" className="titlebar-mark" src={scribeIcon} />
+        Scribe
+        {isDev ? <span className="brand-badge">DEV</span> : null}
       </span>
       <div className="window-controls">
         <button
@@ -205,8 +180,7 @@ const TOAST_ERROR_DURATION_MS = 9000;
 const DISCONNECT_NOTICE_SUPPRESS_MS = 8000;
 
 function App() {
-  const [activeView, setActiveView] = useState<ViewName>("Dashboard");
-  const [settingsTabId, setSettingsTabId] = useState<string | null>(null);
+  const [activeView, setActiveView] = useState<ViewName>("Home");
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(
     null,
   );
@@ -278,18 +252,11 @@ function App() {
   const soundsEnabledRef = useRef(false);
   const notificationsEnabledRef = useRef(false);
 
-  // The Developer panel is opt-in (Settings -> App behavior). Insert it just
-  // before About when enabled so the diagnostics sit at the end of the list.
+  // The Developer page is opt-in (General -> Developer settings) and sits just
+  // before About when on, so the diagnostics stay at the end of the list.
   const developerEnabled =
     dashboardData?.settings.developerSettingsEnabled ?? false;
-  const visibleNavItems: { label: ViewName; Icon: LucideIcon }[] =
-    developerEnabled
-      ? [
-          ...navItems.slice(0, navItems.length - 1),
-          { label: "Developer", Icon: MonitorCog },
-          navItems[navItems.length - 1],
-        ]
-      : navItems;
+  const navGroups = visibleNavGroups(developerEnabled);
 
   useEffect(() => {
     soundsEnabledRef.current = dashboardData?.settings.soundsEnabled ?? false;
@@ -341,22 +308,13 @@ function App() {
   }, [dashboardData?.settings.theme, customTheme]);
 
   // If the Developer panel is turned off while it is the active view, fall back
-  // to the Dashboard so the user isn't stranded on a now-hidden page.
+  // to Home so the user isn't stranded on a now-hidden page.
   useEffect(() => {
     if (activeView === "Developer" && !developerEnabled) {
-      setActiveView("Dashboard");
+      setActiveView("Home");
     }
   }, [activeView, developerEnabled]);
 
-  // A deep-link tab (from `openSettings(tab)`) is one-shot: once the user leaves
-  // Settings, clear it so re-entering Settings via the sidebar opens the default
-  // (last) tab instead of reopening the stale deep-linked one. Guarded on the
-  // current value so this can't loop.
-  useEffect(() => {
-    if (activeView !== "Settings" && settingsTabId !== null) {
-      setSettingsTabId(null);
-    }
-  }, [activeView, settingsTabId]);
 
   // Read `notificationsEnabled` from a ref (kept in sync above) rather than from
   // settings directly, so toggling notifications doesn't change this callback's
@@ -936,9 +894,10 @@ function App() {
     }
   }, [refresh]);
 
+  // Callers that still name an old Settings tab land on the page that now
+  // holds those settings.
   const openSettings = useCallback((tabId?: string) => {
-    setSettingsTabId(tabId ?? null);
-    setActiveView("Settings");
+    setActiveView(settingsTabToView(tabId));
   }, []);
 
   const actions: ViewActions = {
@@ -972,34 +931,31 @@ function App() {
       <TitleBar isDev={isDevFlavor} />
       <div className="app-body">
       <aside className="sidebar">
-        <div className="brand">
-          <img className="brand-mark" src={scribeIcon} alt="" aria-hidden="true" />
-          <div>
-            <div className="brand-name">
-              Scribe
-              {isDevFlavor ? <span className="brand-badge">DEV</span> : null}
-            </div>
-            <div className="brand-subtitle">Private local dictation</div>
-          </div>
-        </div>
+        <SettingsSearch onNavigate={setActiveView} />
 
         <nav className="nav-list" aria-label="Primary">
-          {visibleNavItems.map((item) => {
-            const Icon = item.Icon;
-            return (
-              <button
-                className={
-                  item.label === activeView ? "nav-item active" : "nav-item"
-                }
-                key={item.label}
-                onClick={() => setActiveView(item.label)}
-                type="button"
-              >
-                <Icon aria-hidden="true" className="nav-icon" size={15} />
-                {item.label}
-              </button>
-            );
-          })}
+          {navGroups.map((group) => (
+            <div className="nav-group" key={group.title}>
+              <div className="nav-group-label">{group.title}</div>
+              {group.items.map((item) => {
+                const Icon = item.Icon;
+                return (
+                  <button
+                    aria-current={item.label === activeView ? "page" : undefined}
+                    className={
+                      item.label === activeView ? "nav-item active" : "nav-item"
+                    }
+                    key={item.label}
+                    onClick={() => setActiveView(item.label)}
+                    type="button"
+                  >
+                    <Icon aria-hidden="true" className="nav-icon" size={15} />
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
         </nav>
       </aside>
 
@@ -1020,14 +976,6 @@ function App() {
                 Update v{updateInfo.latestVersion}
               </button>
             ) : null}
-            <button
-              className="secondary-button"
-              onClick={() => setActiveView("History")}
-              type="button"
-            >
-              <HistoryIcon aria-hidden="true" size={14} />
-              History
-            </button>
             {dashboardData?.appState.status === "Recording" ? (
               <>
                 <button
@@ -1080,7 +1028,6 @@ function App() {
               microphones,
               models,
               liveTranscript,
-              settingsTabId,
               showNotice,
               lastUpdateCheck,
               updateInfo,
@@ -1107,46 +1054,41 @@ function renderView(
   microphones: MicrophoneInfo[] | null,
   models: ModelInfo[] | null,
   liveTranscript: PartialTranscriptEvent | null,
-  settingsTabId: string | null,
   showNotice: (message: string, tone?: ToastNotice["tone"]) => void,
   lastUpdateCheck: number | null,
   updateInfo: UpdateCheckResult | null,
 ) {
   switch (activeView) {
-    case "Transcribe":
-      return (
-        <TranscribeView
-          actions={actions}
-          data={data}
-          liveTranscript={liveTranscript}
-        />
-      );
     case "History":
-      return <HistoryView actions={actions} data={data} />;
-    case "Notes":
-      return <HistoryView actions={actions} data={data} notesOnly />;
-    case "Sync":
-      return <SyncView actions={actions} settings={data.settings} />;
-    case "Stats":
-      return <StatsView stats={data.stats} />;
-    case "Settings":
-      return (
-        <SettingsView
-          actions={actions}
-          initialTabId={settingsTabId}
-          settings={data.settings}
-        />
-      );
-    case "Data & Privacy":
-      return <DataPrivacyView actions={actions} settings={data.settings} />;
+      return <HistoryPage actions={actions} data={data} />;
+    case "Transcribe a file":
+      return <TranscribeFilePage />;
+    case "Dictation":
+      return <DictationPage actions={actions} settings={data.settings} />;
+    case "Words":
+      return <WordsPage actions={actions} settings={data.settings} />;
+    case "Microphone":
+      return <MicrophonePage actions={actions} settings={data.settings} />;
+    case "Models & language":
+      return <ModelsAndLanguagePage actions={actions} settings={data.settings} />;
     case "Hotkeys":
       return <HotkeysView actions={actions} settings={data.settings} />;
-    case "Models":
-      return <ModelsView actions={actions} settings={data.settings} />;
-    case "Audio":
-      return <AudioView actions={actions} settings={data.settings} />;
-    case "Themes":
-      return <ThemesView actions={actions} settings={data.settings} />;
+    case "Local AI":
+      return (
+        <LocalAiPage
+          actions={actions}
+          settings={data.settings}
+          showNotice={showNotice}
+        />
+      );
+    case "GitHub backup":
+      return <GitHubBackupPage actions={actions} settings={data.settings} />;
+    case "Your data":
+      return <YourDataPage actions={actions} settings={data.settings} />;
+    case "Appearance":
+      return <AppearancePage actions={actions} settings={data.settings} />;
+    case "General":
+      return <GeneralPage actions={actions} settings={data.settings} />;
     case "Developer":
       return (
         <DeveloperView
@@ -1171,16 +1113,16 @@ function renderView(
           setActiveView={setActiveView}
         />
       );
-    case "Dashboard":
+    case "Home":
     default:
       return (
         <DashboardView
           actions={actions}
           data={data}
+          liveTranscript={liveTranscript}
           microphones={microphones}
           models={models}
           setActiveView={setActiveView}
-          showNotice={showNotice}
         />
       );
   }

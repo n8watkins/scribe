@@ -16,6 +16,7 @@ import {
   formatCount,
   formatDateTime,
   formatDuration,
+  formatHotkey,
   transcriptMeta,
 } from "../lib/format";
 import { EmptyState } from "./feedback";
@@ -23,7 +24,6 @@ import { IconButton } from "./primitives";
 
 export function LastTranscriptCard({
   clearing,
-  compact = false,
   copying,
   onClear,
   onCopy,
@@ -33,7 +33,6 @@ export function LastTranscriptCard({
   transcript,
 }: {
   clearing: boolean;
-  compact?: boolean;
   copying: boolean;
   onClear: () => Promise<void>;
   onCopy: () => Promise<void>;
@@ -46,26 +45,22 @@ export function LastTranscriptCard({
   const outputBusy = clearing || copying || pasting;
 
   return (
-    <article className={compact ? "panel-card" : "buffer-card"}>
+    <article className="buffer-card" data-setting="Last transcript">
       <div className="section-heading">
         <div>
-          <p className="eyebrow">Last Transcript Buffer</p>
-          <h2>{hasTranscript ? "Ready to insert later" : "No transcript stored"}</h2>
+          <p className="eyebrow">Last transcript</p>
+          <h2>
+            {hasTranscript
+              ? `Paste it again with ${formatHotkey(settings.hotkeys.pasteLastTranscript)}`
+              : "Nothing yet"}
+          </h2>
         </div>
         <span className="pill preserve">{clipboardStatus(settings)}</span>
       </div>
 
       {transcript ? (
         <>
-          <p
-            className={
-              compact
-                ? "transcript-text compact-text"
-                : "transcript-text buffer-preview"
-            }
-          >
-            {transcript.text}
-          </p>
+          <p className="transcript-text buffer-preview">{transcript.text}</p>
 
           <div className="metadata-row">
             <span>{formatCount(transcript.wordCount, "word")}</span>
@@ -76,7 +71,7 @@ export function LastTranscriptCard({
           </div>
         </>
       ) : (
-        <EmptyState message="Complete a transcription to populate the buffer. Clipboard remains untouched." />
+        <EmptyState message="Your last dictation shows up here, ready to paste again." />
       )}
 
       <div className="button-row">
@@ -97,7 +92,7 @@ export function LastTranscriptCard({
         <IconButton
           danger
           disabled={!hasTranscript || outputBusy}
-          label={clearing ? "Clearing..." : "Clear buffer"}
+          label={clearing ? "Clearing..." : "Clear"}
           onClick={() => void onClear()}
         >
           <Eraser aria-hidden="true" size={15} />
