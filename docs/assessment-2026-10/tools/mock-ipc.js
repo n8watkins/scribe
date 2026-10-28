@@ -220,6 +220,8 @@
     get_app_state: appState,
     get_settings: () => settings,
     update_settings: (a) => Object.assign(settings, a.settings),
+    patch_settings: (a) => Object.assign(settings, a.patch),
+    stop_dictation: () => null,
     get_last_transcript: () => transcripts.find((t) => !t.isNote) || null,
     list_recent_transcripts: (a) => transcripts.slice(0, (a && a.limit) || 8),
     search_transcripts: (a) => {

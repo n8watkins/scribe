@@ -23,6 +23,7 @@ pub mod note_sync;
 pub mod output;
 pub mod selection_transform;
 pub mod settings;
+pub mod settings_store;
 pub mod state_server;
 pub mod stats;
 pub mod status_file;
@@ -470,7 +471,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_app_state,
             commands::get_settings,
-            commands::update_settings,
+            commands::patch_settings,
             commands::get_last_transcript,
             commands::clear_last_transcript,
             commands::list_recent_transcripts,
