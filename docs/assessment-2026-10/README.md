@@ -10,6 +10,7 @@ The merged report, with the ranked top 10, the roadmap and the decisions for the
 | [lane3-ux.md](lane3-ux.md) | UI and UX, information architecture, accessibility |
 | [lane4-features-perf.md](lane4-features-perf.md) | Feature verification, latency, storage and reliability |
 | [lane5-release-notes.md](lane5-release-notes.md) | Release notes in the repo, the app and the website |
+| [DECISIONS.md](DECISIONS.md) | What the owner decided after reading the report |
 | [screens/mock/](screens/mock/) | 63 screenshots of the React UI with a mocked backend |
 | [tools/](tools/) | The IPC mock and capture script, to redo the screenshots after changes |
 | [lane3-scroll-metrics.json](lane3-scroll-metrics.json) | Scroll depth per view and window size |
