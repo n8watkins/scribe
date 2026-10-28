@@ -153,9 +153,7 @@ pub fn handle_transcription_output(
         OutputMode::CopyClipboard => {
             copy_transcript_text(app, transcript, OutputMode::CopyClipboard, true)
         }
-        OutputMode::CopyAndPaste => {
-            copy_and_paste_transcript_text(app, transcript, pinned, true)
-        }
+        OutputMode::CopyAndPaste => copy_and_paste_transcript_text(app, transcript, pinned, true),
     };
 
     result.map(Some)

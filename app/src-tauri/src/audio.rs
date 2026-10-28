@@ -1660,19 +1660,28 @@ mod tests {
         let (a, b) = (mic("a", true), mic("b", false));
         assert_eq!(choose_input_index(&[&a, &b], Some("b")), Some((1, false)));
         // Matching by display name also counts as the selected mic.
-        assert_eq!(choose_input_index(&[&a, &b], Some("b name")), Some((1, false)));
+        assert_eq!(
+            choose_input_index(&[&a, &b], Some("b name")),
+            Some((1, false))
+        );
     }
 
     #[test]
     fn falls_back_to_the_default_when_the_selected_mic_is_missing() {
         let (a, b) = (mic("a", false), mic("b", true));
-        assert_eq!(choose_input_index(&[&a, &b], Some("headset")), Some((1, true)));
+        assert_eq!(
+            choose_input_index(&[&a, &b], Some("headset")),
+            Some((1, true))
+        );
     }
 
     #[test]
     fn falls_back_to_the_first_device_without_a_default() {
         let (a, b) = (mic("a", false), mic("b", false));
-        assert_eq!(choose_input_index(&[&a, &b], Some("headset")), Some((0, true)));
+        assert_eq!(
+            choose_input_index(&[&a, &b], Some("headset")),
+            Some((0, true))
+        );
         assert_eq!(choose_input_index(&[&a, &b], None), Some((0, false)));
     }
 

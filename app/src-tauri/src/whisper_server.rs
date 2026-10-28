@@ -785,7 +785,14 @@ mod tests {
 
     #[test]
     fn server_args_include_translate_when_enabled() {
-        let args = server_args(Path::new("models/ggml-small.bin"), "es", true, 8090, "/s", 4);
+        let args = server_args(
+            Path::new("models/ggml-small.bin"),
+            "es",
+            true,
+            8090,
+            "/s",
+            4,
+        );
 
         let lang_index = args.iter().position(|arg| arg == "--language").unwrap();
         assert_eq!(args[lang_index + 1], "es");
