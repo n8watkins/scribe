@@ -7,11 +7,8 @@ use tauri::{
 
 use crate::{
     app_state::AppStatus,
-    audio::{self, RecordingResultStatus},
-    commands::BackendState,
-    dictation,
+    dictation_worker::{self, Intent},
     error::CommandError,
-    output,
 };
 
 const TRAY_ID: &str = "scribe-main-tray";
@@ -86,17 +83,11 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
             }
         })
         .on_menu_event(|app, event| match event.id().as_ref() {
-            MENU_START_DICTATION => {
-                // Tray start behaves like the toggle hotkey (the user is not
-                // holding any key), so silence auto-stop applies.
-                let _ = start_dictation(app, true);
-            }
-            MENU_STOP_DICTATION => {
-                let _ = stop_dictation(app);
-            }
-            MENU_PASTE_LAST_TRANSCRIPT => {
-                let _ = paste_last_transcript(app);
-            }
+            // Dictation actions run on the dictation worker, never on this
+            // (main) thread, so a stop that transcribes cannot freeze the UI.
+            MENU_START_DICTATION => dictation_worker::submit(app, Intent::StartFromTray),
+            MENU_STOP_DICTATION => dictation_worker::submit(app, Intent::Stop),
+            MENU_PASTE_LAST_TRANSCRIPT => dictation_worker::submit(app, Intent::PasteLast),
             MENU_OPEN_DASHBOARD => {
                 let _ = open_dashboard(app, None);
             }
@@ -117,81 +108,6 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     builder.build(app)?;
     update_tray_status(app, AppStatus::Idle);
 
-    Ok(())
-}
-
-/// Starts dictation. `allow_auto_stop` controls whether silence auto-stop may
-/// end this recording: true for toggle-style starts (toggle hotkey, tray
-/// menu), false for hold-to-talk where the user is still holding the key.
-pub fn start_dictation(app: &AppHandle, allow_auto_stop: bool) -> Result<(), CommandError> {
-    let state = app.state::<BackendState>();
-    let snapshot = state.app_state()?.snapshot();
-
-    if matches!(
-        snapshot.status,
-        AppStatus::Idle | AppStatus::Ready | AppStatus::Error | AppStatus::Recording
-    ) {
-        let _ = audio::start_recording_for_app(app, None, allow_auto_stop)?;
-        let status = state.app_state()?.status().clone();
-        update_tray_status(app, status);
-    }
-
-    Ok(())
-}
-
-/// Starts a note-taking dictation (tilde+Q): recorded and transcribed like a
-/// normal dictation, but saved flagged as a note and never auto-pasted.
-pub fn start_note_dictation(app: &AppHandle) -> Result<(), CommandError> {
-    let state = app.state::<BackendState>();
-    let snapshot = state.app_state()?.snapshot();
-
-    if matches!(
-        snapshot.status,
-        AppStatus::Idle | AppStatus::Ready | AppStatus::Error
-    ) {
-        let request = audio::StartRecordingRequest {
-            is_note: true,
-            ..Default::default()
-        };
-        let _ = audio::start_recording_for_app(app, Some(request), true)?;
-        let status = state.app_state()?.status().clone();
-        update_tray_status(app, status);
-    }
-
-    Ok(())
-}
-
-pub fn stop_dictation(app: &AppHandle) -> Result<(), CommandError> {
-    let state = app.state::<BackendState>();
-    let snapshot = state.app_state()?.snapshot();
-
-    if snapshot.status != AppStatus::Recording {
-        return Ok(());
-    }
-
-    let result = audio::stop_recording_for_app(app)?;
-    let status = state.app_state()?.status().clone();
-    update_tray_status(app, status);
-
-    if result.status == RecordingResultStatus::TooShort {
-        // A quick tap of the toggle hotkey is benign, not an error: the
-        // state machine already returned to Idle (AudioTooShort), so just
-        // tell the frontend nothing was heard.
-        dictation::emit_dictation_empty(app);
-        return Ok(());
-    }
-
-    dictation::transcribe_recording_for_app(app, result)?;
-    let status = state.app_state()?.status().clone();
-    update_tray_status(app, status);
-    Ok(())
-}
-
-pub fn paste_last_transcript(app: &AppHandle) -> Result<(), CommandError> {
-    output::paste_last_transcript(app)?;
-    let state = app.state::<BackendState>();
-    let status = state.app_state()?.status().clone();
-    update_tray_status(app, status);
     Ok(())
 }
 

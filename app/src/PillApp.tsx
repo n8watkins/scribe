@@ -12,8 +12,7 @@ import {
   copyTranscript,
   getAppState,
   getSettings,
-  stopRecording,
-  transcribeRecording,
+  stopDictation,
   updateSettings,
   type AppSettings,
   type AppStateSnapshot,
@@ -620,10 +619,7 @@ function PillApp() {
     setStopping(true);
 
     try {
-      const recording = await stopRecording();
-      if (recording.status === "completed" || recording.status === "timed_out") {
-        await transcribeRecording(recording);
-      }
+      await stopDictation();
     } catch {
       // Errors surface in the main window via audio://recording-error.
     } finally {

@@ -367,8 +367,7 @@ export type RecordingResult = {
   isNote: boolean;
   isTransform: boolean;
   // True when the recording ended because the mic was disconnected mid-capture
-  // (salvaged + saved to History, never auto-pasted). Kept on the type so the
-  // round-trip through transcribe_recording doesn't silently drop it.
+  // (salvaged + saved to History, never auto-pasted).
   disconnected: boolean;
 };
 
@@ -642,8 +641,11 @@ export function startRecording(
   return invoke("start_recording", { request });
 }
 
-export function stopRecording(): Promise<RecordingResult> {
-  return invoke("stop_recording");
+/** Stops the dictation and transcribes it, the same way the hotkeys and the
+ * tray do. Resolves once the text is out; the result itself arrives through
+ * the dictation events. A stop while nothing is recording does nothing. */
+export function stopDictation(): Promise<void> {
+  return invoke("stop_dictation");
 }
 
 export function cancelRecording(): Promise<void> {
@@ -706,12 +708,6 @@ export function pickDataDir(): Promise<string | null> {
  * the updated settings. */
 export function saveWindowSize(): Promise<AppSettings> {
   return invoke("save_window_size");
-}
-
-export function transcribeRecording(
-  recording: RecordingResult,
-): Promise<DictationResult | null> {
-  return invoke("transcribe_recording", { recording });
 }
 
 /** Transcribes an existing audio/video file; long files can take minutes. */

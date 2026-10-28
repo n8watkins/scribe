@@ -5,6 +5,7 @@ pub mod data_hygiene;
 pub mod db;
 pub mod dictation;
 pub mod dictation_state;
+pub mod dictation_worker;
 pub mod error;
 pub mod export;
 pub mod file_transcribe;
@@ -402,6 +403,11 @@ pub fn run() {
             }
             // Background worker that debounces note saves into GitHub auto-syncs.
             app.manage(note_sync::NoteSyncWorker::spawn(app.handle().clone()));
+            // Every dictation action (hotkeys, tray, pill, dashboard) runs on
+            // this one worker thread, so it must exist before any of them.
+            app.manage(dictation_worker::DictationWorker::spawn(
+                app.handle().clone(),
+            )?);
             hotkeys::setup(app.handle(), &settings.hotkeys, settings.notes_analysis_enabled)?;
             tray::setup(app.handle())?;
             // Restore the user's saved default window size (physical pixels),
@@ -488,7 +494,7 @@ pub fn run() {
             commands::open_dashboard,
             commands::list_microphones,
             commands::start_recording,
-            commands::stop_recording,
+            commands::stop_dictation,
             commands::cancel_recording,
             commands::record_test_clip,
             commands::get_test_clip_audio,
@@ -501,7 +507,6 @@ pub fn run() {
             commands::get_data_dir,
             commands::pick_data_dir,
             commands::save_window_size,
-            commands::transcribe_recording,
             commands::transcribe_file,
             commands::analyze_note,
             commands::llm_status,

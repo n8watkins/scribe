@@ -655,8 +655,23 @@ fn no_test_clip() -> CommandError {
     )
 }
 
+/// Stops and transcribes a recording whose max-duration timer fired. Runs on
+/// the dictation worker; a no-op when `session_id` is no longer the active
+/// recording (the user stopped it while the timeout was queued).
 #[cfg(windows)]
-fn timeout_recording_for_app(app: &AppHandle, session_id: &str) -> Result<(), CommandError> {
+pub(crate) fn finish_timed_out_recording(
+    app: &AppHandle,
+    session_id: &str,
+) -> Result<(), CommandError> {
+    let still_active = app
+        .state::<BackendState>()
+        .audio()?
+        .active_session_id()
+        .is_some_and(|active| active == session_id);
+    if !still_active {
+        return Ok(());
+    }
+
     let result = stop_recording_with_reason(app, StopReason::Timeout, Some(session_id))?;
     let _ = app.emit("audio://recording-timeout", &result);
 
@@ -668,15 +683,19 @@ fn timeout_recording_for_app(app: &AppHandle, session_id: &str) -> Result<(), Co
     } else {
         crate::dictation::transcribe_recording_for_app(app, result)?;
     }
-
-    let state = app.state::<BackendState>();
-    let status = state.app_state()?.status().clone();
-    crate::tray::update_tray_status(app, status);
     Ok(())
 }
 
+#[cfg(not(windows))]
+pub(crate) fn finish_timed_out_recording(
+    _app: &AppHandle,
+    _session_id: &str,
+) -> Result<(), CommandError> {
+    Err(unsupported_audio_platform())
+}
+
 /// Recovers from a capture-stream error (e.g. the mic was unplugged mid-record).
-/// Runs on a background thread spawned by the cpal error callback. Stops the
+/// Runs on the dictation worker, queued by the cpal error callback. Stops the
 /// in-flight session like a normal completion — so whatever was captured before
 /// the drop is still transcribed — surfaces a `microphone_unavailable`
 /// recording error, then finishes transcription exactly like the manual-stop
@@ -684,7 +703,10 @@ fn timeout_recording_for_app(app: &AppHandle, session_id: &str) -> Result<(), Co
 /// session is already gone (the user stopped first, or a duplicate error
 /// callback slipped past the guard), it no-ops cleanly.
 #[cfg(windows)]
-fn disconnect_recording_for_app(app: &AppHandle, session_id: &str) -> Result<(), CommandError> {
+pub(crate) fn finish_disconnected_recording(
+    app: &AppHandle,
+    session_id: &str,
+) -> Result<(), CommandError> {
     let result = match stop_recording_with_reason(app, StopReason::Disconnected, Some(session_id)) {
         Ok(result) => result,
         Err(error) => {
@@ -714,11 +736,15 @@ fn disconnect_recording_for_app(app: &AppHandle, session_id: &str) -> Result<(),
     } else {
         crate::dictation::transcribe_recording_for_app(app, result)?;
     }
-
-    let state = app.state::<BackendState>();
-    let status = state.app_state()?.status().clone();
-    crate::tray::update_tray_status(app, status);
     Ok(())
+}
+
+#[cfg(not(windows))]
+pub(crate) fn finish_disconnected_recording(
+    _app: &AppHandle,
+    _session_id: &str,
+) -> Result<(), CommandError> {
+    Err(unsupported_audio_platform())
 }
 
 #[cfg(windows)]
@@ -822,22 +848,12 @@ fn spawn_timeout_thread(
             return;
         }
 
-        let should_stop = app
-            .try_state::<BackendState>()
-            .and_then(|state| {
-                state
-                    .audio()
-                    .ok()
-                    .and_then(|audio| audio.active_session_id().map(str::to_owned))
-            })
-            .map(|active_session_id| active_session_id == session_id)
-            .unwrap_or(false);
-
-        if should_stop {
-            if let Err(error) = timeout_recording_for_app(&app, &session_id) {
-                emit_recording_error(&app, error);
-            }
-        }
+        // The worker re-checks that this session is still the active one
+        // when the stop runs.
+        crate::dictation_worker::dispatch(
+            &app,
+            crate::dictation_worker::DictationCommand::FinishTimedOut { session_id },
+        );
     });
 }
 
@@ -942,9 +958,9 @@ fn maybe_emit_level(
 
 /// Watches per-chunk RMS during a recording and stops the dictation after
 /// `auto_stop_after_ms` of continuous silence — but only once speech has been
-/// heard, and only once per session. Stopping goes through the same
-/// `tray::stop_dictation` path as a toggle-hotkey stop so transcription and
-/// output run exactly as if the user stopped manually.
+/// heard, and only once per session. Stopping goes through the dictation
+/// worker like a toggle-hotkey stop, so transcription and output run exactly
+/// as if the user stopped manually.
 #[cfg(windows)]
 struct SilenceAutoStop {
     auto_stop_after_ms: Option<u64>,
@@ -1001,15 +1017,11 @@ impl SilenceAutoStop {
             session_id,
             limit_ms
         );
-        // Stop from a separate thread: stop_dictation joins this worker
-        // thread, so it must not run on it. Double stops are harmless —
-        // stop_dictation no-ops unless the app is still Recording.
-        let app = app.clone();
-        thread::spawn(move || {
-            if let Err(error) = crate::tray::stop_dictation(&app) {
-                log::warn!("Silence auto-stop could not stop dictation: {}", error);
-            }
-        });
+        // Queue the stop on the dictation worker: stopping joins this
+        // recording thread, so it must not run on it. Double stops are
+        // harmless, since the worker skips a stop unless the app is still
+        // Recording.
+        crate::dictation_worker::submit(app, crate::dictation_worker::Intent::Stop);
     }
 }
 
@@ -1165,27 +1177,23 @@ fn build_input_stream(
     // dying) on its own thread via this callback. Logging alone leaves the
     // worker blocked on the now-dead chunk channel and the app wedged in
     // Recording until the user stops or the max-duration timeout fires — up to
-    // ten minutes of captured silence. Instead, drive the same stop +
-    // transcribe path the timeout uses, exactly once, on a fresh thread (the
-    // callback must never block), and surface a recording error so the UI can
-    // tell the user the mic dropped. `handled` collapses repeated error
-    // callbacks into a single recovery.
+    // ten minutes of captured silence. Instead, queue the same stop +
+    // transcribe path the timeout uses, exactly once, on the dictation worker
+    // (the callback must never block, and queueing never does), and surface a
+    // recording error so the UI can tell the user the mic dropped. `handled`
+    // collapses repeated error callbacks into a single recovery.
     let handled = Arc::new(AtomicBool::new(false));
     let err_fn = move |error: cpal::StreamError| {
         log::error!("Audio stream error: {}", error);
         if handled.swap(true, Ordering::SeqCst) {
             return;
         }
-        let app = app.clone();
-        let session_id = session_id.clone();
-        thread::spawn(move || {
-            if let Err(error) = disconnect_recording_for_app(&app, &session_id) {
-                log::warn!(
-                    "Could not recover from a mid-recording audio stream error: {}",
-                    error.message
-                );
-            }
-        });
+        crate::dictation_worker::dispatch(
+            &app,
+            crate::dictation_worker::DictationCommand::FinishDisconnected {
+                session_id: session_id.clone(),
+            },
+        );
     };
 
     match sample_format {

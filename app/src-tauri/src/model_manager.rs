@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::{
+    commands::BackendState,
     db::Database,
     error::CommandError,
     models::{
@@ -130,27 +131,29 @@ pub fn list_models(
         .collect()
 }
 
+/// Downloads a model. Blocks for the whole download, so it takes the database
+/// lock only for each short read or write, never across the network transfer:
+/// dictation and every other command keep working meanwhile.
 pub fn download_model(
     app: &AppHandle,
-    db: &Database,
-    downloads: &DownloadRegistry,
+    state: &BackendState,
     model_id: &str,
 ) -> Result<ModelInfo, CommandError> {
+    let downloads = state.model_downloads();
     let cancel_flag = downloads.start(model_id)?;
-    let result = download_model_inner(app, db, cancel_flag, model_id);
+    let result = download_model_inner(app, state, cancel_flag, model_id);
     downloads.finish(model_id);
     result
 }
 
 pub fn retry_model_download(
     app: &AppHandle,
-    db: &Database,
-    downloads: &DownloadRegistry,
+    state: &BackendState,
     model_id: &str,
 ) -> Result<ModelInfo, CommandError> {
     let catalog_model = catalog_model(model_id)?;
     let _ = fs::remove_file(partial_path(app, catalog_model)?);
-    download_model(app, db, downloads, model_id)
+    download_model(app, state, model_id)
 }
 
 pub fn cancel_model_download(
@@ -218,9 +221,11 @@ pub fn delete_model(
     model_info_for_catalog(app, catalog_model, Some(&record), &settings, &registry)
 }
 
+/// Selects a downloaded model. The checksum of a large model takes seconds, so
+/// the database is locked only after it passes.
 pub fn select_model(
     app: &AppHandle,
-    db: &Database,
+    state: &BackendState,
     model_id: &str,
 ) -> Result<ModelInfo, CommandError> {
     let catalog_model = catalog_model(model_id)?;
@@ -250,6 +255,7 @@ pub fn select_model(
     // never become the active model.
     verify_model_file_checksum(catalog_model, &path)?;
 
+    let db = state.db()?;
     let mut settings = db.get_settings()?;
     settings.selected_model_id = Some(model_id.to_string());
     db.save_settings(&settings)?;
@@ -299,7 +305,7 @@ pub fn selected_model_path(
 
 fn download_model_inner(
     app: &AppHandle,
-    db: &Database,
+    state: &BackendState,
     cancel_flag: Arc<AtomicBool>,
     model_id: &str,
 ) -> Result<ModelInfo, CommandError> {
@@ -322,10 +328,11 @@ fn download_model_inner(
         size_bytes: None,
         status: ModelStatus::Downloading,
         checksum: Some(catalog_model.expected_sha256.to_owned()),
-        selected: db.get_settings()?.selected_model_id.as_deref() == Some(catalog_model.id),
+        selected: state.db()?.get_settings()?.selected_model_id.as_deref()
+            == Some(catalog_model.id),
         downloaded_at: None,
     };
-    db.upsert_model_record(&record)?;
+    state.db()?.upsert_model_record(&record)?;
 
     let download_result = stream_download(app, catalog_model, &part_path, cancel_flag);
     match download_result {
@@ -344,7 +351,7 @@ fn download_model_inner(
                 ModelStatus::Downloaded
             };
             record.downloaded_at = Some(Utc::now());
-            db.upsert_model_record(&record)?;
+            state.db()?.upsert_model_record(&record)?;
             emit_progress(
                 app,
                 catalog_model.id,
@@ -362,12 +369,12 @@ fn download_model_inner(
             };
             record.local_path = None;
             record.size_bytes = None;
-            db.upsert_model_record(&record)?;
+            state.db()?.upsert_model_record(&record)?;
             return Err(error);
         }
     }
 
-    let settings = db.get_settings()?;
+    let settings = state.db()?.get_settings()?;
     let registry = DownloadRegistry::default();
     model_info_for_catalog(app, catalog_model, Some(&record), &settings, &registry)
 }

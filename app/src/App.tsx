@@ -43,8 +43,7 @@ import {
   listModels,
   pasteLastTranscript,
   startRecording,
-  stopRecording,
-  transcribeRecording,
+  stopDictation,
   updateSettings,
   type AppStateSnapshot,
   type UpdateCheckResult,
@@ -894,12 +893,7 @@ function App() {
     setSaveError(null);
 
     try {
-      const recording = await stopRecording();
-      if (recording.status === "completed" || recording.status === "timed_out") {
-        await transcribeRecording(recording);
-      } else if (recording.reason) {
-        setSaveError(recording.reason);
-      }
+      await stopDictation();
       await refresh();
     } catch (error) {
       setSaveError(commandErrorMessage(error));
