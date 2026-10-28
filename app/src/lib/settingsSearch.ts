@@ -100,6 +100,7 @@ export const SETTINGS_INDEX: readonly SettingsEntry[] = [
 
   // About
   { label: "Updates", page: "About", keywords: "update version install upgrade automatic check release" },
+  { label: "Release notes", page: "About", keywords: "what's new whats new changelog changes version history" },
 ];
 
 /** Lowercased words of a string, split on anything that isn't a letter or digit. */

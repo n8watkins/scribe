@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, searchForWorkspaceRoot } from "vite";
 import react from "@vitejs/plugin-react";
 
 // @ts-expect-error process is a nodejs global
@@ -24,6 +24,12 @@ export default defineConfig(async () => ({
           port: 1421,
         }
       : undefined,
+    fs: {
+      // The default (this app) plus the repo root, for the CHANGELOG.md the app
+      // bundles as its release notes.
+      // @ts-expect-error process is a nodejs global
+      allow: [searchForWorkspaceRoot(process.cwd()), ".."],
+    },
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],

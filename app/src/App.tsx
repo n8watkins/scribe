@@ -211,6 +211,8 @@ function App() {
   // null hides the overlay and returns to the app.
   const [autoUpdateState, setAutoUpdateState] =
     useState<UpdateOverlayState | null>(null);
+  // The release notes of the update the launch auto-install is applying.
+  const [autoUpdateNotes, setAutoUpdateNotes] = useState<string | null>(null);
   // Timestamp of the last successful auto poll, surfaced in About so the polling
   // is observable (the "last checked" line ticks each cycle).
   const [lastUpdateCheck, setLastUpdateCheck] = useState<number | null>(null);
@@ -413,6 +415,7 @@ function App() {
         setAutoUpdateState(null);
         return;
       }
+      setAutoUpdateNotes(update.body?.trim() || null);
       let downloaded = 0;
       let total: number | null = null;
       const stalled = new Promise<never>((_, reject) => {
@@ -925,6 +928,7 @@ function App() {
       {autoUpdateState ? (
         <UpdateOverlay
           state={autoUpdateState}
+          notes={autoUpdateNotes}
           onDismiss={() => setAutoUpdateState(null)}
         />
       ) : null}

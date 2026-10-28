@@ -32,7 +32,7 @@
     soundsEnabled: true,
     developerSettingsEnabled: S.developer,
     autoUpdateCheckEnabled: true,
-    autoInstallUpdates: true,
+    autoInstallUpdates: !S.noAutoInstall,
     theme: S.theme,
     customTheme: S.customTheme || {
       background: "#0b0e14",
@@ -254,6 +254,8 @@
         : null,
     get_hotkey_status: () => ({ bindings, noteChordActive: true, holdReleaseVerificationRequired: false, windowsFallbackNote: "" }),
     check_for_update: () => ({ currentVersion: "0.8.0", latestVersion: S.update ? "0.9.0" : "0.8.0", updateAvailable: !!S.update, releaseUrl: "https://github.com/n8watkins/scribe/releases" }),
+    whats_new_pending: () => (S.whatsNew ? "0.8.0" : null),
+    dismiss_whats_new: () => null,
     "plugin:app|version": () => "0.8.0",
     "plugin:app|name": () => "Scribe",
     "plugin:app|tauri_version": () => "2.9.0",

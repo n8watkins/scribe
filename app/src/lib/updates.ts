@@ -27,6 +27,7 @@ export async function detectUpdate(): Promise<UpdateCheckResult> {
         currentVersion,
         latestVersion: update.version,
         releaseUrl: RELEASES_URL,
+        releaseNotes: update.body?.trim() || null,
       }
     : {
         updateAvailable: false,
