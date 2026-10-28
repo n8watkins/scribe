@@ -150,6 +150,11 @@ pub struct HotkeyStatus {
     /// Toggle acts on release AND its bind is a pollable single key. The UI
     /// uses this to explain why the note chord is on or off.
     pub note_chord_active: bool,
+    /// Whether this system has the note chord at all (it needs the Windows
+    /// key watcher), so the UI doesn't offer it where it can't work.
+    pub note_chord_supported: bool,
+    /// Modifier-only hold chords (Ctrl+Shift) need the native key watcher,
+    /// which only Windows has; the Hotkeys page explains it there.
     pub hold_release_verification_required: bool,
 }
 
@@ -965,7 +970,8 @@ pub fn status(app: &AppHandle, hotkeys: &HotkeySettings) -> Result<HotkeyStatus,
     Ok(HotkeyStatus {
         bindings,
         note_chord_active: note_chord_active(hotkeys),
-        hold_release_verification_required: true,
+        note_chord_supported: cfg!(windows),
+        hold_release_verification_required: cfg!(windows),
     })
 }
 
@@ -1593,6 +1599,7 @@ mod tests {
         let settings = AppSettings::default();
 
         assert!(validate_hotkeys(&settings.hotkeys).is_ok());
+        #[cfg(not(target_os = "linux"))]
         assert!(matches!(
             parse_shortcut(&settings.hotkeys.hold_to_talk),
             Ok(ParsedShortcut::ModifierChord(_))
@@ -1603,11 +1610,33 @@ mod tests {
         ));
     }
 
+    /// Linux registers global shortcuts as X11 key grabs: a modifier-only
+    /// chord can't be registered at all, and a key without modifiers steals
+    /// that key from every other app. Every default (and Dev) bind must be a
+    /// key with at least one modifier.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_default_hotkeys_register_and_leave_typing_alone() {
+        for hotkeys in [HotkeySettings::default(), HotkeySettings::dev_defaults()] {
+            assert!(validate_hotkeys(&hotkeys).is_ok());
+            for action in HOTKEY_ACTIONS {
+                let bind = action.shortcut(&hotkeys);
+                match parse_shortcut(bind) {
+                    Ok(ParsedShortcut::Plugin(shortcut)) => {
+                        assert!(!shortcut.mods.is_empty(), "{bind} has no modifier")
+                    }
+                    other => panic!("{bind} is not a key chord: {other:?}"),
+                }
+            }
+        }
+    }
+
     #[test]
     fn dev_hotkeys_validate_and_differ_from_production() {
         let dev = HotkeySettings::dev_defaults();
         // Each Dev bind must be individually registerable.
         assert!(validate_hotkeys(&dev).is_ok());
+        #[cfg(not(target_os = "linux"))]
         assert!(matches!(
             parse_shortcut(&dev.hold_to_talk),
             Ok(ParsedShortcut::ModifierChord(_))

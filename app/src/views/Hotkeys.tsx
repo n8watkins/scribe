@@ -35,8 +35,16 @@ const triggerLabels: Record<TriggerEdge, string> = {
 };
 
 /** The Toggle hint explains the note-chord trade-off right where the user
- * flips the edge: it is only available while Toggle acts on release. */
-function toggleHint(trigger: TriggerEdge | null, noteChordActive: boolean): string {
+ * flips the edge: it is only available while Toggle acts on release, and only
+ * on systems that have it (Windows). */
+function toggleHint(
+  trigger: TriggerEdge | null,
+  noteChordActive: boolean,
+  noteChordSupported: boolean,
+): string {
+  if (!noteChordSupported) {
+    return trigger === "press" ? "Acts on press" : "Acts on release";
+  }
   if (trigger === "press") {
     return "Acts on press. The hold-and-tap-Q note chord is off in this mode";
   }
@@ -319,6 +327,8 @@ export function HotkeysView({
     }));
 
   const noteChordActive = status?.noteChordActive ?? false;
+  // Assume support until the status loads, so Windows never flickers.
+  const noteChordSupported = status?.noteChordSupported ?? true;
 
   return (
     <section className="view-grid">
@@ -342,7 +352,7 @@ export function HotkeysView({
             <RefreshCw aria-hidden="true" size={13} />
             Refresh
           </button>
-          <p className="hotkeys-toolbar-note">Global Windows shortcuts</p>
+          <p className="hotkeys-toolbar-note">Global shortcuts</p>
         </div>
         {statusError ? (
           <InlineError message={statusError} onRetry={loadStatus} />
@@ -392,7 +402,11 @@ export function HotkeysView({
                     ) : (
                       <span className="hotkeys-row-desc">
                         {binding.action === "toggleDictation"
-                          ? toggleHint(binding.trigger, noteChordActive)
+                          ? toggleHint(
+                              binding.trigger,
+                              noteChordActive,
+                              noteChordSupported,
+                            )
                           : (hotkeyActionHints[binding.action] ??
                             "Global shortcut")}
                       </span>
