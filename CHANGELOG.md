@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0 - 2026-10-28
+
+Dictations now paste only into the window you started in, and stay out of Windows clipboard history. New in Settings: choose what happens after dictation (insert, copy only or save only) and how text goes in, including typing it out for apps that block paste. Web pages can no longer reach Scribe's local speech server.
+
+### Fixed
+
+- Align GitHub backup setup guidance
+- Clear the Dependabot alerts ([#40](https://github.com/n8watkins/scribe/pull/40))
+- Transform Selection only rewrites what you selected, and keeps your clipboard ([#48](https://github.com/n8watkins/scribe/pull/48))
+- Clear leftover recordings and old data, and keep settings when one is unreadable ([#47](https://github.com/n8watkins/scribe/pull/47))
+- Hotkey conflicts on the Dashboard, expired paste buffer, Stats clipping, MSI smoke hang ([#50](https://github.com/n8watkins/scribe/pull/50))
+
 ## 0.8.0 - 2026-07-14
 
 ### New
