@@ -15,14 +15,14 @@ The assessment comes first; changes come only after the owner has read the repor
 1. This file.
 2. `README.md`, `SECURITY.md`, `docs/HANDOFF.md`, `docs/STATUS_AND_NEXT_STEPS.md`.
 3. Earlier UX thinking, so the assessment builds on it instead of repeating it: `docs/UX_REFINEMENT_BACKLOG.md` (2026-06-21: an Integrations view for GitHub and LM Studio, and more), `docs/FRONTEND_UX_REFINEMENT_PLAN.md`, `docs/COMPETITIVE-ANALYSIS.md`, `docs/PRD.md`.
-4. The landing page's own notes: `~/projects/tools/scribe/scribe-web-lvl/docs/scribe-review-and-videos.md`.
+4. The landing page's own notes: `~/projects/tools/scribe/scribe-web/docs/scribe-review-and-videos.md`.
 
 ## State of the repo today (check, don't assume)
 
 - Checked out on `feat/rust-storage-profiles` (last commit `80b3cff`), not `main`; a worktree `validation/scribe-rust-storage-windows` exists.
   Find out what those branches are and whether they're merged before reviewing "the code".
-- Five Dependabot PRs are open (#20, #32, #37, #38, #39), the oldest from July.
-- 13 commits sit on `main` since v0.8.0 (the owner hasn't said yet whether to cut a release).
+- Dependabot: of the five PRs open when this plan was written (#20, #32, #37, #38, #39, the oldest from July), only #38 is still open; #40 superseded the rest on 2026-10-27.
+- 15 commits sit on `main` since v0.8.0, including the security fixes from #40 (the owner hasn't said yet whether to cut a release).
 - CI: `.github/workflows/ci.yml`, `release.yml`, `gpu-spike.yml`; builds run on `windows-latest` because the app is Windows-only.
 - The installed app is at `C:\Users\natha\AppData\Local\Scribe\Scribe.exe` (there is also a "Scribe Dev" data folder).
 

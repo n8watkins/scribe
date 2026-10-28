@@ -3,6 +3,9 @@
 Status: Shipping as a public MIT-licensed project.
 
 Current release: **0.8.0**, published on 2026-07-14.
+`main` has unreleased changes since then, most importantly the dependency security fixes from #40; the next release waits on the owner's go-ahead because releases auto-update installed copies.
+
+The current open work, owner blockers and next steps are in the start-here section of [HANDOFF.md](HANDOFF.md); this page records the release state and longer-term opportunities only.
 
 Repository: <https://github.com/n8watkins/scribe>
 
@@ -17,6 +20,8 @@ The [app README](../app/README.md) owns desktop development and GitHub App confi
 
 The [release workflow](../.github/workflows/release.yml) is authoritative for build, validation, packaging, signing, and publication mechanics.
 The [Windows QA checklist](V1_WINDOWS_QA_CHECKLIST.md) owns manual release acceptance.
+Releases are cut with release-kit (`npm run release -- --push`); see [RELEASING.md](../RELEASING.md).
+Only the updater artifacts are signed; Authenticode signing of the installers needs a code-signing certificate from the owner.
 
 ## Remaining opportunities
 
