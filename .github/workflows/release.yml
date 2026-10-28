@@ -13,6 +13,10 @@ on:
           - stable
           - dev
         default: stable
+      publish_dev:
+        description: "Dev only, from main: sign this build and publish it to the rolling dev pre-release that Scribe Dev updates from"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -55,11 +59,22 @@ jobs:
             throw "Repository variable SCRIBE_GITHUB_APP_CLIENT_ID must contain the GitHub App client ID (Iv...)."
           }
           $flavor = "${{ inputs.flavor || 'stable' }}"
-          "version=$packageVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $publishDev = "${{ inputs.publish_dev }}" -eq "true"
+          if ($publishDev -and $flavor -ne "dev") { throw "publish_dev needs the dev flavor" }
+          if ($publishDev -and "${{ github.ref }}" -ne "refs/heads/main") { throw "Only main publishes to the dev channel" }
+          # Every dev build gets its own version, a numbered pre-release of the
+          # next patch (0.9.0 -> 0.9.1-<run number>), so Scribe Dev sees each
+          # one as newer than the last. WiX accepts only a numeric pre-release.
+          $version = $packageVersion
+          if ($flavor -eq "dev") {
+            $parts = $packageVersion.Split(".")
+            $version = "{0}.{1}.{2}-{3}" -f $parts[0], $parts[1], ([int]$parts[2] + 1), $env:GITHUB_RUN_NUMBER
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "flavor=$flavor" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           $stage = Join-Path $env:RUNNER_TEMP "scribe-release"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          Set-Content -Path (Join-Path $stage "version.txt") -Value $packageVersion -NoNewline
+          Set-Content -Path (Join-Path $stage "version.txt") -Value $version -NoNewline
           Set-Content -Path (Join-Path $stage "flavor.txt") -Value $flavor -NoNewline
 
       - name: Generate source SBOM
@@ -204,14 +219,18 @@ jobs:
           $configs = @("--config", "src-tauri/tauri.unsigned-build.conf.json")
           if ("${{ steps.metadata.outputs.flavor }}" -eq "dev") {
             $configs += @("--config", "src-tauri/tauri.dev-flavor.conf.json")
+            $devVersion = Join-Path $env:RUNNER_TEMP "dev-version.conf.json"
+            @{ version = "${{ steps.metadata.outputs.version }}" } | ConvertTo-Json | Set-Content $devVersion -Encoding utf8
+            $configs += @("--config", $devVersion)
           }
           npm run tauri -- build @configs
 
-      # Only tagged releases are signed, so manual and dev builds never
-      # touch the key. The signature is what latest.json carries and what
-      # installed copies verify against the pubkey in tauri.conf.json.
+      # Only tagged releases and dev builds explicitly published from main
+      # are signed, so other manual builds never touch the key. The signature
+      # is what latest.json (or latest-dev.json) carries and what installed
+      # copies verify against the pubkey in tauri.conf.json.
       - name: Sign updater artifact
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || (inputs.flavor == 'dev' && inputs.publish_dev && github.ref == 'refs/heads/main')
         working-directory: app
         shell: pwsh
         env:
@@ -234,30 +253,42 @@ jobs:
           $msi = @(Get-ChildItem -Path $msiDir -Filter "*.msi")
           if ($setup.Count -ne 1) { throw "Expected one NSIS installer, found $($setup.Count)" }
           if ($msi.Count -ne 1) { throw "Expected one MSI installer, found $($msi.Count)" }
-          Copy-Item $setup[0].FullName, $msi[0].FullName -Destination $stage
+          # GitHub turns spaces in asset names into dots ("Scribe Dev_..."),
+          # so stage the names it will publish and the manifest URLs match.
+          $setupName = $setup[0].Name -replace ' ', '.'
+          Copy-Item $setup[0].FullName -Destination (Join-Path $stage $setupName)
+          Copy-Item $msi[0].FullName -Destination (Join-Path $stage ($msi[0].Name -replace ' ', '.'))
 
+          $manifestPath = $null
           if ("${{ github.ref_type }}" -eq "tag") {
+            $tag = "${{ github.ref_name }}"
+            $manifestPath = Join-Path $stage "latest.json"
+          } elseif ("${{ inputs.flavor }}" -eq "dev" -and "${{ inputs.publish_dev }}" -eq "true") {
+            # The rolling dev pre-release: Scribe Dev reads latest-dev.json
+            # (tauri.dev-flavor.conf.json); stable never sees it.
+            $tag = "dev"
+            $manifestPath = Join-Path $stage "latest-dev.json"
+          }
+          if ($manifestPath) {
             $signature = "$($setup[0].FullName).sig"
             if (-not (Test-Path $signature)) { throw "Missing Tauri updater signature for $($setup[0].Name)" }
-            Copy-Item $signature -Destination $stage
-            $tag = "${{ github.ref_name }}"
+            Copy-Item $signature -Destination (Join-Path $stage "$setupName.sig")
             $manifest = [ordered]@{
               version = "${{ steps.metadata.outputs.version }}"
               pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
               platforms = @{
                 "windows-x86_64" = @{
                   signature = (Get-Content $signature -Raw).Trim()
-                  url = "https://github.com/${{ github.repository }}/releases/download/$tag/$($setup[0].Name)"
+                  url = "https://github.com/${{ github.repository }}/releases/download/$tag/$setupName"
                 }
               }
             }
-            $manifestPath = Join-Path $stage "latest.json"
             $manifest | ConvertTo-Json -Depth 4 | Set-Content $manifestPath -Encoding utf8
             $parsed = Get-Content $manifestPath -Raw | ConvertFrom-Json
             if ($parsed.version -ne "${{ steps.metadata.outputs.version }}") { throw "Updater version mismatch" }
             if (@($parsed.platforms.PSObject.Properties).Count -ne 1) { throw "Unexpected updater platforms" }
             if ($parsed.platforms.'windows-x86_64'.signature -ne (Get-Content $signature -Raw).Trim()) { throw "Updater signature mismatch" }
-            if (-not $parsed.platforms.'windows-x86_64'.url.EndsWith("/$($setup[0].Name)")) { throw "Updater installer URL mismatch" }
+            if (-not $parsed.platforms.'windows-x86_64'.url.EndsWith("/$setupName")) { throw "Updater installer URL mismatch" }
           }
 
           $files = Get-ChildItem $stage -File | Where-Object Name -NotIn @("SHA256SUMS.txt", "version.txt", "flavor.txt") | Sort-Object Name
@@ -333,7 +364,9 @@ jobs:
             Where-Object { $_.DisplayName -in @("Scribe", "Scribe Dev") } |
             Select-Object -First 1
           if (-not $entry) { throw "Scribe uninstall entry was not created" }
-          if ($entry.DisplayVersion -ne "${{ needs.build-windows.outputs.version }}") {
+          # WiX writes a dev pre-release (0.9.1-42) as a fourth number (0.9.1.42).
+          $expectedVersions = @("${{ needs.build-windows.outputs.version }}", ("${{ needs.build-windows.outputs.version }}" -replace '-', '.'))
+          if ($entry.DisplayVersion -notin $expectedVersions) {
             throw "Installed version $($entry.DisplayVersion) did not match ${{ needs.build-windows.outputs.version }}"
           }
 
@@ -482,6 +515,62 @@ jobs:
         run: |
           mkdir downloaded
           gh release download "${{ github.ref_name }}" --repo "${{ github.repository }}" --dir downloaded
+          cp candidate/SHA256SUMS.txt downloaded/
+          cd downloaded
+          sha256sum --check SHA256SUMS.txt
+
+  # The rolling `dev` pre-release that Scribe Dev updates from. A pre-release
+  # never becomes "latest", so stable installs (which read
+  # releases/latest/download/latest.json) never see it.
+  publish-dev:
+    name: Publish dev channel build
+    needs: [build-windows, smoke-install]
+    if: inputs.flavor == 'dev' && inputs.publish_dev && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: scribe-release-candidate
+          path: candidate
+
+      - name: Replace the dev pre-release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build-windows.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -s candidate/latest-dev.json
+          test "$(jq -r .version candidate/latest-dev.json)" = "$VERSION"
+          notes="Rolling Scribe Dev build $VERSION from main at ${GITHUB_SHA::12}. For testing only; Scribe Dev installs update from here, stable installs never do."
+          if gh release view dev --repo "$REPO" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$REPO/git/refs/tags/dev" -f sha="$GITHUB_SHA" -F force=true >/dev/null
+            gh release edit dev --repo "$REPO" --prerelease --latest=false \
+              --title "Scribe Dev $VERSION" --notes "$notes"
+            # The manifest goes first and comes back last, so a Dev install
+            # never reads a manifest that points at a missing installer.
+            gh release delete-asset dev latest-dev.json --repo "$REPO" --yes 2>/dev/null || true
+            gh release view dev --repo "$REPO" --json assets --jq '.assets[].name' |
+              while read -r name; do
+                gh release delete-asset dev "$name" --repo "$REPO" --yes
+              done
+          else
+            gh release create dev --repo "$REPO" --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title "Scribe Dev $VERSION" --notes "$notes"
+          fi
+          gh release upload dev --repo "$REPO" --clobber \
+            candidate/*-setup.exe candidate/*-setup.exe.sig candidate/*.msi \
+            candidate/*.cdx.json candidate/SHA256SUMS.txt
+          gh release upload dev --repo "$REPO" --clobber candidate/latest-dev.json
+
+      - name: Verify published dev assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir downloaded
+          gh release download dev --repo "${{ github.repository }}" --dir downloaded
           cp candidate/SHA256SUMS.txt downloaded/
           cd downloaded
           sha256sum --check SHA256SUMS.txt
