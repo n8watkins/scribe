@@ -16,6 +16,8 @@ cargo build --release        # produces target/release/scribe
 ```
 
 The binary is named `scribe`.
+Development and test builds keep line-table debug information for `scribe-cli` while omitting dependency debug information to reduce artifact size.
+Use `cargo build --profile full-debug` when full debug information is required for the CLI and its dependencies.
 
 ## Commands
 

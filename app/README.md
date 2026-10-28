@@ -34,6 +34,9 @@ Run the Tauri desktop app:
 npm run tauri dev
 ```
 
+Development and test builds keep line-table debug information for Scribe while omitting dependency debug information to reduce artifact size.
+Run `cd src-tauri && cargo build --profile full-debug` when full debug information is required for the desktop backend and its dependencies.
+
 Rust and the Tauri OS prerequisites are required for desktop builds.
 
 ## GitHub App configuration

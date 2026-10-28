@@ -11,7 +11,9 @@ edition = "2021"
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "app_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Only the desktop binary links this library. The staticlib and cdylib types
+# from the Tauri template are for mobile targets, which Scribe doesn't build.
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -72,3 +74,22 @@ windows = { version = "0.58", features = [
 
 [dev-dependencies]
 tempfile = "3"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = "none"
+
+[profile.test]
+debug = "line-tables-only"
+
+[profile.test.package."*"]
+debug = "none"
+
+[profile.full-debug]
+inherits = "dev"
+debug = "full"
+
+[profile.full-debug.package."*"]
+debug = "full"

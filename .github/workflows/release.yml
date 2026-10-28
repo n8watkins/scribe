@@ -29,6 +29,7 @@ jobs:
   build-windows:
     name: Build release candidate
     runs-on: windows-latest
+    timeout-minutes: 60
     outputs:
       version: ${{ steps.metadata.outputs.version }}
       flavor: ${{ steps.metadata.outputs.flavor }}
@@ -94,7 +95,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: app/package-lock.json
 
@@ -107,7 +108,7 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          npm ci --ignore-scripts --no-audit --no-fund
+          npm ci --ignore-scripts --no-audit --no-fund --allow-git=root
           npx --no-install release-kit release --verify-tag "$TAG"
 
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
@@ -140,10 +141,13 @@ jobs:
               }
             }
 
+      # Install scripts stay off so no dependency runs code at install time;
+      # esbuild's is the only one the Windows build needs, so it runs on its own.
       - name: Install and validate application dependencies
         working-directory: app
         run: |
-          npm ci
+          npm ci --ignore-scripts
+          npm rebuild esbuild
           npm audit
           npm run lint
           npm test
@@ -188,19 +192,37 @@ jobs:
             Copy-Item $file.FullName -Destination $dest
           }
 
+      # The build never sees the updater signing key: it skips the updater
+      # artifacts, and the next step signs the installer on its own, so no
+      # build script, proc macro or npm package can read the key.
       - name: Build installers
         working-directory: app
         shell: pwsh
         env:
           SCRIBE_GITHUB_APP_CLIENT_ID: ${{ vars.SCRIBE_GITHUB_APP_CLIENT_ID }}
+        run: |
+          $configs = @("--config", "src-tauri/tauri.unsigned-build.conf.json")
+          if ("${{ steps.metadata.outputs.flavor }}" -eq "dev") {
+            $configs += @("--config", "src-tauri/tauri.dev-flavor.conf.json")
+          }
+          npm run tauri -- build @configs
+
+      # Only tagged releases are signed, so manual and dev builds never
+      # touch the key. The signature is what latest.json carries and what
+      # installed copies verify against the pubkey in tauri.conf.json.
+      - name: Sign updater artifact
+        if: github.ref_type == 'tag'
+        working-directory: app
+        shell: pwsh
+        env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          if ("${{ steps.metadata.outputs.flavor }}" -eq "dev") {
-            npm run tauri -- build --config src-tauri/tauri.dev-flavor.conf.json
-          } else {
-            npm run tauri build
-          }
+          $setup = @(Get-ChildItem -Path "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe")
+          if ($setup.Count -ne 1) { throw "Expected one NSIS installer to sign, found $($setup.Count)" }
+          npx --no-install tauri signer sign $setup[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw "Signing the updater artifact failed" }
+          if (-not (Test-Path "$($setup[0].FullName).sig")) { throw "The signer did not write $($setup[0].Name).sig" }
 
       - name: Stage and validate release candidate
         shell: pwsh
@@ -212,11 +234,12 @@ jobs:
           $msi = @(Get-ChildItem -Path $msiDir -Filter "*.msi")
           if ($setup.Count -ne 1) { throw "Expected one NSIS installer, found $($setup.Count)" }
           if ($msi.Count -ne 1) { throw "Expected one MSI installer, found $($msi.Count)" }
-          $signature = "$($setup[0].FullName).sig"
-          if (-not (Test-Path $signature)) { throw "Missing Tauri updater signature for $($setup[0].Name)" }
-          Copy-Item $setup[0].FullName, $signature, $msi[0].FullName -Destination $stage
+          Copy-Item $setup[0].FullName, $msi[0].FullName -Destination $stage
 
           if ("${{ github.ref_type }}" -eq "tag") {
+            $signature = "$($setup[0].FullName).sig"
+            if (-not (Test-Path $signature)) { throw "Missing Tauri updater signature for $($setup[0].Name)" }
+            Copy-Item $signature -Destination $stage
             $tag = "${{ github.ref_name }}"
             $manifest = [ordered]@{
               version = "${{ steps.metadata.outputs.version }}"
@@ -255,32 +278,21 @@ jobs:
     name: Smoke install (${{ matrix.kind }})
     needs: build-windows
     runs-on: windows-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         kind: [nsis, msi]
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # the notes need the previous tag
-          persist-credentials: false
-
-      # User-facing notes from the Conventional Commits since the previous
-      # release (release-kit), the same section the release commit wrote to
-      # CHANGELOG.md; not GitHub's list of pull request titles.
-      - name: Release notes
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          npx --no-install release-kit notes --to "$TAG" > release-notes.md
-
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: scribe-release-candidate
           path: candidate
 
+      # A hung msiexec or installer must fail the job (so the logs upload)
+      # instead of holding the runner for hours.
       - name: Verify checksums and install candidate
+        timeout-minutes: 10
         shell: pwsh
         run: |
           $candidate = (Resolve-Path candidate).Path
@@ -342,8 +354,11 @@ jobs:
           if ("${{ matrix.kind }}" -eq "msi") {
             $uninstall = Start-Process msiexec.exe -ArgumentList @("/x", $entry.PSChildName, "/qn", "/norestart", "/L*V", "$env:RUNNER_TEMP\scribe-msi-uninstall.log") -Wait -PassThru
           } else {
-            $command = if ($entry.QuietUninstallString) { $entry.QuietUninstallString } else { "$($entry.UninstallString) /S" }
-            $uninstall = Start-Process cmd.exe -ArgumentList @("/d", "/s", "/c", $command) -Wait -PassThru
+            # Run the uninstaller directly: UninstallString is a quoted path,
+            # and passing it through cmd.exe breaks on spaces in that path.
+            $uninstaller = ([string]$entry.UninstallString).Trim().Trim('"')
+            if (-not (Test-Path $uninstaller -PathType Leaf)) { throw "NSIS uninstaller was not found at $uninstaller" }
+            $uninstall = Start-Process $uninstaller -ArgumentList "/S" -Wait -PassThru
           }
           if ($uninstall.ExitCode -notin @(0, 3010)) { throw "Uninstall failed with $($uninstall.ExitCode)" }
           if (Test-Path $exe.FullName) { throw "Scribe executable remained after uninstall" }
@@ -365,6 +380,26 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the notes need the previous tag
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      # User-facing notes from the Conventional Commits since the previous
+      # release (release-kit), the same section the release commit wrote to
+      # CHANGELOG.md; not GitHub's list of pull request titles.
+      - name: Release notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund --allow-git=root
+          npx --no-install release-kit notes --to "$TAG" > release-notes.md
+          test -s release-notes.md
+
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: scribe-release-candidate

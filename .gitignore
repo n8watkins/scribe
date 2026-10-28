@@ -1,2 +1,5 @@
-# Claude Code local agent state (git worktrees, task transcripts) — never commit
+# Claude Code local agent state (git worktrees, task transcripts); never commit
 .claude/
+
+# Release tooling installed at the root (release-kit)
+node_modules/
