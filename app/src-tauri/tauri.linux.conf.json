@@ -7,6 +7,7 @@
     ],
     "createUpdaterArtifacts": false,
     "shortDescription": "Private local dictation (experimental Linux build).",
+    "longDescription": "Scribe is a Linux tray utility for recording speech, transcribing locally with Whisper, and inserting the Last Transcript Buffer without permanently overwriting the clipboard. This Linux build is experimental.",
     "linux": {
       "deb": {
         "section": "utils"

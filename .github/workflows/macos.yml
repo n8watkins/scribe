@@ -338,6 +338,16 @@ jobs:
           }
 
           self_test arm64 env
+
+          # The runner is a new install, so the app registered the default
+          # hotkeys at startup: each one must be a shortcut macOS accepts.
+          hotkeys="$(cat "$HOME/Library/Logs/com.natkins.scribe"/*.log | grep -E 'hotkey bindings|Hotkey registration failed' || true)"
+          echo "$hotkeys"
+          if [ -z "$hotkeys" ] || grep -q 'Hotkey registration failed' <<< "$hotkeys"; then
+            echo "A default hotkey did not register" >&2
+            exit 1
+          fi
+
           diagnose
           self_test x86_64 arch -x86_64
 

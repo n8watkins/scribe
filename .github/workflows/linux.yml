@@ -10,6 +10,8 @@ on:
     paths:
       - ".github/workflows/**"
       - "app/src-tauri/tauri.linux.conf.json"
+      - "app/src-tauri/Cargo.toml"
+      - "app/src-tauri/Cargo.lock"
       - "app/src-tauri/src/platform/**"
       - "app/src-tauri/src/audio.rs"
 
@@ -45,7 +47,9 @@ jobs:
             librsvg2-dev \
             libxdo-dev \
             libasound2-dev \
-            libssl-dev
+            libdbus-1-dev \
+            libssl-dev \
+            gnome-keyring
 
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
@@ -63,6 +67,17 @@ jobs:
       - name: Run backend tests
         working-directory: app/src-tauri
         run: cargo test --locked
+
+      # The GitHub token lives in the Secret Service on Linux. A private
+      # session bus with an unlocked GNOME Keyring lets the ignored round-trip
+      # test prove a credential is really stored, read back and deleted.
+      - name: Run the Secret Service round trip
+        working-directory: app/src-tauri
+        run: |
+          dbus-run-session -- sh -c '
+            printf ci | gnome-keyring-daemon --unlock --components=secrets --daemonize > /dev/null
+            cargo test --locked --lib secret_service_round_trips_a_credential -- --ignored
+          '
 
   build-linux:
     name: Build Linux bundles (experimental)
@@ -82,6 +97,7 @@ jobs:
             librsvg2-dev \
             libxdo-dev \
             libasound2-dev \
+            libdbus-1-dev \
             libssl-dev \
             patchelf \
             file \

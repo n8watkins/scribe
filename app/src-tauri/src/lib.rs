@@ -239,6 +239,19 @@ fn install_panic_logger() {
     }));
 }
 
+/// Tells every webview which OS it runs on (`window.__SCRIBE_PLATFORM__`:
+/// "windows", "macos" or "linux") before any page script runs, so the UI can
+/// word platform-specific copy without an async round trip or a flash of the
+/// Windows wording.
+fn platform_script<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("scribe-platform")
+        .js_init_script(format!(
+            "window.__SCRIBE_PLATFORM__ = {:?};",
+            std::env::consts::OS
+        ))
+        .build()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     install_panic_logger();
@@ -292,6 +305,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(platform_script())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             let audio_temp_dir = app.path().app_cache_dir()?.join("recordings");
