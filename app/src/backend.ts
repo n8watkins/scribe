@@ -440,6 +440,13 @@ export type HotkeyStatus = {
   holdReleaseVerificationRequired: boolean;
 };
 
+/** Whether pasting into other apps needs a permission granted in the
+ * system settings (Accessibility on macOS), and whether it has been. */
+export type PastePermission = {
+  required: boolean;
+  granted: boolean;
+};
+
 export type HotkeyRegistrationFailure = {
   action: string;
   shortcut: string;
@@ -498,6 +505,16 @@ export function updateSettings(
   const result = settingsWrites.then(write, write);
   settingsWrites = result.catch(() => undefined);
   return result;
+}
+
+export function getPastePermission(): Promise<PastePermission> {
+  return invoke("get_paste_permission");
+}
+
+/** Shows the system prompt and opens the settings where the user grants the
+ * paste permission. */
+export function requestPastePermission(): Promise<PastePermission> {
+  return invoke("request_paste_permission");
 }
 
 export function getLastTranscript(): Promise<Transcript | null> {

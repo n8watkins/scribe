@@ -17,13 +17,15 @@ use objc2_app_kit::{
     NSApplicationActivationOptions, NSPasteboard, NSPasteboardItem, NSPasteboardWriting,
     NSRunningApplication, NSWorkspace,
 };
-use objc2_core_foundation::{CFArray, CFDictionary, CFNumber, CFRetained, CFString, CFType};
+use objc2_core_foundation::{
+    CFArray, CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType,
+};
 use objc2_core_graphics::{
     kCGNullWindowID, kCGWindowLayer, kCGWindowNumber, kCGWindowOwnerPID, CGEvent, CGEventFlags,
     CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGKeyCode, CGWindowListCopyWindowInfo,
     CGWindowListOption,
 };
-use objc2_foundation::{NSArray, NSData, NSString};
+use objc2_foundation::{NSArray, NSData, NSString, NSURL};
 
 use super::{PasteTarget, WindowId};
 use crate::error::CommandError;
@@ -33,7 +35,15 @@ extern "C" {
     /// Whether this process may post keystrokes to other apps (System
     /// Settings, Privacy & Security, Accessibility). Returns a C `Boolean`.
     fn AXIsProcessTrusted() -> u8;
+    /// The same check; with `kAXTrustedCheckOptionPrompt` set it also adds
+    /// the app to the Accessibility list and shows the system prompt.
+    fn AXIsProcessTrustedWithOptions(options: Option<&CFDictionary>) -> u8;
+    static kAXTrustedCheckOptionPrompt: &'static CFString;
 }
+
+/// The Accessibility list in System Settings (Privacy & Security).
+const ACCESSIBILITY_SETTINGS: &str =
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 
 /// What the paste says when the Accessibility permission is missing. One
 /// line; the caller adds "Copied. Press Cmd+V to paste."
@@ -68,6 +78,26 @@ const SELECTION_COPY_FAILED: &str = "selection_copy_failed";
 /// signature, so an ad-hoc signed update may need it granted again.
 pub fn accessibility_granted() -> bool {
     unsafe { AXIsProcessTrusted() != 0 }
+}
+
+/// Asks for the Accessibility permission when it is missing: macOS adds
+/// Scribe to the Accessibility list and shows its prompt, and the list opens
+/// in System Settings, where the user turns Scribe on.
+pub fn request_accessibility() {
+    // SAFETY: a constant string exported by ApplicationServices.
+    let prompt = unsafe { kAXTrustedCheckOptionPrompt };
+    let options = CFDictionary::from_slices(&[prompt], &[CFBoolean::new(true)]);
+    // SAFETY: the options dictionary maps the prompt key to a boolean.
+    if unsafe { AXIsProcessTrustedWithOptions(Some(options.as_ref())) } != 0 {
+        return;
+    }
+    autoreleasepool(|_| {
+        let opened = NSURL::URLWithString(&NSString::from_str(ACCESSIBILITY_SETTINGS))
+            .is_some_and(|url| NSWorkspace::sharedWorkspace().openURL(&url));
+        if !opened {
+            log::warn!("Could not open the Accessibility settings");
+        }
+    });
 }
 
 fn own_pid() -> i32 {

@@ -1,4 +1,10 @@
-import type { AppSettings } from "../backend";
+import { useEffect, useState } from "react";
+import {
+  getPastePermission,
+  requestPastePermission,
+  type AppSettings,
+  type PastePermission,
+} from "../backend";
 import {
   afterDictationOf,
   formatHotkey,
@@ -30,8 +36,41 @@ const METHOD_DESCRIPTIONS: Record<InsertMethod, string> = {
   type: "Scribe types the text out key by key. Use this for apps that block pasting, such as some terminals, remote desktops and games. Your clipboard is never touched.",
 };
 
+/** The paste permission, read again whenever Scribe's window regains focus
+ * (the user grants it in System Settings and comes back). */
+function usePastePermission() {
+  const [permission, setPermission] = useState<PastePermission | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      getPastePermission()
+        .then((next) => {
+          if (active) setPermission(next);
+        })
+        .catch(() => undefined);
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", refresh);
+    };
+  }, []);
+
+  const request = () => {
+    requestPastePermission()
+      .then(setPermission)
+      .catch(() => undefined);
+  };
+
+  return { permission, request };
+}
+
 /** The two output settings shared by Settings and Transcribe: what happens
- * after a dictation, and how inserted text reaches the app. */
+ * after a dictation, and how inserted text reaches the app. Where pasting
+ * needs a permission that is missing (Accessibility on macOS), a row to
+ * grant it comes first. */
 export function OutputSettingRows({
   disabled,
   onChange,
@@ -44,6 +83,7 @@ export function OutputSettingRows({
   const after = afterDictationOf(settings.outputMode);
   const method = insertMethodOf(settings);
   const pasteLast = formatHotkey(settings.hotkeys.pasteLastTranscript);
+  const { permission, request } = usePastePermission();
   const afterDescriptions: Record<AfterDictation, string> = {
     insert: "Your words go straight into the app you're typing in.",
     copy: `Your words go on the clipboard for you to paste. ${pasteLast} also pastes the last one.`,
@@ -52,6 +92,16 @@ export function OutputSettingRows({
 
   return (
     <>
+      {permission?.required && !permission.granted ? (
+        <SettingRow
+          description="macOS needs it before Scribe can paste or type into other apps. Until it's on, your words are copied for you to paste with Cmd+V. After a Scribe update you may need to turn it on again."
+          label="Accessibility permission"
+        >
+          <button className="secondary-button" onClick={request} type="button">
+            Open System Settings
+          </button>
+        </SettingRow>
+      ) : null}
       <SettingRow description={afterDescriptions[after]} label="After dictation">
         <SegmentedControl
           className="output-after-control"
