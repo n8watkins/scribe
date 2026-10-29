@@ -660,6 +660,44 @@ pub async fn refresh_basic_stats(app: tauri::AppHandle) -> Result<BasicStats, Co
     .await
 }
 
+/// Whether pasting into other apps needs a permission the user grants in
+/// the system settings (Accessibility on macOS), and whether it has been.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PastePermission {
+    pub required: bool,
+    pub granted: bool,
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn get_paste_permission() -> PastePermission {
+    PastePermission {
+        required: true,
+        granted: crate::platform::accessibility_granted(),
+    }
+}
+
+/// Windows and Linux (X11) let any app send keystrokes.
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn get_paste_permission() -> PastePermission {
+    PastePermission {
+        required: false,
+        granted: true,
+    }
+}
+
+/// Starts granting the paste permission where one is needed (on macOS, the
+/// system prompt and the Accessibility settings). The grant itself happens
+/// in System Settings, so the result is usually still not granted.
+#[tauri::command]
+pub fn request_paste_permission() -> PastePermission {
+    #[cfg(target_os = "macos")]
+    crate::platform::request_accessibility();
+    get_paste_permission()
+}
+
 #[tauri::command]
 pub async fn get_hotkey_status(app: tauri::AppHandle) -> Result<HotkeyStatus, CommandError> {
     off_main(app, move |app| {
