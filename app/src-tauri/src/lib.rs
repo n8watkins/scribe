@@ -517,6 +517,8 @@ pub fn run() {
             commands::get_basic_stats,
             commands::refresh_basic_stats,
             commands::get_hotkey_status,
+            commands::get_paste_permission,
+            commands::request_paste_permission,
             commands::rebind_hotkey,
             commands::set_hotkey_trigger,
             commands::reset_hotkeys_to_defaults,
