@@ -65,6 +65,13 @@ jobs:
         working-directory: app/src-tauri
         run: cargo test --locked
 
+      # The platform tests that need the logged-in session's window server
+      # and pasteboard, which the runner has: the app in front and a
+      # clipboard snapshot and restore round trip.
+      - name: Run macOS system tests
+        working-directory: app/src-tauri
+        run: cargo test --locked --lib platform::macos -- --ignored --test-threads=1 --nocapture
+
   build-macos:
     name: Build macOS bundle (experimental)
     # Apple Silicon runner; the Intel slice is cross-compiled and tested under
