@@ -79,6 +79,10 @@ windows = { version = "0.58", features = [
 # XWayland; XFIXES tells when the clipboard changes. Already in the tree
 # through arboard.
 x11rb = { version = "0.13", features = ["xtest", "xfixes"] }
+# The GitHub token store: the freedesktop Secret Service (GNOME Keyring,
+# KWallet, KeePassXC) over D-Bus. libdbus is already linked through tao;
+# crypto-rust encrypts the session without needing OpenSSL.
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 
 [dev-dependencies]
 tempfile = "3"
