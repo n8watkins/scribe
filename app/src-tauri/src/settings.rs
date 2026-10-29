@@ -581,10 +581,20 @@ pub struct HotkeySettings {
 /// binds use Ctrl+Alt, which desktops leave free for these keys and which
 /// typing never produces. Toggle fires on press there: the hold-and-tap-Q
 /// note chord that needs the release edge is Windows-only.
+///
+/// macOS has the same two limits (global shortcuts are Carbon hot keys, which
+/// need a key, and a bare Backquote would be taken from every app). Its binds
+/// use Control+Option too, like the other Scribe defaults, because Option
+/// alone types characters and the Command chords belong to apps. Hold to talk
+/// is Control+Option+Z, not Space: macOS reserves Control+Option+Space for
+/// switching input sources (and Control+Space and Command+Space too).
 #[cfg(target_os = "linux")]
 const DEFAULT_DICTATION_BINDS: (&str, &str, TriggerEdge) =
     ("Ctrl+Alt+Space", "Ctrl+Alt+Backquote", TriggerEdge::Press);
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+const DEFAULT_DICTATION_BINDS: (&str, &str, TriggerEdge) =
+    ("Ctrl+Alt+Z", "Ctrl+Alt+Backquote", TriggerEdge::Press);
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 const DEFAULT_DICTATION_BINDS: (&str, &str, TriggerEdge) =
     ("Ctrl+Win", "Backquote", TriggerEdge::Release);
 
@@ -595,7 +605,13 @@ const DEV_DICTATION_BINDS: (&str, &str, TriggerEdge) = (
     "Ctrl+Alt+Shift+Backquote",
     TriggerEdge::Press,
 );
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+const DEV_DICTATION_BINDS: (&str, &str, TriggerEdge) = (
+    "Ctrl+Alt+Shift+Z",
+    "Ctrl+Alt+Shift+Backquote",
+    TriggerEdge::Press,
+);
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 const DEV_DICTATION_BINDS: (&str, &str, TriggerEdge) = (
     "Ctrl+Shift+Win",
     "Ctrl+Shift+Backquote",
@@ -1692,7 +1708,7 @@ mod tests {
     fn default_hotkeys_avoid_windows_reserved_shortcuts() {
         let hotkeys = HotkeySettings::default();
 
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             assert_eq!(hotkeys.hold_to_talk, "Ctrl+Win");
             assert_eq!(hotkeys.toggle_dictation, "Backquote");
@@ -1701,6 +1717,12 @@ mod tests {
         #[cfg(target_os = "linux")]
         {
             assert_eq!(hotkeys.hold_to_talk, "Ctrl+Alt+Space");
+            assert_eq!(hotkeys.toggle_dictation, "Ctrl+Alt+Backquote");
+            assert_eq!(hotkeys.toggle_dictation_trigger, TriggerEdge::Press);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(hotkeys.hold_to_talk, "Ctrl+Alt+Z");
             assert_eq!(hotkeys.toggle_dictation, "Ctrl+Alt+Backquote");
             assert_eq!(hotkeys.toggle_dictation_trigger, TriggerEdge::Press);
         }
