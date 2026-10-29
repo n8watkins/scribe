@@ -10,7 +10,8 @@
 //! branches on the JSON `error` field, not the status code.
 //!
 //! Access and refresh tokens are persisted together only in the OS keychain
-//! (Windows Credential Manager via `keyring`), never in settings or SQLite.
+//! through `keyring` (Windows Credential Manager, the macOS Keychain, or the
+//! freedesktop Secret Service on Linux), never in settings or SQLite.
 //! Expiring GitHub App user tokens are refreshed before use and each rotated
 //! refresh token replaces its predecessor in the same keychain credential.
 
@@ -330,9 +331,10 @@ pub fn sign_out(service: &str) -> Result<(), CommandError> {
     match entry.delete_credential() {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()),
-        Err(error) => Err(failure(format!(
-            "Could not clear the saved GitHub token. {error}"
-        ))),
+        Err(error) => Err(keychain_failure(
+            "Could not clear the saved GitHub token.",
+            error,
+        )),
     }
 }
 
@@ -357,9 +359,7 @@ pub(crate) fn store_credential(
     keychain_entry(service)?
         .set_password(&encoded)
         .map_err(|error| {
-            failure(format!(
-                "Could not save the GitHub token to the keychain. {error}"
-            ))
+            keychain_failure("Could not save the GitHub token to the keychain.", error)
         })
 }
 
@@ -489,7 +489,7 @@ fn credential_from_response(
 
 fn keychain_entry(service: &str) -> Result<keyring::Entry, CommandError> {
     keyring::Entry::new(service, KEYCHAIN_USER)
-        .map_err(|error| failure(format!("The OS keychain is unavailable. {error}")))
+        .map_err(|error| keychain_failure("The OS keychain is unavailable.", error))
 }
 
 fn load_credential(service: &str) -> Result<StoredCredential, CommandError> {
@@ -499,10 +499,28 @@ fn load_credential(service: &str) -> Result<StoredCredential, CommandError> {
             "github_not_signed_in",
             "Not signed in to GitHub. Connect it on the GitHub backup page.",
         )),
-        Err(error) => Err(failure(format!(
-            "Could not read the saved GitHub token. {error}"
-        ))),
+        Err(error) => Err(keychain_failure(
+            "Could not read the saved GitHub token.",
+            error,
+        )),
     }
+}
+
+/// Wraps a keychain error. On Linux the usual cause is that no Secret Service
+/// provider is running or its keyring is locked, which the raw D-Bus error does
+/// not say in plain words.
+fn keychain_failure(context: &str, error: keyring::Error) -> CommandError {
+    #[cfg(target_os = "linux")]
+    if matches!(
+        error,
+        keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_)
+    ) {
+        return failure(format!(
+            "{context} Scribe keeps it in the desktop keyring (Secret Service), so make sure \
+             one such as GNOME Keyring or KWallet is running and unlocked. {error}"
+        ));
+    }
+    failure(format!("{context} {error}"))
 }
 
 fn decode_credential(encoded: &str) -> Result<StoredCredential, CommandError> {
@@ -902,5 +920,34 @@ mod tests {
             let error = request_device_code().unwrap_err();
             assert_eq!(error.code, "github_not_configured");
         }
+    }
+
+    /// Needs a running Secret Service, which CI starts for this test alone
+    /// (see linux.yml); a developer machine without one would fail it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "needs a Secret Service provider on the session bus"]
+    fn secret_service_round_trips_a_credential() {
+        let service = format!("com.scribe.keyring-test.{}", uuid::Uuid::new_v4());
+        let credential = StoredCredential {
+            version: CREDENTIAL_VERSION,
+            access_token: "ghu_test".to_string(),
+            expires_at: Some(2_000_000_000),
+            refresh_token: Some("ghr_test".to_string()),
+            refresh_token_expires_at: Some(2_100_000_000),
+        };
+
+        store_credential(&service, &credential).unwrap();
+        assert!(has_stored_token(&service));
+        let loaded = load_credential(&service).unwrap();
+        assert_eq!(loaded.access_token, "ghu_test");
+        assert_eq!(loaded.refresh_token.as_deref(), Some("ghr_test"));
+
+        sign_out(&service).unwrap();
+        assert!(!has_stored_token(&service));
+        assert_eq!(
+            load_credential(&service).unwrap_err().code,
+            "github_not_signed_in"
+        );
     }
 }
