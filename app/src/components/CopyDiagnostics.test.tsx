@@ -38,6 +38,20 @@ describe("CopyDiagnostics", () => {
     expect(copied).toMatch(/^Scribe diagnostics\nApp: Scribe 0\.9\.0\nWebView: /);
   });
 
+  it("names the OS detail the report includes", () => {
+    render(<CopyDiagnostics />);
+    expect(screen.getByText(/Windows version/)).toBeInTheDocument();
+    cleanup();
+
+    window.__SCRIBE_PLATFORM__ = "linux";
+    try {
+      render(<CopyDiagnostics />);
+      expect(screen.getByText(/version, Linux distribution, a summary/)).toBeInTheDocument();
+    } finally {
+      delete window.__SCRIBE_PLATFORM__;
+    }
+  });
+
   it("shows why copying failed", async () => {
     stubClipboard(() => Promise.resolve());
     collectMock.mockRejectedValue({ code: "database_error", message: "Database is busy." });

@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { getVersion as getAppVersion } from "@tauri-apps/api/app";
 import { check as checkUpdaterPackage } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { forPlatform } from "../lib/platform";
 import {
   ArrowUpRight,
   Check,
@@ -231,7 +232,11 @@ export function AboutView({
         <article className="panel-card">
           <div className="settings-list">
           <p className="about-lead">
-            Scribe is a Windows tray utility for private speech-to-text.
+            {forPlatform({
+              windows: "Scribe is a Windows tray utility for private speech-to-text.",
+              macos: "Scribe is a macOS menu bar utility for private speech-to-text.",
+              linux: "Scribe is a Linux tray utility for private speech-to-text.",
+            })}
           </p>
 
           <div className="about-block">
@@ -312,8 +317,12 @@ export function AboutView({
               />
             </div>
             <small className="about-autoinstall-hint">
-              Downloads and installs new versions on launch, with a Scribe screen
-              and no Windows installer popups.
+              {forPlatform({
+                windows:
+                  "Downloads and installs new versions on launch, with a Scribe screen and no Windows installer popups.",
+                macos: "Downloads and installs new versions on launch, with a Scribe screen.",
+                linux: "Downloads and installs new versions on launch, with a Scribe screen.",
+              })}
             </small>
           </div>
 

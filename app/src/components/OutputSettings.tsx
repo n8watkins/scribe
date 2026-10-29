@@ -7,6 +7,7 @@ import {
   type AfterDictation,
   type InsertMethod,
 } from "../lib/format";
+import { forPlatform } from "../lib/platform";
 import { SettingRow } from "./layout";
 import { SegmentedControl } from "./primitives";
 
@@ -24,11 +25,23 @@ const METHOD_OPTIONS: { label: string; value: InsertMethod }[] = [
 
 const METHOD_DESCRIPTIONS: Record<InsertMethod, string> = {
   paste_restore:
-    "Scribe pastes the text, then puts back whatever was on your clipboard. Dictations stay out of Windows clipboard history.",
+    "Scribe pastes the text, then puts back whatever was on your clipboard.",
   paste_keep:
     "Scribe pastes the text and leaves it on your clipboard, replacing what was there, so you can paste it again.",
   type: "Scribe types the text out key by key. Use this for apps that block pasting, such as some terminals, remote desktops and games. Your clipboard is never touched.",
 };
+
+/** What keeps a dictation out of clipboard history differs per platform: a
+ * Windows clipboard format, and on Linux a hint that KDE's Klipper and other
+ * managers honor. Nothing is claimed where it isn't done. */
+function clipboardHistoryNote(): string {
+  return forPlatform({
+    windows: " Dictations stay out of Windows clipboard history.",
+    macos: "",
+    linux:
+      " Dictations are marked so clipboard managers that honor it leave them out of their history.",
+  });
+}
 
 /** The two output settings shared by Settings and Transcribe: what happens
  * after a dictation, and how inserted text reaches the app. */
@@ -62,7 +75,14 @@ export function OutputSettingRows({
         />
       </SettingRow>
       {after === "insert" ? (
-        <SettingRow description={METHOD_DESCRIPTIONS[method]} label="Insert method">
+        <SettingRow
+          description={
+            method === "paste_restore"
+              ? `${METHOD_DESCRIPTIONS[method]}${clipboardHistoryNote()}`
+              : METHOD_DESCRIPTIONS[method]
+          }
+          label="Insert method"
+        >
           <select
             aria-label="Insert method"
             className="output-method-select"

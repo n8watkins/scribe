@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { currentPlatform, forPlatform } from "./lib/platform";
 
 export type AppStatus =
   | "Idle"
@@ -999,11 +1000,19 @@ export function commandErrorMessage(error: unknown): string {
 }
 
 function friendlyCommandErrorMessage(code: string): string | null {
+  const whisperCli =
+    currentPlatform() === "windows" ? "windows/whisper-cli.exe" : `${currentPlatform()}/whisper-cli`;
   const messages: Record<string, string> = {
     no_microphone_selected:
       "Choose a microphone before recording, or switch back to the default input device.",
-    microphone_permission_denied:
-      "Windows denied microphone access. Enable microphone permission for Scribe in Windows privacy settings.",
+    microphone_permission_denied: forPlatform({
+      windows:
+        "Windows denied microphone access. Enable microphone permission for Scribe in Windows privacy settings.",
+      macos:
+        "macOS denied microphone access. Allow Scribe under System Settings > Privacy & Security > Microphone.",
+      linux:
+        "Microphone access was denied. Allow Scribe to use the microphone in your desktop's privacy or sound settings.",
+    }),
     microphone_unavailable:
       "The selected microphone is unavailable. Reconnect it or choose another input device.",
     recording_failed:
@@ -1017,7 +1026,7 @@ function friendlyCommandErrorMessage(code: string): string | null {
     whisper_model_missing:
       "Selected Whisper model is missing. Re-download the model or choose another downloaded model.",
     missing_whisper_executable:
-      "The bundled whisper.cpp executable is missing. Install a build that includes resources/bin/windows/whisper-cli.exe.",
+      `The bundled whisper.cpp executable is missing. Install a build that includes resources/bin/${whisperCli}.`,
     whisper_transcription_failed:
       "Whisper transcription failed. Try again or choose another model.",
     empty_transcript:
@@ -1028,8 +1037,14 @@ function friendlyCommandErrorMessage(code: string): string | null {
       "The downloaded model failed verification. Delete it and retry the download.",
     model_download_in_progress:
       "That model is already downloading. Wait for it to finish or cancel it first.",
-    autostart_failed:
-      "Windows rejected the startup registration, so Launch at startup was not changed. Try again or check Windows startup settings.",
+    autostart_failed: forPlatform({
+      windows:
+        "Windows rejected the startup registration, so Launch at startup was not changed. Try again or check Windows startup settings.",
+      macos:
+        "macOS rejected the login item, so Launch at startup was not changed. Try again or check Login Items in System Settings.",
+      linux:
+        "Scribe could not write its autostart entry, so Launch at startup was not changed. Check that ~/.config/autostart is writable and try again.",
+    }),
     hotkey_registration_failed:
       "Could not register the hotkey. Another app may be using it; choose a different shortcut.",
     paste_failed:
@@ -1039,7 +1054,9 @@ function friendlyCommandErrorMessage(code: string): string | null {
     app_database_error:
       "Scribe could not access its local database. Restart the app; if it persists, inspect the app data folder.",
     app_data_dir_unavailable:
-      "Scribe could not locate its app data folder. Check Windows profile permissions and restart.",
+      currentPlatform() === "windows"
+        ? "Scribe could not locate its app data folder. Check Windows profile permissions and restart."
+        : "Scribe could not locate its app data folder. Check the permissions on your home folder and restart.",
   };
 
   return messages[code] ?? null;
