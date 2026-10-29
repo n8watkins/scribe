@@ -1599,7 +1599,7 @@ mod tests {
         let settings = AppSettings::default();
 
         assert!(validate_hotkeys(&settings.hotkeys).is_ok());
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
         assert!(matches!(
             parse_shortcut(&settings.hotkeys.hold_to_talk),
             Ok(ParsedShortcut::ModifierChord(_))
@@ -1610,13 +1610,13 @@ mod tests {
         ));
     }
 
-    /// Linux registers global shortcuts as X11 key grabs: a modifier-only
-    /// chord can't be registered at all, and a key without modifiers steals
-    /// that key from every other app. Every default (and Dev) bind must be a
-    /// key with at least one modifier.
-    #[cfg(target_os = "linux")]
+    /// Linux registers global shortcuts as X11 key grabs and macOS as Carbon
+    /// hot keys: a modifier-only chord can't be registered at all, and a key
+    /// without modifiers steals that key from every other app. Every default
+    /// (and Dev) bind must be a key with at least one modifier.
+    #[cfg(not(windows))]
     #[test]
-    fn linux_default_hotkeys_register_and_leave_typing_alone() {
+    fn default_hotkeys_register_and_leave_typing_alone() {
         for hotkeys in [HotkeySettings::default(), HotkeySettings::dev_defaults()] {
             assert!(validate_hotkeys(&hotkeys).is_ok());
             for action in HOTKEY_ACTIONS {
@@ -1636,7 +1636,7 @@ mod tests {
         let dev = HotkeySettings::dev_defaults();
         // Each Dev bind must be individually registerable.
         assert!(validate_hotkeys(&dev).is_ok());
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
         assert!(matches!(
             parse_shortcut(&dev.hold_to_talk),
             Ok(ParsedShortcut::ModifierChord(_))
