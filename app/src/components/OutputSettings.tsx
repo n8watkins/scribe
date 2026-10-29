@@ -38,12 +38,13 @@ const METHOD_DESCRIPTIONS: Record<InsertMethod, string> = {
 };
 
 /** What keeps a dictation out of clipboard history differs per platform: a
- * Windows clipboard format, and on Linux a hint that KDE's Klipper and other
- * managers honor. Nothing is claimed where it isn't done. */
+ * Windows clipboard format, on Linux a hint that KDE's Klipper and other
+ * managers honor, and on macOS the nspasteboard.org concealed type. */
 function clipboardHistoryNote(): string {
   return forPlatform({
     windows: " Dictations stay out of Windows clipboard history.",
-    macos: "",
+    macos:
+      " Dictations are marked so clipboard managers that honor it leave them out of their history.",
     linux:
       " Dictations are marked so clipboard managers that honor it leave them out of their history.",
   });
