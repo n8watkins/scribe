@@ -950,4 +950,20 @@ mod tests {
             "github_not_signed_in"
         );
     }
+
+    /// The token must reach the real Keychain: keyring's fallback mock store
+    /// keeps nothing between `Entry` values, so a fresh read would miss it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn credential_round_trips_through_the_keychain() {
+        let service = format!("com.natkins.scribe.test.{}", uuid::Uuid::new_v4());
+        let credential = StoredCredential::legacy("gho_keychain_test".to_string());
+        store_credential(&service, &credential).unwrap();
+        let stored = load_credential(&service);
+        let present = has_stored_token(&service);
+        sign_out(&service).unwrap();
+        assert_eq!(stored.unwrap().access_token, "gho_keychain_test");
+        assert!(present);
+        assert!(!has_stored_token(&service));
+    }
 }
