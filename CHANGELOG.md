@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.0 - 2026-10-28
+
+The Last transcript card now shows what really happened to your clipboard, discarded or timed-out recordings keep their stop reason, and the paste, focus and clipboard code moved into a platform layer as groundwork for Linux and macOS builds.
+
+### New
+
+- Record from the microphone on Linux ([#63](https://github.com/n8watkins/scribe/pull/63))
+- Paste, type out and transform selected text in X11 apps on Linux ([#64](https://github.com/n8watkins/scribe/pull/64))
+- Hotkeys that work on Linux for new installs ([#66](https://github.com/n8watkins/scribe/pull/66))
+
+### Fixed
+
+- A discarded or timed-out recording keeps its stop reason ([#65](https://github.com/n8watkins/scribe/pull/65))
+- Show what really happened to the clipboard on the Last transcript card ([#69](https://github.com/n8watkins/scribe/pull/69))
+
 ## 0.10.0 - 2026-10-28
 
 A reorganized Scribe: settings are grouped, Ctrl+K finds any setting, and Home shows your stats. Scribe's windows stay responsive while it transcribes, and settings changed in one window are no longer undone by another.

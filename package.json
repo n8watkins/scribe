@@ -1,6 +1,6 @@
 {
   "name": "scribe",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "description": "Release tooling for Scribe (n8watkins/release-kit). The app itself is in app/.",
   "license": "MIT",
