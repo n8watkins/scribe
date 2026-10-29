@@ -49,9 +49,17 @@ pub struct PasteTarget {
     pub process_id: u32,
 }
 
+/// The paste shortcut, as the user presses it here, for messages that ask
+/// the user to paste themselves.
+pub const PASTE_SHORTCUT: &str = if cfg!(target_os = "macos") {
+    "Cmd+V"
+} else {
+    "Ctrl+V"
+};
+
 /// The error for an operation this system doesn't support yet. `what` names
 /// the feature in a few words, starting with a capital letter.
-#[cfg_attr(windows, allow(dead_code))]
+#[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
 pub(crate) fn unsupported(code: &str, what: &str) -> CommandError {
     CommandError::new(code, format!("{what} is not supported on this system yet."))
 }

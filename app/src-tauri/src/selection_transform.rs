@@ -257,7 +257,10 @@ pub fn apply_result(
         captured.restore_on_drop = false;
         return Err(CommandError::new(
             "transform_target_changed",
-            "You switched windows while Scribe was rewriting. The result is on your clipboard: press Ctrl+V to paste it.",
+            format!(
+                "You switched windows while Scribe was rewriting. The result is on your clipboard: press {} to paste it.",
+                platform::PASTE_SHORTCUT
+            ),
         ));
     }
 

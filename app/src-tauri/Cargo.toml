@@ -74,6 +74,16 @@ windows = { version = "0.58", features = [
     "Win32_System_Threading",
 ] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# The app in front (NSWorkspace), window order (CGWindowList), synthetic
+# keystrokes (CGEvent) and the full clipboard (NSPasteboard). Already in the
+# tree through Tauri and arboard.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "libc", "NSPasteboard", "NSPasteboardItem", "NSRunningApplication", "NSWorkspace"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFArray", "CFDictionary", "CFNumber", "CFString"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGEvent", "CGEventSource", "CGEventTypes", "CGRemoteOperation", "CGWindow"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSString"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # Window identity, focus and synthetic keystrokes (XTEST) on X11 and
 # XWayland; XFIXES tells when the clipboard changes. Already in the tree
