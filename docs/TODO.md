@@ -15,6 +15,13 @@ Standing rules: Conventional Commits under 100 chars, no Co-Authored-By trailer,
 
 ## 2. Linux (Phase 4)
 
+### 2.0 Full dictation test in GitHub Actions
+
+- [ ] In `linux.yml`: run the AppImage under Xvfb (X11) and under a headless Wayland compositor (weston or sway headless), with a PulseAudio/PipeWire null sink as the microphone fed from speech WAVs.
+- [ ] Same flow as the macOS test (3.0): hotkey via XTEST, dictate, check the paste into a test window (a small GTK or xterm target) and the clipboard restore, type-out, paste guard with a second app, Transform with the stand-in LLM, discard.
+- [ ] Wayland run: today it should show the copy fallback message; once 2.1 lands it becomes the portal paste test.
+- [ ] Screenshots uploaded as artifacts.
+
 ### 2.1 Must-have for a usable Linux build
 - [ ] **Wayland paste and typing.** Today paste works only through X11/XWayland (#64). Options: XDG RemoteDesktop portal (keyboard injection with a one-time user consent), `wtype` (wlroots compositors only), `ydotool` (needs uinput access). Recommendation: portal first, fall back to copy with a clear message.
 - [ ] **Wayland global shortcuts.** Hotkeys are X11 grabs, so on native Wayland they fire only while an X11 window has focus. Use the XDG GlobalShortcuts portal (GNOME 48+, KDE 5.27+), and keep X11 grabs as the fallback.
@@ -37,6 +44,27 @@ Standing rules: Conventional Commits under 100 chars, no Co-Authored-By trailer,
 - [ ] Microphone selection with PipeWire and PulseAudio.
 
 ## 3. macOS (Phase 4)
+
+### 3.0 Full dictation test in GitHub Actions (do this first)
+
+The macOS runner already has a logged-in session with Accessibility granted, which is how #72's TextEdit paste test works.
+Build on that to cover most of the hands-on checklist automatically, in `macos.yml` (one PR, then grow it):
+
+- [ ] Install a virtual audio device on the runner (BlackHole via Homebrew, free) and make it the default input, so recorded speech WAVs can be "spoken" into Scribe.
+- [ ] Launch the full app (not just `--self-test-transcribe`) with a throwaway profile, `status.json` to wait on state (as the Windows harness does), and Save-only off.
+- [ ] Toggle dictation with the real default hotkey (Control+Option+Backquote posted as a CGEvent), play a WAV, stop, and check the transcript lands in a TextEdit document and the previous clipboard (text, then an image, then a file URL) is restored.
+- [ ] Hold-to-talk: hold Control+Option+Z while the WAV plays, release, check the paste.
+- [ ] Direct Insert (type out) and Copy-only modes.
+- [ ] Paste guard: switch to another app while transcribing, check nothing is pasted and the text is left on the clipboard with the Cmd+V message.
+- [ ] Paste last (Control+Option+V) with the dashboard in front: the app below gets focus and the text.
+- [ ] Transform Selection on a TextEdit selection, with a stand-in OpenAI-compatible server on localhost that upper-cases the text (like the Windows test's `fake_llm.py`).
+- [ ] Discard (Control+Option+X) leaves no clip; silence auto-stop.
+- [ ] Other targets: Terminal (and iTerm via Homebrew cask), a Safari text field if automatable.
+- [ ] Screenshots (`screencapture`) of the main window, the pill (transparency), the result toast and the Accessibility row, uploaded as workflow artifacts for a visual review.
+- [ ] Update path: install the previous release, update to the new build, check whether the Accessibility grant still applies. The runner's TCC setup is special, so treat the result as a hint, not proof.
+- [ ] Run it on PRs that touch macOS code, the platform layer, audio, output or hotkeys, and on release builds.
+
+What CI cannot answer (still needs a real Mac, see 3.1): Gatekeeper's first-launch flow after a browser download, the real permission prompts (runners come pre-granted), whether grants survive updates under normal TCC, real Metal speed, and apps that need a sign-in (Slack).
 
 ### 3.1 Must-have
 - [ ] **Hands-on test on a real Mac** (the owner has none; options: borrow one, a cloud Mac such as MacStadium/AWS EC2 Mac (paid), or accept CI-only). Checklist is in `macos-findings.md` "What a person must check" plus: dictate into TextEdit, Safari, Slack, Terminal, iTerm with Paste, Copy+Paste and Direct Insert; clipboard (text, image, Finder file) comes back after paste; switching apps mid-dictation skips the paste with the Cmd+V message; Paste last (Control+Option+V) from the dashboard; Transform on a TextEdit selection; the Accessibility row and button (#76); the microphone prompt; hotkeys fire while other apps are in front (#71).
@@ -80,7 +108,7 @@ Standing rules: Conventional Commits under 100 chars, no Co-Authored-By trailer,
 
 ## 7. Tooling and environment
 
-- [ ] 7.1 Windows hands-on harness lives outside the repo in `C:\Users\natha\AppData\Local\Temp\scribe-test\` (`go.ps1` watchdog, `run.ps1`, `devstart.ps1`, `targetb.ps1`); Temp can be wiped. Move it into the repo (for example `tools/windows-harness/`) with a README, so it survives and CI can reuse it. Rules: never tap Alt to take focus, click inside the harness window instead; announce start and end; save and restore the owner's clipboard; window B must be a separate process.
+- [ ] 7.1 Windows hands-on harness lives outside the repo in `C:\Users\natha\AppData\Local\Temp\scribe-test\` (backup copy with `devctl.sh`, `fake_llm.py` and the WAV clips: `~/projects/tools/scribe/windows-harness/`; the working set is `run.ps1`, `go.ps1`, `devstart.ps1`, `devshow.ps1`, `targetb.ps1`, `pw.ps1`, the rest are older experiments) (`go.ps1` watchdog, `run.ps1`, `devstart.ps1`, `targetb.ps1`); Temp can be wiped. Move it into the repo (for example `tools/windows-harness/`) with a README, so it survives and CI can reuse it. Rules: never tap Alt to take focus, click inside the harness window instead; announce start and end; save and restore the owner's clipboard; window B must be a separate process.
 - [ ] The agent `isolation: "worktree"` hook fails ("hook succeeded but returned no worktree path"); create worktrees by hand with `git worktree add ../wt-<name> -b <branch> origin/main` until the hook is fixed.
 - [ ] Stacked PRs: retarget them to `main` before deleting the base branch, or GitHub closes them for good (#74 became #76).
 - [ ] WSL memory: 20 GB cap shared by several sessions; the `wsl-cache-trim` timer trims file cache every 2 minutes. Check `free -m` before cargo builds and use low `-j`; macOS work compiles in CI only.
