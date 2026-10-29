@@ -14,6 +14,7 @@ import {
 import type { ViewActions } from "../types";
 import { SettingRow } from "../components/layout";
 import { MsInput, Toggle } from "../components/primitives";
+import { currentPlatform } from "../lib/platform";
 
 // Groups of setting rows. The sidebar pages in views/pages.tsx place them:
 // Dictation, Words, Models & language, Local AI, Appearance and General.
@@ -271,7 +272,11 @@ export function AppBehaviorSettings({ actions, settings }: GroupProps) {
   return (
     <>
       <SettingRow
-        description="Start Scribe when you sign in to Windows."
+        description={
+          currentPlatform() === "windows"
+            ? "Start Scribe when you sign in to Windows."
+            : "Start Scribe when you log in."
+        }
         label="Launch at startup"
       >
         <Toggle

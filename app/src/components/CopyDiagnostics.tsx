@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ClipboardCopy } from "lucide-react";
 import { collectDiagnostics, commandErrorMessage } from "../backend";
+import { forPlatform } from "../lib/platform";
 
 /** About's "Copy diagnostics": copies a plain-text report (version, OS,
  * settings summary, recent problems and the end of the log) for a bug report.
@@ -32,14 +33,20 @@ export function CopyDiagnostics() {
     }
   };
 
+  const osVersion = forPlatform({
+    windows: "Windows version",
+    macos: "macOS version",
+    linux: "Linux distribution",
+  });
+
   return (
     <div className="about-block" data-setting="Diagnostics">
       <div className="about-block-head">
         <strong>Diagnostics</strong>
       </div>
       <small>
-        Copies a report to paste into a bug report: version, Windows version,
-        a summary of your settings, recent errors and the end of the log. It
+        Copies a report to paste into a bug report: version, {osVersion}, a
+        summary of your settings, recent errors and the end of the log. It
         never includes your transcripts, sign-in tokens or your user name.
       </small>
       <div className="about-block-actions">
