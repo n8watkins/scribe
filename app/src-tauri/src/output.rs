@@ -52,19 +52,17 @@ pub enum PasteBlock {
 
 impl PasteBlock {
     fn message(self) -> String {
-        match self {
-            PasteBlock::FocusChanged => {
-                "You switched windows, so Scribe didn't paste. Copied. Press Ctrl+V to paste."
-                    .to_string()
-            }
+        let reason = match self {
+            PasteBlock::FocusChanged => "You switched windows, so Scribe didn't paste.",
             PasteBlock::Elevated => {
-                "That window runs as administrator, which blocks Scribe from pasting. Copied. Press Ctrl+V to paste."
-                    .to_string()
+                "That window runs as administrator, which blocks Scribe from pasting."
             }
-            PasteBlock::Unavailable(reason) => {
-                format!("{reason} Copied. Press Ctrl+V to paste.")
-            }
-        }
+            PasteBlock::Unavailable(reason) => reason,
+        };
+        format!(
+            "{reason} Copied. Press {} to paste.",
+            platform::PASTE_SHORTCUT
+        )
     }
 }
 
@@ -785,7 +783,10 @@ mod tests {
             PasteBlock::Elevated,
             PasteBlock::Unavailable("Scribe can't paste into Wayland apps yet."),
         ] {
-            assert!(block.message().ends_with("Copied. Press Ctrl+V to paste."));
+            assert!(block.message().ends_with(&format!(
+                "Copied. Press {} to paste.",
+                platform::PASTE_SHORTCUT
+            )));
         }
     }
 
