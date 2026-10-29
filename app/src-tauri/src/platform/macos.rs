@@ -511,13 +511,17 @@ mod tests {
         }
     }
 
-    fn frontmost_bundle_id() -> Option<String> {
-        autoreleasepool(|_| {
-            NSWorkspace::sharedWorkspace()
-                .frontmostApplication()?
-                .bundleIdentifier()
-                .map(|id| id.to_string())
-        })
+    fn textedit_pid() -> Option<i32> {
+        let output = std::process::Command::new("pgrep")
+            .args(["-x", "TextEdit"])
+            .output()
+            .ok()?;
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()?
+            .trim()
+            .parse()
+            .ok()
     }
 
     fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
@@ -548,15 +552,20 @@ mod tests {
             .status()
             .unwrap();
         assert!(opened.success());
-        wait_until("TextEdit in front", || {
-            frontmost_bundle_id().as_deref() == Some("com.apple.TextEdit")
+        // The test thread has no main run loop to update NSWorkspace's
+        // frontmost app, so TextEdit is found by its frontmost window.
+        let mut pid = 0;
+        wait_until("TextEdit to start", || {
+            textedit_pid().map(|found| pid = found).is_some()
         });
-        wait_until("the TextEdit window", || {
-            foreground_target().is_some_and(|target| target.window > 0)
+        wait_until("the TextEdit window in front", || {
+            app_windows()
+                .first()
+                .is_some_and(|window| window.owner == pid)
         });
-        let target = foreground_target().unwrap();
-        assert_eq!(foreground_window(), target.window);
-        assert!(!is_own_window(target.window));
+        let window = front_window_id(pid);
+        assert!(window > 0);
+        assert!(!is_own_window(window));
         // Let the document window take keyboard focus.
         thread::sleep(Duration::from_millis(500));
 
