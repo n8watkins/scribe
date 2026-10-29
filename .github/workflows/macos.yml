@@ -65,9 +65,10 @@ jobs:
         working-directory: app/src-tauri
         run: cargo test --locked
 
-      # The platform tests that need the logged-in session's window server
-      # and pasteboard, which the runner has: the app in front and a
-      # clipboard snapshot and restore round trip.
+      # The platform tests that need the logged-in session's window server,
+      # pasteboard and Accessibility permission, which the runner has: the
+      # app in front, a clipboard snapshot and restore round trip, and real
+      # paste, typing and selection copy in TextEdit.
       - name: Run macOS system tests
         working-directory: app/src-tauri
         run: cargo test --locked --lib platform::macos -- --ignored --test-threads=1 --nocapture

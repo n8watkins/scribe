@@ -511,6 +511,82 @@ mod tests {
         }
     }
 
+    fn frontmost_bundle_id() -> Option<String> {
+        autoreleasepool(|_| {
+            NSWorkspace::sharedWorkspace()
+                .frontmostApplication()?
+                .bundleIdentifier()
+                .map(|id| id.to_string())
+        })
+    }
+
+    fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !done() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// End to end with real keystrokes: opens a text file in TextEdit, pastes
+    /// into it, types after the paste, then selects all and copies it back
+    /// out through the selection capture's Command+C. Needs the Accessibility
+    /// permission and quits TextEdit afterwards, so it is meant for the CI
+    /// runner, which grants it.
+    #[test]
+    #[ignore]
+    fn pastes_types_and_copies_in_textedit() {
+        assert!(
+            accessibility_granted(),
+            "posting keystrokes needs the Accessibility permission"
+        );
+        let file = std::env::temp_dir().join(format!("scribe-paste-{}.txt", std::process::id()));
+        std::fs::write(&file, "").unwrap();
+        let opened = std::process::Command::new("open")
+            .args(["-a", "TextEdit"])
+            .arg(&file)
+            .status()
+            .unwrap();
+        assert!(opened.success());
+        wait_until("TextEdit in front", || {
+            frontmost_bundle_id().as_deref() == Some("com.apple.TextEdit")
+        });
+        wait_until("the TextEdit window", || {
+            foreground_target().is_some_and(|target| target.window > 0)
+        });
+        let target = foreground_target().unwrap();
+        assert_eq!(foreground_window(), target.window);
+        assert!(!is_own_window(target.window));
+        // Let the document window take keyboard focus.
+        thread::sleep(Duration::from_millis(500));
+
+        let original = save_clipboard_snapshot();
+        let mut clipboard = open_clipboard().unwrap();
+        set_private_clipboard_text(&mut clipboard, "Pasted by Scribe.").unwrap();
+        send_paste_shortcut().unwrap();
+        thread::sleep(Duration::from_millis(500));
+        let typed = " Typed: naïve café 😀, long enough to need several events.";
+        type_text(typed).unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        // Command+A (the ANSI A key is code 0), then the selection copy.
+        let source = event_source().unwrap();
+        assert!(post_key(&source, 0, CGEventFlags::MaskCommand, None));
+        thread::sleep(Duration::from_millis(300));
+        let before = clipboard_sequence_number();
+        send_copy_shortcut(false).unwrap();
+        wait_until("the copy", || clipboard_sequence_number() != before);
+        thread::sleep(Duration::from_millis(100));
+        let copied = clipboard.get_text().unwrap();
+
+        restore_clipboard_snapshot(&original).unwrap();
+        let _ = std::process::Command::new("pkill")
+            .args(["-x", "TextEdit"])
+            .status();
+        let _ = std::fs::remove_file(&file);
+        assert_eq!(copied, format!("Pasted by Scribe.{typed}"));
+    }
+
     /// Writes to the real general pasteboard (and puts it back), so it runs
     /// only when asked.
     #[test]
