@@ -59,9 +59,14 @@ jobs:
           npm ci --ignore-scripts
           npm rebuild esbuild
 
+      # Shipped dependencies must be clean; dev-only tooling (the eslint chain)
+      # fails only on high or critical, since its moderate advisories often wait
+      # weeks for an upstream release.
       - name: Audit dependencies
         working-directory: app
-        run: npm audit
+        run: |
+          npm audit --omit=dev
+          npm audit --audit-level=high
 
       - name: Lint frontend
         working-directory: app
@@ -119,9 +124,14 @@ jobs:
           npm ci --ignore-scripts
           npm rebuild esbuild
 
+      # Shipped dependencies must be clean; dev-only tooling (the eslint chain)
+      # fails only on high or critical, since its moderate advisories often wait
+      # weeks for an upstream release.
       - name: Audit dependencies
         working-directory: integrations/mcp-server
-        run: npm audit
+        run: |
+          npm audit --omit=dev
+          npm audit --audit-level=high
 
       - name: Test, typecheck, and build
         working-directory: integrations/mcp-server
