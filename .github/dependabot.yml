@@ -32,7 +32,6 @@ updates:
       day: monday
       time: "08:00"
       timezone: America/Los_Angeles
-    open-pull-requests-limit: 5
     patterns: ["@tauri-apps/api", "@tauri-apps/plugin-*"]
     multi-ecosystem-group: tauri
     groups:
@@ -65,7 +64,6 @@ updates:
       day: monday
       time: "08:00"
       timezone: America/Los_Angeles
-    open-pull-requests-limit: 5
     patterns: ["tauri", "tauri-build", "tauri-plugin-*"]
     multi-ecosystem-group: tauri
     groups:
