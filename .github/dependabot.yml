@@ -1,4 +1,18 @@
 version: 2
+# The Tauri packages come in npm and Rust pairs (@tauri-apps/api and tauri,
+# @tauri-apps/plugin-X and tauri-plugin-X), and the Tauri CLI refuses to bundle
+# when a pair differs in major or minor version (#85). One group across both
+# ecosystems moves each pair in the same pull request.
+multi-ecosystem-groups:
+  tauri:
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: America/Los_Angeles
+    commit-message:
+      prefix: build
+      include: scope
 updates:
   # release-kit (the root dev dependency): each kit release, majors included.
   - package-ecosystem: npm
@@ -19,9 +33,12 @@ updates:
       time: "08:00"
       timezone: America/Los_Angeles
     open-pull-requests-limit: 5
+    patterns: ["@tauri-apps/api", "@tauri-apps/plugin-*"]
+    multi-ecosystem-group: tauri
     groups:
       safe-updates:
         update-types: [minor, patch]
+        exclude-patterns: ["@tauri-apps/api", "@tauri-apps/plugin-*"]
     ignore:
       - dependency-name: "*"
         update-types: [version-update:semver-major]
@@ -49,9 +66,12 @@ updates:
       time: "08:00"
       timezone: America/Los_Angeles
     open-pull-requests-limit: 5
+    patterns: ["tauri", "tauri-build", "tauri-plugin-*"]
+    multi-ecosystem-group: tauri
     groups:
       safe-updates:
         update-types: [minor, patch]
+        exclude-patterns: ["tauri", "tauri-build", "tauri-plugin-*"]
     ignore:
       - dependency-name: "*"
         update-types: [version-update:semver-major]
