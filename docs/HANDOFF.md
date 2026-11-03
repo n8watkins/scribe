@@ -76,7 +76,7 @@ Current product and operations docs are listed in the [documentation index](READ
 
 ## Release process (release-kit)
 
-Scribe follows the n8 release standard ([release-kit](https://github.com/n8watkins/release-kit); see `RELEASING.md`).
+Scribe follows the n8 release standard ([release-kit](https://github.com/n8watkins/release-kit); see `RELEASING.md`). Dev builds (the Scribe Dev flavor and its rolling `dev` pre-release) are in [DEV_BUILDS.md](DEV_BUILDS.md).
 release-kit owns the version, the tag, `CHANGELOG.md` and the release notes; `.github/workflows/release.yml` still owns the build, signing, smoke installs, `latest.json`, checksums and the upload.
 
 1. Commit with Conventional Commits; `feat`, `fix`, `perf` and `security` subjects become the release notes, so write them for a user.
