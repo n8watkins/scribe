@@ -6,5 +6,7 @@
     "app/package.json",
     "app/package-lock.json"
   ],
-  "workflows": "package"
+  "workflows": "package",
+  "repository": "n8watkins/scribe",
+  "visibility": "public"
 }
