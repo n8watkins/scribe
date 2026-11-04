@@ -53,9 +53,11 @@ jobs:
         with:
           components: clippy
 
+      # Kept when a scenario fails, so the next run doesn't rebuild everything.
       - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           workspaces: app/src-tauri
+          cache-on-failure: true
 
       - name: Restore whisper.cpp build
         id: whisper-cache
