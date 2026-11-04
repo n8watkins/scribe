@@ -14,7 +14,11 @@ multi-ecosystem-groups:
       prefix: build
       include: scope
 updates:
-  # release-kit (the root dev dependency): each kit release, majors included.
+  # The root package.json: release-kit (each kit release, majors included, in a
+  # pull request of its own) and every other root dependency. No allow list:
+  # Dependabot applies it to security updates too, and security jobs take this
+  # first npm entry's settings, so an allow list naming only the kit blocked
+  # every root security update ("all versions were ignored").
   - package-ecosystem: npm
     directory: /
     schedule:
@@ -22,8 +26,23 @@ updates:
       day: monday
       time: "08:00"
       timezone: America/Los_Angeles
-    allow:
-      - dependency-name: release-kit
+    # A new release waits 3 days (7 for a major) so a bad one can be pulled;
+    # the kit is exempt, so its newest tag is always the candidate.
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
+      exclude: ["release-kit"]
+    commit-message:
+      prefix: build
+      include: scope
+    # A dependency joins the first group that matches it.
+    groups:
+      release-kit:
+        patterns: ["release-kit"]
+      npm-minor-patch:
+        update-types: [minor, patch]
+      npm-major:
+        update-types: [major]
 
   - package-ecosystem: npm
     directory: /app
