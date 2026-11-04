@@ -32,6 +32,8 @@ pub mod state_server;
 pub mod stats;
 pub mod status_file;
 pub mod sync_history;
+#[cfg(feature = "e2e-audio")]
+pub mod test_audio;
 pub mod text_replace;
 pub mod transcript;
 pub mod tray;
@@ -453,6 +455,11 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 style_native_titlebar(&window);
             }
+
+            // Builds made for the end-to-end tests can record a WAV file in
+            // place of the microphone (see test_audio for the gates).
+            #[cfg(feature = "e2e-audio")]
+            test_audio::activate(app.handle());
 
             // Seed the on-disk status file with the startup (Idle) state so a
             // second app (T-Hub) always has a file to read, even before the

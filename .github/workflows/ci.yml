@@ -40,6 +40,13 @@ jobs:
         working-directory: app/src-tauri
         run: cargo test --locked
 
+      # The test-only audio input of the end-to-end build (e2e-windows.yml).
+      - name: Lint and test the e2e-audio feature
+        working-directory: app/src-tauri
+        run: |
+          cargo clippy --locked --all-targets --features e2e-audio -- -D warnings
+          cargo test --locked --features e2e-audio test_audio
+
   desktop-frontend:
     name: Desktop frontend
     runs-on: ubuntu-latest
