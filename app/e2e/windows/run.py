@@ -826,6 +826,9 @@ class Run:
         self.app.launch()
         failures = re.findall(r"Hotkey registration failed.*", log_text())
         check(not failures, f"Test hotkeys failed to register: {failures}")
+        self.dashboard = wait_until("the dashboard window", self.app.main_window, 30)
+        wait_until("the dashboard to show", lambda: user32.IsWindowVisible(self.dashboard), 30)
+        self.shot("dashboard")
         self.targets["A"] = Target("A", self.work, 20)
         self.targets["B"] = Target("B", self.work, 520)
 
@@ -857,9 +860,7 @@ class Run:
     # -- scenarios ---------------------------------------------------------
 
     def close_to_tray(self) -> None:
-        window = wait_until("the dashboard window", self.app.main_window, 30)
-        wait_until("the dashboard to show", lambda: user32.IsWindowVisible(window), 30)
-        self.shot("dashboard")
+        window = self.dashboard
         user32.PostMessageW(window, WM_CLOSE, 0, 0)
         wait_until("the dashboard to hide", lambda: not user32.IsWindowVisible(window), 10)
         stays("Scribe to keep running in the tray", self.app.alive, 2)
