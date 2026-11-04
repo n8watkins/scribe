@@ -6,7 +6,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "http://127.0.0.1:9/e2e-builds-never-update.json"
+        "https://127.0.0.1:9/e2e-builds-never-update.json"
       ]
     }
   }
