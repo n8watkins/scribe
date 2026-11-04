@@ -19,7 +19,7 @@ The [app README](../app/README.md) owns desktop development and GitHub App confi
 ## Release health
 
 The [release workflow](../.github/workflows/release.yml) is authoritative for build, validation, packaging, signing, and publication mechanics.
-The [Windows QA checklist](V1_WINDOWS_QA_CHECKLIST.md) owns manual release acceptance.
+The [Windows QA checklist](V1_WINDOWS_QA_CHECKLIST.md) owns release acceptance, split into automated and manual checks.
 Releases are cut with release-kit (`npm run release -- --push`); see [RELEASING.md](../RELEASING.md).
 Only the updater artifacts are signed; Authenticode signing of the installers needs a code-signing certificate from the owner.
 

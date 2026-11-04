@@ -12,7 +12,7 @@ Use current source, tests, workflows, and release metadata as the final authorit
 - [`HANDOFF.md`](HANDOFF.md) starts with the current state, open problems, owner blockers and next steps (its "Historical record" part below that is not current).
 - [`STATUS_AND_NEXT_STEPS.md`](STATUS_AND_NEXT_STEPS.md) records the current release state and remaining opportunities.
 - [`ASSESSMENT_PLAN_2026-10.md`](ASSESSMENT_PLAN_2026-10.md) is the plan for the full code, security and UX assessment.
-- [`V1_WINDOWS_QA_CHECKLIST.md`](V1_WINDOWS_QA_CHECKLIST.md) is the active Windows acceptance checklist.
+- [`V1_WINDOWS_QA_CHECKLIST.md`](V1_WINDOWS_QA_CHECKLIST.md) is the active Windows acceptance checklist: what CI checks, what an end-to-end job can check next (#93), and what a person checks before a release.
 - [`integrations/dictation-state-contract.md`](integrations/dictation-state-contract.md) is the frozen v1 external state contract.
 - [`../cli/README.md`](../cli/README.md) and [`../integrations/mcp-server/README.md`](../integrations/mcp-server/README.md) document the current integration clients.
 
