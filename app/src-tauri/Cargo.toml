@@ -15,6 +15,12 @@ name = "app_lib"
 # from the Tauri template are for mobile targets, which Scribe doesn't build.
 crate-type = ["rlib"]
 
+[features]
+# Test only: the Windows end-to-end job (.github/workflows/e2e-windows.yml)
+# records a WAV file in place of the microphone (src/test_audio.rs). Shipped
+# builds never turn it on.
+e2e-audio = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

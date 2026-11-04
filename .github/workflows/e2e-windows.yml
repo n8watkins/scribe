@@ -1,0 +1,172 @@
+name: Windows end-to-end
+
+# Drives a real Scribe Dev build on a hosted Windows runner the way a person
+# would: global hotkeys, dictation into stand-in apps, the clipboard, app
+# switches and Transform Selection (app/e2e/windows/run.py). Runners have an
+# interactive desktop but no microphone, so this build is made with the
+# test-only `e2e-audio` feature and records WAV clips instead
+# (app/src-tauri/src/test_audio.rs); everything after capture runs for real.
+on:
+  pull_request:
+    paths:
+      - "app/**"
+      - ".github/workflows/e2e-windows.yml"
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - ".github/workflows/e2e-windows.yml"
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-windows-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Same reviewed whisper.cpp source as the Windows release build.
+  WHISPER_CPP_VERSION: v1.9.1
+  WHISPER_CPP_COMMIT: f049fff95a089aa9969deb009cdd4892b3e74916
+  E2E_OUT: ${{ github.workspace }}\e2e-out
+
+jobs:
+  e2e:
+    name: Windows end-to-end
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          components: clippy
+
+      # Kept when a scenario fails, so the next run doesn't rebuild everything.
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        with:
+          workspaces: app/src-tauri
+          cache-on-failure: true
+
+      - name: Restore whisper.cpp build
+        id: whisper-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/whisper-cpu
+          key: whisper-windows-cpu-${{ env.WHISPER_CPP_COMMIT }}
+
+      # CPU only and statically linked: the test checks Scribe's behavior, not
+      # GPU speed, and runners have no GPU. The release smoke test already runs
+      # the shipped Vulkan build on a runner. Skipping the Vulkan SDK and its
+      # shader compilation keeps this job fast.
+      - name: Build reviewed whisper.cpp source (CPU)
+        if: steps.whisper-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $src = "$env:RUNNER_TEMP\wcpp"
+          git clone --depth 1 --branch "$env:WHISPER_CPP_VERSION" https://github.com/ggml-org/whisper.cpp $src
+          $actual = (git -C $src rev-parse HEAD).Trim()
+          if ($actual -ne $env:WHISPER_CPP_COMMIT) {
+            throw "whisper.cpp commit $actual did not match reviewed commit $env:WHISPER_CPP_COMMIT"
+          }
+          cmake -S $src -B "$src\build" `
+            -DGGML_NATIVE=OFF `
+            -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON `
+            -DGGML_OPENMP=OFF `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DWHISPER_BUILD_EXAMPLES=ON `
+            -DWHISPER_BUILD_TESTS=OFF `
+            -DWHISPER_BUILD_SERVER=ON
+          if ($LASTEXITCODE -ne 0) { throw "Configuring whisper.cpp failed" }
+          cmake --build "$src\build" --config Release -j --target whisper-cli whisper-server
+          if ($LASTEXITCODE -ne 0) { throw "Building whisper.cpp failed" }
+          $out = "$env:RUNNER_TEMP\whisper-cpu"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          foreach ($name in @("whisper-cli.exe", "whisper-server.exe")) {
+            $file = Get-ChildItem "$src\build" -Recurse -Filter $name | Select-Object -First 1
+            if (-not $file) { throw "$name was not built" }
+            Copy-Item $file.FullName $out
+          }
+
+      # Saved straight away, so a later failure in the job does not throw the
+      # whisper.cpp build away.
+      - name: Save whisper.cpp build
+        if: steps.whisper-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/whisper-cpu
+          key: ${{ steps.whisper-cache.outputs.cache-primary-key }}
+
+      - name: Stage whisper.cpp binaries
+        shell: pwsh
+        run: |
+          $dest = "app/src-tauri/resources/bin/windows"
+          Copy-Item "$env:RUNNER_TEMP\whisper-cpu\*.exe" $dest
+          & "$dest\whisper-cli.exe" --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "whisper-cli.exe does not run" }
+
+      # Same install as the release build: scripts off, esbuild's run on its own.
+      - name: Install application dependencies
+        working-directory: app
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild esbuild
+
+      # A release build of the Dev flavor (its own data folders), with the test
+      # audio input compiled in and the updater pointed nowhere.
+      - name: Build Scribe Dev for testing
+        working-directory: app
+        shell: pwsh
+        run: |
+          npm run tauri -- build --no-bundle --features e2e-audio `
+            --config src-tauri/tauri.dev-flavor.conf.json `
+            --config src-tauri/tauri.e2e.conf.json
+          if ($LASTEXITCODE -ne 0) { throw "The test build failed" }
+          $exe = Get-Item "src-tauri/target/release/Scribe Dev.exe"
+          # The release workflow proves shipped builds lack the test input by
+          # looking for this name; here it must be found, or that check is blind.
+          $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($exe.FullName))
+          if (-not $text.Contains("SCRIBE_E2E_AUDIO_WAV")) { throw "The test build lacks the test audio input" }
+          if (-not (Test-Path "src-tauri/target/release/bin/windows/whisper-server.exe")) {
+            throw "whisper.cpp was not copied next to the build"
+          }
+          "SCRIBE_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Run end-to-end scenarios
+        timeout-minutes: 25
+        shell: pwsh
+        run: |
+          python --version
+          python app/e2e/windows/run.py --exe "$env:SCRIBE_EXE" --fixtures app/src-tauri/tests/fixtures --out "$env:E2E_OUT"
+          if ($LASTEXITCODE -ne 0) { throw "End-to-end scenarios failed" }
+
+      - name: Collect app logs
+        if: always()
+        shell: pwsh
+        run: |
+          $dest = "$env:E2E_OUT\app"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          $cache = Join-Path $env:LOCALAPPDATA "com.natkins.scribe.dev"
+          Copy-Item "$cache\logs\*.log" $dest -ErrorAction SilentlyContinue
+          Copy-Item "$cache\status.json" $dest -ErrorAction SilentlyContinue
+          Remove-Item "$env:E2E_OUT\work\*.wav" -ErrorAction SilentlyContinue
+
+      - name: Upload results, screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: e2e-windows
+          path: ${{ env.E2E_OUT }}
+          if-no-files-found: ignore
+          retention-days: 14

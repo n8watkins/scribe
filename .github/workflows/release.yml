@@ -225,6 +225,18 @@ jobs:
           }
           npm run tauri -- build @configs
 
+      # The end-to-end test input (the e2e-audio feature) must never ship: no
+      # executable of this build may carry its environment variable.
+      - name: Check the build has no test input
+        shell: pwsh
+        run: |
+          $exes = @(Get-ChildItem app/src-tauri/target/release -Filter *.exe -File)
+          if ($exes.Count -eq 0) { throw "No executable was built" }
+          foreach ($exe in $exes) {
+            $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($exe.FullName))
+            if ($text.Contains("SCRIBE_E2E_AUDIO_WAV")) { throw "$($exe.Name) contains the end-to-end test input" }
+          }
+
       # Only tagged releases and dev builds explicitly published from main
       # are signed, so other manual builds never touch the key. The signature
       # is what latest.json (or latest-dev.json) carries and what installed

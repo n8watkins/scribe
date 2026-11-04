@@ -249,22 +249,17 @@ impl AudioService {
             .microphone_id
             .as_deref()
             .or(settings.selected_mic_id.as_deref());
-        let (candidate, microphone_fallback) = select_input_device(selected_mic_id)?;
+        let input = open_input(selected_mic_id)?;
+        let microphone_fallback = input.fallback;
         if microphone_fallback {
             log::warn!(
                 "Selected microphone {:?} is not connected; recording with {} instead",
                 selected_mic_id,
-                candidate.info.name
+                input.info.name
             );
         }
-        let supported_config = candidate
-            .device
-            .default_input_config()
-            .map_err(|error| microphone_unavailable(candidate.info.name.as_str(), error))?;
-        let sample_format = supported_config.sample_format();
-        let stream_config: StreamConfig = supported_config.into();
-        let source_sample_rate = stream_config.sample_rate.0;
-        let source_channels = stream_config.channels;
+        let source_sample_rate = input.sample_rate;
+        let source_channels = input.channels;
         let session_id = Uuid::new_v4().to_string();
         let started_at = Utc::now();
         let max_duration_ms = request
@@ -273,8 +268,8 @@ impl AudioService {
             .max(settings.min_recording_ms as u64);
         let info = RecordingSessionInfo {
             session_id: session_id.clone(),
-            microphone_id: candidate.info.id.clone(),
-            microphone_name: candidate.info.name.clone(),
+            microphone_id: input.info.id.clone(),
+            microphone_name: input.info.name.clone(),
             sample_rate: source_sample_rate,
             channels: source_channels,
             started_at,
@@ -334,14 +329,7 @@ impl AudioService {
             )
         });
 
-        let stream = CaptureStream::start(
-            candidate.device,
-            stream_config,
-            sample_format,
-            chunk_tx,
-            app.clone(),
-            session_id.clone(),
-        )?;
+        let stream = CaptureStream::start(input.source, chunk_tx, app.clone(), session_id.clone())?;
 
         let timeout_active = Arc::new(AtomicBool::new(true));
         spawn_timeout_thread(
@@ -1088,6 +1076,49 @@ struct CaptureStream {
 
 impl CaptureStream {
     fn start(
+        source: InputSource,
+        chunk_tx: Sender<AudioChunk>,
+        app: AppHandle,
+        session_id: String,
+    ) -> Result<Self, CommandError> {
+        match source {
+            InputSource::Microphone {
+                device,
+                config,
+                sample_format,
+            } => Self::start_microphone(device, config, sample_format, chunk_tx, app, session_id),
+            #[cfg(feature = "e2e-audio")]
+            InputSource::TestClip(clip) => Self::start_test_clip(clip, chunk_tx),
+        }
+    }
+
+    /// Plays a test clip in place of the microphone (see `test_audio`).
+    #[cfg(feature = "e2e-audio")]
+    fn start_test_clip(
+        clip: crate::test_audio::Clip,
+        chunk_tx: Sender<AudioChunk>,
+    ) -> Result<Self, CommandError> {
+        let (stop_tx, stop_rx) = bounded::<()>(1);
+        let thread = thread::Builder::new()
+            .name("scribe-e2e-audio".to_string())
+            .spawn(move || {
+                crate::test_audio::play(&clip, &stop_rx, |samples| {
+                    chunk_tx.send(AudioChunk { samples }).is_ok()
+                })
+            })
+            .map_err(|error| {
+                CommandError::new(
+                    "recording_failed",
+                    format!("Could not start the test audio thread. {}", error),
+                )
+            })?;
+        Ok(Self {
+            stop_tx: Some(stop_tx),
+            thread: Some(thread),
+        })
+    }
+
+    fn start_microphone(
         device: Device,
         config: StreamConfig,
         sample_format: SampleFormat,
@@ -1365,6 +1396,62 @@ fn choose_input_index(
         .position(|info| info.is_default)
         .or_else(|| (!candidates.is_empty()).then_some(0))?;
     Some((index, fell_back))
+}
+
+/// Where a recording's audio comes from.
+enum InputSource {
+    Microphone {
+        device: Device,
+        config: StreamConfig,
+        sample_format: SampleFormat,
+    },
+    /// A WAV file, in builds made for the end-to-end tests only.
+    #[cfg(feature = "e2e-audio")]
+    TestClip(crate::test_audio::Clip),
+}
+
+/// The input a recording is about to start from.
+struct OpenedInput {
+    info: MicrophoneInfo,
+    /// The selected microphone isn't connected; this is the fallback.
+    fallback: bool,
+    sample_rate: u32,
+    channels: u16,
+    source: InputSource,
+}
+
+/// Opens the selected microphone (or the fallback), or the test clip when the
+/// end-to-end test input is on.
+fn open_input(selected_mic_id: Option<&str>) -> Result<OpenedInput, CommandError> {
+    #[cfg(feature = "e2e-audio")]
+    if let Some(clip) = crate::test_audio::clip_for_recording()? {
+        return Ok(OpenedInput {
+            info: clip.microphone_info(),
+            fallback: false,
+            sample_rate: clip.sample_rate,
+            channels: 1,
+            source: InputSource::TestClip(clip),
+        });
+    }
+
+    let (candidate, fallback) = select_input_device(selected_mic_id)?;
+    let supported_config = candidate
+        .device
+        .default_input_config()
+        .map_err(|error| microphone_unavailable(candidate.info.name.as_str(), error))?;
+    let sample_format = supported_config.sample_format();
+    let config: StreamConfig = supported_config.into();
+    Ok(OpenedInput {
+        info: candidate.info,
+        fallback,
+        sample_rate: config.sample_rate.0,
+        channels: config.channels,
+        source: InputSource::Microphone {
+            device: candidate.device,
+            config,
+            sample_format,
+        },
+    })
 }
 
 fn select_input_device(
