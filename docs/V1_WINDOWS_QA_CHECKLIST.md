@@ -1,37 +1,51 @@
-# V1 Windows QA Checklist
+# Windows QA checklist
 
-## Release resources
+What gets checked before a Windows release, split by who checks it: GitHub Actions on its own, GitHub Actions once the end-to-end job exists, or a person on a real PC.
+All automated testing runs on GitHub-hosted runners; nothing depends on a maintainer's machine.
 
-- Verify the release workflow builds the pinned whisper.cpp source with Vulkan enabled.
-- Verify `whisper-cli.exe`, `whisper-server.exe`, `whisper.dll`, `ggml.dll`, `ggml-base.dll`, `ggml-cpu.dll`, and `ggml-vulkan.dll` are present under `$RESOURCE/bin/windows/`.
-- Do not ship with placeholder or unreviewed executable files.
-- Confirm Whisper models download to the backend-resolved app data `models` directory.
+## Automated today (GitHub Actions)
 
-## Installer and release integrity
+CI (`.github/workflows/ci.yml`) on every pull request:
 
-- Build on Windows with `cd app && npm run tauri build`.
-- Verify NSIS current-user install.
-- Verify MSI install and upgrade behavior.
-- Confirm the unsigned NSIS and MSI installers produce the expected Windows SmartScreen warning; Authenticode code signing is intentionally out of scope.
-- Verify the updater signature before publishing release metadata.
-- Verify `SHA256SUMS` against every staged release asset.
-- Verify the release software bill of materials is present.
-- Smoke-test clean NSIS and MSI installs, launch, uninstall, and removal before publishing the release.
-- Record the stable MSI upgrade code before publishing updates.
+- Backend formatting, clippy and tests on Windows; frontend lint, tests and build; CLI and MCP server tests; npm and Rust dependency audits.
 
-## Manual acceptance
+Release (`.github/workflows/release.yml`) before anything is published:
 
-- Install and launch on Windows 10 and Windows 11.
-- Confirm the app runs from the tray and closing the main window hides it when `minimizeToTray` is enabled.
-- Select a microphone from the Audio view.
-- Download, select, delete, and retry a Whisper model from the Models view.
-- Hold the dictation hotkey, release to transcribe, and verify the Last Transcript Buffer updates.
-- Paste the last transcript with `Ctrl+Alt+V`.
-- Verify Save Only, Auto Paste, Copy to Clipboard, and Copy + Paste modes.
-- Confirm clipboard restore behavior in compatibility paste mode.
-- Confirm transcript history, stats, search, edit, and delete refresh without restarting the app.
-- Confirm the floating pill appears for recording, transcribing, ready, and error states.
-- Confirm in-app notifications follow the Notifications setting.
+- The tag matches every version file, and the release metadata validates.
+- The pinned whisper.cpp source builds with Vulkan, and `whisper-cli.exe`, `whisper-server.exe`, `whisper.dll`, `ggml.dll`, `ggml-base.dll`, `ggml-cpu.dll` and `ggml-vulkan.dll` are bundled.
+- The updater artifact is signed, `SHA256SUMS` covers every asset, and the SBOM (with the bundled whisper.cpp) is attached.
+- Smoke install, separately for NSIS and MSI on a clean runner: checksums verify, the installer runs silently, the uninstall entry exists, the bundled binaries are in place, the app launches and stays up, `--self-test-transcribe` downloads the default model through the verified download path and transcribes `tests/fixtures/jfk.wav`, and the uninstaller removes it.
+- The published release's assets are verified after upload.
+
+## Can be automated next (issue #93)
+
+A spike on 2026-11-04 confirmed that hosted `windows-2022` and `windows-2025` runners have an interactive desktop where a test can take focus, receive `RegisterHotKey` hotkeys from injected input, see held keys through `GetAsyncKeyState`, read and write the clipboard, paste with Ctrl+V, type with Unicode `SendInput`, switch to another app and back, and take screenshots.
+They have no audio devices, so the job needs a test-only way to feed a WAV file into the dictation pipeline in place of the microphone, like `--self-test-transcribe` does for transcription.
+With that, an end-to-end job can cover:
+
+- Toggle dictation with the hotkey: the transcript lands in the focused text box and the previous clipboard is restored.
+- Hold-to-talk with the keys held for the whole clip.
+- Each output mode: Save Only, Auto Paste, Copy to Clipboard, Copy + Paste, and typed insertion (`direct_insert`, clipboard never touched).
+- Switching apps mid-dictation: the text is not pasted into the wrong app and stays on the clipboard.
+- Paste the last transcript (`Ctrl+Alt+V`) and discard a dictation.
+- Transform Selection against a stand-in OpenAI-compatible server on 127.0.0.1.
+- Transcript history, stats, search, edit and delete refresh without a restart.
+- Closing the main window hides it to the tray when `minimizeToTray` is on.
+- MSI upgrade from the previous release keeps settings and history.
+- Screenshots of the floating pill in its recording, transcribing, ready and error states, uploaded for review.
+
+## Manual before a release (a person on a real PC)
+
+These need real hardware, a client edition of Windows, or human judgement, which hosted runners can't provide.
+
+- Install and launch on Windows 10 and Windows 11 (runners are Windows Server).
+- Download the installer in a browser and confirm the expected SmartScreen warning (the installers are intentionally unsigned).
+- Pick a microphone in the Audio view and dictate in your own voice, including a noisy room and a quiet one.
+- GPU (Vulkan) transcription speed on real graphics hardware (runners have no GPU), and the first dictation after 10 idle minutes.
+- Dictate into real apps: a browser text field, Slack or Discord, Word or Outlook, a terminal, and an app running as administrator.
+- The floating pill, tray icon and notifications look right, including on a second monitor and at 125% and 150% display scaling.
+- Download, select, delete and retry a Whisper model from the Models view on a normal home connection.
+- Sleep and resume, and a long session with many dictations.
 
 ## Historical V1 polish notes
 
