@@ -524,7 +524,12 @@ jobs:
               cp "parts/$part/$name" "release/$name"
             done < "parts/$part/SHA256SUMS.txt"
           done
-          for name in Scribe-macos-universal.dmg Scribe-linux-x86_64.AppImage Scribe-linux-amd64.deb latest.json; do
+          required=(Scribe-macos-universal.dmg Scribe-linux-x86_64.AppImage Scribe-linux-amd64.deb)
+          # Only tag builds are signed, so only they carry the updater manifest.
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            required+=(latest.json)
+          fi
+          for name in "${required[@]}"; do
             test -s "release/$name" || { echo "Missing $name" >&2; exit 1; }
           done
           (cd release && sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
