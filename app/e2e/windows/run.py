@@ -1123,7 +1123,10 @@ class Run:
     def dashboard_shot(self, name: str) -> None:
         """Brings the dashboard to the front and saves a screenshot of it, for
         the model status line. A screenshot never fails a check."""
+        targets = [target.form for target in self.targets.values()]
         try:
+            for form in targets:
+                user32.ShowWindow(form, 6)  # SW_MINIMIZE: the stand-in apps sit on top
             hwnd = wait_until("the dashboard window", self.app.main_window, 30)
             user32.ShowWindow(hwnd, 9)  # SW_RESTORE
             user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0003)  # topmost, keep size and place
@@ -1132,6 +1135,9 @@ class Run:
             user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, 0x0003)  # not topmost
         except Exception as error:
             print(f"Dashboard screenshot {name} failed: {error}")
+        finally:
+            for form in targets:
+                user32.ShowWindow(form, 9)  # SW_RESTORE
 
     def owned_engines(self) -> list[dict]:
         pid = self.app.process.pid
