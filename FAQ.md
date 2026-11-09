@@ -2,6 +2,19 @@
 
 Answers to questions that come up while using or building Scribe. Newest at the top.
 
+## How long can one recording be? Will Scribe cut me off mid-sentence?
+
+Scribe never cuts you off while you are talking at a normal length.
+A recording ends when you stop it (release the hold key, or tap the toggle key again), or on its own in one of these ways:
+
+- **Silence auto-stop:** a toggle (hands-free) recording ends after 60 seconds of silence once you have said something.
+- **Long recordings:** past 10 minutes, the same 60-second silence also ends hold-to-talk recordings, even if nothing was said, so a stuck key or a forgotten open mic still stops.
+- **Hard stop:** at 30 minutes a recording stops even mid-sentence, as a safety limit. Nothing is lost: what you said is still transcribed and saved to History.
+
+All three are in **Microphone → Advanced timing** (*Auto-stop pause*, *Silence stops any recording after*, *Hard stop*).
+The hard stop goes up to 60 minutes, because a recording is held in memory until it finishes.
+Turning **Auto-stop on silence** off leaves only the hard stop.
+
 ## Is there a Mac or Linux version?
 
 Yes, as betas: a universal macOS app (Apple Silicon and Intel, macOS 13.3 or later) and a Linux `.deb` and AppImage (x86_64), on every release next to the Windows installers.
