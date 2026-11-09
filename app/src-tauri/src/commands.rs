@@ -341,6 +341,10 @@ fn apply_settings_change(
     // Every window updates from this event, so it goes out as soon as the
     // new settings are stored.
     settings_store::emit_changed(app, &settings);
+    // Load, reload or unload the speech model to match (model, language,
+    // GPU and "Keep the speech model loaded").
+    app.state::<crate::whisper_server::WarmTranscriber>()
+        .sync_with_settings(&settings);
     hotkeys::emit_registration_failures(app, &hotkey_failures);
 
     if previous.history_retention_days != settings.history_retention_days
@@ -1945,6 +1949,8 @@ pub async fn delete_model(
         // Deleting the selected model clears the selection.
         if let Some(settings) = settings {
             settings_store::emit_changed(app, &settings);
+            app.state::<crate::whisper_server::WarmTranscriber>()
+                .sync_with_settings(&settings);
         }
         Ok(info)
     })
@@ -1962,7 +1968,24 @@ pub async fn select_model(
         let info = model_manager::select_model(app, state, &model_id)?;
         let settings = state.db()?.get_settings()?;
         settings_store::emit_changed(app, &settings);
+        // Switching models unloads the old one before the new one loads.
+        app.state::<crate::whisper_server::WarmTranscriber>()
+            .sync_with_settings(&settings);
         Ok(info)
+    })
+    .await
+}
+
+/// Which speech model is active, whether it is loaded, and what it uses.
+/// Changes arrive as `scribe:engine-status` events.
+#[tauri::command]
+pub async fn get_engine_status(
+    app: tauri::AppHandle,
+) -> Result<crate::speech_engine::EngineStatus, CommandError> {
+    off_main(app, move |app| {
+        Ok(app
+            .state::<crate::whisper_server::WarmTranscriber>()
+            .status())
     })
     .await
 }

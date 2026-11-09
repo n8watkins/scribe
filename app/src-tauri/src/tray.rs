@@ -145,6 +145,46 @@ pub fn open_dashboard(app: &AppHandle, route: Option<&str>) -> Result<(), Comman
     Ok(())
 }
 
+/// The tooltip's second line: the speech model and whether it is loaded.
+static ENGINE_SUMMARY: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+/// The tooltip's first line's status word.
+static STATUS_LABEL: std::sync::Mutex<&'static str> = std::sync::Mutex::new("Idle");
+
+fn set_tooltip(app: &AppHandle) {
+    let label = *STATUS_LABEL.lock().unwrap_or_else(|p| p.into_inner());
+    let engine = ENGINE_SUMMARY
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone();
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let _ = tray.set_tooltip(Some(tooltip_text(
+            crate::display_name(app),
+            label,
+            engine.as_deref(),
+        )));
+    }
+}
+
+/// "Scribe - Idle" plus, when known, the model line. Windows cuts tooltips
+/// at 127 characters, so the model line is trimmed to fit.
+fn tooltip_text(app_name: &str, label: &str, engine: Option<&str>) -> String {
+    let first = format!("{app_name} - {label}");
+    match engine {
+        Some(engine) => {
+            let room = 127usize.saturating_sub(first.chars().count() + 1);
+            let engine: String = engine.chars().take(room).collect();
+            format!("{first}\n{engine}")
+        }
+        None => first,
+    }
+}
+
+/// Shows which speech model is active and whether it is loaded.
+pub(crate) fn update_engine_summary(app: &AppHandle, summary: String) {
+    *ENGINE_SUMMARY.lock().unwrap_or_else(|p| p.into_inner()) = Some(summary);
+    set_tooltip(app);
+}
+
 pub(crate) fn update_tray_status(app: &AppHandle, status: AppStatus) {
     let label = match status {
         AppStatus::Idle => "Idle",
@@ -157,8 +197,34 @@ pub(crate) fn update_tray_status(app: &AppHandle, status: AppStatus) {
         AppStatus::Paused => "Paused",
     };
 
+    *STATUS_LABEL.lock().unwrap_or_else(|p| p.into_inner()) = label;
+    set_tooltip(app);
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let _ = tray.set_tooltip(Some(format!("{} - {}", crate::display_name(app), label)));
         let _ = tray.set_title(Some(label));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tooltip_text;
+
+    #[test]
+    fn tooltip_shows_status_then_model() {
+        assert_eq!(tooltip_text("Scribe", "Idle", None), "Scribe - Idle");
+        assert_eq!(
+            tooltip_text("Scribe", "Idle", Some("Parakeet v3 · loaded · 0.9 GB")),
+            "Scribe - Idle\nParakeet v3 · loaded · 0.9 GB"
+        );
+    }
+
+    #[test]
+    fn tooltip_fits_the_windows_limit() {
+        let long = "x".repeat(300);
+        assert_eq!(
+            tooltip_text("Scribe Dev", "Transcribing", Some(&long))
+                .chars()
+                .count(),
+            127
+        );
     }
 }

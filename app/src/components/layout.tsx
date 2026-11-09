@@ -110,6 +110,7 @@ export function HotkeyList({
 
 export function StatusCard({
   action,
+  detail,
   Icon,
   label,
   onAction,
@@ -117,6 +118,8 @@ export function StatusCard({
   value,
 }: {
   action: string;
+  /** A short live line under the value. */
+  detail?: string;
   Icon: LucideIcon;
   label: string;
   onAction: () => void;
@@ -131,6 +134,11 @@ export function StatusCard({
       <span className="status-card-main">
         <span className="status-card-label">{label}</span>
         <strong title={value}>{value}</strong>
+        {detail ? (
+          <span className="status-card-detail" role="status" title={detail}>
+            {detail}
+          </span>
+        ) : null}
       </span>
       {status ?? null}
       <button

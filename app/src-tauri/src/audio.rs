@@ -452,6 +452,11 @@ pub fn start_recording_for_app(
             state.set_paste_target(crate::output::current_paste_target());
             let snapshot = state.transition_app_state(AppEvent::StartRecording)?;
             emit_state_snapshot(app, &snapshot);
+            // Load the speech model while the person speaks, if it isn't
+            // loaded already ("Keep the speech model loaded" off, or a crash).
+            if let Some(warm) = app.try_state::<crate::whisper_server::WarmTranscriber>() {
+                warm.prewarm();
+            }
         }
 
         Ok(outcome.info)

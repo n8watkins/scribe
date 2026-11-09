@@ -82,6 +82,11 @@ BUSY = {"Recording", "Stopping", "Transcribing", "Pasting"}
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
 
 ULONG_PTR = ctypes.c_size_t
@@ -684,6 +689,7 @@ class Scribe:
         self.clip_path = clip_path
         self.out = out
         self.process: subprocess.Popen | None = None
+        self.monitor: SpeechProcessMonitor | None = None
 
     def self_test(self, clip: Path) -> dict:
         """The release smoke test's mode on a fresh profile: downloads the
@@ -701,6 +707,8 @@ class Scribe:
         env = dict(os.environ, SCRIBE_E2E_AUDIO_WAV=str(self.clip_path))
         self.process = subprocess.Popen([str(self.exe)], env=env)
         pid = self.process.pid
+        if self.monitor is not None:
+            self.monitor.parent = pid
         wait_until("Scribe to start", lambda: (read_status() or {}).get("pid") == pid, 120)
         wait_until("Scribe to finish setup", lambda: TEST_AUDIO_ON_LOG in log_text(), 60)
 
@@ -723,23 +731,74 @@ def status() -> str | None:
     return (read_status() or {}).get("status")
 
 
-SPEECH_ENGINES = ("whisper-server.exe", "scribe-parakeet.exe")
+# Processes that hold a speech model: the resident engines and whisper-cli.
+SPEECH_ENGINES = ("whisper-server.exe", "scribe-parakeet.exe", "whisper-cli.exe")
+
+
+class PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD),
+        ("th32DefaultHeapID", ULONG_PTR),
+        ("th32ModuleID", wintypes.DWORD),
+        ("cntThreads", wintypes.DWORD),
+        ("th32ParentProcessID", wintypes.DWORD),
+        ("pcPriClassBase", wintypes.LONG),
+        ("dwFlags", wintypes.DWORD),
+        ("szExeFile", wintypes.WCHAR * 260),
+    ]
 
 
 def speech_processes() -> list[dict]:
-    """Every running speech engine process on the machine, with its parent."""
-    names = " or ".join(f"Name='{name}'" for name in SPEECH_ENGINES)
-    script = (
-        f"@(Get-CimInstance Win32_Process -Filter \"{names}\" | "
-        "Select-Object ProcessId,ParentProcessId,Name) | ConvertTo-Json -Compress"
-    )
-    out = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-Command", script], capture_output=True, text=True, timeout=60
-    ).stdout.strip()
-    if not out:
+    """Every running speech engine process on the machine, with its parent
+    (a Toolhelp snapshot: fast enough to poll)."""
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+    if snapshot in (None, 0, -1, ctypes.c_void_p(-1).value):
         return []
-    found = json.loads(out)
-    return found if isinstance(found, list) else [found]
+    found = []
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        ok = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while ok:
+            if entry.szExeFile.lower() in SPEECH_ENGINES:
+                found.append(
+                    {
+                        "ProcessId": entry.th32ProcessID,
+                        "ParentProcessId": entry.th32ParentProcessID,
+                        "Name": entry.szExeFile,
+                    }
+                )
+            ok = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot)
+    return found
+
+
+class SpeechProcessMonitor:
+    """Samples the speech engine processes Scribe owns for the whole run and
+    remembers the most that were ever alive at once: two would mean two
+    models in memory together."""
+
+    def __init__(self) -> None:
+        self.parent: int | None = None
+        self.peak: list[dict] = []
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._sample, daemon=True)
+        self._thread.start()
+
+    def _sample(self) -> None:
+        while not self._stop.is_set():
+            if self.parent is not None:
+                owned = [p for p in speech_processes() if p["ParentProcessId"] == self.parent]
+                if len(owned) > len(self.peak):
+                    self.peak = owned
+            self._stop.wait(0.1)
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(5)
 
 
 def wait_idle(timeout: float = 60) -> None:
@@ -792,6 +851,8 @@ class Run:
         self.results: list[tuple[str, bool, str, float]] = []
         self.targets: dict[str, Target] = {}
         self.clips: dict[str, Path] = {"jfk": self.fixtures / "jfk.wav"}
+        self.monitor = SpeechProcessMonitor()
+        self.app.monitor = self.monitor
 
     # -- setup -------------------------------------------------------------
 
@@ -1058,6 +1119,43 @@ class Run:
         check_words(request["instruction"], ["make", "text", "uppercase"], "The spoken instruction")
         wait_idle()
 
+    def owned_engines(self) -> list[dict]:
+        pid = self.app.process.pid
+        return [p for p in speech_processes() if p["ParentProcessId"] == pid and p["Name"] != "whisper-cli.exe"]
+
+    def model_loads_at_startup(self) -> None:
+        """Keep the speech model loaded is on by default: the model is loaded
+        right after launch, before anyone dictates."""
+        engines = wait_until("the speech model to load at startup", self.owned_engines, 90, 0.2)
+        print(f"Loaded at startup: {engines}")
+
+    def never_two_models(self) -> None:
+        peak = self.monitor.peak
+        print(f"Most speech engine processes alive at once: {len(peak)} {peak}")
+        check(len(peak) <= 1, f"Two speech models were in memory at once: {peak}")
+
+    def keep_loaded_off(self) -> None:
+        """With the switch off, nothing is loaded until a dictation starts,
+        the dictation still works, and the model is unloaded a minute later."""
+        self.app.stop()
+        patch_settings({"keepWhisperLoaded": False})
+        self.app.launch()
+        stays("no model loaded after launch", lambda: not self.owned_engines(), 5)
+        target = self.targets["A"]
+        self.prepare(target, "clipboard before keep-loaded off")
+        transcript = self.toggle_dictation("jfk")
+        check_words(transcript["text"], JFK_WORDS, "The transcript with the model loaded on demand")
+        finished = time.monotonic()
+        # A quick follow-up dictation stays instant: the model waits a minute.
+        stays("the model loaded for most of the idle minute", lambda: bool(self.owned_engines()), 45)
+        wait_until("the model to unload after a minute idle", lambda: not self.owned_engines(), 60, 1)
+        print(f"Unloaded {time.monotonic() - finished:.0f} s after the dictation finished")
+        # Back to the default for the scenarios after this one.
+        self.app.stop()
+        patch_settings({"keepWhisperLoaded": True})
+        self.app.launch()
+        wait_until("the model to load at startup again", self.owned_engines, 90, 0.2)
+
     def hard_kill_stops_speech_engine(self) -> None:
         """Ends Scribe the way a crash or Task Manager does (TerminateProcess:
         no exit handler runs) and checks Windows takes the loaded speech
@@ -1102,6 +1200,7 @@ class Run:
             self.scenario("Setup: self-test, test settings, launch", self.setup)
             if self.results[-1][1]:
                 for name, body in [
+                    ("Keep the speech model loaded: it loads at startup", self.model_loads_at_startup),
                     ("Closing the dashboard hides it to the tray", self.close_to_tray),
                     ("Toggle dictation pastes and restores the clipboard", self.toggle_paste_restores_clipboard),
                     ("Hold to talk", self.hold_to_talk),
@@ -1115,11 +1214,14 @@ class Run:
                     ("Paste last transcript", self.paste_last),
                     ("Discard a dictation", self.discard),
                     ("Transform Selection with a local AI server", self.transform_selection),
+                    ("Keep the speech model loaded off: loads on dictation, unloads after a minute", self.keep_loaded_off),
+                    ("Never two speech models in memory at once", self.never_two_models),
                     # Last: it ends the app.
                     ("A hard kill takes the speech model down with Scribe", self.hard_kill_stops_speech_engine),
                 ]:
                     self.scenario(name, body)
         finally:
+            self.monitor.stop()
             self.app.stop()
             for target in self.targets.values():
                 target.close()

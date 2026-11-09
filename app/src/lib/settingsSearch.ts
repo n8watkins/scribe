@@ -53,6 +53,7 @@ export const SETTINGS_INDEX: readonly SettingsEntry[] = [
   { label: "Language", page: "Models & language", keywords: "spoken multilingual english spanish french german auto-detect" },
   { label: "Translate to English", page: "Models & language", keywords: "translation multilingual" },
   { label: "Use GPU acceleration", page: "Models & language", keywords: "gpu graphics card vulkan speed fast cpu" },
+  { label: "Keep the speech model loaded", page: "Models & language", keywords: "memory ram unload loaded idle warm instant startup model engine" },
 
   // Hotkeys
   { label: "Hotkeys", page: "Hotkeys", keywords: "shortcut shortcuts keyboard keys bindings rebind reset" },

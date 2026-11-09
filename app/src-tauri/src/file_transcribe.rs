@@ -11,7 +11,6 @@ use uuid::Uuid;
 
 use crate::{
     commands::BackendState,
-    dictation::whisper_language,
     error::CommandError,
     model_manager,
     whisper::{self, WhisperRequest},
@@ -47,11 +46,11 @@ pub fn transcribe_file(app: &AppHandle, path: &str) -> Result<TranscribeFileResu
     }
 
     let state = app.state::<BackendState>();
-    let (settings, model_path) = {
+    let (settings, model_id, model_path) = {
         let db = state.db()?;
         let settings = db.get_settings()?;
-        let (_, model_path) = model_manager::selected_model_path(app, &db)?;
-        (settings, model_path)
+        let (model_id, model_path) = model_manager::selected_model_path(app, &db)?;
+        (settings, model_id, model_path)
     };
 
     let work_dir = work_dir(app)?;
@@ -70,19 +69,13 @@ pub fn transcribe_file(app: &AppHandle, path: &str) -> Result<TranscribeFileResu
         .unwrap_or_else(|| source.clone());
     let duration_ms = wav_duration_ms(&input_path);
 
-    let request = WhisperRequest {
-        model_path,
-        wav_path: input_path,
-        language: whisper_language(&settings.language),
-        translate: settings.translate_to_english,
-        vocabulary_prompt: settings.vocabulary_prompt.clone(),
-        // FILLER: gate from settings (None = off, unchanged path).
-        filler: crate::filler::FillerConfig::from_settings(&settings),
-        gpu: settings.gpu_acceleration,
-        gpu_device_index: settings.gpu_device_index,
-    };
+    let request = WhisperRequest::for_settings(&model_id, model_path, input_path, &settings);
     let output_prefix = work_dir.join(format!("file-{}", Uuid::new_v4().simple()));
-    let transcription = whisper::transcribe_with_output_prefix(app, &request, &output_prefix)?;
+    // A one-off whisper-cli run loads its own copy of the model, so the
+    // resident one is unloaded first: never two models in memory.
+    let transcription = app
+        .state::<crate::whisper_server::WarmTranscriber>()
+        .run_exclusive(|| whisper::transcribe_with_output_prefix(app, &request, &output_prefix))?;
     drop(converted);
 
     Ok(TranscribeFileResult {

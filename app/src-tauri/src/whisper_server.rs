@@ -1,17 +1,23 @@
-//! Warm transcription backend: keeps a resident `whisper-server.exe` process
-//! alive across dictations so the GGML model is loaded once instead of on
-//! every transcription.
+//! The resident speech engine: keeps the selected model loaded in its own
+//! process across dictations, so it is loaded once instead of on every
+//! transcription.
 //!
 //! Design notes:
 //! - `WarmTranscriber::transcribe` is a stateless, serialized primitive:
 //!   request in (WAV + model + language + prompt), text out. Nothing assumes
 //!   "one transcription per recording", so incremental/segment transcription
 //!   can reuse it as-is.
-//! - The server is spawned lazily on first use and reused while the model and
-//!   language match. The vocabulary prompt is sent per request, so prompt
-//!   changes never require a server restart.
-//! - After 10 minutes without a transcription a watchdog thread stops the
-//!   server so it does not linger holding model memory.
+//! - At most one engine process holds a model at any time ([`Slot`]): loading
+//!   another model, engine or launch setting stops the current process and
+//!   waits for it before the new one starts. One-off model runs (whisper-cli
+//!   for files and the GPU probe) go through [`WarmTranscriber::run_exclusive`],
+//!   which unloads the resident model first.
+//! - "Keep the speech model loaded" (on by default, per engine): the model is
+//!   loaded at startup and stays loaded. Off: it is unloaded a minute after
+//!   the last dictation and loaded again when the next recording starts, so
+//!   the load overlaps with speaking.
+//! - The vocabulary prompt is sent per request, so prompt changes never
+//!   require a restart.
 //! - The server is started through `child_guard`, so it dies with Scribe even
 //!   when Scribe crashes or is killed, and a survivor is stopped at the next
 //!   start.
@@ -25,53 +31,61 @@ use std::{
     net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, Stdio},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, MutexGuard, TryLockError,
+    },
     time::{Duration, Instant},
 };
 
 use serde::Deserialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::{
+    app_state::AppStatus,
+    commands::BackendState,
     error::CommandError,
+    models::{self, EngineKind},
+    settings::AppSettings,
+    speech_engine::{EngineConfig, EngineStatus, Ensured, LoadState, Measurements, Resident, Slot},
     whisper::{self, WhisperRequest, WhisperTranscription},
 };
 
+/// Tauri event carrying the new [`EngineStatus`] whenever it changes.
+pub const ENGINE_STATUS_EVENT: &str = "scribe:engine-status";
+
 const SERVER_HOST: &str = "127.0.0.1";
 const SERVER_EXECUTABLE: &str = "whisper-server.exe";
-/// Stop the server after this long without a transcription.
-const IDLE_SHUTDOWN: Duration = Duration::from_secs(10 * 60);
-/// How often the watchdog thread checks for idleness.
-const WATCHDOG_INTERVAL: Duration = Duration::from_secs(30);
+/// With "Keep the speech model loaded" off, unload this long after the last
+/// dictation. Long enough that a quick follow-up dictation stays instant,
+/// short enough that the memory comes back soon after you stop.
+const UNLOAD_AFTER_IDLE: Duration = Duration::from_secs(60);
+/// How often the watchdog checks idleness and samples memory.
+const WATCHDOG_INTERVAL: Duration = Duration::from_secs(5);
+/// Memory changes smaller than this don't re-publish the status.
+const MEMORY_REPORT_STEP: u64 = 4 * 1024 * 1024;
 /// Hard cap on waiting for the server to load the model and start listening.
-const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
-const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(60);
+const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// Generous per-request cap so long dictations on big models still finish.
 const INFERENCE_TIMEOUT: Duration = Duration::from_secs(300);
 /// Consecutive server failures before the server path is disabled.
 const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 
-/// The launch configuration a server process is bound to. A request whose
-/// configuration differs requires a restart; everything else (WAV, prompt)
-/// is per-request.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ServerConfig {
-    model_path: PathBuf,
-    language: String,
-    /// Translate task (English output). Part of the launch config: changing it
-    /// requires a server restart, since it is passed as a launch argument.
-    translate: bool,
-    /// GPU acceleration preference. A launch-time concern (`--no-gpu`), so a
-    /// change restarts the server.
-    gpu: crate::settings::GpuAcceleration,
-    /// Pinned Vulkan device index (set as an env var at spawn). Also launch-time,
-    /// so a change restarts the server.
-    gpu_device_index: Option<u32>,
+/// Whether `engine` can stay resident on this system. Whisper's warm server
+/// runs on Windows; elsewhere each dictation runs whisper-cli.
+pub fn resident_supported(engine: EngineKind) -> bool {
+    match engine {
+        EngineKind::Whisper => cfg!(windows),
+        EngineKind::Parakeet => true,
+    }
 }
 
-impl ServerConfig {
+impl EngineConfig {
     fn for_request(request: &WhisperRequest) -> Self {
         Self {
+            engine: request.engine,
+            model_id: request.model_id.clone(),
             model_path: request.model_path.clone(),
             language: request.language.clone(),
             translate: request.translate,
@@ -126,14 +140,10 @@ struct ServerProcess {
     /// with. Every route, including `/load`, sits under it, so a web page
     /// that finds the loopback port cannot reach the server without it.
     request_path: String,
-    config: ServerConfig,
+    config: EngineConfig,
 }
 
 impl ServerProcess {
-    fn has_exited(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(Some(_)))
-    }
-
     /// Kills the child process. Safe to call multiple times (kill on an
     /// already-exited child is a no-op error that we ignore).
     fn kill(&mut self) {
@@ -143,60 +153,281 @@ impl ServerProcess {
     }
 }
 
+impl Resident for ServerProcess {
+    fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    fn config(&self) -> &EngineConfig {
+        &self.config
+    }
+
+    fn has_exited(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(Some(_)))
+    }
+
+    fn stop(&mut self) {
+        log::info!("Unloading {} (whisper-server)", self.config.model_id);
+        self.kill();
+    }
+}
+
 impl Drop for ServerProcess {
     fn drop(&mut self) {
         self.kill();
     }
 }
 
-#[derive(Default)]
 struct Inner {
-    server: Option<ServerProcess>,
+    slot: Slot<ServerProcess>,
     /// Configuration of the most recent server attempt; used to detect model
     /// changes even while the server path is disabled.
-    last_config: Option<ServerConfig>,
+    last_config: Option<EngineConfig>,
     failures: FailureTracker,
     last_used: Option<Instant>,
     http: Option<reqwest::blocking::Client>,
-    watchdog_running: bool,
+    measurements: Measurements,
 }
 
-impl Inner {
-    fn stop_server(&mut self) {
-        if let Some(mut server) = self.server.take() {
-            server.kill();
+/// The selected model and switch, cached so the watchdog and the status
+/// never need the database.
+#[derive(Debug, Clone)]
+struct Selection {
+    engine: EngineKind,
+    model_id: Option<String>,
+    model_name: Option<String>,
+    keep_loaded: bool,
+}
+
+impl Selection {
+    fn from_settings(settings: &AppSettings) -> Self {
+        let model = settings
+            .selected_model_id
+            .as_deref()
+            .and_then(models::catalog_model);
+        let engine = model
+            .map(|model| model.engine)
+            .unwrap_or(EngineKind::Whisper);
+        Self {
+            engine,
+            model_id: model.map(|model| model.id.to_string()),
+            model_name: model.map(|model| model.status_name()),
+            keep_loaded: keep_loaded(settings, engine),
         }
     }
 }
 
-/// Tauri-managed warm transcription service. `Send + Sync`; all internal
-/// state lives behind one mutex, which also serializes transcriptions (the
-/// server runs one inference at a time anyway).
-pub struct WarmTranscriber {
-    inner: Arc<Mutex<Inner>>,
+/// The "Keep the speech model loaded" switch for `engine`.
+pub fn keep_loaded(settings: &AppSettings, engine: EngineKind) -> bool {
+    match engine {
+        EngineKind::Whisper => settings.keep_whisper_loaded,
+        EngineKind::Parakeet => settings.keep_parakeet_loaded,
+    }
 }
 
-impl Default for WarmTranscriber {
-    fn default() -> Self {
-        Self::new()
-    }
+/// What the status shows besides the selection; written only by whoever
+/// holds the slot, read without it.
+#[derive(Default)]
+struct Live {
+    selection: Option<Selection>,
+    /// The model id being loaded right now.
+    loading: Option<String>,
+    /// The loaded model's id and process id.
+    loaded: Option<(String, u32)>,
+    memory_bytes: Option<u64>,
+    published: Option<EngineStatus>,
+}
+
+struct Shared {
+    app: AppHandle,
+    live: Mutex<Live>,
+    prewarm_pending: AtomicBool,
+}
+
+/// Tauri-managed warm transcription service. `Send + Sync`; the slot and its
+/// bookkeeping live behind one mutex, which also serializes transcriptions
+/// (an engine runs one inference at a time anyway).
+pub struct WarmTranscriber {
+    inner: Arc<Mutex<Inner>>,
+    shared: Arc<Shared>,
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl WarmTranscriber {
-    pub fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(Inner::default())),
+    pub fn new(app: AppHandle, measurements_path: PathBuf) -> Self {
+        let transcriber = Self {
+            inner: Arc::new(Mutex::new(Inner {
+                slot: Slot::default(),
+                last_config: None,
+                failures: FailureTracker::default(),
+                last_used: None,
+                http: None,
+                measurements: Measurements::load(measurements_path),
+            })),
+            shared: Arc::new(Shared {
+                app,
+                live: Mutex::new(Live::default()),
+                prewarm_pending: AtomicBool::new(false),
+            }),
+        };
+        transcriber.start_watchdog();
+        transcriber
+    }
+
+    /// The current status, for the `get_engine_status` command.
+    pub fn status(&self) -> EngineStatus {
+        let mut live = lock(&self.shared.live);
+        if live.selection.is_none() {
+            if let Some(settings) = current_settings(&self.shared.app) {
+                live.selection = Some(Selection::from_settings(&settings));
+            }
+        }
+        let measurements = self.inner.try_lock().ok().map(|inner| {
+            live.selection
+                .as_ref()
+                .and_then(|selection| selection.model_id.as_deref())
+                .and_then(|id| inner.measurements.get(id))
+        });
+        let mut status = build_status(&live, measurements.flatten());
+        if measurements.is_none() {
+            // The slot is busy (a transcription or a load); keep the last
+            // published measurement rather than wait.
+            status.measured = live.published.as_ref().and_then(|p| p.measured);
+        }
+        status
+    }
+
+    /// Call at startup and after any settings change: loads the model when
+    /// "Keep the speech model loaded" is on, and unloads a model that no
+    /// longer matches the settings (or the switch turned off) right away.
+    pub fn sync_with_settings(&self, settings: &AppSettings) {
+        let selection = Selection::from_settings(settings);
+        let previous = lock(&self.shared.live).selection.replace(selection.clone());
+        self.publish(None);
+        // The switch for this engine went from on to off just now.
+        let switched_off = !selection.keep_loaded
+            && previous.is_some_and(|p| p.keep_loaded && p.engine == selection.engine);
+
+        let desired = desired_config(&self.shared.app, settings);
+        let keep = selection.keep_loaded && resident_supported(selection.engine);
+        if keep {
+            let loaded_config = self
+                .inner
+                .try_lock()
+                .ok()
+                .and_then(|inner| inner.slot.resident().map(|r| r.config().clone()));
+            if desired.is_some() && loaded_config != desired {
+                self.prewarm();
+            }
+            return;
+        }
+
+        // Off, or a model that can't stay resident. Decided under the slot
+        // lock, after any running transcription.
+        let shared = self.shared.clone();
+        let inner = self.inner.clone();
+        let resident_ok = resident_supported(selection.engine);
+        spawn_named("speech-engine-unload", move || {
+            let mut inner = lock(&inner);
+            let loaded = inner.slot.resident().map(|r| r.config().clone());
+            if unload_on_settings_change(
+                resident_ok,
+                switched_off,
+                loaded.as_ref(),
+                desired.as_ref(),
+            ) && inner.slot.unload()
+            {
+                shared.after_unload();
+                shared.publish(None);
+            }
+        });
+    }
+
+    /// Loads the selected model in the background unless it is already
+    /// loaded. Called when a recording starts, so with the switch off the
+    /// load overlaps with speaking. Repeated calls while a load is pending
+    /// collapse into one.
+    pub fn prewarm(&self) {
+        if self.shared.prewarm_pending.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let shared = self.shared.clone();
+        let inner = self.inner.clone();
+        let spawned = spawn_named("speech-engine-load", move || {
+            shared.prewarm_pending.store(false, Ordering::SeqCst);
+            // The GPU probe loads a model of its own, so it runs (once per
+            // session, then cached) before this load rather than later next
+            // to the loaded model, when the Models page asks for it.
+            if cfg!(windows) {
+                let _ = crate::gpu::probe(&shared.app);
+            }
+            let Some(settings) = current_settings(&shared.app) else {
+                return;
+            };
+            let Some(config) = desired_config(&shared.app, &settings) else {
+                return;
+            };
+            if !resident_supported(config.engine) {
+                return;
+            }
+            let mut inner = lock(&inner);
+            if !inner.failures.server_allowed() && inner.last_config.as_ref() == Some(&config) {
+                return;
+            }
+            let Ok(client) = http_client(&mut inner) else {
+                return;
+            };
+            if let Err(error) = load(&shared, &mut inner, &config, &client) {
+                log::warn!(
+                    "Could not load {} ahead of dictation. {}",
+                    config.model_id,
+                    error
+                );
+            }
+            // Count a preload as use, so the idle timer starts from here.
+            inner.last_used = Some(Instant::now());
+        });
+        if !spawned {
+            self.shared.prewarm_pending.store(false, Ordering::SeqCst);
         }
     }
 
-    /// Transcribes one WAV. Tries the warm server first and transparently
+    /// Runs `work` (a one-off model run such as whisper-cli on a file, or the
+    /// GPU probe) with no resident model loaded, so two models are never in
+    /// memory together. The resident model is unloaded first and, when the
+    /// switch is on, loaded again afterwards.
+    pub fn run_exclusive<T>(&self, work: impl FnOnce() -> T) -> T {
+        let result = {
+            let mut inner = lock(&self.inner);
+            if inner.slot.unload() {
+                self.shared.after_unload();
+                self.publish(None);
+            }
+            work()
+        };
+        if lock(&self.shared.live)
+            .selection
+            .as_ref()
+            .is_some_and(|selection| selection.keep_loaded)
+        {
+            self.prewarm();
+        }
+        result
+    }
+
+    /// Transcribes one WAV. Tries the resident engine first and transparently
     /// falls back to the `whisper-cli.exe` path on any server failure.
     pub fn transcribe(
         &self,
         app: &AppHandle,
         request: WhisperRequest,
     ) -> Result<WhisperTranscription, CommandError> {
-        // FILLER: the warm server now serves filler requests too — it returns
+        // FILLER: the warm server serves filler requests too — it returns
         // verbose_json with per-word timings (parsed in transcribe_via_server),
         // so suppression runs on the warm path with no model-reload overhead. The
         // whisper-cli path stays the fallback (and also handles filler).
@@ -205,16 +436,22 @@ impl WarmTranscriber {
         // CLI path produce its existing error messages without touching the
         // failure counter.
         if request.model_path.is_file() && request.wav_path.is_file() {
-            if let Some(transcription) = self.try_server(app, &request) {
+            if let Some(transcription) = self.try_server(&request) {
                 return Ok(transcription);
             }
         }
 
-        // whisper-cli fallback. It uses the GPU per the request; if that fails
-        // while the GPU was in use (a driver crash or VRAM OOM on a big model),
-        // retry once on CPU (--no-gpu) so a GPU problem degrades to
-        // slower-but-working instead of losing the dictation. WS5.
-        match whisper::transcribe(app, request.clone()) {
+        // whisper-cli fallback, with no resident model loaded next to it. It
+        // uses the GPU per the request; if that fails while the GPU was in use
+        // (a driver crash or VRAM OOM on a big model), retry once on CPU
+        // (--no-gpu) so a GPU problem degrades to slower-but-working instead of
+        // losing the dictation. WS5.
+        let mut inner = lock(&self.inner);
+        if inner.slot.unload() {
+            self.shared.after_unload();
+            self.publish(None);
+        }
+        let result = match whisper::transcribe(app, request.clone()) {
             Ok(transcription) => Ok(transcription),
             Err(error) => match cpu_retry_request(&request) {
                 Some(cpu_request) => {
@@ -226,36 +463,32 @@ impl WarmTranscriber {
                 }
                 None => Err(error),
             },
-        }
+        };
+        inner.last_used = Some(Instant::now());
+        result
     }
 
-    /// Stops the resident server. Called on app exit; double-stop is safe.
+    /// Stops the resident engine. Called on app exit; double-stop is safe.
     pub fn shutdown(&self) {
-        let mut inner = match self.inner.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if inner.server.is_some() {
-            log::info!("Stopping whisper-server");
-            inner.stop_server();
+        let mut inner = lock(&self.inner);
+        if inner.slot.unload() {
+            log::info!("Stopped the speech engine");
         }
     }
 
-    /// Attempts the warm-server path. Returns None when the server path is
-    /// unavailable or failed (the caller falls back to whisper-cli).
-    fn try_server(
-        &self,
-        app: &AppHandle,
-        request: &WhisperRequest,
-    ) -> Option<WhisperTranscription> {
-        if !cfg!(windows) {
+    fn publish(&self, memory: Option<u64>) {
+        self.shared.publish(memory);
+    }
+
+    /// Attempts the resident path. Returns None when it is unavailable or
+    /// failed (the caller falls back to whisper-cli).
+    fn try_server(&self, request: &WhisperRequest) -> Option<WhisperTranscription> {
+        if !resident_supported(request.engine) {
             return None;
         }
 
-        let desired = ServerConfig::for_request(request);
-        let Ok(mut inner) = self.inner.lock() else {
-            return None;
-        };
+        let desired = EngineConfig::for_request(request);
+        let mut inner = lock(&self.inner);
 
         // A model (or language) change resets the failure policy.
         if inner.last_config.as_ref() != Some(&desired) {
@@ -271,11 +504,22 @@ impl WarmTranscriber {
         }
 
         let started = Instant::now();
-        match self.transcribe_via_server(app, &mut inner, &desired, request) {
+        match self.transcribe_via_server(&mut inner, &desired, request) {
             Ok(text) => {
                 let latency_ms = started.elapsed().as_millis().min(u32::MAX as u128) as u32;
                 inner.failures.record_success();
                 inner.last_used = Some(Instant::now());
+                // The first inference allocates working buffers: sample now so
+                // the status and the measurement include them.
+                let memory = inner
+                    .slot
+                    .resident()
+                    .and_then(|resident| crate::process_info::private_memory_bytes(resident.pid()));
+                if let Some(bytes) = memory {
+                    inner.measurements.record_memory(&desired.model_id, bytes);
+                }
+                drop(inner);
+                self.publish(memory);
                 Some(WhisperTranscription { text, latency_ms })
             }
             Err(error) => {
@@ -285,13 +529,17 @@ impl WarmTranscriber {
                 );
                 // The server state is unknown after a failure; restart fresh
                 // on the next attempt.
-                inner.stop_server();
+                if inner.slot.unload() {
+                    self.shared.after_unload();
+                }
                 if inner.failures.record_failure() {
                     log::warn!(
                         "Disabling whisper-server for the rest of the session after {} consecutive failures",
                         MAX_CONSECUTIVE_FAILURES
                     );
                 }
+                drop(inner);
+                self.publish(None);
                 None
             }
         }
@@ -299,18 +547,16 @@ impl WarmTranscriber {
 
     fn transcribe_via_server(
         &self,
-        app: &AppHandle,
         inner: &mut Inner,
-        config: &ServerConfig,
+        config: &EngineConfig,
         request: &WhisperRequest,
     ) -> Result<String, String> {
         let client = http_client(inner)?;
-        ensure_server(app, inner, config, &client)?;
-        self.start_watchdog(inner);
+        load(&self.shared, inner, config, &client)?;
 
         let url = inner
-            .server
-            .as_ref()
+            .slot
+            .resident()
             .map(|server| inference_url(server.port, &server.request_path))
             .ok_or_else(|| "whisper-server is not running".to_string())?;
 
@@ -376,41 +622,274 @@ impl WarmTranscriber {
         Ok(whisper::normalize_transcript_text(&parsed.text))
     }
 
-    /// Starts the idle watchdog once per app session. It holds only a weak
-    /// reference so it never keeps the transcriber alive.
-    fn start_watchdog(&self, inner: &mut Inner) {
-        if inner.watchdog_running {
+    /// Checks idleness, crashes and memory every few seconds. Holds only weak
+    /// references so it never keeps the transcriber alive.
+    fn start_watchdog(&self) {
+        let weak_inner = Arc::downgrade(&self.inner);
+        let weak_shared = Arc::downgrade(&self.shared);
+        spawn_named("speech-engine-watchdog", move || loop {
+            std::thread::sleep(WATCHDOG_INTERVAL);
+            let (Some(inner), Some(shared)) = (weak_inner.upgrade(), weak_shared.upgrade()) else {
+                return;
+            };
+            // Busy (a transcription or a load): look again next time.
+            let mut inner = match inner.try_lock() {
+                Ok(guard) => guard,
+                Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+                Err(TryLockError::WouldBlock) => continue,
+            };
+            watchdog_tick(&shared, &mut inner);
+        });
+    }
+}
+
+/// With "Keep the speech model loaded" off (or an engine that can't stay
+/// resident), whether a settings change should unload the model right away.
+/// Any other save (a window size, a hotkey) leaves it to the idle timer, so
+/// the minute after a dictation stays fast.
+fn unload_on_settings_change(
+    resident_ok: bool,
+    switched_off: bool,
+    loaded: Option<&EngineConfig>,
+    desired: Option<&EngineConfig>,
+) -> bool {
+    let Some(loaded) = loaded else {
+        return false;
+    };
+    !resident_ok || switched_off || desired != Some(loaded)
+}
+
+fn watchdog_tick(shared: &Shared, inner: &mut Inner) {
+    let Some(resident) = inner.slot.resident_mut() else {
+        return;
+    };
+    if resident.has_exited() {
+        log::warn!("The speech engine exited on its own");
+        inner.slot.unload();
+        shared.after_unload();
+        shared.publish(None);
+        return;
+    }
+    let pid = resident.pid();
+    let model_id = resident.config().model_id.clone();
+    let keep = lock(&shared.live)
+        .selection
+        .as_ref()
+        .is_none_or(|selection| selection.keep_loaded);
+    let idle = inner
+        .last_used
+        .is_none_or(|used| used.elapsed() >= UNLOAD_AFTER_IDLE);
+    if !keep && idle && !dictation_in_progress(&shared.app) {
+        log::info!(
+            "Unloading {} after {} s without dictation (Keep the speech model loaded is off)",
+            model_id,
+            UNLOAD_AFTER_IDLE.as_secs()
+        );
+        inner.slot.unload();
+        shared.after_unload();
+        shared.publish(None);
+        return;
+    }
+    if let Some(bytes) = crate::process_info::private_memory_bytes(pid) {
+        inner.measurements.record_memory(&model_id, bytes);
+        shared.publish_if_memory_moved(bytes, inner.measurements.get(&model_id));
+    }
+}
+
+impl Shared {
+    fn after_unload(&self) {
+        let mut live = lock(&self.live);
+        live.loaded = None;
+        live.memory_bytes = None;
+    }
+
+    /// Recomputes the status and, when it changed, emits it and updates the
+    /// tray. `memory` replaces the cached memory figure when given.
+    fn publish(&self, memory: Option<u64>) {
+        let mut live = lock(&self.live);
+        if memory.is_some() && live.loaded.is_some() {
+            live.memory_bytes = memory;
+        }
+        let measured = live.published.as_ref().and_then(|p| p.measured);
+        self.publish_locked(&mut live, measured);
+    }
+
+    fn publish_if_memory_moved(
+        &self,
+        bytes: u64,
+        measured: Option<crate::speech_engine::Measurement>,
+    ) {
+        let mut live = lock(&self.live);
+        let moved = live
+            .memory_bytes
+            .is_none_or(|known| known.abs_diff(bytes) >= MEMORY_REPORT_STEP);
+        if moved {
+            live.memory_bytes = Some(bytes);
+        }
+        let measured_changed = live.published.as_ref().and_then(|p| p.measured) != measured;
+        if moved || measured_changed {
+            self.publish_locked(&mut live, measured);
+        }
+    }
+
+    fn publish_with_measurement(&self, measured: Option<crate::speech_engine::Measurement>) {
+        let mut live = lock(&self.live);
+        self.publish_locked(&mut live, measured);
+    }
+
+    fn publish_locked(&self, live: &mut Live, measured: Option<crate::speech_engine::Measurement>) {
+        if live.selection.is_none() {
+            if let Some(settings) = current_settings(&self.app) {
+                live.selection = Some(Selection::from_settings(&settings));
+            }
+        }
+        let status = build_status(live, measured);
+        if live.published.as_ref() == Some(&status) {
             return;
         }
-        inner.watchdog_running = true;
+        live.published = Some(status.clone());
+        let _ = self.app.emit(ENGINE_STATUS_EVENT, &status);
+        crate::tray::update_engine_summary(&self.app, status.summary());
+    }
+}
 
-        let weak = Arc::downgrade(&self.inner);
-        let spawned = std::thread::Builder::new()
-            .name("whisper-server-watchdog".to_string())
-            .spawn(move || loop {
-                std::thread::sleep(WATCHDOG_INTERVAL);
-                let Some(inner) = weak.upgrade() else {
-                    return;
-                };
-                let Ok(mut inner) = inner.lock() else {
-                    return;
-                };
-                if inner.server.is_none() {
-                    continue;
-                }
-                let last_used = inner.last_used.unwrap_or_else(Instant::now);
-                if idle_expired(last_used, Instant::now()) {
-                    log::info!(
-                        "Stopping whisper-server after {} minutes idle",
-                        IDLE_SHUTDOWN.as_secs() / 60
-                    );
-                    inner.stop_server();
-                }
-            });
+fn build_status(live: &Live, measured: Option<crate::speech_engine::Measurement>) -> EngineStatus {
+    let selection = live.selection.clone().unwrap_or(Selection {
+        engine: EngineKind::Whisper,
+        model_id: None,
+        model_name: None,
+        keep_loaded: true,
+    });
+    let selected = selection.model_id.as_deref();
+    let loaded_here = live
+        .loaded
+        .as_ref()
+        .is_some_and(|(id, _)| Some(id.as_str()) == selected);
+    let state = if !resident_supported(selection.engine) {
+        LoadState::PerDictation
+    } else if loaded_here {
+        LoadState::Loaded
+    } else if live
+        .loading
+        .as_deref()
+        .is_some_and(|id| Some(id) == selected)
+    {
+        LoadState::Loading
+    } else {
+        LoadState::NotLoaded
+    };
+    EngineStatus {
+        engine: selection.engine,
+        model_id: selection.model_id,
+        model_name: selection.model_name,
+        state,
+        memory_bytes: if loaded_here { live.memory_bytes } else { None },
+        keep_loaded: selection.keep_loaded,
+        measured,
+    }
+}
 
-        if let Err(error) = spawned {
-            inner.watchdog_running = false;
-            log::warn!("Could not start whisper-server idle watchdog. {}", error);
+/// Loads `config` into the slot if it isn't already there: stops any other
+/// engine first, then starts and waits for the new one, recording how long
+/// the cold load took.
+fn load(
+    shared: &Shared,
+    inner: &mut Inner,
+    config: &EngineConfig,
+    client: &reqwest::blocking::Client,
+) -> Result<(), String> {
+    let matches = inner
+        .slot
+        .resident()
+        .is_some_and(|resident| resident.config() == config);
+    if !matches {
+        if inner.slot.unload() {
+            shared.after_unload();
+        }
+        lock(&shared.live).loading = Some(config.model_id.clone());
+        shared.publish(None);
+    }
+    let started = Instant::now();
+    let outcome = inner.slot.ensure(config, |config| {
+        launch_whisper_server(&shared.app, config, client)
+    });
+    lock(&shared.live).loading = None;
+    match outcome {
+        Ok(Ensured::AlreadyLoaded) => Ok(()),
+        Ok(Ensured::Loaded) => {
+            let load_ms = started.elapsed().as_millis() as u64;
+            let pid = inner.slot.resident().map(|r| r.pid()).unwrap_or_default();
+            inner.measurements.record_load(&config.model_id, load_ms);
+            let memory = crate::process_info::private_memory_bytes(pid);
+            if let Some(bytes) = memory {
+                inner.measurements.record_memory(&config.model_id, bytes);
+            }
+            {
+                let mut live = lock(&shared.live);
+                live.loaded = Some((config.model_id.clone(), pid));
+                live.memory_bytes = memory;
+            }
+            shared.publish_with_measurement(inner.measurements.get(&config.model_id));
+            log::info!(
+                "Loaded {} in {} ms ({} in memory)",
+                config.model_id,
+                load_ms,
+                memory
+                    .map(crate::speech_engine::format_bytes)
+                    .unwrap_or_else(|| "unknown".into())
+            );
+            Ok(())
+        }
+        Err(error) => {
+            shared.publish(None);
+            Err(error)
+        }
+    }
+}
+
+/// The engine configuration the current settings ask for, or None when no
+/// downloaded model is selected.
+fn desired_config(app: &AppHandle, settings: &AppSettings) -> Option<EngineConfig> {
+    let state = app.try_state::<BackendState>()?;
+    let (model_id, model_path) = {
+        let db = state.db().ok()?;
+        crate::model_manager::selected_model_path(app, &db).ok()?
+    };
+    let request = WhisperRequest::for_settings(&model_id, model_path, PathBuf::new(), settings);
+    Some(EngineConfig::for_request(&request))
+}
+
+fn current_settings(app: &AppHandle) -> Option<AppSettings> {
+    let state = app.try_state::<BackendState>()?;
+    let db = state.db().ok()?;
+    db.get_settings().ok()
+}
+
+/// A recording, transcription or paste is under way: not the moment to
+/// unload the model.
+fn dictation_in_progress(app: &AppHandle) -> bool {
+    let Some(state) = app.try_state::<BackendState>() else {
+        return false;
+    };
+    let Ok(machine) = state.app_state() else {
+        return false;
+    };
+    matches!(
+        machine.snapshot().status,
+        AppStatus::Recording | AppStatus::Stopping | AppStatus::Transcribing | AppStatus::Pasting
+    )
+}
+
+/// Spawns a named background thread; returns false when the OS refused.
+fn spawn_named(name: &str, work: impl FnOnce() + Send + 'static) -> bool {
+    match std::thread::Builder::new()
+        .name(name.to_string())
+        .spawn(work)
+    {
+        Ok(_) => true,
+        Err(error) => {
+            log::warn!("Could not start the {} thread. {}", name, error);
+            false
         }
     }
 }
@@ -477,35 +956,13 @@ fn http_client(inner: &mut Inner) -> Result<reqwest::blocking::Client, String> {
     Ok(inner.http.clone().expect("client initialized above"))
 }
 
-/// Ensures a healthy server process matching `config` is running.
-fn ensure_server(
+/// Starts whisper-server for `config` and waits until the model is loaded.
+/// The caller ([`Slot::ensure`]) has already stopped any other engine.
+fn launch_whisper_server(
     app: &AppHandle,
-    inner: &mut Inner,
-    config: &ServerConfig,
+    config: &EngineConfig,
     client: &reqwest::blocking::Client,
-) -> Result<(), String> {
-    if let Some(server) = inner.server.as_mut() {
-        if server.has_exited() {
-            log::warn!("whisper-server exited unexpectedly; restarting");
-            inner.stop_server();
-        }
-    }
-
-    if let Some(server) = inner.server.as_ref() {
-        if needs_restart(&server.config, config) {
-            log::info!(
-                "Restarting whisper-server for model {} (language {})",
-                config.model_path.display(),
-                config.language
-            );
-            inner.stop_server();
-        }
-    }
-
-    if inner.server.is_some() {
-        return Ok(());
-    }
-
+) -> Result<ServerProcess, String> {
     let executable = whisper::resolve_bundled_executable(app, SERVER_EXECUTABLE)
         .map_err(|error| error.message)?;
     let port = find_free_port()?;
@@ -530,7 +987,6 @@ fn ensure_server(
         config.language,
         threads
     );
-    let started = Instant::now();
     let child = spawn_server_process(
         &executable,
         &args,
@@ -545,13 +1001,7 @@ fn ensure_server(
 
     // On failure, `server` is dropped here, which kills the child.
     wait_until_healthy(client, &mut server)?;
-    log::info!(
-        "whisper-server ready on port {} after {} ms",
-        port,
-        started.elapsed().as_millis()
-    );
-    inner.server = Some(server);
-    Ok(())
+    Ok(server)
 }
 
 fn spawn_server_process(
@@ -589,7 +1039,7 @@ fn wait_until_healthy(
     let url = health_url(server.port, &server.request_path);
 
     loop {
-        if server.has_exited() {
+        if Resident::has_exited(server) {
             return Err("whisper-server exited during startup.".to_string());
         }
 
@@ -680,14 +1130,6 @@ fn health_url(port: u16, request_path: &str) -> String {
 
 fn inference_url(port: u16, request_path: &str) -> String {
     format!("http://{}:{}{}/inference", SERVER_HOST, port, request_path)
-}
-
-fn needs_restart(current: &ServerConfig, desired: &ServerConfig) -> bool {
-    current != desired
-}
-
-fn idle_expired(last_used: Instant, now: Instant) -> bool {
-    now.saturating_duration_since(last_used) >= IDLE_SHUTDOWN
 }
 
 /// WS5: build the CPU-only retry for a request whose GPU attempt failed. Returns
@@ -821,70 +1263,52 @@ mod tests {
     }
 
     #[test]
-    fn idle_expiry_triggers_only_after_the_idle_window() {
-        let now = Instant::now();
-        assert!(!idle_expired(now, now));
-        assert!(!idle_expired(
-            now,
-            now + IDLE_SHUTDOWN - Duration::from_secs(1)
-        ));
-        assert!(idle_expired(now, now + IDLE_SHUTDOWN));
-        assert!(idle_expired(
-            now,
-            now + IDLE_SHUTDOWN + Duration::from_secs(1)
-        ));
-    }
-
-    #[test]
-    fn restart_needed_only_when_config_changes() {
-        use crate::settings::GpuAcceleration;
-        let current = ServerConfig {
-            model_path: PathBuf::from("models/ggml-base.en.bin"),
-            language: "en".to_string(),
+    fn with_keep_loaded_off_only_real_changes_unload_at_once() {
+        let loaded = EngineConfig {
+            engine: EngineKind::Whisper,
+            model_id: "small".into(),
+            model_path: PathBuf::from("m.bin"),
+            language: "en".into(),
             translate: false,
-            gpu: GpuAcceleration::Auto,
+            gpu: crate::settings::GpuAcceleration::Auto,
             gpu_device_index: None,
         };
-
-        assert!(!needs_restart(&current, &current.clone()));
-        assert!(needs_restart(
-            &current,
-            &ServerConfig {
-                model_path: PathBuf::from("models/ggml-small.en-q5_1.bin"),
-                ..current.clone()
-            }
+        let other = EngineConfig {
+            model_id: "base".into(),
+            ..loaded.clone()
+        };
+        // An unrelated save (window size, hotkeys) right after a dictation:
+        // the idle minute decides, not the save.
+        assert!(!unload_on_settings_change(
+            true,
+            false,
+            Some(&loaded),
+            Some(&loaded)
         ));
-        assert!(needs_restart(
-            &current,
-            &ServerConfig {
-                language: "auto".to_string(),
-                ..current.clone()
-            }
+        // The switch was just turned off: free the memory now.
+        assert!(unload_on_settings_change(
+            true,
+            true,
+            Some(&loaded),
+            Some(&loaded)
         ));
-        // Toggling translate also requires a restart (it is a launch arg).
-        assert!(needs_restart(
-            &current,
-            &ServerConfig {
-                translate: true,
-                ..current.clone()
-            }
+        // Another model, language or GPU choice: the loaded one is stale.
+        assert!(unload_on_settings_change(
+            true,
+            false,
+            Some(&loaded),
+            Some(&other)
         ));
-        // GPU on/off is a launch arg (--no-gpu), so toggling it restarts.
-        assert!(needs_restart(
-            &current,
-            &ServerConfig {
-                gpu: GpuAcceleration::Off,
-                ..current.clone()
-            }
+        assert!(unload_on_settings_change(true, false, Some(&loaded), None));
+        // An engine that can't stay resident here.
+        assert!(unload_on_settings_change(
+            false,
+            false,
+            Some(&loaded),
+            Some(&loaded)
         ));
-        // Pinning a different Vulkan device (env at spawn) also restarts.
-        assert!(needs_restart(
-            &current,
-            &ServerConfig {
-                gpu_device_index: Some(1),
-                ..current.clone()
-            }
-        ));
+        // Nothing loaded: nothing to do.
+        assert!(!unload_on_settings_change(true, true, None, Some(&loaded)));
     }
 
     #[test]
@@ -926,6 +1350,8 @@ mod tests {
     fn cpu_retry_only_when_gpu_was_on() {
         use crate::settings::GpuAcceleration;
         let base = WhisperRequest {
+            engine: EngineKind::Whisper,
+            model_id: "small".to_string(),
             model_path: PathBuf::from("m.bin"),
             wav_path: PathBuf::from("a.wav"),
             language: "en".to_string(),

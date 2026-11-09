@@ -135,6 +135,15 @@ pub struct AppSettings {
     /// integrated one), so the strong card is always the one used.
     #[serde(default)]
     pub gpu_device_index: Option<u32>,
+    /// "Keep the speech model loaded" for Whisper. On (the default), the
+    /// model stays loaded in its own process so every dictation starts
+    /// instantly. Off, Scribe unloads it a minute after the last dictation and
+    /// loads it again when the next one starts.
+    #[serde(default = "default_keep_model_loaded")]
+    pub keep_whisper_loaded: bool,
+    /// The same choice for Parakeet, remembered separately.
+    #[serde(default = "default_keep_model_loaded")]
+    pub keep_parakeet_loaded: bool,
     /// Custom vocabulary / spelling hints passed to whisper.cpp via
     /// `--prompt` when non-empty.
     #[serde(default)]
@@ -291,6 +300,10 @@ fn default_silence_auto_stop_enabled() -> bool {
 
 fn default_silence_auto_stop_ms() -> u32 {
     60_000
+}
+
+fn default_keep_model_loaded() -> bool {
+    true
 }
 
 fn default_incremental_transcription_enabled() -> bool {
@@ -806,6 +819,8 @@ impl Default for AppSettings {
             translate_to_english: false,
             gpu_acceleration: GpuAcceleration::Auto,
             gpu_device_index: None,
+            keep_whisper_loaded: default_keep_model_loaded(),
+            keep_parakeet_loaded: default_keep_model_loaded(),
             vocabulary_prompt: String::new(),
             text_replacements: Vec::new(),
             output_mode: OutputMode::AutoPaste,
@@ -1466,6 +1481,9 @@ mod tests {
             GpuAcceleration::Auto
         );
         assert_eq!(AppSettings::default().gpu_device_index, None);
+        // Models stay loaded by default: dictation starts instantly.
+        assert!(AppSettings::default().keep_whisper_loaded);
+        assert!(AppSettings::default().keep_parakeet_loaded);
         assert!(!GpuAcceleration::Auto.is_off());
         assert!(GpuAcceleration::Off.is_off());
 
@@ -1478,6 +1496,15 @@ mod tests {
         let settings: AppSettings = serde_json::from_value(json).unwrap();
         assert_eq!(settings.gpu_acceleration, GpuAcceleration::Auto);
         assert_eq!(settings.gpu_device_index, None);
+
+        // Settings saved before the keep-loaded switches keep today's
+        // behavior: the model stays loaded.
+        let mut json = serde_json::to_value(AppSettings::default()).unwrap();
+        let object = json.as_object_mut().unwrap();
+        object.remove("keepWhisperLoaded");
+        object.remove("keepParakeetLoaded");
+        let settings: AppSettings = serde_json::from_value(json).unwrap();
+        assert!(settings.keep_whisper_loaded && settings.keep_parakeet_loaded);
 
         // Round-trips as snake_case.
         assert_eq!(
