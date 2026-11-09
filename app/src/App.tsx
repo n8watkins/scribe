@@ -8,7 +8,7 @@ import {
   sendNotification,
 } from "@tauri-apps/plugin-notification";
 import { check as checkUpdaterPackage } from "@tauri-apps/plugin-updater";
-import { detectUpdate } from "./lib/updates";
+import { detectUpdate, updatesInstallInApp } from "./lib/updates";
 import { deriveCustomThemeVars } from "./lib/customTheme";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { Download, Eraser, Mic, Minus, Square, X } from "lucide-react";
@@ -115,7 +115,9 @@ async function notifyOutsideApp(title: string, body: string) {
 async function notifyUpdateAvailable(version: string) {
   await notifyOutsideApp(
     "Scribe update available",
-    `Version ${version} is ready to install. Open Scribe → About to update.`,
+    updatesInstallInApp()
+      ? `Version ${version} is ready to install. Open Scribe → About to update.`
+      : `Version ${version} is out. Open Scribe → About to download it.`,
   );
 }
 
@@ -487,6 +489,7 @@ function App() {
   // startup DB read no longer silently skips the install (review M1).
   const maybeRunLaunchInstall = useCallback(() => {
     if (
+      updatesInstallInApp() &&
       launchInstallVersionRef.current &&
       settingsLoadedRef.current &&
       autoUpdateCheckRef.current &&
@@ -535,7 +538,9 @@ function App() {
             // in-app notifications setting.
             pushToast({
               tone: "info",
-              message: `Scribe ${result.latestVersion} is available. Open About to install it.`,
+              message: updatesInstallInApp()
+                ? `Scribe ${result.latestVersion} is available. Open About to install it.`
+                : `Scribe ${result.latestVersion} is available. Open About to download it.`,
             });
             void notifyUpdateAvailable(result.latestVersion);
           }
@@ -977,7 +982,7 @@ function App() {
               <button
                 className="secondary-button update-available-button"
                 onClick={() => setActiveView("About")}
-                title={`Scribe v${updateInfo.latestVersion} is available. Open About to install it`}
+                title={`Scribe v${updateInfo.latestVersion} is available. Open About to ${updatesInstallInApp() ? "install" : "download"} it`}
                 type="button"
               >
                 <Download aria-hidden="true" size={14} />
