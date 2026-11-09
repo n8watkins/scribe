@@ -168,6 +168,10 @@ export type AppSettings = {
   /** Pinned Vulkan device index for multi-GPU machines; null = ggml's default
    * device (usually the discrete card). */
   gpuDeviceIndex: number | null;
+  /** Keep the Whisper model loaded between dictations (default on). */
+  keepWhisperLoaded: boolean;
+  /** Keep the Parakeet model loaded between dictations (default on). */
+  keepParakeetLoaded: boolean;
   vocabularyPrompt: string;
   textReplacements: TextReplacement[];
   outputMode: OutputMode;
@@ -311,7 +315,42 @@ export type ModelInfo = {
   /** Whether the model can transcribe non-English languages (and translate to
    * English). English-only (`.en`) builds are false. */
   multilingual: boolean;
+  /** The speech engine the model runs on. */
+  engine: EngineKind;
 };
+
+export type EngineKind = "whisper" | "parakeet";
+
+/** Whether the active model is in memory: `per_dictation` means this engine
+ * can't stay resident on this system and loads for each dictation. */
+export type EngineLoadState =
+  | "not_loaded"
+  | "loading"
+  | "loaded"
+  | "per_dictation";
+
+/** What the active model measured on this machine. */
+export type EngineMeasurement = {
+  loadMs: number | null;
+  memoryBytes: number | null;
+};
+
+/** The active speech model and whether it is loaded (Home, Models, tray). */
+export type EngineStatus = {
+  engine: EngineKind;
+  modelId: string | null;
+  modelName: string | null;
+  state: EngineLoadState;
+  memoryBytes: number | null;
+  keepLoaded: boolean;
+  measured: EngineMeasurement | null;
+};
+
+export const ENGINE_STATUS_EVENT = "scribe:engine-status";
+
+export function getEngineStatus(): Promise<EngineStatus> {
+  return invoke("get_engine_status");
+}
 
 export type ModelDownloadProgress = {
   modelId: string;

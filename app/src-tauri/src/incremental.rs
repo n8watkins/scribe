@@ -435,6 +435,8 @@ pub fn start_session(
 
 /// Settings and model resolved once per session, at the first segment.
 struct SegmentContext {
+    engine: crate::models::EngineKind,
+    model_id: String,
     model_path: PathBuf,
     language: String,
     translate: bool,
@@ -531,6 +533,8 @@ fn transcribe_segment(
         .transcribe(
             app,
             WhisperRequest {
+                engine: context.engine,
+                model_id: context.model_id.clone(),
                 model_path: context.model_path.clone(),
                 wav_path: wav_path.to_path_buf(),
                 language: context.language.clone(),
@@ -550,10 +554,14 @@ fn segment_context(app: &AppHandle) -> Result<SegmentContext, String> {
     let state = app.state::<BackendState>();
     let db = state.db().map_err(|error| error.message)?;
     let settings = db.get_settings().map_err(|error| error.message)?;
-    let (_, model_path) =
+    let (model_id, model_path) =
         model_manager::selected_model_path(app, &db).map_err(|error| error.message)?;
 
     Ok(SegmentContext {
+        engine: crate::models::catalog_model(&model_id)
+            .map(|model| model.engine)
+            .unwrap_or(crate::models::EngineKind::Whisper),
+        model_id,
         model_path,
         language: crate::dictation::whisper_language(&settings.language),
         translate: settings.translate_to_english,

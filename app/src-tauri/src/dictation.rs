@@ -253,17 +253,12 @@ fn transcribe_recording_inner(
                 // internally when the server path is unavailable.
                 app.state::<WarmTranscriber>().transcribe(
                     app,
-                    WhisperRequest {
+                    WhisperRequest::for_settings(
+                        &model_id,
                         model_path,
-                        wav_path: wav_path.clone(),
-                        language: language.clone(),
-                        translate: settings.translate_to_english,
-                        vocabulary_prompt: settings.vocabulary_prompt.clone(),
-                        // FILLER: gate from settings (None = off, unchanged path).
-                        filler: crate::filler::FillerConfig::from_settings(&settings),
-                        gpu: settings.gpu_acceleration,
-                        gpu_device_index: settings.gpu_device_index,
-                    },
+                        wav_path.clone(),
+                        &settings,
+                    ),
                 )
             }
         }

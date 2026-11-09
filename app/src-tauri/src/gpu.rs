@@ -154,7 +154,14 @@ pub fn probe(app: &AppHandle) -> GpuProbe {
             return cached.clone();
         }
     }
-    let result = probe_uncached(app);
+    // On Windows the probe loads a model in whisper-cli: never next to the
+    // resident one.
+    let warm = tauri::Manager::try_state::<crate::whisper_server::WarmTranscriber>(app)
+        .filter(|_| cfg!(windows));
+    let result = match warm {
+        Some(warm) => warm.run_exclusive(|| probe_uncached(app)),
+        None => probe_uncached(app),
+    };
     if result.probed {
         if let Ok(mut guard) = PROBE_CACHE.lock() {
             *guard = Some(result.clone());

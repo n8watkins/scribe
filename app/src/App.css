@@ -744,6 +744,15 @@ button:disabled {
   letter-spacing: 0.02em;
 }
 
+/* A live line under a status card's value, like "Loaded · 0.9 GB". */
+.status-card-detail {
+  overflow: hidden;
+  color: var(--scribe-text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .status-card-go {
   flex: 0 0 auto;
   display: inline-flex;

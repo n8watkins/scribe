@@ -25,6 +25,7 @@ import { HotkeyList, StatsRow, StatusCard } from "../components/layout";
 import { LastTranscriptCard, LiveTranscript } from "../components/transcript";
 import { WhatsNewCard } from "../components/ReleaseNotes";
 import { insertMethodLabel, usePastePermission } from "../lib/pastePermission";
+import { engineStateLabel, useEngineStatus } from "../lib/engineStatus";
 
 /** The hotkeys Home always lists; any other hotkey shows up only when it
  * failed to register, so a conflict is never hidden. */
@@ -66,10 +67,17 @@ export function DashboardView({
   const afterValue =
     (after === "insert" ? insertMethodLabel(permission) : null) ??
     AFTER_DICTATION_LABELS[after];
+  const engineStatus = useEngineStatus();
+  const engineMatches =
+    engineStatus !== null &&
+    engineStatus.modelId === settings.selectedModelId;
   const modelName =
+    (engineMatches ? engineStatus.modelName : null) ??
     models?.find((model) => model.id === settings.selectedModelId)?.name ??
     settings.selectedModelId ??
     "Choose a model";
+  const modelDetail =
+    modelReady && engineMatches ? engineStateLabel(engineStatus) : undefined;
   const liveText = liveTranscript?.text.trim() ?? "";
   const showLive =
     liveText.length > 0 &&
@@ -118,6 +126,7 @@ export function DashboardView({
         <StatusCard
           action="Open Models and language"
           Icon={Database}
+          detail={modelDetail}
           label="Model"
           onAction={() => setActiveView("Models & language")}
           value={modelName}

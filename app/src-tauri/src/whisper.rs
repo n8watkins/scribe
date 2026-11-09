@@ -13,6 +13,10 @@ use crate::error::CommandError;
 
 #[derive(Debug, Clone)]
 pub struct WhisperRequest {
+    /// The engine the model runs on (from the catalog).
+    pub engine: crate::models::EngineKind,
+    /// The catalog id of the model, for status and measurements.
+    pub model_id: String,
     pub model_path: PathBuf,
     pub wav_path: PathBuf,
     pub language: String,
@@ -32,6 +36,33 @@ pub struct WhisperRequest {
     /// Vulkan device to pin via `GGML_VK_VISIBLE_DEVICES` (None = ggml's default
     /// device, normally the discrete card). Ignored when `gpu` is `Off`.
     pub gpu_device_index: Option<u32>,
+}
+
+impl WhisperRequest {
+    /// A request for `wav_path` with the selected model and the user's
+    /// language, translate, vocabulary, filler and GPU settings.
+    pub fn for_settings(
+        model_id: &str,
+        model_path: PathBuf,
+        wav_path: PathBuf,
+        settings: &crate::settings::AppSettings,
+    ) -> Self {
+        Self {
+            engine: crate::models::catalog_model(model_id)
+                .map(|model| model.engine)
+                .unwrap_or(crate::models::EngineKind::Whisper),
+            model_id: model_id.to_string(),
+            model_path,
+            wav_path,
+            language: crate::dictation::whisper_language(&settings.language),
+            translate: settings.translate_to_english,
+            vocabulary_prompt: settings.vocabulary_prompt.clone(),
+            // FILLER: gate from settings (None = off, unchanged path).
+            filler: crate::filler::FillerConfig::from_settings(settings),
+            gpu: settings.gpu_acceleration,
+            gpu_device_index: settings.gpu_device_index,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

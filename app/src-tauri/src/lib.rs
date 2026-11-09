@@ -31,6 +31,7 @@ pub mod selection_transform;
 pub mod self_test;
 pub mod settings;
 pub mod settings_store;
+pub mod speech_engine;
 pub mod state_server;
 pub mod stats;
 pub mod status_file;
@@ -425,7 +426,10 @@ pub fn run() {
             if stale > 0 {
                 log::warn!("Stopped {} speech engine process(es) left by an earlier run", stale);
             }
-            app.manage(whisper_server::WarmTranscriber::new());
+            app.manage(whisper_server::WarmTranscriber::new(
+                app.handle().clone(),
+                speech_engine::measurements_path(&app_data_dir),
+            ));
             // Offer Scribe's live dictation state to external tools over an
             // in-process loopback HTTP+SSE server. Additive and best-effort: a
             // bind failure must never block the app, so log and carry on.
@@ -493,6 +497,11 @@ pub fn run() {
                 log::info!("Starting self-test run");
                 self_test::spawn(app.handle(), request);
             }
+
+            // Load the speech model now when "Keep the speech model loaded" is
+            // on, so the first dictation is instant; publish its status.
+            app.state::<whisper_server::WarmTranscriber>()
+                .sync_with_settings(&settings);
 
             log::info!("Scribe setup complete");
             Ok(())
@@ -590,6 +599,7 @@ pub fn run() {
             commands::retry_model_download,
             commands::delete_model,
             commands::select_model,
+            commands::get_engine_status,
             commands::check_for_update,
             commands::open_release_page,
             commands::github_status,

@@ -39,7 +39,13 @@ import {
   progressPercent,
 } from "../lib/format";
 import { EmptyState, InlineError } from "../components/feedback";
-import { IconButton } from "../components/primitives";
+import { IconButton, Toggle } from "../components/primitives";
+import { SettingRow } from "../components/layout";
+import {
+  engineStateLabel,
+  keepLoadedCaveat,
+  useEngineStatus,
+} from "../lib/engineStatus";
 
 export function ModelsView({
   children,
@@ -65,6 +71,7 @@ export function ModelsView({
   // Auto-expand the catalog once on first load if nothing is downloaded yet, so
   // a fresh user immediately sees models to download. Manual toggles win after.
   const autoExpandedRef = useRef(false);
+  const engineStatus = useEngineStatus();
 
   const loadModels = useCallback(async () => {
     setModelsLoading(true);
@@ -275,10 +282,12 @@ export function ModelsView({
                 settings.selectedModelId ??
                 "No model selected"}
             </strong>
-            <span className="muted">
+            <span className="muted" data-testid="engine-state" role="status">
               {selectedModel
                 ? isModelDownloaded(effectiveStatus(selectedModel))
-                  ? "Ready for dictation"
+                  ? engineStatus && engineStatus.modelId === selectedModel.id
+                    ? engineStateLabel(engineStatus)
+                    : "Ready for dictation"
                   : "Download this model to use it"
                 : "Select a downloaded model below"}
             </span>
@@ -296,6 +305,27 @@ export function ModelsView({
           </div>
         </div>
 
+        {engineStatus ? (
+          <SettingRow
+            description={keepLoadedCaveat(engineStatus)}
+            label="Keep the speech model loaded"
+          >
+            <Toggle
+              checked={engineStatus.keepLoaded}
+              disabled={
+                actions.savingSettings || engineStatus.state === "per_dictation"
+              }
+              label="Keep the speech model loaded"
+              onChange={(on) =>
+                actions.updateSettings(
+                  engineStatus.engine === "parakeet"
+                    ? { keepParakeetLoaded: on }
+                    : { keepWhisperLoaded: on },
+                )
+              }
+            />
+          </SettingRow>
+        ) : null}
       </article>
 
       <article className="panel-card span-2">

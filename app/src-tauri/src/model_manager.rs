@@ -667,6 +667,7 @@ fn model_info_for_catalog(
         selected,
         downloaded_at: record.and_then(|record| record.downloaded_at),
         multilingual: catalog_model.multilingual,
+        engine: catalog_model.engine,
     })
 }
 

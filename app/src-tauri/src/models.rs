@@ -43,6 +43,26 @@ impl ModelStatus {
     }
 }
 
+/// The speech recognition engine a model runs on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineKind {
+    /// OpenAI Whisper through whisper.cpp (whisper-server, whisper-cli).
+    Whisper,
+    /// NVIDIA Parakeet TDT through whisper.cpp's Parakeet support, in
+    /// Scribe's own resident sidecar.
+    Parakeet,
+}
+
+impl EngineKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Whisper => "Whisper",
+            Self::Parakeet => "Parakeet",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ChecksumKind {
@@ -77,9 +97,20 @@ pub struct CatalogModel {
     /// UI uses this to label rows and to warn when a non-English language or
     /// translate is selected against an English-only model.
     pub multilingual: bool,
+    pub engine: EngineKind,
 }
 
 impl CatalogModel {
+    /// The short name the status line and the tray use, like
+    /// "Whisper Small English Q5_1" or "Parakeet v3".
+    pub fn status_name(self) -> String {
+        let base = self.name.split(" (").next().unwrap_or(self.name);
+        match self.engine {
+            EngineKind::Whisper => format!("Whisper {base}"),
+            EngineKind::Parakeet => base.to_string(),
+        }
+    }
+
     pub fn download_url(self) -> String {
         format!(
             "{}/{}/{}",
@@ -113,6 +144,7 @@ pub struct ModelInfo {
     /// Mirrors `CatalogModel::multilingual` for the frontend (English-only vs
     /// multilingual labeling + the non-English pair guard).
     pub multilingual: bool,
+    pub engine: EngineKind,
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +172,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_sha256: "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
             expected_size_bytes: 77_704_715,
             multilingual: false,
+            engine: EngineKind::Whisper,
         },
         CatalogModel {
             id: "base.en",
@@ -149,6 +182,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
             expected_size_bytes: 147_964_211,
             multilingual: false,
+            engine: EngineKind::Whisper,
         },
         CatalogModel {
             id: "small.en",
@@ -158,6 +192,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
             expected_size_bytes: 487_614_201,
             multilingual: false,
+            engine: EngineKind::Whisper,
         },
         CatalogModel {
             id: DEFAULT_MODEL_ID,
@@ -167,6 +202,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_sha256: "bfdff4894dcb76bbf647d56263ea2a96645423f1669176f4844a1bf8e478ad30",
             expected_size_bytes: 190_098_681,
             multilingual: false,
+            engine: EngineKind::Whisper,
         },
         CatalogModel {
             id: "medium.en",
@@ -176,6 +212,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_sha256: "cc37e93478338ec7700281a7ac30a10128929eb8f427dda2e865faa8f6da4356",
             expected_size_bytes: 1_533_774_781,
             multilingual: false,
+            engine: EngineKind::Whisper,
         },
         // Multilingual Whisper builds. These transcribe ~99 languages and can
         // translate any of them to English (the Translate-to-English setting).
@@ -190,6 +227,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
             expected_size_bytes: 77_691_713,
             multilingual: true,
+            engine: EngineKind::Whisper,
         },
         CatalogModel {
             id: "base",
@@ -199,6 +237,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
             expected_size_bytes: 147_951_465,
             multilingual: true,
+            engine: EngineKind::Whisper,
         },
         CatalogModel {
             id: "small",
@@ -208,6 +247,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
             expected_size_bytes: 487_601_967,
             multilingual: true,
+            engine: EngineKind::Whisper,
         },
         CatalogModel {
             id: "medium",
@@ -217,6 +257,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
             expected_size_bytes: 1_533_763_059,
             multilingual: true,
+            engine: EngineKind::Whisper,
         },
         CatalogModel {
             id: "large-v3-turbo-q5_0",
@@ -226,6 +267,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
             expected_size_bytes: 574_041_195,
             multilingual: true,
+            engine: EngineKind::Whisper,
         },
         // Full-precision (fp16) large-v3-turbo: the most accurate model offered.
         // ~3x the q5_0 size and slow on CPU, so it's really meant for the GPU
@@ -238,6 +280,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
             expected_size_bytes: 1_624_555_275,
             multilingual: true,
+            engine: EngineKind::Whisper,
         },
     ]
 }
@@ -308,6 +351,18 @@ mod tests {
         assert_eq!(q5.expected_sha256.len(), 64);
         assert_eq!(full.expected_sha256.len(), 64);
         assert!(full.expected_size_bytes > q5.expected_size_bytes);
+    }
+
+    #[test]
+    fn status_names_are_short() {
+        assert_eq!(
+            catalog_model(DEFAULT_MODEL_ID).unwrap().status_name(),
+            "Whisper Small English Q5_1"
+        );
+        assert_eq!(
+            catalog_model("large-v3-turbo").unwrap().status_name(),
+            "Whisper Large v3 Turbo"
+        );
     }
 
     #[test]
