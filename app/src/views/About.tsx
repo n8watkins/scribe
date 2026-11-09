@@ -26,7 +26,7 @@ import {
   openReleasePage,
   type UpdateCheckResult,
 } from "../backend";
-import { detectUpdate } from "../lib/updates";
+import { detectUpdate, updatesInstallInApp } from "../lib/updates";
 import type { ViewName } from "../types";
 import { Toggle } from "../components/primitives";
 import {
@@ -208,6 +208,7 @@ export function AboutView({
   // to the app's background-poll result so an available update always shows here
   // (even after dismissing the topbar chip).
   const effectiveUpdate = updateResult ?? autoUpdateInfo ?? null;
+  const inAppInstall = updatesInstallInApp();
 
   const updateStatus =
     updateError ??
@@ -270,17 +271,28 @@ export function AboutView({
             </small>
             <div className="about-block-actions">
               {effectiveUpdate?.updateAvailable ? (
-                <button
-                  className="primary-button about-update-button"
-                  disabled={installing}
-                  onClick={() => void handleInstallUpdate()}
-                  type="button"
-                >
-                  <Download aria-hidden="true" size={15} />
-                  {installing
-                    ? "Installing..."
-                    : `Install v${effectiveUpdate.latestVersion}`}
-                </button>
+                inAppInstall ? (
+                  <button
+                    className="primary-button about-update-button"
+                    disabled={installing}
+                    onClick={() => void handleInstallUpdate()}
+                    type="button"
+                  >
+                    <Download aria-hidden="true" size={15} />
+                    {installing
+                      ? "Installing..."
+                      : `Install v${effectiveUpdate.latestVersion}`}
+                  </button>
+                ) : (
+                  <button
+                    className="primary-button about-update-button"
+                    onClick={() => void openReleasePage(effectiveUpdate.releaseUrl)}
+                    type="button"
+                  >
+                    <Download aria-hidden="true" size={15} />
+                    {`Download v${effectiveUpdate.latestVersion}`}
+                  </button>
+                )
               ) : null}
               <button
                 className="secondary-button about-update-button"
@@ -307,23 +319,32 @@ export function AboutView({
                 onChange={(enabled) => onToggleAutoCheck?.(enabled)}
               />
             </div>
-            <div className="about-autocheck about-autoinstall">
-              <span>Install updates automatically</span>
-              <Toggle
-                checked={autoInstallEnabled ?? true}
-                disabled={autoCheckEnabled === false}
-                label="Install updates automatically"
-                onChange={(enabled) => onToggleAutoInstall?.(enabled)}
-              />
-            </div>
-            <small className="about-autoinstall-hint">
-              {forPlatform({
-                windows:
-                  "Downloads and installs new versions on launch, with a Scribe screen and no Windows installer popups.",
-                macos: "Downloads and installs new versions on launch, with a Scribe screen.",
-                linux: "Downloads and installs new versions on launch, with a Scribe screen.",
-              })}
-            </small>
+            {inAppInstall ? (
+              <>
+                <div className="about-autocheck about-autoinstall">
+                  <span>Install updates automatically</span>
+                  <Toggle
+                    checked={autoInstallEnabled ?? true}
+                    disabled={autoCheckEnabled === false}
+                    label="Install updates automatically"
+                    onChange={(enabled) => onToggleAutoInstall?.(enabled)}
+                  />
+                </div>
+                <small className="about-autoinstall-hint">
+                  Downloads and installs new versions on launch, with a Scribe screen and no Windows installer popups.
+                </small>
+              </>
+            ) : (
+              <small className="about-autoinstall-hint">
+                {forPlatform({
+                  windows: "",
+                  macos:
+                    "The macOS beta doesn't install updates itself yet. Download the new version and drag it into Applications to replace this one.",
+                  linux:
+                    "The Linux beta doesn't install updates itself yet. Download the new .deb or AppImage and install it over this one.",
+                })}
+              </small>
+            )}
           </div>
 
           <div className="about-block">

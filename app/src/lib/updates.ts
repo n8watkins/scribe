@@ -1,6 +1,7 @@
 import { check } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
-import type { UpdateCheckResult } from "../backend";
+import { checkForUpdate, type UpdateCheckResult } from "../backend";
+import { currentPlatform } from "./platform";
 
 const RELEASES_URL = "https://github.com/n8watkins/scribe/releases";
 
@@ -19,6 +20,12 @@ const RELEASES_URL = "https://github.com/n8watkins/scribe/releases";
  * swallows them; About surfaces them).
  */
 export async function detectUpdate(): Promise<UpdateCheckResult> {
+  if (!updatesInstallInApp()) {
+    // latest.json carries a signed package for Windows only, so the updater
+    // plugin can't resolve one here; the backend reads the same manifest's
+    // version and the UI links to the release for a manual install.
+    return checkForUpdate();
+  }
   const currentVersion = await getVersion();
   const update = await check();
   return update
@@ -35,4 +42,13 @@ export async function detectUpdate(): Promise<UpdateCheckResult> {
         latestVersion: currentVersion,
         releaseUrl: RELEASES_URL,
       };
+}
+
+/**
+ * Whether new versions download and install from inside the app. Only the
+ * Windows build publishes a signed updater package; the macOS and Linux betas
+ * update by installing the new release by hand.
+ */
+export function updatesInstallInApp(): boolean {
+  return currentPlatform() === "windows";
 }
