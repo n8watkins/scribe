@@ -1145,10 +1145,11 @@ class Run:
         self.prepare(target, "clipboard before keep-loaded off")
         transcript = self.toggle_dictation("jfk")
         check_words(transcript["text"], JFK_WORDS, "The transcript with the model loaded on demand")
-        check(bool(self.owned_engines()), "The model is not loaded right after the dictation")
-        unloaded_by = time.monotonic()
-        wait_until("the model to unload after a minute idle", lambda: not self.owned_engines(), 120, 1)
-        print(f"Unloaded {time.monotonic() - unloaded_by:.0f} s after the dictation finished")
+        finished = time.monotonic()
+        # A quick follow-up dictation stays instant: the model waits a minute.
+        stays("the model loaded for most of the idle minute", lambda: bool(self.owned_engines()), 45)
+        wait_until("the model to unload after a minute idle", lambda: not self.owned_engines(), 60, 1)
+        print(f"Unloaded {time.monotonic() - finished:.0f} s after the dictation finished")
         # Back to the default for the scenarios after this one.
         self.app.stop()
         patch_settings({"keepWhisperLoaded": True})

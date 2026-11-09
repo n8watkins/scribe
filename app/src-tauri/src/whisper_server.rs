@@ -307,33 +307,45 @@ impl WarmTranscriber {
     /// longer matches the settings (or the switch turned off) right away.
     pub fn sync_with_settings(&self, settings: &AppSettings) {
         let selection = Selection::from_settings(settings);
-        lock(&self.shared.live).selection = Some(selection.clone());
+        let previous = lock(&self.shared.live).selection.replace(selection.clone());
         self.publish(None);
+        // The switch for this engine went from on to off just now.
+        let switched_off = !selection.keep_loaded
+            && previous.is_some_and(|p| p.keep_loaded && p.engine == selection.engine);
 
         let desired = desired_config(&self.shared.app, settings);
-        let loaded_config = self
-            .inner
-            .try_lock()
-            .ok()
-            .and_then(|inner| inner.slot.resident().map(|r| r.config().clone()));
-
-        if selection.keep_loaded && resident_supported(selection.engine) {
+        let keep = selection.keep_loaded && resident_supported(selection.engine);
+        if keep {
+            let loaded_config = self
+                .inner
+                .try_lock()
+                .ok()
+                .and_then(|inner| inner.slot.resident().map(|r| r.config().clone()));
             if desired.is_some() && loaded_config != desired {
                 self.prewarm();
             }
-        } else if loaded_config.is_some() {
-            // Off, or a model that can't stay resident: free the memory now
-            // (a running transcription finishes first; it holds the slot).
-            let shared = self.shared.clone();
-            let inner = self.inner.clone();
-            spawn_named("speech-engine-unload", move || {
-                let mut inner = lock(&inner);
-                if inner.slot.unload() {
-                    shared.after_unload();
-                }
-                shared.publish(None);
-            });
+            return;
         }
+
+        // Off, or a model that can't stay resident. Decided under the slot
+        // lock, after any running transcription.
+        let shared = self.shared.clone();
+        let inner = self.inner.clone();
+        let resident_ok = resident_supported(selection.engine);
+        spawn_named("speech-engine-unload", move || {
+            let mut inner = lock(&inner);
+            let loaded = inner.slot.resident().map(|r| r.config().clone());
+            if unload_on_settings_change(
+                resident_ok,
+                switched_off,
+                loaded.as_ref(),
+                desired.as_ref(),
+            ) && inner.slot.unload()
+            {
+                shared.after_unload();
+                shared.publish(None);
+            }
+        });
     }
 
     /// Loads the selected model in the background unless it is already
@@ -629,6 +641,22 @@ impl WarmTranscriber {
             watchdog_tick(&shared, &mut inner);
         });
     }
+}
+
+/// With "Keep the speech model loaded" off (or an engine that can't stay
+/// resident), whether a settings change should unload the model right away.
+/// Any other save (a window size, a hotkey) leaves it to the idle timer, so
+/// the minute after a dictation stays fast.
+fn unload_on_settings_change(
+    resident_ok: bool,
+    switched_off: bool,
+    loaded: Option<&EngineConfig>,
+    desired: Option<&EngineConfig>,
+) -> bool {
+    let Some(loaded) = loaded else {
+        return false;
+    };
+    !resident_ok || switched_off || desired != Some(loaded)
 }
 
 fn watchdog_tick(shared: &Shared, inner: &mut Inner) {
@@ -1232,6 +1260,55 @@ mod tests {
     fn picks_a_sane_thread_count() {
         let threads = server_threads();
         assert!((1..=8).contains(&threads));
+    }
+
+    #[test]
+    fn with_keep_loaded_off_only_real_changes_unload_at_once() {
+        let loaded = EngineConfig {
+            engine: EngineKind::Whisper,
+            model_id: "small".into(),
+            model_path: PathBuf::from("m.bin"),
+            language: "en".into(),
+            translate: false,
+            gpu: crate::settings::GpuAcceleration::Auto,
+            gpu_device_index: None,
+        };
+        let other = EngineConfig {
+            model_id: "base".into(),
+            ..loaded.clone()
+        };
+        // An unrelated save (window size, hotkeys) right after a dictation:
+        // the idle minute decides, not the save.
+        assert!(!unload_on_settings_change(
+            true,
+            false,
+            Some(&loaded),
+            Some(&loaded)
+        ));
+        // The switch was just turned off: free the memory now.
+        assert!(unload_on_settings_change(
+            true,
+            true,
+            Some(&loaded),
+            Some(&loaded)
+        ));
+        // Another model, language or GPU choice: the loaded one is stale.
+        assert!(unload_on_settings_change(
+            true,
+            false,
+            Some(&loaded),
+            Some(&other)
+        ));
+        assert!(unload_on_settings_change(true, false, Some(&loaded), None));
+        // An engine that can't stay resident here.
+        assert!(unload_on_settings_change(
+            false,
+            false,
+            Some(&loaded),
+            Some(&loaded)
+        ));
+        // Nothing loaded: nothing to do.
+        assert!(!unload_on_settings_change(true, true, None, Some(&loaded)));
     }
 
     #[test]
