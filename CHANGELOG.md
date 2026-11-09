@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.12.0 - 2026-11-09
+
+Scribe now has beta builds for macOS and Linux, and the bundled SQLite gets a security fix.
+
+### New
+
+- Hotkeys that register on macOS for new installs ([#71](https://github.com/n8watkins/scribe/pull/71))
+- Keep the GitHub token in the freedesktop Secret Service ([#73](https://github.com/n8watkins/scribe/pull/73))
+- Word platform-specific copy for Linux and macOS ([#75](https://github.com/n8watkins/scribe/pull/75))
+- Paste, typing and selection capture on macOS ([#72](https://github.com/n8watkins/scribe/pull/72))
+- Ask for the macOS Accessibility permission that pasting needs ([#76](https://github.com/n8watkins/scribe/pull/76))
+- MacOS (universal .dmg) and Linux (.deb and AppImage) beta downloads on every release
+
+### Fixed
+
+- On the Mac and Linux betas, About now tells you when a new version is out and links to the download, instead of showing an update error
+
+### Safer
+
+- Updates are unpacked with a patched zip library.
+- The bundled SQLite database engine is updated to fix a security issue (CVE-2026-119375)
+
 ## 0.11.0 - 2026-10-28
 
 The Last transcript card now shows what really happened to your clipboard, discarded or timed-out recordings keep their stop reason, and the paste, focus and clipboard code moved into a platform layer as groundwork for Linux and macOS builds.
