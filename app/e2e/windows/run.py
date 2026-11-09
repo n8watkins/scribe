@@ -723,6 +723,25 @@ def status() -> str | None:
     return (read_status() or {}).get("status")
 
 
+SPEECH_ENGINES = ("whisper-server.exe", "scribe-parakeet.exe")
+
+
+def speech_processes() -> list[dict]:
+    """Every running speech engine process on the machine, with its parent."""
+    names = " or ".join(f"Name='{name}'" for name in SPEECH_ENGINES)
+    script = (
+        f"@(Get-CimInstance Win32_Process -Filter \"{names}\" | "
+        "Select-Object ProcessId,ParentProcessId,Name) | ConvertTo-Json -Compress"
+    )
+    out = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command", script], capture_output=True, text=True, timeout=60
+    ).stdout.strip()
+    if not out:
+        return []
+    found = json.loads(out)
+    return found if isinstance(found, list) else [found]
+
+
 def wait_idle(timeout: float = 60) -> None:
     wait_until("Scribe to be idle", lambda: status() in ("Idle", "Ready"), timeout)
 
@@ -1039,6 +1058,30 @@ class Run:
         check_words(request["instruction"], ["make", "text", "uppercase"], "The spoken instruction")
         wait_idle()
 
+    def hard_kill_stops_speech_engine(self) -> None:
+        """Ends Scribe the way a crash or Task Manager does (TerminateProcess:
+        no exit handler runs) and checks Windows takes the loaded speech
+        model down with it."""
+        pid = self.app.process.pid
+        engines = wait_until(
+            "a speech engine process owned by Scribe",
+            lambda: [p for p in speech_processes() if p["ParentProcessId"] == pid],
+            60,
+            0.5,
+        )
+        print(f"Speech engine before the kill: {engines}")
+        self.app.process.kill()
+        self.app.process.wait(30)
+        killed_at = time.monotonic()
+        engine_pids = {p["ProcessId"] for p in engines}
+        wait_until(
+            "the speech engine to exit with Scribe",
+            lambda: not engine_pids & {p["ProcessId"] for p in speech_processes()},
+            5,
+            0.2,
+        )
+        print(f"Speech engine gone {time.monotonic() - killed_at:.1f} s after the kill")
+
     # -- driver ------------------------------------------------------------
 
     def scenario(self, name: str, body) -> None:
@@ -1072,6 +1115,8 @@ class Run:
                     ("Paste last transcript", self.paste_last),
                     ("Discard a dictation", self.discard),
                     ("Transform Selection with a local AI server", self.transform_selection),
+                    # Last: it ends the app.
+                    ("A hard kill takes the speech model down with Scribe", self.hard_kill_stops_speech_engine),
                 ]:
                     self.scenario(name, body)
         finally:
