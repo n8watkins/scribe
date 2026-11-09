@@ -1,26 +1,31 @@
-name: Linux (experimental)
+name: Linux (beta)
 
-# An experimental Linux build: an AppImage and a .deb uploaded as workflow
-# artifacts only. It is not part of a published release. Windows bundles are
-# unchanged because the Linux targets live in tauri.linux.conf.json, which
-# Tauri merges only when it builds on Linux.
+# The Linux build: an AppImage and a .deb, installed and launched on a fresh
+# runner before anything uses them. On pull requests they stay workflow
+# artifacts; release.yml calls this workflow (release: true) and attaches the
+# tested files to the GitHub Release. Windows bundles are unchanged because
+# the Linux targets live in tauri.linux.conf.json, which Tauri merges only
+# when it builds on Linux.
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release:
+        description: "Called from the release workflow: build and smoke-test only"
+        type: boolean
+        default: false
   pull_request:
     paths:
-      - ".github/workflows/**"
-      - "app/src-tauri/tauri.linux.conf.json"
-      - "app/src-tauri/Cargo.toml"
-      - "app/src-tauri/Cargo.lock"
-      - "app/src-tauri/src/platform/**"
-      - "app/src-tauri/src/audio.rs"
+      - ".github/workflows/linux.yml"
+      - ".github/scripts/smoke-linux.sh"
+      - "app/**"
 
 permissions:
   contents: read
 
 concurrency:
   group: linux-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # Same reviewed whisper.cpp source as the Windows release build.
@@ -31,7 +36,8 @@ jobs:
   # The Linux-only Rust code (platform/linux.rs and everything cfg'd for it)
   # is otherwise never compiled, linted or tested in CI.
   backend-linux:
-    name: Desktop backend (Linux, experimental)
+    name: Desktop backend (Linux)
+    if: ${{ !inputs.release }}
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
@@ -80,7 +86,7 @@ jobs:
           '
 
   build-linux:
-    name: Build Linux bundles (experimental)
+    name: Build Linux bundles
     # The oldest supported runner, so the AppImage runs on older glibc too.
     runs-on: ubuntu-22.04
     timeout-minutes: 60
@@ -118,8 +124,7 @@ jobs:
 
       # CPU only and statically linked, so the two binaries need no shared
       # whisper or ggml libraries next to them and no OpenMP runtime. The
-      # Windows build adds Vulkan; Linux GPU support is not part of this
-      # experiment.
+      # Windows build adds Vulkan; Linux GPU support is not built yet.
       - name: Build reviewed whisper.cpp source
         run: |
           src="$RUNNER_TEMP/wcpp"
@@ -167,8 +172,9 @@ jobs:
           SCRIBE_GITHUB_APP_CLIENT_ID: ${{ vars.SCRIBE_GITHUB_APP_CLIENT_ID }}
         run: npm run tauri -- build
 
-      - name: Verify bundles
+      - name: Verify and stage bundles
         run: |
+          set -euo pipefail
           bundle=app/src-tauri/target/release/bundle
           appimage=("$bundle"/appimage/*.AppImage)
           deb=("$bundle"/deb/*.deb)
@@ -187,14 +193,81 @@ jobs:
               exit 1
             fi
           done
-          mkdir -p "$RUNNER_TEMP/scribe-linux"
-          cp "${appimage[0]}" "${deb[0]}" "$RUNNER_TEMP/scribe-linux/"
-          (cd "$RUNNER_TEMP/scribe-linux" && sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          # The end-to-end test input (the e2e-audio feature) must never ship.
+          mapfile -t exes < <(find app/src-tauri/target/release -maxdepth 1 -type f -perm -u+x)
+          if [ "${#exes[@]}" -eq 0 ]; then
+            echo "No executable was built" >&2
+            exit 1
+          fi
+          for exe in "${exes[@]}"; do
+            if grep -q SCRIBE_E2E_AUDIO_WAV "$exe"; then
+              echo "$exe contains the end-to-end test input" >&2
+              exit 1
+            fi
+          done
+          dpkg-deb --info "${deb[0]}"
+          # The versioned files Tauri names, plus copies under names that never
+          # change, so a site can link releases/latest/download/<name>.
+          stage="$RUNNER_TEMP/scribe-linux"
+          mkdir -p "$stage"
+          cp "${appimage[0]}" "${deb[0]}" "$stage/"
+          cp "${appimage[0]}" "$stage/Scribe-linux-x86_64.AppImage"
+          cp "${deb[0]}" "$stage/Scribe-linux-amd64.deb"
+          (cd "$stage" && sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
 
       - name: Upload Linux bundles
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: scribe-linux-experimental
+          name: scribe-linux
           path: ${{ runner.temp }}/scribe-linux/*
           if-no-files-found: error
+          retention-days: 14
+
+  smoke-linux:
+    name: Install and launch on Linux
+    needs: build-linux
+    # A newer, clean runner without the build's -dev packages, so a missing
+    # runtime dependency shows up here as it would for a user.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: scribe-linux
+          path: candidate
+
+      # xvfb and a session bus stand in for the desktop; libfuse2 is what
+      # the install docs ask AppImage users to add on Ubuntu 24.04.
+      - name: Install the test desktop
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb xauth dbus libfuse2t64 jq
+
+      - name: Install, launch and transcribe a clip
+        timeout-minutes: 30
+        run: |
+          version="$(jq -r .version app/src-tauri/tauri.conf.json)"
+          xvfb-run -a -s "-screen 0 1920x1080x24" dbus-run-session -- \
+            bash .github/scripts/smoke-linux.sh candidate app/src-tauri/tests/fixtures/jfk.wav "$version"
+
+      - name: Collect app logs on failure
+        if: failure()
+        run: |
+          mkdir -p "$RUNNER_TEMP/scribe-logs"
+          cp -R "$RUNNER_TEMP/scribe-smoke/." "$RUNNER_TEMP/scribe-logs/" 2>/dev/null || true
+          cp -R "$HOME/.local/share/com.natkins.scribe/logs" "$RUNNER_TEMP/scribe-logs/app-logs" 2>/dev/null || true
+          rm -rf "$RUNNER_TEMP/scribe-logs/squashfs-root" "$RUNNER_TEMP/scribe-logs/Applications"
+          ls -la "$RUNNER_TEMP/scribe-logs"
+
+      - name: Upload app logs on failure
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: scribe-linux-logs
+          path: ${{ runner.temp }}/scribe-logs
+          if-no-files-found: ignore
           retention-days: 14

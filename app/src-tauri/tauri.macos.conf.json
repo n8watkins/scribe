@@ -6,7 +6,7 @@
       "dmg"
     ],
     "createUpdaterArtifacts": false,
-    "shortDescription": "Private local dictation (experimental macOS build).",
+    "shortDescription": "Private local dictation for macOS (beta).",
     "macOS": {
       "signingIdentity": "-",
       "hardenedRuntime": false,
