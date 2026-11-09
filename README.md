@@ -1,6 +1,6 @@
 # Scribe
 
-Private, local-first dictation for Windows.
+Private, local-first dictation for Windows, with beta builds for macOS and Linux.
 Hold a hotkey, talk, and release to transcribe on your own machine with [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and insert the result wherever your cursor is.
 Your audio never leaves your PC, and no account is required.
 Optional GitHub backup is off by default and uploads text only to a private repository you control: notes by default and, if enabled, every transcript, but never audio.
@@ -42,26 +42,47 @@ Scribe is free and open source under the MIT license.
 
 **Stays out of your way**
 
-- **All hotkeys rebindable** from the Hotkeys tab, with per-bind **press / release** triggers and inline conflict reporting.
-- **Model manager:** download and switch between curated Whisper models (tiny to large-v3-turbo) from the Models tab; they run entirely offline after the one-time download.
-- **Auto-updates:** Scribe checks GitHub for new releases shortly after launch, on refocus, and every six hours, fires an OS notification when one is found, and installs it in-app. The updater artifact is cryptographically signed. Automatic checks can be turned off.
+- **All hotkeys rebindable** from the **Hotkeys** page, with per-bind **press / release** triggers and inline conflict reporting.
+- **Model manager:** download and switch between curated Whisper models (tiny to large-v3-turbo) on the **Models & language** page; they run entirely offline after the one-time download.
+- **Auto-updates (Windows):** Scribe checks GitHub for new releases shortly after launch, on refocus, and every six hours, fires an OS notification when one is found, and installs it in-app. The updater artifact is cryptographically signed. Automatic checks can be turned off.
+  The macOS and Linux betas don't update themselves yet: install the new version from the latest release.
 - **Tray app:** closing the window minimizes to the tray; dictation hotkeys keep working. Quit from the tray icon.
 
-Windows 10/11 x64 only, by design. There are no plans to over-build this for other platforms.
+Scribe is built for Windows 10/11 x64 first.
+The macOS and Linux builds are betas: every release builds, installs, launches and test-transcribes them automatically, but they have had little hands-on use on real Macs and Linux desktops yet, so please report what you find in [Issues](https://github.com/n8watkins/scribe/issues).
 
 ## Install (for users)
 
-1. Download the `Scribe_<version>_x64-setup.exe` installer from the [latest release](https://github.com/n8watkins/scribe/releases/latest) and run it.
-   - The binary is not code-signed (no Authenticode certificate), so Windows SmartScreen will warn you. Click **More info → Run anyway**.
-   - The installer bootstraps Microsoft WebView2 automatically if you don't have it.
-2. Launch Scribe. Open the **Models** tab and download a model; `base.en` (~140 MB) is a good start; `small.en` is more accurate and still fast on modern CPUs (the default is `small.en-q5_1`, a quantized balance). Models download once from [Hugging Face](https://huggingface.co/ggerganov/whisper.cpp) and run entirely offline afterward.
-3. Open the **Audio** tab, pick your microphone, and use **Record test** / **Play test** to confirm it hears you.
-4. Put your cursor in any app, hold `Ctrl+Win`, and talk.
+Every file is on the [latest release](https://github.com/n8watkins/scribe/releases/latest), and `SHA256SUMS.txt` there lists a checksum for each one.
+Each platform has a full guide: install, update and uninstall, permissions, what works there, where your data lives, known limits and troubleshooting.
 
-To use selected-text transform or note analysis, run a local OpenAI-compatible LLM server ([LM Studio](https://lmstudio.ai/) or [Ollama](https://ollama.com/)) and point Scribe at it in Settings (default `http://127.0.0.1:1234/v1`).
+| Platform | Download | Guide |
+|---|---|---|
+| Windows 10/11 x64 | `Scribe_<version>_x64-setup.exe` (or the `.msi`) | [Windows](docs/install/windows.md) |
+| macOS 13.3+, Apple Silicon and Intel (beta) | [`Scribe-macos-universal.dmg`](https://github.com/n8watkins/scribe/releases/latest/download/Scribe-macos-universal.dmg) | [macOS](docs/install/macos.md) |
+| Linux x86_64 (beta) | [`Scribe-linux-amd64.deb`](https://github.com/n8watkins/scribe/releases/latest/download/Scribe-linux-amd64.deb) or [`Scribe-linux-x86_64.AppImage`](https://github.com/n8watkins/scribe/releases/latest/download/Scribe-linux-x86_64.AppImage) | [Linux](docs/install/linux.md) |
+
+- **Windows:** Scribe is not code-signed, so SmartScreen warns on first install: click **More info → Run anyway**.
+- **macOS:** Scribe has no Apple Developer ID, so the app is ad-hoc signed and **not notarized**, and macOS blocks the first open.
+  On macOS 15 and later, open **System Settings → Privacy & Security** and click **Open Anyway**; on macOS 13 and 14, Control-click Scribe in Applications and choose **Open**.
+  If macOS says the app "is damaged", run `xattr -dr com.apple.quarantine /Applications/Scribe.app`.
+  Then allow the **Microphone** and turn on **Accessibility** so Scribe can paste.
+- **Linux:** `sudo apt install ./Scribe-linux-amd64.deb`, or make the AppImage executable (it needs FUSE 2: `libfuse2t64` on Ubuntu 24.04).
+  Hotkeys and pasting work on X11; on Wayland they only reach X11 apps for now, and native Wayland support is coming.
+- Trying a beta on a real Mac or Linux machine? The [testing checklist](docs/install/testing-checklist.md) says what to check and what to send back.
+
+### First run (all platforms)
+
+1. Launch Scribe. Open **Models & language** and download a model; `base.en` (~140 MB) is a good start; `small.en` is more accurate and still fast on modern CPUs (the default is `small.en-q5_1`, a quantized balance). Models download once from [Hugging Face](https://huggingface.co/ggerganov/whisper.cpp) and run entirely offline afterward.
+2. Open **Microphone**, pick your microphone, and use **Record test** / **Play test** to confirm it hears you.
+3. Put your cursor in any app, hold the hold-to-talk hotkey (`Ctrl+Win` on Windows), and talk.
+
+To use selected-text transform or note analysis, run a local OpenAI-compatible LLM server ([LM Studio](https://lmstudio.ai/) or [Ollama](https://ollama.com/)) and point Scribe at it on the **Local AI** page (default `http://127.0.0.1:1234/v1`).
 These features are optional and off by default; core dictation needs no LLM.
 
 ### Default hotkeys
+
+These are the Windows defaults; macOS uses `Control+Option` and Linux `Ctrl+Alt` combinations instead (see the [macOS](docs/install/macos.md#default-hotkeys) and [Linux](docs/install/linux.md#default-hotkeys) guides).
 
 | Action | Default |
 | --- | --- |
@@ -73,7 +94,7 @@ These features are optional and off by default; core dictation needs no LLM.
 | Discard / cancel recording | `Ctrl+Alt+X` |
 | Open dashboard | `Ctrl+Alt+F` |
 
-If a hotkey conflicts with another app, rebind it in the **Hotkeys** tab, where conflicts are reported inline. Each non-hold bind can fire on key **press** or **release**.
+If a hotkey conflicts with another app, rebind it on the **Hotkeys** page, where conflicts are reported inline. Each non-hold bind can fire on key **press** or **release**.
 
 ### Privacy
 
@@ -81,7 +102,7 @@ Your audio is recorded and transcribed on your PC and is never uploaded.
 By default Scribe keeps each recording with its transcript so you can play it back, and deletes both automatically after 30 days.
 Notes keep their text until you delete them, but their recordings are deleted after the same 30 days.
 Recordings that fail to transcribe are kept (up to 20) so you can retry them, and are deleted on the same schedule.
-The **Data & Privacy** tab sets how long history is kept, and turning off **Save raw audio clips** stops Scribe keeping new recordings once they are transcribed.
+The **Your data** page sets how long history is kept, and turning off **Save audio clips** stops Scribe keeping new recordings once they are transcribed.
 Transcripts live in a local SQLite database under `%APPDATA%\com.natkins.scribe\`.
 **Data & Privacy** can open the folder, turn history off, or clear history, which deletes every dictation with its audio, failed recordings and copies opened in an editor, and keeps your notes.
 
@@ -180,4 +201,8 @@ Contributions and issue reports are welcome.
 Scribe's Windows executables and installers are intentionally not Authenticode-signed, so Windows SmartScreen can show an unrecognized-app warning on first install.
 Authenticode code signing is not on the roadmap.
 This is separate from Tauri updater signing: update metadata and updater artifacts are cryptographically signed so the installed app can reject tampered updates.
-Release automation also publishes SHA-256 checksums and a software bill of materials, then smoke-tests both the NSIS and MSI installers before publication.
+The macOS app and its bundled whisper.cpp binaries are ad-hoc signed but not notarized, because Scribe has no Apple Developer ID; see the [macOS guide](docs/install/macos.md) for how to open it.
+The Linux AppImage and `.deb` are not signed.
+Release automation also publishes SHA-256 checksums for every file and a software bill of materials.
+Before anything is published it installs every build on a fresh runner, launches it and transcribes a speech clip with the bundled whisper.cpp: the NSIS and MSI installers on Windows, the `.dmg` on macOS (Apple Silicon, and Intel under Rosetta), and the `.deb` and AppImage on Linux.
+Updates that install themselves are Windows only for now.

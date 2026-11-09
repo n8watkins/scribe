@@ -1,30 +1,36 @@
-name: macOS (experimental)
+name: macOS (beta)
 
-# An experimental macOS build: a universal (Apple Silicon and Intel) .dmg
-# uploaded as a workflow artifact only. It is not part of a published release.
-# Windows and Linux bundles are unchanged because the macOS targets live in
-# tauri.macos.conf.json, which Tauri merges only when it builds on macOS.
+# The macOS build: a universal (Apple Silicon and Intel) .dmg, installed and
+# launched on a fresh runner before anything uses it. On pull requests it stays
+# a workflow artifact; release.yml calls this workflow (release: true) and
+# attaches the tested .dmg to the GitHub Release. Windows and Linux bundles are
+# unchanged because the macOS targets live in tauri.macos.conf.json, which
+# Tauri merges only when it builds on macOS.
 #
 # There is no Apple Developer ID: the app and its bundled whisper.cpp binaries
 # are ad-hoc signed (`codesign -s -`), which Apple Silicon needs to run any
-# code at all. Gatekeeper still rejects the app when it is downloaded, because
-# it is not notarized.
+# code at all. Gatekeeper still blocks the app on first open after a download,
+# because it is not notarized; README.md says how users open it anyway.
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release:
+        description: "Called from the release workflow: build and smoke-test only"
+        type: boolean
+        default: false
   pull_request:
     paths:
-      - ".github/workflows/**"
-      - "app/src-tauri/tauri.macos.conf.json"
-      - "app/src-tauri/Info.plist"
-      - "app/src-tauri/src/platform/**"
-      - "app/src-tauri/src/audio.rs"
+      - ".github/workflows/macos.yml"
+      - ".github/scripts/smoke-macos.sh"
+      - "app/**"
 
 permissions:
   contents: read
 
 concurrency:
   group: macos-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # Same reviewed whisper.cpp source as the Windows release build.
@@ -42,7 +48,8 @@ jobs:
   # The macOS-only Rust code (platform/macos.rs and everything cfg'd for it)
   # is otherwise never compiled, linted or tested for aarch64-apple-darwin.
   backend-macos:
-    name: Desktop backend (macOS, experimental)
+    name: Desktop backend (macOS)
+    if: ${{ !inputs.release }}
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -74,7 +81,7 @@ jobs:
         run: cargo test --locked --lib platform::macos -- --ignored --test-threads=1 --nocapture
 
   build-macos:
-    name: Build macOS bundle (experimental)
+    name: Build macOS bundle
     # Apple Silicon runner; the Intel slice is cross-compiled and tested under
     # Rosetta.
     runs-on: macos-latest
@@ -272,106 +279,63 @@ jobs:
           spctl --assess --type open --context context:primary-signature --verbose=4 "${dmgs[0]}" 2>&1 || true
           echo "dmg=${dmgs[0]}" >> "$GITHUB_OUTPUT"
 
-      # End to end through the .dmg the way a user installs it: mount it, copy
-      # the app into an Applications folder, then let the app download the
-      # default model through its verified download path, transcribe the clip
-      # with the bundled whisper.cpp, write the result and exit. The Intel
-      # slice runs the same test under Rosetta with the model already present.
-      # perl's alarm is the timeout, so a hung app fails the job fast.
-      - name: Install from the .dmg and transcribe a clip
-        timeout-minutes: 25
-        env:
-          DMG: ${{ steps.bundle.outputs.dmg }}
+      # The end-to-end test input (the e2e-audio feature) must never ship.
+      - name: Check the build has no test input
         run: |
           set -euo pipefail
-          mnt="$RUNNER_TEMP/scribe-dmg"
-          apps="$RUNNER_TEMP/Applications"
-          mkdir -p "$mnt" "$apps"
-          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$DMG"
-          ditto "$mnt/Scribe.app" "$apps/Scribe.app"
-          hdiutil detach "$mnt"
-          codesign --verify --deep --strict "$apps/Scribe.app"
-          version="$(jq -r .version app/src-tauri/tauri.conf.json)"
-          clip="$PWD/app/src-tauri/tests/fixtures/jfk.wav"
-          exe="$apps/Scribe.app/Contents/MacOS/Scribe"
-
-          self_test() {
-            local label="$1" result="$RUNNER_TEMP/scribe-self-test-$1.json"
-            shift
-            local start end status=0
-            start=$(date +%s)
-            perl -e 'alarm shift; exec @ARGV or die "exec failed: $!"' 600 \
-              "$@" "$exe" --self-test-transcribe "$clip" "$result" || status=$?
-            end=$(date +%s)
-            echo "Self-test ($label) exited with $status after $((end - start)) s"
-            if [ ! -f "$result" ]; then
-              echo "The self-test ($label) wrote no result" >&2
-              return 1
-            fi
-            cat "$result"
-            echo
-            jq -e '.ok == true' "$result" > /dev/null || { echo "The self-test ($label) failed" >&2; return 1; }
-            [ "$status" -eq 0 ] || { echo "The self-test ($label) reported success but exited with $status" >&2; return 1; }
-            jq -e '.text | test("country")' "$result" > /dev/null || { echo "The transcript ($label) did not match the clip" >&2; return 1; }
-            jq -e --arg v "$version" '.appVersion == $v' "$result" > /dev/null || { echo "The self-test ($label) ran the wrong version" >&2; return 1; }
-          }
-
-          # The bundled whisper-cli on its own, per slice, with and without
-          # Metal, for the record: which backend ggml picked and how long the
-          # clip took. Informational only.
-          diagnose() {
-            local model start end
-            model="$(find "$HOME/Library/Application Support/com.natkins.scribe/models" -name '*.bin' | head -n 1)"
-            for arch in arm64 x86_64; do
-              for gpu in "" --no-gpu; do
-                start=$(date +%s)
-                echo "::group::whisper-cli $arch ${gpu:-(gpu on)}"
-                perl -e 'alarm shift; exec @ARGV or die "exec failed: $!"' 300 \
-                  arch "-$arch" "$apps/Scribe.app/Contents/Resources/bin/macos/whisper-cli" \
-                  -m "$model" -f "$clip" --no-timestamps $gpu 2>&1 |
-                  grep -iE 'metal|gpu|backend|system_info|total time|country|error|fail' || true
-                end=$(date +%s)
-                echo "::endgroup::"
-                echo "whisper-cli $arch ${gpu:-(gpu on)}: $((end - start)) s"
-              done
-            done
-          }
-
-          self_test arm64 env
-
-          # The runner is a new install, so the app registered the default
-          # hotkeys at startup: each one must be a shortcut macOS accepts.
-          hotkeys="$(cat "$HOME/Library/Logs/com.natkins.scribe"/*.log | grep -E 'hotkey bindings|Hotkey registration failed' || true)"
-          echo "$hotkeys"
-          if [ -z "$hotkeys" ] || grep -q 'Hotkey registration failed' <<< "$hotkeys"; then
-            echo "A default hotkey did not register" >&2
+          main="$(find app/src-tauri/target/universal-apple-darwin/release/bundle/macos -path '*/Contents/MacOS/Scribe')"
+          if grep -q SCRIBE_E2E_AUDIO_WAV "$main"; then
+            echo "$main contains the end-to-end test input" >&2
             exit 1
           fi
 
-          diagnose
-          self_test x86_64 arch -x86_64
-
+      # The versioned file Tauri names, plus a copy under a name that never
+      # changes, so a site can link releases/latest/download/<name>.
       - name: Stage .dmg
         env:
           DMG: ${{ steps.bundle.outputs.dmg }}
         run: |
-          mkdir -p "$RUNNER_TEMP/scribe-macos"
-          cp "$DMG" "$RUNNER_TEMP/scribe-macos/"
-          (cd "$RUNNER_TEMP/scribe-macos" && shasum -a 256 -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          stage="$RUNNER_TEMP/scribe-macos"
+          mkdir -p "$stage"
+          cp "$DMG" "$stage/"
+          cp "$DMG" "$stage/Scribe-macos-universal.dmg"
+          (cd "$stage" && shasum -a 256 -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
 
       - name: Upload macOS bundle
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: scribe-macos-experimental
+          name: scribe-macos
           path: ${{ runner.temp }}/scribe-macos/*
           if-no-files-found: error
           retention-days: 14
+
+  smoke-macos:
+    name: Install and launch on macOS
+    needs: build-macos
+    # A fresh runner that never built anything.
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: scribe-macos
+          path: candidate
+
+      - name: Install from the .dmg, launch and transcribe a clip
+        timeout-minutes: 30
+        run: |
+          version="$(jq -r .version app/src-tauri/tauri.conf.json)"
+          bash .github/scripts/smoke-macos.sh candidate app/src-tauri/tests/fixtures/jfk.wav "$version"
 
       - name: Collect app logs on failure
         if: failure()
         run: |
           mkdir -p "$RUNNER_TEMP/scribe-logs"
-          cp "$RUNNER_TEMP"/scribe-self-test-*.json "$RUNNER_TEMP/scribe-logs/" 2>/dev/null || true
+          cp "$RUNNER_TEMP"/scribe-smoke/*.json "$RUNNER_TEMP"/scribe-smoke/*.log "$RUNNER_TEMP/scribe-logs/" 2>/dev/null || true
           for dir in "$HOME/Library/Logs/com.natkins.scribe" "$HOME/Library/Application Support/com.natkins.scribe/logs"; do
             if [ -d "$dir" ]; then
               cp -R "$dir" "$RUNNER_TEMP/scribe-logs/" || true

@@ -71,7 +71,7 @@ What CI cannot answer (still needs a real Mac, see 3.1): Gatekeeper's first-laun
 - [ ] **Accessibility grant after updates.** Ad-hoc signing changes the code signature each build, so the grant probably stops applying after every update. Confirm on a Mac, then decide: document it (row text already warns), detect a stale grant and explain "turn Scribe off and on again", or reconsider a free stable signing identity (a self-signed certificate kept in CI secrets gives a stable designated requirement without paying Apple; check whether TCC keeps the grant with it).
 - [ ] **Keychain prompt after updates** (#70): same signature issue, macOS may ask for the login password once per update. Confirm on a Mac.
 - [ ] **Updates for macOS.** `darwin-aarch64` and `darwin-x86_64` (or universal) entries in `latest.json`, with a signed `.app.tar.gz` from `macos.yml`/`release.yml`. Only after 3.1 hands-on testing passes.
-- [ ] **Distribution page**: Gatekeeper steps for an unsigned app (macOS 15+: try to open, then System Settings, Privacy & Security, "Open Anyway"; or `xattr -dr com.apple.quarantine /Applications/Scribe.app`). Put this on the website download section when Mac downloads go live.
+- [x] **Distribution page**: Gatekeeper steps are in `docs/install/macos.md` and every release's notes; the website still needs them (section 4).
 
 ### 3.2 Should-have
 - [ ] Pill transparency: needs `macOSPrivateApi` in Tauri (blocks Mac App Store, which is not planned). Turn it on in `tauri.macos.conf.json` and check the pill.
@@ -84,10 +84,11 @@ What CI cannot answer (still needs a real Mac, see 3.1): Gatekeeper's first-laun
 
 ## 4. Cross-platform
 
-- [ ] README, FAQ and website still describe a Windows-only app. Update when Linux or macOS downloads are offered, not before.
-- [ ] Website download section: add Linux/macOS downloads (from the latest release assets) once they are in releases; `scribe-web/lib/site.ts` reads only the `x64-setup.exe` asset today.
+- [x] README and FAQ cover all three platforms, with per-platform guides in `docs/install/` and a beta testing checklist (2026-11-09).
+- [ ] The website still describes a Windows-only app.
+- [ ] Website download section: add Linux/macOS downloads; `scribe-web/lib/site.ts` reads only the `x64-setup.exe` asset today. Every release now has stable names for `releases/latest/download/<name>` links: `Scribe-macos-universal.dmg`, `Scribe-linux-x86_64.AppImage`, `Scribe-linux-amd64.deb`. Copy the Gatekeeper steps from `docs/install/macos.md`.
 - [ ] Website fallback release in `scribe-web/lib/site.ts` still points at 0.9.0 (used only when GitHub is unreachable). Bump it to the current release.
-- [ ] `release.yml` builds Windows only. Add Linux and macOS jobs (reusing `linux.yml`/`macos.yml`) that upload to the same release, when 2.1/3.1 are done.
+- [x] `release.yml` calls `linux.yml` and `macos.yml`, which install, launch and test-transcribe the builds on fresh runners, and publishes them as betas on the same release (owner decision 2026-11-09, before 2.1/3.1).
 - [ ] Dependabot alert #86 (`glib` 0.18, Linux GTK stack, dismissed as tolerable): revisit when Tauri moves to gtk-rs 0.20.
 
 ## 5. Windows follow-ups
