@@ -45,7 +45,8 @@ export const SETTINGS_INDEX: readonly SettingsEntry[] = [
   { label: "Pause before splitting (ms)", page: "Microphone", keywords: "phrase segment milliseconds ms timing advanced" },
   { label: "Longest phrase (ms)", page: "Microphone", keywords: "phrase segment maximum length milliseconds ms timing advanced" },
   { label: "Shortest recording (ms)", page: "Microphone", keywords: "minimum duration length too short milliseconds ms advanced" },
-  { label: "Longest recording (ms)", page: "Microphone", keywords: "maximum duration length limit cap minutes milliseconds ms advanced" },
+  { label: "Silence stops any recording after (ms)", page: "Microphone", keywords: "maximum duration length long limit hold-to-talk stuck key minutes milliseconds ms advanced" },
+  { label: "Hard stop (ms)", page: "Microphone", keywords: "maximum duration length limit cap ceiling safety stuck key forgotten minutes milliseconds ms advanced" },
 
   // Models & language
   { label: "Models", page: "Models & language", keywords: "whisper download speech model accuracy speed size" },

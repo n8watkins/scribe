@@ -375,17 +375,34 @@ export function MicrophoneView({
                 />
               </SettingRow>
               <SettingRow
-                description="Recording stops after this long (600000 ms is 10 minutes)."
-                label="Longest recording (ms)"
+                description="Nobody is cut off while talking. Past this length, the auto-stop pause also ends hold-to-talk recordings, even if nothing was said (600000 ms is 10 minutes)."
+                label="Silence stops any recording after (ms)"
               >
                 <MsInput
-                  ariaLabel="Maximum duration in milliseconds"
-                  disabled={actions.savingSettings}
+                  ariaLabel="Length after which silence stops any recording, in milliseconds"
+                  disabled={
+                    actions.savingSettings || !settings.silenceAutoStopEnabled
+                  }
                   min={settings.minRecordingMs}
                   onCommit={(maxRecordingMs) =>
                     actions.updateSettings({ maxRecordingMs })
                   }
                   value={settings.maxRecordingMs}
+                />
+              </SettingRow>
+              <SettingRow
+                description="Safety limit for a stuck key or a forgotten mic: recording stops at this length even mid-sentence, and the text is kept (1800000 ms is 30 minutes; 60000 to 3600000)."
+                label="Hard stop (ms)"
+              >
+                <MsInput
+                  ariaLabel="Hard stop length in milliseconds"
+                  disabled={actions.savingSettings}
+                  max={3600000}
+                  min={60000}
+                  onCommit={(recordingCeilingMs) =>
+                    actions.updateSettings({ recordingCeilingMs })
+                  }
+                  value={settings.recordingCeilingMs}
                 />
               </SettingRow>
             </div>

@@ -74,7 +74,14 @@ pub struct AppSettings {
     /// working unchanged.
     pub recording_mode: RecordingMode,
     pub min_recording_ms: u32,
+    /// The long-recording point. It never cuts a recording off: past it the
+    /// silence auto-stop rule also covers hold-to-talk and no longer needs
+    /// speech first, so a stuck key or a forgotten open mic still ends.
     pub max_recording_ms: u32,
+    /// Safety ceiling: a recording stops at this length even mid-sentence.
+    /// Bounded so the recording buffer and transcription time stay safe.
+    #[serde(default = "default_recording_ceiling_ms")]
+    pub recording_ceiling_ms: u32,
     pub silence_trim_enabled: bool,
     /// Automatically stop toggle/UI-started recordings after a stretch of
     /// continuous silence. Never applies to hold-to-talk or test clips.
@@ -267,6 +274,16 @@ impl Default for CustomTheme {
         }
     }
 }
+
+/// 30 minutes.
+fn default_recording_ceiling_ms() -> u32 {
+    1_800_000
+}
+
+/// Allowed range of `recording_ceiling_ms`: 1 to 60 minutes. Capture keeps
+/// the whole recording in memory at the microphone's rate (about 690 MB for
+/// an hour at 48 kHz), so an hour is the most that stays safe.
+pub const RECORDING_CEILING_RANGE_MS: std::ops::RangeInclusive<u32> = 60_000..=3_600_000;
 
 fn default_silence_auto_stop_enabled() -> bool {
     true
@@ -702,6 +719,7 @@ impl Default for AppSettings {
             recording_mode: RecordingMode::Both,
             min_recording_ms: 300,
             max_recording_ms: 600_000,
+            recording_ceiling_ms: default_recording_ceiling_ms(),
             silence_trim_enabled: true,
             silence_auto_stop_enabled: default_silence_auto_stop_enabled(),
             silence_auto_stop_ms: default_silence_auto_stop_ms(),
@@ -834,6 +852,12 @@ impl AppSettings {
             ));
         }
 
+        if !RECORDING_CEILING_RANGE_MS.contains(&self.recording_ceiling_ms) {
+            return Err(SettingsValidationError::new(
+                "recordingCeilingMs must be between 60000 and 3600000.",
+            ));
+        }
+
         if !(500..=300_000).contains(&self.silence_auto_stop_ms) {
             return Err(SettingsValidationError::new(
                 "silenceAutoStopMs must be between 500 and 300000.",
@@ -957,6 +981,7 @@ mod tests {
         assert_eq!(settings.recording_mode, RecordingMode::Both);
         assert_eq!(settings.min_recording_ms, 300);
         assert_eq!(settings.max_recording_ms, 600_000);
+        assert_eq!(settings.recording_ceiling_ms, 1_800_000);
         assert_eq!(settings.output_mode, OutputMode::AutoPaste);
         assert_eq!(settings.paste_method, PasteMethod::ClipboardPaste);
         assert!(settings.silence_auto_stop_enabled);
@@ -1366,6 +1391,28 @@ mod tests {
     }
 
     #[test]
+    fn validates_recording_ceiling_range() {
+        let mut settings = AppSettings {
+            recording_ceiling_ms: 59_999,
+            ..AppSettings::default()
+        };
+        assert!(settings.validate().is_err());
+        settings.recording_ceiling_ms = 60_000;
+        assert!(settings.validate().is_ok());
+        settings.recording_ceiling_ms = 3_600_000;
+        assert!(settings.validate().is_ok());
+        settings.recording_ceiling_ms = 3_600_001;
+        assert!(settings.validate().is_err());
+
+        // The long-recording point may sit past the ceiling (it then never
+        // comes into play): old installs with a long custom maximum must
+        // still save.
+        settings.recording_ceiling_ms = 600_000;
+        settings.max_recording_ms = 7_200_000;
+        assert!(settings.validate().is_ok());
+    }
+
+    #[test]
     fn validates_silence_auto_stop_ms_range() {
         let mut settings = AppSettings {
             silence_auto_stop_ms: 499,
@@ -1581,6 +1628,8 @@ mod tests {
         assert_eq!(settings.defaults_version, 0);
         assert!(settings.silence_auto_stop_enabled);
         assert_eq!(settings.silence_auto_stop_ms, 60_000);
+        // Absent from settings saved before the safety ceiling existed.
+        assert_eq!(settings.recording_ceiling_ms, 1_800_000);
         assert!(settings.incremental_transcription_enabled);
         assert_eq!(settings.vocabulary_prompt, "");
         // Absent from this legacy JSON; #[serde(default)] fills it as empty.
