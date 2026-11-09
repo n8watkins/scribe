@@ -1,15 +1,39 @@
-//! Linux implementation of the platform layer. Focus, window identity and
-//! synthetic keystrokes go through X11 (`x11`), which covers X11 sessions
-//! and, on Wayland sessions, X11 apps running under XWayland. A native
-//! Wayland app can't be pasted into yet: the paste falls back to copying
-//! (`paste_unavailable`). The clipboard goes through arboard.
+//! Linux implementation of the platform layer.
+//!
+//! Which way keystrokes go is picked per paste, from the session type
+//! (`session`):
+//!
+//! - X11 sessions, and X11 (XWayland) apps on Wayland: XTEST keystrokes, with
+//!   focus and window identity read over X11 (`x11`).
+//! - Native Wayland apps: the XDG RemoteDesktop portal (`portal`), which the
+//!   user allows once; the grant is saved and reused (`grant_store`).
+//! - Where neither works (no portal, permission declined, Scribe's own
+//!   window in front), the text is copied and the user told to paste.
+//!
+//! Global hotkeys on Wayland go through the GlobalShortcuts portal
+//! (`shortcuts`). The clipboard goes through arboard, natively on Wayland
+//! desktops with the data-control protocol and through XWayland elsewhere.
 
+mod grant_store;
+mod host;
+mod portal;
+#[cfg(test)]
+mod portal_dbus_tests;
+mod session;
+pub mod shortcuts;
 mod x11;
 
-use std::{collections::HashMap, sync::Mutex, thread, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Mutex,
+    thread,
+    time::Duration,
+};
 
 use arboard::{GetExtLinux, LinuxClipboardKind, SetExtLinux};
 
+pub use self::session::{InsertPath, PortalPaste, SessionKind};
 use super::{unsupported, PasteTarget, WindowId};
 use crate::error::CommandError;
 
@@ -50,15 +74,133 @@ fn is_terminal_class(instance: &str, class: &str) -> bool {
         || class == "org.wezfurlong.wezterm"
 }
 
-/// True on a Wayland desktop, where only X11 (XWayland) apps can be reached.
-fn wayland_session() -> bool {
-    std::env::var("XDG_SESSION_TYPE").is_ok_and(|kind| kind.eq_ignore_ascii_case("wayland"))
-        || std::env::var_os("WAYLAND_DISPLAY").is_some_and(|display| !display.is_empty())
+/// Sets up the portal clients: Scribe's app id (so the desktop can store
+/// its grants) and the folder the grants are saved in. Called once at
+/// startup, before any paste or hotkey.
+pub fn init(state_dir: PathBuf, app_id: &str) {
+    host::set_app_id(app_id);
+    portal::set_state_dir(state_dir);
 }
 
-/// What a Wayland session needs to say when the app in front can't be
-/// reached. One line; the caller adds "Copied. Press Ctrl+V to paste."
-const WAYLAND_PASTE: &str = "Scribe can't paste into Wayland apps yet.";
+pub fn session_kind() -> SessionKind {
+    SessionKind::detect()
+}
+
+/// Scribe's own windows that have the keyboard focus, by label. On Wayland
+/// Scribe's windows are native Wayland ones that X11 can't see, so the focus
+/// guard asks this instead.
+static OWN_FOCUS: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+/// Records a focus change of one of Scribe's windows.
+pub fn note_window_focus(label: &str, focused: bool) {
+    if let Ok(mut windows) = OWN_FOCUS.lock() {
+        let windows = windows.get_or_insert_with(HashSet::new);
+        if focused {
+            windows.insert(label.to_string());
+        } else {
+            windows.remove(label);
+        }
+    }
+}
+
+fn own_window_focused() -> bool {
+    OWN_FOCUS
+        .lock()
+        .ok()
+        .and_then(|windows| windows.as_ref().map(|windows| !windows.is_empty()))
+        .unwrap_or(false)
+}
+
+/// Why a paste can't reach the app in front, one sentence each; the caller
+/// adds "Copied. Press Ctrl+V to paste."
+const NO_DISPLAY: &str = "Scribe can't reach your desktop to paste.";
+const NO_PORTAL: &str = "Your desktop doesn't let apps paste into Wayland apps.";
+const PORTAL_DECLINED: &str =
+    "Pasting into Wayland apps is off. You can allow it on the Dictation page.";
+const PORTAL_FAILED: &str = "Scribe couldn't get your desktop's OK to paste.";
+const OWN_WINDOW: &str = "Scribe's own window was in front.";
+
+/// The insert path for the app in front right now, without asking the user
+/// anything. `Err` holds the reason when nothing can paste.
+fn current_path() -> Result<InsertPath, &'static str> {
+    let session = session_kind();
+    let display = x11::Display::open();
+    if session == SessionKind::X11 {
+        return display.map(|_| InsertPath::X11).ok_or(NO_DISPLAY);
+    }
+    let x11_front = display
+        .as_ref()
+        .is_some_and(|display| display.active_window().is_some());
+    if session == SessionKind::Wayland && !x11_front && own_window_focused() {
+        return Err(OWN_WINDOW);
+    }
+    let portal = if session == SessionKind::Wayland && !x11_front {
+        portal::paste_state().0
+    } else {
+        PortalPaste::Unavailable
+    };
+    match session::insert_path(session, x11_front, portal) {
+        InsertPath::CopyOnly => Err(match (session, portal) {
+            (SessionKind::Wayland, PortalPaste::Declined) => PORTAL_DECLINED,
+            (SessionKind::Wayland, _) => NO_PORTAL,
+            _ => NO_DISPLAY,
+        }),
+        path => Ok(path),
+    }
+}
+
+/// The method the Dashboard shows: how a dictation reaches native apps in
+/// this session, whatever is in front right now.
+pub fn insert_method() -> InsertPath {
+    let session = session_kind();
+    let portal = if session == SessionKind::Wayland {
+        portal::paste_state().0
+    } else {
+        PortalPaste::Unavailable
+    };
+    session::session_insert_path(session, x11::Display::open().is_some(), portal)
+}
+
+/// Whether pasting into Wayland apps needs the portal permission, and
+/// whether the user gave it. `None` outside Wayland or without the portal.
+pub fn wayland_paste_permission() -> Option<(PortalPaste, bool)> {
+    if session_kind() != SessionKind::Wayland {
+        return None;
+    }
+    let (state, granted) = portal::paste_state();
+    (state != PortalPaste::Unavailable).then_some((state, granted))
+}
+
+/// Shows the desktop's permission dialog now (the Dictation page's
+/// button), even if it was turned down before.
+pub fn request_wayland_paste_permission() -> Result<(), CommandError> {
+    portal::prepare(true).map_err(|failure| match failure {
+        portal::PortalFailure::Declined => CommandError::new(
+            "paste_permission_declined",
+            "Pasting stays off. Scribe will copy your words for you to paste.",
+        ),
+        other => CommandError::new(
+            "paste_permission_failed",
+            format!("Could not ask your desktop for the paste permission: {other}."),
+        ),
+    })
+}
+
+/// The command a desktop keyboard shortcut runs to control Scribe, without
+/// the action: the AppImage when Scribe runs from one, otherwise this
+/// binary. Quoted when the path has spaces.
+pub fn control_command() -> Option<String> {
+    let path = std::env::var_os("APPIMAGE")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_exe().ok())?;
+    let path = path.to_string_lossy().into_owned();
+    Some(if path.contains(char::is_whitespace) {
+        format!("\"{path}\"")
+    } else {
+        path
+    })
+}
 
 fn input_failed(code: &str, what: &str, error: String) -> CommandError {
     CommandError::new(
@@ -115,16 +257,24 @@ pub fn runs_elevated_above_us(_process_id: u32) -> bool {
     false
 }
 
-/// Why Scribe can't paste into the app in front, if it can't: no X server
-/// at all, or a Wayland session whose focused app isn't an X11 one.
+/// Why Scribe can't paste into the app in front, if it can't. On Wayland
+/// this is also where the RemoteDesktop session opens, so the one-time
+/// permission dialog shows before Scribe borrows the clipboard (and an
+/// answer of no leaves the text copied instead).
 pub fn paste_unavailable() -> Option<&'static str> {
-    let Some(display) = x11::Display::open() else {
-        return Some(WAYLAND_PASTE);
-    };
-    if wayland_session() && display.active_window().is_none() {
-        return Some(WAYLAND_PASTE);
+    match current_path() {
+        Ok(InsertPath::Portal) => match portal::prepare(false) {
+            Ok(()) => None,
+            Err(portal::PortalFailure::Declined) => Some(PORTAL_DECLINED),
+            Err(portal::PortalFailure::Unavailable(_)) => Some(NO_PORTAL),
+            Err(failure) => {
+                log::warn!("RemoteDesktop portal: {failure}");
+                Some(PORTAL_FAILED)
+            }
+        },
+        Ok(_) => None,
+        Err(reason) => Some(reason),
     }
-    None
 }
 
 /// When one of Scribe's own windows is in front, activates the app window
@@ -162,17 +312,34 @@ pub fn ensure_foreign_focus() -> Result<(), CommandError> {
 }
 
 pub fn type_text(text: &str) -> Result<(), CommandError> {
+    if current_path() == Ok(InsertPath::Portal) {
+        shortcuts::wait_for_release(HOTKEY_RELEASE_WAIT);
+        return portal::send_keys(portal::typing_keys(text))
+            .map_err(|failure| input_failed("paste_failed", "typed text", failure.to_string()));
+    }
     let display = display_or("direct_insert_unsupported", "Typing text into other apps")?;
     display
         .type_text(text)
         .map_err(|error| input_failed("paste_failed", "typed text", error))
 }
 
+/// How long a paste waits for a held portal hotkey to come up.
+const HOTKEY_RELEASE_WAIT: Duration = Duration::from_millis(1_500);
+
 /// Ctrl+V, or Shift+Insert in a terminal (where Ctrl+V is a literal-next
 /// key). Terminals such as xterm paste the PRIMARY selection on Shift+Insert,
 /// so the clipboard text is put there too; the clipboard snapshot puts the
-/// previous PRIMARY text back.
+/// previous PRIMARY text back. Native Wayland apps get Shift+Insert through
+/// the portal, since Wayland can't say whether the app in front is a
+/// terminal.
 pub fn send_paste_shortcut() -> Result<(), CommandError> {
+    if current_path() == Ok(InsertPath::Portal) {
+        copy_clipboard_to_primary();
+        shortcuts::wait_for_release(HOTKEY_RELEASE_WAIT);
+        return portal::send_keys(portal::PASTE_KEYS.to_vec()).map_err(|failure| {
+            input_failed("paste_failed", "the paste shortcut", failure.to_string())
+        });
+    }
     let display = display_or("paste_unsupported", "Pasting into other apps")?;
     let terminal = display
         .active_window()
@@ -205,9 +372,11 @@ pub fn send_copy_shortcut(console: bool) -> Result<(), CommandError> {
         .map_err(|error| input_failed("selection_copy_failed", "the copy shortcut", error))
 }
 
-/// Selection capture needs an X11 app in front to send Ctrl+C to.
+/// Selection capture needs an X11 app in front to send Ctrl+C to. Native
+/// Wayland apps are left out: Scribe can't tell a terminal there, where
+/// Ctrl+C would stop the running program.
 pub fn can_capture_selection() -> bool {
-    paste_unavailable().is_none()
+    current_path() == Ok(InsertPath::X11)
 }
 
 pub fn clipboard_sequence_number() -> u32 {

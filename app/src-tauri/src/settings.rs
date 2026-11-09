@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 /// Bumped whenever a shipped default changes in a way that should be applied
 /// once to existing installs (see `migrate_defaults`). Stored settings with a
 /// lower `defaults_version` get the new defaults applied exactly once.
-pub const CURRENT_DEFAULTS_VERSION: u32 = 5;
+pub const CURRENT_DEFAULTS_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 // Container-level `default` (risk R3): any field missing from the stored JSON
@@ -678,6 +678,39 @@ impl HotkeySettings {
         }
     }
 
+    /// Replaces every bind Linux can't use (see [`unusable_on_linux`]) with
+    /// the default for that action; Toggle also gets the default trigger
+    /// edge. When that leaves two actions on the same keys, every bind goes
+    /// back to the defaults. Returns true when anything changed.
+    pub fn make_linux_safe(&mut self) -> bool {
+        let defaults = Self::default();
+        let mut changed = false;
+        let mut fix = |bind: &mut String, default: &str| {
+            if unusable_on_linux(bind) {
+                *bind = default.to_string();
+                changed = true;
+                true
+            } else {
+                false
+            }
+        };
+        fix(&mut self.hold_to_talk, &defaults.hold_to_talk);
+        if fix(&mut self.toggle_dictation, &defaults.toggle_dictation) {
+            self.toggle_dictation_trigger = defaults.toggle_dictation_trigger;
+        }
+        fix(
+            &mut self.paste_last_transcript,
+            &defaults.paste_last_transcript,
+        );
+        fix(&mut self.open_dashboard, &defaults.open_dashboard);
+        fix(&mut self.discard_dictation, &defaults.discard_dictation);
+        fix(&mut self.transform_selection, &defaults.transform_selection);
+        if changed && crate::hotkeys::validate_hotkeys(self).is_err() {
+            *self = defaults;
+        }
+        changed
+    }
+
     /// Non-conflicting binds for the Scribe Dev flavor, so running Dev next to
     /// stable Scribe doesn't fight over the same global shortcuts. Each differs
     /// from the production default by an extra Shift.
@@ -697,6 +730,46 @@ impl HotkeySettings {
             transform_selection_trigger: TriggerEdge::Press,
         }
     }
+}
+
+/// Whether `shortcut` can't work as a Linux hotkey: modifiers only (X11
+/// grabs and the GlobalShortcuts portal both need a key), or a key without
+/// modifiers other than F1 to F24 (an X11 grab would take it from every app,
+/// so typing a backtick would start a dictation).
+pub fn unusable_on_linux(shortcut: &str) -> bool {
+    let tokens: Vec<String> = shortcut
+        .split('+')
+        .map(|token| token.trim().to_ascii_lowercase())
+        .filter(|token| !token.is_empty())
+        .collect();
+    let is_modifier = |token: &str| {
+        matches!(
+            token,
+            "ctrl"
+                | "control"
+                | "shift"
+                | "alt"
+                | "option"
+                | "win"
+                | "windows"
+                | "super"
+                | "meta"
+                | "cmd"
+                | "command"
+        )
+    };
+    let keys: Vec<&String> = tokens.iter().filter(|token| !is_modifier(token)).collect();
+    if keys.is_empty() {
+        return true;
+    }
+    if keys.len() < tokens.len() {
+        return false;
+    }
+    !keys.iter().all(|key| {
+        key.strip_prefix('f')
+            .and_then(|number| number.parse::<u8>().ok())
+            .is_some_and(|number| (1..=24).contains(&number))
+    })
 }
 
 impl Default for AppSettings {
@@ -833,6 +906,15 @@ impl AppSettings {
         // migration runs is preserved.
         if self.defaults_version < 5 && self.paste_method == PasteMethod::DirectInsert {
             self.paste_method = PasteMethod::ClipboardPaste;
+        }
+
+        // v6 (Linux): binds that can't work there are moved to the Linux
+        // defaults: modifier-only chords (X11 grabs and the Wayland portal
+        // need a key) and bare typing keys such as Backquote (an X11 grab
+        // takes that key from every app). Other binds are kept.
+        #[cfg(target_os = "linux")]
+        if self.defaults_version < 6 && self.hotkeys.make_linux_safe() {
+            log::info!("Moved hotkeys that can't work on Linux to the Linux defaults");
         }
 
         self.defaults_version = CURRENT_DEFAULTS_VERSION;
@@ -1157,6 +1239,90 @@ mod tests {
         assert_eq!(settings.recording_mode, RecordingMode::Both);
         assert_eq!(settings.output_mode, OutputMode::AutoPaste);
         assert_eq!(settings.hotkeys, HotkeySettings::default());
+    }
+
+    #[test]
+    fn linux_can_use_keys_with_modifiers_and_function_keys() {
+        for usable in [
+            "Ctrl+Alt+Space",
+            "Ctrl+Alt+Backquote",
+            "Super+V",
+            "F9",
+            "f12",
+            "Shift+F1",
+        ] {
+            assert!(!unusable_on_linux(usable), "{usable}");
+        }
+        for unusable in [
+            "Ctrl+Win",
+            "Ctrl+Shift",
+            "Backquote",
+            "`",
+            "A",
+            "Space",
+            "F25",
+            "",
+        ] {
+            assert!(unusable_on_linux(unusable), "{unusable}");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_safe_hotkeys_replace_only_the_unusable_binds() {
+        let mut hotkeys = HotkeySettings {
+            hold_to_talk: "Ctrl+Win".to_string(),
+            toggle_dictation: "Backquote".to_string(),
+            toggle_dictation_trigger: TriggerEdge::Release,
+            paste_last_transcript: "Ctrl+Shift+F7".to_string(),
+            ..HotkeySettings::default()
+        };
+        assert!(hotkeys.make_linux_safe());
+        let defaults = HotkeySettings::default();
+        assert_eq!(hotkeys.hold_to_talk, defaults.hold_to_talk);
+        assert_eq!(hotkeys.toggle_dictation, defaults.toggle_dictation);
+        assert_eq!(
+            hotkeys.toggle_dictation_trigger,
+            defaults.toggle_dictation_trigger
+        );
+        assert_eq!(hotkeys.paste_last_transcript, "Ctrl+Shift+F7");
+        assert!(!hotkeys.make_linux_safe());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_safe_hotkeys_fall_back_to_defaults_on_a_clash() {
+        let defaults = HotkeySettings::default();
+        // The custom paste bind already uses the default hold-to-talk keys.
+        let mut hotkeys = HotkeySettings {
+            hold_to_talk: "Ctrl+Win".to_string(),
+            paste_last_transcript: defaults.hold_to_talk.clone(),
+            ..HotkeySettings::default()
+        };
+        assert!(hotkeys.make_linux_safe());
+        assert_eq!(hotkeys, defaults);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_installs_move_off_unusable_hotkeys_once() {
+        let mut settings = AppSettings {
+            defaults_version: 5,
+            hotkeys: HotkeySettings {
+                hold_to_talk: "Ctrl+Win".to_string(),
+                toggle_dictation: "Backquote".to_string(),
+                ..HotkeySettings::default()
+            },
+            ..AppSettings::default()
+        };
+        assert!(settings.migrate_defaults());
+        assert_eq!(settings.hotkeys, HotkeySettings::default());
+        assert_eq!(settings.defaults_version, CURRENT_DEFAULTS_VERSION);
+
+        // A later choice is never touched again.
+        settings.hotkeys.toggle_dictation = "Backquote".to_string();
+        assert!(!settings.migrate_defaults());
+        assert_eq!(settings.hotkeys.toggle_dictation, "Backquote");
     }
 
     #[test]
@@ -1814,7 +1980,14 @@ mod tests {
 
         assert!(settings.migrate_defaults());
         assert_eq!(settings.hotkeys.toggle_dictation, "F9");
-        assert_eq!(settings.hotkeys.hold_to_talk, "Ctrl+Shift");
+        // Linux can't register a modifier-only chord, so v6 moves that one
+        // bind (and only it) to the Linux default.
+        let hold = if cfg!(target_os = "linux") {
+            HotkeySettings::default().hold_to_talk
+        } else {
+            "Ctrl+Shift".to_string()
+        };
+        assert_eq!(settings.hotkeys.hold_to_talk, hold);
         assert_eq!(settings.defaults_version, CURRENT_DEFAULTS_VERSION);
     }
 

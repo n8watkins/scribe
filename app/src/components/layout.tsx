@@ -55,6 +55,7 @@ export function HotkeyList({
   failedActions,
   only,
   settings,
+  systemTriggers,
 }: {
   compact?: boolean;
   /** Actions whose shortcut failed to register (another app holds it). */
@@ -62,6 +63,9 @@ export function HotkeyList({
   /** When set, list only these actions. */
   only?: ReadonlySet<string>;
   settings: AppSettings;
+  /** When the desktop owns the hotkeys (Wayland portal): the keys it
+   * assigned, by action, shown instead of Scribe's own bindings. */
+  systemTriggers?: Readonly<Record<string, string>>;
 }) {
   return (
     <div className={compact ? "hotkey-list compact-list" : "hotkey-list"}>
@@ -75,13 +79,18 @@ export function HotkeyList({
         )
         .map((hotkey) => {
           const failed = failedActions?.has(hotkey.action) ?? false;
+          const keys = systemTriggers
+            ? (systemTriggers[hotkey.action] ?? "Not set")
+            : formatHotkey(hotkey.value);
           return (
             <div
               className={failed ? "hotkey-row hotkey-row-failed" : "hotkey-row"}
               key={hotkey.label}
               title={
                 failed
-                  ? "Not registered. Another app may already use this shortcut."
+                  ? systemTriggers
+                    ? "Your desktop hasn't assigned keys to this yet."
+                    : "Not registered. Another app may already use this shortcut."
                   : undefined
               }
             >
@@ -91,7 +100,7 @@ export function HotkeyList({
                 ) : null}
                 {hotkey.label}
               </span>
-              <kbd>{formatHotkey(hotkey.value)}</kbd>
+              <kbd>{keys}</kbd>
             </div>
           );
         })}

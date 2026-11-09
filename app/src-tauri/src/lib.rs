@@ -24,6 +24,7 @@ pub mod note_sync;
 pub mod output;
 pub mod platform;
 pub mod release_notes;
+pub mod remote_command;
 pub mod selection_transform;
 pub mod self_test;
 pub mod settings;
@@ -260,7 +261,14 @@ pub fn run() {
     tauri::Builder::default()
         // The single-instance plugin must be the first plugin registered so
         // it can take over before anything else initializes.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // `Scribe toggle` and friends, bound in the desktop's keyboard
+            // settings where Scribe can't register hotkeys (Wayland without
+            // the GlobalShortcuts portal).
+            if let Some(command) = remote_command::RemoteCommand::parse(&args) {
+                command.run(app);
+                return;
+            }
             log::info!("Second instance launch detected; focusing the main window");
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -429,6 +437,10 @@ pub fn run() {
             app.manage(dictation_worker::DictationWorker::spawn(
                 app.handle().clone(),
             )?);
+            // The Wayland portals need Scribe's app id and a place to keep
+            // the permission they grant, before the hotkeys start.
+            #[cfg(target_os = "linux")]
+            platform::init(app_data_dir.clone(), &app.config().identifier);
             hotkeys::setup(app.handle(), &settings.hotkeys, settings.notes_analysis_enabled)?;
             tray::setup(app.handle())?;
             // Restore the user's saved default window size (physical pixels),
@@ -478,6 +490,12 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // Wayland hides which app is in front; Scribe still knows when
+            // one of its own windows is, so a paste never lands in Scribe.
+            #[cfg(target_os = "linux")]
+            if let tauri::WindowEvent::Focused(focused) = event {
+                platform::note_window_focus(window.label(), *focused);
+            }
             if window.label() != "main" {
                 return;
             }
@@ -524,6 +542,8 @@ pub fn run() {
             commands::get_basic_stats,
             commands::refresh_basic_stats,
             commands::get_hotkey_status,
+            commands::bind_portal_shortcuts,
+            commands::configure_portal_shortcuts,
             commands::get_paste_permission,
             commands::request_paste_permission,
             commands::rebind_hotkey,

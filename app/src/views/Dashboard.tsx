@@ -24,6 +24,7 @@ import {
 import { HotkeyList, StatsRow, StatusCard } from "../components/layout";
 import { LastTranscriptCard, LiveTranscript } from "../components/transcript";
 import { WhatsNewCard } from "../components/ReleaseNotes";
+import { insertMethodLabel, usePastePermission } from "../lib/pastePermission";
 
 /** The hotkeys Home always lists; any other hotkey shows up only when it
  * failed to register, so a conflict is never hidden. */
@@ -52,11 +53,19 @@ export function DashboardView({
 }) {
   const { appState, lastTranscript, settings, stats } = data;
   const modelReady = isSelectedModelReady(models, settings.selectedModelId);
-  const failedHotkeys = useFailedHotkeys(
+  const hotkeyHealth = useHotkeyHealth(
     JSON.stringify(settings.hotkeys),
     settings.notesAnalysisEnabled,
   );
+  const failedHotkeys = hotkeyHealth.failed;
   const shownHotkeys = new Set([...HOME_HOTKEYS, ...failedHotkeys]);
+  const { permission } = usePastePermission();
+  const after = afterDictationOf(settings.outputMode);
+  // On Linux, "Insert at cursor" names the way it really happens: through
+  // the Wayland portal, X11 keystrokes, or not at all (copied instead).
+  const afterValue =
+    (after === "insert" ? insertMethodLabel(permission) : null) ??
+    AFTER_DICTATION_LABELS[after];
   const modelName =
     models?.find((model) => model.id === settings.selectedModelId)?.name ??
     settings.selectedModelId ??
@@ -118,7 +127,7 @@ export function DashboardView({
           Icon={Clipboard}
           label="After dictation"
           onAction={() => setActiveView("Dictation")}
-          value={AFTER_DICTATION_LABELS[afterDictationOf(settings.outputMode)]}
+          value={afterValue}
         />
       </section>
 
@@ -163,12 +172,18 @@ export function DashboardView({
             failedActions={failedHotkeys}
             only={shownHotkeys}
             settings={settings}
+            systemTriggers={
+              hotkeyHealth.managedByDesktop
+                ? hotkeyHealth.systemTriggers
+                : undefined
+            }
           />
           {failedHotkeys.size > 0 ? (
             <p className="hotkey-summary-note" role="status">
-              {failedHotkeys.size === 1
-                ? "One hotkey isn't working. Another app may use it."
-                : `${failedHotkeys.size} hotkeys aren't working. Another app may use them.`}
+              {failedHotkeysNote(
+                failedHotkeys.size,
+                hotkeyHealth.managedByDesktop,
+              )}
             </p>
           ) : null}
         </article>
@@ -177,33 +192,70 @@ export function DashboardView({
   );
 }
 
+type HotkeyHealth = {
+  /** Actions whose shortcut is bound but not registered. */
+  failed: ReadonlySet<string>;
+  /** The desktop's GlobalShortcuts portal owns the keys (Wayland). */
+  managedByDesktop: boolean;
+  /** The keys the desktop assigned, by action, when it owns them. */
+  systemTriggers: Readonly<Record<string, string>>;
+};
+
+const EMPTY_HEALTH: HotkeyHealth = {
+  failed: new Set(),
+  managedByDesktop: false,
+  systemTriggers: {},
+};
+
 /** Actions whose shortcut is bound but not registered, so Home can flag a
- * conflict instead of listing a hotkey that does nothing. Reloads when the
- * bindings or the Local AI switch change. Status errors are left to the
- * Hotkeys page, which reports them in full. */
-function useFailedHotkeys(
+ * conflict instead of listing a hotkey that does nothing, and the keys the
+ * desktop assigned when it owns the hotkeys. Reloads when the bindings or
+ * the Local AI switch change. Status errors are left to the Hotkeys page,
+ * which reports them in full. */
+function useHotkeyHealth(
   hotkeysKey: string,
   aiEnabled: boolean,
-): ReadonlySet<string> {
-  const [failed, setFailed] = useState<ReadonlySet<string>>(new Set());
+): HotkeyHealth {
+  const [health, setHealth] = useState<HotkeyHealth>(EMPTY_HEALTH);
   useEffect(() => {
     let cancelled = false;
     getHotkeyStatus()
       .then((status) => {
-        if (!cancelled) {
-          setFailed(
-            new Set(
-              status.bindings
-                .filter((binding) => !binding.registered && !binding.disabledReason)
-                .map((binding) => binding.action),
-            ),
-          );
+        if (cancelled) {
+          return;
         }
+        const systemTriggers: Record<string, string> = {};
+        for (const binding of status.bindings) {
+          if (binding.systemTrigger) {
+            systemTriggers[binding.action] = binding.systemTrigger;
+          }
+        }
+        setHealth({
+          failed: new Set(
+            status.bindings
+              .filter((binding) => !binding.registered && !binding.disabledReason)
+              .map((binding) => binding.action),
+          ),
+          managedByDesktop: status.backend === "portal",
+          systemTriggers,
+        });
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
   }, [hotkeysKey, aiEnabled]);
-  return failed;
+  return health;
+}
+
+/** Home's one-line summary of hotkeys that do nothing. */
+function failedHotkeysNote(count: number, managedByDesktop: boolean): string {
+  if (managedByDesktop) {
+    return count === 1
+      ? "One hotkey has no keys from your desktop yet. See Hotkeys."
+      : `${count} hotkeys have no keys from your desktop yet. See Hotkeys.`;
+  }
+  return count === 1
+    ? "One hotkey isn't working. Another app may use it."
+    : `${count} hotkeys aren't working. Another app may use them.`;
 }

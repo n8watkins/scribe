@@ -17,6 +17,9 @@
 //!   `microphone_label` (which devices to offer and how to name them;
 //!   recording itself is cross-platform through cpal).
 //!
+//! Linux adds the session plumbing (`init`, `note_window_focus`, the
+//! Wayland portals); callers reach it under `cfg(target_os = "linux")`.
+//!
 //! An operation a system can't do yet returns a `CommandError` from
 //! [`unsupported`], never a panic.
 
@@ -56,6 +59,36 @@ pub const PASTE_SHORTCUT: &str = if cfg!(target_os = "macos") {
 } else {
     "Ctrl+V"
 };
+
+/// How a dictation reaches the app in front, for the Dashboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InsertMethod {
+    /// The system's own input APIs (Windows SendInput, macOS CGEvent).
+    Native,
+    /// XTEST keystrokes on X11.
+    X11,
+    /// The XDG RemoteDesktop portal on Wayland.
+    Portal,
+    /// Nothing can send keystrokes; dictations are copied.
+    CopyOnly,
+}
+
+/// The insert method in effect for this session.
+pub fn insert_method() -> InsertMethod {
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        match self::linux::insert_method() {
+            self::linux::InsertPath::X11 => InsertMethod::X11,
+            self::linux::InsertPath::Portal => InsertMethod::Portal,
+            self::linux::InsertPath::CopyOnly => InsertMethod::CopyOnly,
+        }
+    }
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        InsertMethod::Native
+    }
+}
 
 /// The error for an operation this system doesn't support yet. `what` names
 /// the feature in a few words, starting with a capital letter.

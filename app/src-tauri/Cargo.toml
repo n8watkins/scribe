@@ -102,9 +102,29 @@ x11rb = { version = "0.13", features = ["xtest", "xfixes"] }
 # KWallet, KeePassXC) over D-Bus. libdbus is already linked through tao;
 # crypto-rust encrypts the session without needing OpenSSL.
 keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+# Native Wayland: the XDG desktop portals send the paste keystroke
+# (RemoteDesktop, keyboard only, permission remembered with a restore token)
+# and deliver global hotkeys (GlobalShortcuts). async-io matches the zbus 5
+# runtime already in the tree through the single-instance plugin, so no
+# second D-Bus stack or tokio-bound connection is pulled in. ashpd's
+# remote_desktop module needs its screencast types to compile; Scribe opens
+# no screen cast.
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "remote_desktop", "screencast", "global_shortcuts"] }
+# The Wayland clipboard (wlr/ext data-control, KDE and wlroots desktops);
+# arboard falls back to X11 (XWayland) where the compositor lacks it (GNOME).
+arboard = { version = "3.4", features = ["wayland-data-control"] }
+# Drive the portal futures on Scribe's own threads (the app has no async
+# runtime of its own); both already in the tree through zbus.
+async-io = "2"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tempfile = "3"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# A stand-in desktop portal on a private session bus, for the portal client
+# tests (src/platform/linux/portal_dbus_tests.rs). Same zbus 5 as the tree.
+zbus = "5"
 
 [profile.dev]
 debug = "line-tables-only"
