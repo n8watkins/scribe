@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.13.0 - 2026-11-09
+
+### New
+
+- Recordings no longer stop at 10 minutes while you are talking ([#101](https://github.com/n8watkins/scribe/pull/101))
+- On Wayland, Scribe pastes into every app and its hotkeys work everywhere ([#107](https://github.com/n8watkins/scribe/pull/107))
+
+### Fixed
+
+- A slow app gets the dictation, not your old clipboard ([#108](https://github.com/n8watkins/scribe/pull/108))
+
 ## 0.12.0 - 2026-11-09
 
 Scribe now has beta builds for macOS and Linux, and the bundled SQLite gets a security fix.
