@@ -1,6 +1,9 @@
 //! Windows implementation of the platform layer: Win32 foreground-window
 //! identity and focus, SendInput keystrokes, and the raw clipboard.
 
+mod clipboard_loan;
+
+pub use self::clipboard_loan::{lend_clipboard_text, ClipboardLoan};
 use super::{PasteTarget, WindowId};
 use crate::error::CommandError;
 use std::{collections::HashMap, ffi::c_void, mem::size_of, thread, time::Duration};

@@ -441,17 +441,24 @@ fn copy_and_paste_transcript_text(
     }
 }
 
+/// Longest wait for the target app to read the pasted text before the user's
+/// clipboard is put back anyway. Generous, because restoring early pastes the
+/// user's old clipboard in place of the dictation (issue #105); an app that
+/// reads normally ends the wait as soon as it does.
+const PASTE_READ_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// Default "Paste (keeps your clipboard)": borrow the clipboard to send a real
 /// Ctrl+V, then put the user's previous clipboard contents back. This makes the
 /// insert land as a single atomic paste (unlike the keystroke path, which can
 /// visibly stream characters in chat/browser/Electron apps) without
 /// permanently consuming the clipboard.
 ///
-/// Sequence: snapshot ALL current clipboard formats (raw Win32) -> set the
+/// Sequence: snapshot ALL current clipboard formats (raw Win32) -> lend the
 /// clipboard to the transcript text -> send Ctrl+V (which first waits for the
 /// paste-hotkey modifiers to release, so the chord can't combine with the
-/// injected V) -> small delay to let the target app finish reading the
-/// clipboard -> restore every snapshotted format.
+/// injected V) -> wait until the target app has read the text (on Windows
+/// this is observed, see `platform::lend_clipboard_text`; elsewhere a short
+/// fixed wait) -> restore every snapshotted format.
 ///
 /// FIDELITY: unlike the old text-only restore, this captures the full clipboard
 /// as raw bytes per format, so a previously-copied IMAGE or set of FILES
@@ -470,27 +477,61 @@ fn clipboard_paste(
     // is treated as "nothing to restore" so the paste still proceeds.
     let snapshot = platform::save_clipboard_snapshot();
 
-    // The transcript is only borrowing the clipboard, so keep it out of
+    // The transcript is only borrowing the clipboard, so it is kept out of
     // Clipboard History, the cloud clipboard and clipboard managers.
-    set_private_clipboard_text(&transcript.text)?;
+    let loan = platform::lend_clipboard_text(&transcript.text)?;
     // Let the clipboard write settle before the paste reads it.
-    // NOTE: the 60ms (pre-paste settle) and 180ms (post-paste settle below) are
-    // timing knobs; slow targets may need them raised.
     thread::sleep(Duration::from_millis(60));
     // `send_paste_shortcut` waits for held modifiers to release before injecting
     // Ctrl+V, so a still-held paste chord can't scramble the keystroke.
-    platform::send_paste_shortcut()?;
-    // Give the target app time to read the clipboard before we overwrite it
-    // again with the restore, otherwise it may paste the restored data instead.
-    thread::sleep(Duration::from_millis(180));
+    if let Err(error) = platform::send_paste_shortcut() {
+        // Nothing was pasted; don't leave the transcript in place of the
+        // user's clipboard.
+        if let Err(restore_error) = platform::restore_clipboard_snapshot(&snapshot) {
+            log::warn!(
+                "Could not restore the clipboard after a failed paste: {}",
+                restore_error.message
+            );
+        }
+        return Err(error);
+    }
+    // Never put the old clipboard back before the target has read the text,
+    // or it pastes the old clipboard instead of the dictation.
+    let outcome = loan.wait_for_read(PASTE_READ_TIMEOUT);
+    if outcome == platform::LoanOutcome::NotRead {
+        log::warn!(
+            "The app in front didn't read the pasted text within {} s; restoring the clipboard anyway.",
+            PASTE_READ_TIMEOUT.as_secs()
+        );
+    }
 
-    // Restore: put the user's previous clipboard contents back. When the
-    // snapshot was empty (nothing was there, or it couldn't be captured) this
-    // clears the clipboard so the transcript isn't left behind.
-    let restore = platform::restore_clipboard_snapshot(&snapshot);
+    Ok(restore_result(transcript, output_mode, outcome, || {
+        platform::restore_clipboard_snapshot(&snapshot)
+    }))
+}
+
+/// Puts the user's clipboard back after a paste (unless they copied
+/// something newer meanwhile) and builds the honest result for it.
+fn restore_result(
+    transcript: &Transcript,
+    output_mode: OutputMode,
+    outcome: platform::LoanOutcome,
+    restore: impl FnOnce() -> Result<(), CommandError>,
+) -> OutputResult {
+    // Something newer than the transcript is on the clipboard: the user's
+    // own clipboard is already theirs again, and a restore would wipe it.
+    // When the snapshot was empty (nothing was there, or it couldn't be
+    // captured) the restore clears the clipboard so the transcript isn't
+    // left behind.
+    let restore = if outcome == platform::LoanOutcome::Replaced {
+        log::info!("The clipboard changed during the paste; keeping the newer contents.");
+        Ok(())
+    } else {
+        restore()
+    };
 
     match restore {
-        Ok(()) => Ok(OutputResult {
+        Ok(()) => OutputResult {
             transcript_id: transcript.id.clone(),
             action: OutputAction::Paste,
             status: OutputStatus::Completed,
@@ -504,10 +545,10 @@ fn clipboard_paste(
             clipboard_preservation: ClipboardPreservation::RestoredAfterPaste,
             clipboard_restore_error: None,
             message: "Pasted transcript and restored your clipboard.".to_string(),
-        }),
+        },
         // The paste already succeeded; only the restore failed. Report the
         // partial success honestly rather than erroring the whole operation.
-        Err(error) => Ok(OutputResult {
+        Err(error) => OutputResult {
             transcript_id: transcript.id.clone(),
             action: OutputAction::Paste,
             status: OutputStatus::ClipboardRestoreFailed,
@@ -521,7 +562,7 @@ fn clipboard_paste(
             clipboard_preservation: ClipboardPreservation::RestoreFailed,
             clipboard_restore_error: Some(error.message),
             message: "Pasted transcript, but couldn't restore your previous clipboard.".to_string(),
-        }),
+        },
     }
 }
 
@@ -817,73 +858,80 @@ mod tests {
         assert!(result.pasted);
     }
 
-    // NOTE: `clipboard_paste` itself can't be exercised here — it needs a real
-    // system clipboard (arboard) and a foreground window to paste into, neither
-    // of which exists in headless CI. These tests assert the shape of the
-    // `OutputResult` it builds on the restore-success and restore-failure paths
-    // so the honest-messaging contract is locked down at the unit level.
+    // NOTE: `clipboard_paste` itself needs a real clipboard and a window to
+    // paste into; the Windows end-to-end test drives it (including an app
+    // that reads the clipboard late, issue #105). These tests cover how the
+    // wait's outcome and the restore turn into the result the user sees.
 
-    #[test]
-    fn clipboard_paste_success_result_reports_restored_clipboard() {
+    use crate::platform::LoanOutcome;
+
+    fn restore_with(outcome: LoanOutcome, works: bool) -> (OutputResult, bool) {
         let transcript = Transcript::new_last_buffer("hello", Some(100), None, None).unwrap();
-
-        // Mirrors the borrow-and-restore success path: paste happened and the
-        // previous clipboard text was put back.
-        let result = OutputResult {
-            transcript_id: transcript.id,
-            action: OutputAction::Paste,
-            status: OutputStatus::Completed,
-            output_mode: OutputMode::AutoPaste,
-            paste_method: Some(PasteMethod::ClipboardPaste),
-            copied: false,
-            pasted: true,
-            clipboard_restored: Some(true),
-            clipboard_preservation: ClipboardPreservation::RestoredAfterPaste,
-            clipboard_restore_error: None,
-            message: "Pasted transcript and restored your clipboard.".to_string(),
-        };
-
-        assert_eq!(
-            result.clipboard_preservation,
-            ClipboardPreservation::RestoredAfterPaste
-        );
-        assert_eq!(result.status, OutputStatus::Completed);
-        // The clipboard was put back, so from the user's view nothing was kept.
-        assert!(!result.copied);
-        assert!(result.pasted);
-        assert_eq!(result.clipboard_restored, Some(true));
-        assert!(result.clipboard_restore_error.is_none());
+        let mut restored = false;
+        let result = restore_result(&transcript, OutputMode::AutoPaste, outcome, || {
+            restored = true;
+            if works {
+                Ok(())
+            } else {
+                Err(CommandError::new(
+                    "clipboard_set_failed",
+                    "clipboard write failed",
+                ))
+            }
+        });
+        (result, restored)
     }
 
     #[test]
-    fn clipboard_paste_restore_failure_result_is_honest() {
-        let transcript = Transcript::new_last_buffer("hello", Some(100), None, None).unwrap();
+    fn restores_the_clipboard_once_the_paste_was_read() {
+        for outcome in [
+            LoanOutcome::Read,
+            LoanOutcome::NotRead,
+            LoanOutcome::Unobserved,
+        ] {
+            let (result, restored) = restore_with(outcome, true);
+            assert!(restored, "{outcome:?} must restore the clipboard");
+            assert_eq!(result.status, OutputStatus::Completed);
+            assert_eq!(
+                result.clipboard_preservation,
+                ClipboardPreservation::RestoredAfterPaste
+            );
+            // The clipboard was put back, so from the user's view nothing was kept.
+            assert!(!result.copied);
+            assert!(result.pasted);
+            assert_eq!(result.clipboard_restored, Some(true));
+            assert!(result.clipboard_restore_error.is_none());
+        }
+    }
 
-        // Mirrors the borrow-and-restore failure path: paste succeeded but the
-        // previous clipboard could not be restored, so the transcript is still
-        // on the clipboard. This must be reported honestly, not as a hard error.
-        let result = OutputResult {
-            transcript_id: transcript.id,
-            action: OutputAction::Paste,
-            status: OutputStatus::ClipboardRestoreFailed,
-            output_mode: OutputMode::AutoPaste,
-            paste_method: Some(PasteMethod::ClipboardPaste),
-            copied: true,
-            pasted: true,
-            clipboard_restored: Some(false),
-            clipboard_preservation: ClipboardPreservation::RestoreFailed,
-            clipboard_restore_error: Some("clipboard write failed".to_string()),
-            message: "Pasted transcript, but couldn't restore your previous clipboard.".to_string(),
-        };
+    #[test]
+    fn never_overwrites_something_copied_during_the_paste() {
+        let (result, restored) = restore_with(LoanOutcome::Replaced, false);
+        assert!(
+            !restored,
+            "a newer copy must not be replaced by the old clipboard"
+        );
+        assert_eq!(result.status, OutputStatus::Completed);
+        assert!(!result.copied);
+    }
 
+    #[test]
+    fn a_failed_restore_is_reported_honestly() {
+        let (result, restored) = restore_with(LoanOutcome::Read, false);
+        assert!(restored);
+        // The paste still landed; only the restore failed, so the transcript
+        // is still on the clipboard.
+        assert_eq!(result.status, OutputStatus::ClipboardRestoreFailed);
         assert_eq!(
             result.clipboard_preservation,
             ClipboardPreservation::RestoreFailed
         );
-        assert_eq!(result.status, OutputStatus::ClipboardRestoreFailed);
-        // The paste still landed even though restore failed.
         assert!(result.pasted);
+        assert!(result.copied);
         assert_eq!(result.clipboard_restored, Some(false));
-        assert!(result.clipboard_restore_error.is_some());
+        assert_eq!(
+            result.clipboard_restore_error.as_deref(),
+            Some("clipboard write failed")
+        );
     }
 }

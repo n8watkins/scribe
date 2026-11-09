@@ -12,7 +12,9 @@
 //!   `can_capture_selection`.
 //! - Clipboard: `ClipboardSnapshot`, `save_clipboard_snapshot`,
 //!   `restore_clipboard_snapshot`, `clipboard_sequence_number`,
-//!   `set_private_clipboard_text`, `open_clipboard`.
+//!   `set_private_clipboard_text`, `open_clipboard`, and `lend_clipboard_text`
+//!   with its `ClipboardLoan` (the paste's borrow of the clipboard, which
+//!   tells when the target has read it).
 //! - Audio: `audio_endpoint_ids_by_name`, `microphone_id` and
 //!   `microphone_label` (which devices to offer and how to name them;
 //!   recording itself is cross-platform through cpal).
@@ -50,6 +52,43 @@ pub type WindowId = isize;
 pub struct PasteTarget {
     pub window: WindowId,
     pub process_id: u32,
+}
+
+/// What happened to the clipboard Scribe lent to a paste while it waited for
+/// the target app to read it (`ClipboardLoan::wait_for_read`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoanOutcome {
+    /// An app read the dictation: the paste has been consumed.
+    Read,
+    /// Nothing read it before the timeout (the app ignored the paste, or is
+    /// still busy). The restore goes ahead anyway.
+    NotRead,
+    /// Another app, or the user, put something new on the clipboard first.
+    /// A restore would overwrite that newer content, so there is none.
+    Replaced,
+    /// This system can't observe the read; a short fixed wait stood in.
+    Unobserved,
+}
+
+/// The dictation lent to the clipboard for one paste, where the read can't
+/// be observed (macOS and Linux for now): a short fixed wait stands in.
+#[cfg(not(windows))]
+pub struct ClipboardLoan;
+
+/// Puts `text` on the clipboard privately for one paste.
+#[cfg(not(windows))]
+pub fn lend_clipboard_text(text: &str) -> Result<ClipboardLoan, CommandError> {
+    crate::output::set_private_clipboard_text(text)?;
+    Ok(ClipboardLoan)
+}
+
+#[cfg(not(windows))]
+impl ClipboardLoan {
+    /// Gives the target app a moment to read the clipboard.
+    pub fn wait_for_read(self, _timeout: std::time::Duration) -> LoanOutcome {
+        std::thread::sleep(std::time::Duration::from_millis(180));
+        LoanOutcome::Unobserved
+    }
 }
 
 /// The paste shortcut, as the user presses it here, for messages that ask

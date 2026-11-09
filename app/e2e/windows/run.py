@@ -66,7 +66,12 @@ CLIPS = {
     "switch": "Send the invoice to the accounting department today.",
     "discard": "This sentence should never be pasted anywhere at all.",
     "instruction": "Make this text uppercase, please.",
+    "slow_app": "The busy spreadsheet finally opened after lunch.",
+    "ignored_paste": "Nobody reads the clipboard in this window today.",
 }
+# How long the slow stand-in app is busy before it reads the clipboard on
+# Ctrl+V (target.ps1 -PasteDelayMs); well past Scribe's old fixed 180 ms wait.
+SLOW_APP_PASTE_DELAY_MS = 1000
 TRANSFORM_SOURCE = "scribe turns this selection into capitals"
 
 BUSY = {"Recording", "Stopping", "Transcribing", "Pasting"}
@@ -557,7 +562,7 @@ def transcript_count() -> int:
 class Target:
     """A stand-in app window (target.ps1) in its own process."""
 
-    def __init__(self, name: str, work: Path, left: int) -> None:
+    def __init__(self, name: str, work: Path, left: int, top: int = 40, paste_delay_ms: int = 0) -> None:
         self.name = name
         self.title = f"Scribe E2E target {name}"
         info = work / f"target-{name}.json"
@@ -578,7 +583,9 @@ class Target:
                 "-Left",
                 str(left),
                 "-Top",
-                "40",
+                str(top),
+                "-PasteDelayMs",
+                str(paste_delay_ms),
             ]
         )
         data = json.loads(wait_until(f"target window {name} to open", lambda: info.exists() and info.read_text(), 60))
@@ -831,6 +838,8 @@ class Run:
         self.shot("dashboard")
         self.targets["A"] = Target("A", self.work, 20)
         self.targets["B"] = Target("B", self.work, 520)
+        self.targets["Slow"] = Target("Slow", self.work, 20, top=300, paste_delay_ms=SLOW_APP_PASTE_DELAY_MS)
+        self.targets["Deaf"] = Target("Deaf", self.work, 520, top=300, paste_delay_ms=-1)
 
     # -- building blocks ---------------------------------------------------
 
@@ -894,6 +903,33 @@ class Run:
         check_words(transcript["text"], key_words(CLIPS["hold"]), "The transcript")
         wait_until("the transcript in the focused box", lambda: target.text.strip() == transcript["text"].strip(), 5)
         wait_until("the clipboard to be restored", lambda: self.clipboard.read() == sentinel, 5)
+
+    def slow_app_paste(self) -> None:
+        """Issue #105: an app that reads the clipboard late must still get the
+        dictation, never the clipboard Scribe puts back afterwards."""
+        target = self.targets["Slow"]
+        sentinel = "clipboard before the slow app"
+        self.prepare(target, sentinel)
+        transcript = self.toggle_dictation("slow_app")
+        check_words(transcript["text"], key_words(CLIPS["slow_app"]), "The transcript")
+        pasted = wait_until("the slow app to paste something", lambda: target.text.strip(), 15)
+        check(pasted != sentinel, "The slow app pasted the old clipboard instead of the dictation")
+        check(pasted == transcript["text"].strip(), f"The slow app pasted {pasted!r}")
+        wait_until("the clipboard to be restored", lambda: self.clipboard.read() == sentinel, 10)
+        check("Paste clipboard: Read" in log_text(), "Scribe did not see the slow app read the clipboard")
+
+    def ignored_paste(self) -> None:
+        """An app that never reads the clipboard on Ctrl+V must still get the
+        user's clipboard back once Scribe stops waiting for the read."""
+        target = self.targets["Deaf"]
+        sentinel = "clipboard before an ignored paste"
+        self.prepare(target, sentinel)
+        transcript = self.toggle_dictation("ignored_paste")
+        check_words(transcript["text"], key_words(CLIPS["ignored_paste"]), "The transcript")
+        # The dictation is saved after its paste and restore, so both are done.
+        check(self.clipboard.read() == sentinel, "The clipboard was not restored after the ignored paste")
+        check("restoring the clipboard anyway" in log_text(), "Scribe did not wait for the ignored paste to time out")
+        stays("nothing pasted", lambda: target.text == "")
 
     def save_only(self) -> None:
         patch_settings({"outputMode": "save_only"})
@@ -1026,6 +1062,8 @@ class Run:
                     ("Closing the dashboard hides it to the tray", self.close_to_tray),
                     ("Toggle dictation pastes and restores the clipboard", self.toggle_paste_restores_clipboard),
                     ("Hold to talk", self.hold_to_talk),
+                    ("A slow app still pastes the dictation", self.slow_app_paste),
+                    ("An app that ignores the paste gets its clipboard back", self.ignored_paste),
                     ("Output mode: Save Only", self.save_only),
                     ("Output mode: Copy to Clipboard", self.copy_clipboard),
                     ("Output mode: Copy + Paste", self.copy_and_paste),
