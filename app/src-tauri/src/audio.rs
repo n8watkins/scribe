@@ -87,6 +87,8 @@ pub struct RecordingSessionInfo {
     pub sample_rate: u32,
     pub channels: u16,
     pub started_at: DateTime<Utc>,
+    /// Hard stop for this recording: the safety ceiling, or a test clip's
+    /// length.
     pub max_duration_ms: u64,
     pub is_test_clip: bool,
     pub is_note: bool,
@@ -262,10 +264,13 @@ impl AudioService {
         let source_channels = input.channels;
         let session_id = Uuid::new_v4().to_string();
         let started_at = Utc::now();
-        let max_duration_ms = request
-            .max_duration_ms
-            .unwrap_or(settings.max_recording_ms as u64)
-            .max(settings.min_recording_ms as u64);
+        let limits = StopLimits::for_recording(
+            settings,
+            request.max_duration_ms,
+            is_test_clip,
+            allow_auto_stop,
+        );
+        let max_duration_ms = limits.ceiling_ms;
         let info = RecordingSessionInfo {
             session_id: session_id.clone(),
             microphone_id: input.info.id.clone(),
@@ -285,12 +290,6 @@ impl AudioService {
         let temp_dir = self.temp_dir.clone();
         let min_recording_ms = settings.min_recording_ms as u64;
         let silence_trim_enabled = settings.silence_trim_enabled;
-        // Silence auto-stop only applies to toggle-style starts (toggle
-        // hotkey, tray menu, UI Start button) — never hold-to-talk or test
-        // clips — and only when the setting is enabled.
-        let auto_stop_after_ms =
-            (allow_auto_stop && !is_test_clip && settings.silence_auto_stop_enabled)
-                .then_some(settings.silence_auto_stop_ms as u64);
         // Incremental transcription applies to dictation recordings only —
         // never test clips — and only when the setting is enabled. When the
         // coordinator cannot start this is None and behavior is unchanged.
@@ -324,7 +323,7 @@ impl AudioService {
                 source_sample_rate,
                 min_recording_ms,
                 silence_trim_enabled,
-                auto_stop_after_ms,
+                limits,
                 incremental,
             )
         });
@@ -350,12 +349,12 @@ impl AudioService {
         self.last_result = None;
 
         log::info!(
-            "Recording started: session {} (mic '{}', {} Hz, test clip: {}, silence auto-stop: {:?} ms)",
+            "Recording started: session {} (mic '{}', {} Hz, test clip: {}, limits: {:?})",
             info.session_id,
             info.microphone_name,
             info.sample_rate,
             is_test_clip,
-            auto_stop_after_ms
+            limits
         );
         let _ = app.emit("audio://recording-started", &info);
         Ok(StartOutcome {
@@ -569,9 +568,11 @@ fn no_test_clip() -> CommandError {
     )
 }
 
-/// Stops and transcribes a recording whose max-duration timer fired. Runs on
-/// the dictation worker; a no-op when `session_id` is no longer the active
-/// recording (the user stopped it while the timeout was queued).
+/// Stops and transcribes a recording that ended on its own: the safety
+/// ceiling, or the silence rule past the long-recording point (see
+/// [`StopPolicy`]). Runs on the dictation worker; a no-op when `session_id` is
+/// no longer the active recording (the user stopped it while this was
+/// queued), so the transcript is never lost or duplicated.
 pub(crate) fn finish_timed_out_recording(
     app: &AppHandle,
     session_id: &str,
@@ -730,6 +731,9 @@ fn stop_recording_with_reason(
     Ok(result)
 }
 
+/// Wall-clock backstop for the safety ceiling. [`StopPolicy`] stops at the
+/// ceiling by counting captured audio; this timer still fires if the stream
+/// stops delivering audio without reporting an error.
 fn spawn_timeout_thread(
     app: AppHandle,
     session_id: String,
@@ -761,14 +765,14 @@ fn recording_worker(
     source_sample_rate: u32,
     min_recording_ms: u64,
     silence_trim_enabled: bool,
-    auto_stop_after_ms: Option<u64>,
+    limits: StopLimits,
     mut incremental: Option<crate::incremental::WorkerLink>,
 ) -> Result<RecordingResult, CommandError> {
     let mut samples = Vec::<f32>::new();
     let mut last_level_emit = Instant::now()
         .checked_sub(LEVEL_EVENT_INTERVAL)
         .unwrap_or_else(Instant::now);
-    let mut auto_stop = SilenceAutoStop::new(auto_stop_after_ms, source_sample_rate);
+    let mut stop_policy = StopPolicy::new(limits, source_sample_rate);
     let stop_reason = loop {
         crossbeam_channel::select! {
             recv(control_rx) -> message => {
@@ -781,7 +785,9 @@ fn recording_worker(
                 match message {
                     Ok(chunk) => {
                         maybe_emit_level(&app, &info.session_id, &chunk.samples, &mut last_level_emit);
-                        auto_stop.observe(&app, &info.session_id, &chunk.samples);
+                        if let Some(signal) = stop_policy.observe(&chunk.samples) {
+                            act_on_stop_signal(&app, &info.session_id, signal, limits);
+                        }
                         if let Some(link) = incremental.as_mut() {
                             link.push_chunk(&chunk.samples);
                         }
@@ -860,70 +866,185 @@ fn maybe_emit_level(
     *last_level_emit = Instant::now();
 }
 
-/// Watches per-chunk RMS during a recording and stops the dictation after
-/// `auto_stop_after_ms` of continuous silence — but only once speech has been
-/// heard, and only once per session. Stopping goes through the dictation
-/// worker like a toggle-hotkey stop, so transcription and output run exactly
-/// as if the user stopped manually.
-struct SilenceAutoStop {
-    auto_stop_after_ms: Option<u64>,
-    sample_rate: u32,
-    speech_detected: bool,
-    silence_samples: usize,
-    triggered: bool,
+/// How a recording's length and silence end it. Built once per session from
+/// the settings and the kind of start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StopLimits {
+    /// Continuous silence that ends the recording (`silence_auto_stop_ms`),
+    /// or `None` when silence auto-stop is off.
+    silence_ms: Option<u64>,
+    /// Whether the silence rule applies from the start (toggle-style starts:
+    /// toggle hotkey, tray, UI Start). Hold-to-talk passes false: the user is
+    /// still holding the key, so a pause must not cut them off.
+    silence_from_start: bool,
+    /// The long-recording point (`max_recording_ms`). It never cuts anyone
+    /// off; past it the silence rule also covers hold-to-talk, and no longer
+    /// needs speech first, so a stuck key or a forgotten open mic still ends.
+    long_recording_ms: u64,
+    /// Safety ceiling (`recording_ceiling_ms`): stops even mid-sentence.
+    ceiling_ms: u64,
 }
 
-impl SilenceAutoStop {
-    fn new(auto_stop_after_ms: Option<u64>, sample_rate: u32) -> Self {
+impl StopLimits {
+    fn for_recording(
+        settings: &AppSettings,
+        request_max_ms: Option<u64>,
+        is_test_clip: bool,
+        allow_auto_stop: bool,
+    ) -> Self {
+        let min_ms = settings.min_recording_ms as u64;
+        if is_test_clip {
+            // Test clips run for a fixed length and must capture whatever the
+            // mic hears: no silence rule, and the requested length is a hard
+            // stop.
+            let ceiling_ms = request_max_ms
+                .unwrap_or(settings.recording_ceiling_ms as u64)
+                .max(min_ms);
+            return Self {
+                silence_ms: None,
+                silence_from_start: false,
+                long_recording_ms: ceiling_ms,
+                ceiling_ms,
+            };
+        }
+
+        // A caller-chosen maximum is a hard stop, like the ceiling.
+        let ceiling_ms = request_max_ms
+            .unwrap_or(settings.recording_ceiling_ms as u64)
+            .max(min_ms);
         Self {
-            auto_stop_after_ms,
+            silence_ms: settings
+                .silence_auto_stop_enabled
+                .then_some(settings.silence_auto_stop_ms as u64),
+            silence_from_start: allow_auto_stop,
+            long_recording_ms: settings.max_recording_ms as u64,
+            ceiling_ms,
+        }
+    }
+}
+
+/// Why [`StopPolicy`] wants the recording to end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StopSignal {
+    /// The normal silence auto-stop of a toggle-style start: speech was heard,
+    /// then `silence_ms` of silence. Stops exactly like a toggle press.
+    Silence,
+    /// Past the long-recording point, `silence_ms` of silence (any start, with
+    /// or without speech). Stops through the timed-out salvage path.
+    LongRecordingSilence,
+    /// The safety ceiling. Stops through the timed-out salvage path, even
+    /// mid-sentence.
+    Ceiling,
+}
+
+/// Watches the captured audio and decides when a recording should end on its
+/// own. A recording is never cut off at the long-recording point while the
+/// user is talking: it ends when they stop it, after the silence rule, or at
+/// the ceiling. Fires at most once per session. Pure (no app handle) so the
+/// rules can be unit tested; the recording worker performs the stop.
+struct StopPolicy {
+    limits: StopLimits,
+    sample_rate: u32,
+    elapsed_samples: usize,
+    speech_detected: bool,
+    silence_samples: usize,
+    fired: bool,
+}
+
+impl StopPolicy {
+    fn new(limits: StopLimits, sample_rate: u32) -> Self {
+        Self {
+            limits,
             sample_rate,
+            elapsed_samples: 0,
             speech_detected: false,
             silence_samples: 0,
-            triggered: false,
+            fired: false,
         }
     }
 
-    fn observe(&mut self, app: &AppHandle, session_id: &str, samples: &[f32]) {
-        let Some(limit_ms) = self.auto_stop_after_ms else {
-            return;
-        };
-        if self.triggered || samples.is_empty() {
-            return;
+    fn observe(&mut self, samples: &[f32]) -> Option<StopSignal> {
+        if self.fired || samples.is_empty() {
+            return None;
         }
 
+        self.elapsed_samples += samples.len();
         let rms = chunk_rms(samples);
         if rms >= AUTO_STOP_SPEECH_RMS {
             self.speech_detected = true;
             self.silence_samples = 0;
-            return;
-        }
-        if rms >= SILENCE_RMS_THRESHOLD {
+        } else if rms >= SILENCE_RMS_THRESHOLD {
             // Not loud enough to count as speech, but not silent either:
             // the continuous-silence run is broken.
             self.silence_samples = 0;
-            return;
-        }
-        if !self.speech_detected {
-            return;
+        } else {
+            self.silence_samples += samples.len();
         }
 
-        self.silence_samples += samples.len();
-        if duration_ms(self.silence_samples, self.sample_rate) < limit_ms {
-            return;
+        let signal = self.decide();
+        self.fired = signal.is_some();
+        signal
+    }
+
+    fn decide(&self) -> Option<StopSignal> {
+        let elapsed_ms = duration_ms(self.elapsed_samples, self.sample_rate);
+        if elapsed_ms >= self.limits.ceiling_ms {
+            return Some(StopSignal::Ceiling);
         }
 
-        self.triggered = true;
-        log::info!(
-            "Silence auto-stop: session {} silent for {} ms, stopping dictation",
-            session_id,
-            limit_ms
-        );
-        // Queue the stop on the dictation worker: stopping joins this
-        // recording thread, so it must not run on it. Double stops are
-        // harmless, since the worker skips a stop unless the app is still
-        // Recording.
-        crate::dictation_worker::submit(app, crate::dictation_worker::Intent::Stop);
+        let silence_ms = self.limits.silence_ms?;
+        if duration_ms(self.silence_samples, self.sample_rate) < silence_ms {
+            return None;
+        }
+        if self.limits.silence_from_start && self.speech_detected {
+            return Some(StopSignal::Silence);
+        }
+        if elapsed_ms >= self.limits.long_recording_ms {
+            return Some(StopSignal::LongRecordingSilence);
+        }
+        None
+    }
+}
+
+/// Carries out a [`StopSignal`] from the recording worker. Every stop is
+/// queued on the dictation worker: stopping joins this recording thread, so
+/// it must not run on it.
+fn act_on_stop_signal(app: &AppHandle, session_id: &str, signal: StopSignal, limits: StopLimits) {
+    match signal {
+        StopSignal::Silence => {
+            log::info!(
+                "Silence auto-stop: session {} silent for {:?} ms, stopping dictation",
+                session_id,
+                limits.silence_ms
+            );
+            // Stops exactly like a toggle press. Double stops are harmless,
+            // since the worker skips a stop unless the app is still Recording.
+            crate::dictation_worker::submit(app, crate::dictation_worker::Intent::Stop);
+        }
+        StopSignal::LongRecordingSilence | StopSignal::Ceiling => {
+            if signal == StopSignal::Ceiling {
+                log::warn!(
+                    "Recording ceiling: session {} reached {} ms, stopping and transcribing",
+                    session_id,
+                    limits.ceiling_ms
+                );
+            } else {
+                log::info!(
+                    "Long recording: session {} past {} ms and silent for {:?} ms, stopping and transcribing",
+                    session_id,
+                    limits.long_recording_ms,
+                    limits.silence_ms
+                );
+            }
+            // The session-scoped salvage path: it no-ops when the user
+            // already stopped this session, and transcribes what was captured.
+            crate::dictation_worker::dispatch(
+                app,
+                crate::dictation_worker::DictationCommand::FinishTimedOut {
+                    session_id: session_id.to_string(),
+                },
+            );
+        }
     }
 }
 
@@ -1200,8 +1321,7 @@ fn build_input_stream(
     // cpal delivers stream errors (the mic being unplugged, the WASAPI endpoint
     // dying) on its own thread via this callback. Logging alone leaves the
     // worker blocked on the now-dead chunk channel and the app wedged in
-    // Recording until the user stops or the max-duration timeout fires — up to
-    // ten minutes of captured silence. Instead, queue the same stop +
+    // Recording until the user stops or the safety ceiling fires. Instead, queue the same stop +
     // transcribe path the timeout uses, exactly once, on the dictation worker
     // (the callback must never block, and queueing never does), and surface a
     // recording error so the UI can tell the user the mic dropped. `handled`
@@ -1830,6 +1950,169 @@ mod tests {
     fn normalizing_16_khz_audio_only_clamps() {
         let resampled = normalize_to_whisper_wav_samples(vec![0.25, 1.5, -2.0], 16_000);
         assert_eq!(resampled, vec![0.25, 1.0, -1.0]);
+    }
+
+    /// 1 kHz keeps the policy tests readable: one sample is one millisecond.
+    const POLICY_RATE: u32 = 1_000;
+
+    fn limits(silence_from_start: bool) -> StopLimits {
+        StopLimits {
+            silence_ms: Some(60_000),
+            silence_from_start,
+            long_recording_ms: 600_000,
+            ceiling_ms: 1_800_000,
+        }
+    }
+
+    /// Feeds `ms` of audio in 100 ms chunks and returns the first signal with
+    /// the elapsed time (ms since the start of the recording) it fired at.
+    fn run(policy: &mut StopPolicy, level: f32, ms: usize) -> Option<(StopSignal, u64)> {
+        for _ in 0..ms / 100 {
+            if let Some(signal) = policy.observe(&vec![level; 100]) {
+                return Some((signal, duration_ms(policy.elapsed_samples, POLICY_RATE)));
+            }
+        }
+        None
+    }
+
+    const TALK: f32 = 0.5;
+    const QUIET: f32 = 0.0;
+
+    #[test]
+    fn talking_through_the_long_recording_point_keeps_recording() {
+        for silence_from_start in [true, false] {
+            let mut policy = StopPolicy::new(limits(silence_from_start), POLICY_RATE);
+            // 20 minutes of talking with 30 s pauses: never stops.
+            for _ in 0..20 {
+                assert_eq!(run(&mut policy, TALK, 30_000), None);
+                assert_eq!(run(&mut policy, QUIET, 30_000), None);
+            }
+        }
+    }
+
+    #[test]
+    fn toggle_silence_auto_stop_is_unchanged_before_the_point() {
+        let mut policy = StopPolicy::new(limits(true), POLICY_RATE);
+        // Silence before any speech never stops a toggle recording early.
+        assert_eq!(run(&mut policy, QUIET, 120_000), None);
+        assert_eq!(run(&mut policy, TALK, 5_000), None);
+        assert_eq!(
+            run(&mut policy, QUIET, 61_000),
+            Some((StopSignal::Silence, 185_000))
+        );
+    }
+
+    #[test]
+    fn hold_to_talk_never_stops_on_silence_before_the_point() {
+        let mut policy = StopPolicy::new(limits(false), POLICY_RATE);
+        assert_eq!(run(&mut policy, TALK, 5_000), None);
+        assert_eq!(run(&mut policy, QUIET, 500_000), None);
+    }
+
+    #[test]
+    fn a_pause_past_the_point_stops_after_the_silence_window() {
+        for silence_from_start in [true, false] {
+            let mut policy = StopPolicy::new(limits(silence_from_start), POLICY_RATE);
+            // Talking up to 11 minutes, then a pause: stops 60 s into it.
+            assert_eq!(run(&mut policy, TALK, 660_000), None);
+            let expected = if silence_from_start {
+                StopSignal::Silence
+            } else {
+                StopSignal::LongRecordingSilence
+            };
+            assert_eq!(run(&mut policy, QUIET, 61_000), Some((expected, 720_000)));
+        }
+    }
+
+    #[test]
+    fn a_stuck_hold_key_on_silence_ends_at_the_point() {
+        // Nothing was ever said: the silence run already covers the window
+        // when the point arrives, so it stops right there.
+        let mut policy = StopPolicy::new(limits(false), POLICY_RATE);
+        assert_eq!(
+            run(&mut policy, QUIET, 700_000),
+            Some((StopSignal::LongRecordingSilence, 600_000))
+        );
+        // Same for a forgotten toggle recording that never heard speech.
+        let mut policy = StopPolicy::new(limits(true), POLICY_RATE);
+        assert_eq!(
+            run(&mut policy, QUIET, 700_000),
+            Some((StopSignal::LongRecordingSilence, 600_000))
+        );
+    }
+
+    #[test]
+    fn the_ceiling_stops_even_mid_sentence() {
+        for silence_from_start in [true, false] {
+            let mut policy = StopPolicy::new(limits(silence_from_start), POLICY_RATE);
+            assert_eq!(
+                run(&mut policy, TALK, 2_000_000),
+                Some((StopSignal::Ceiling, 1_800_000))
+            );
+        }
+    }
+
+    #[test]
+    fn with_silence_auto_stop_off_only_the_ceiling_stops() {
+        let mut limits = limits(false);
+        limits.silence_ms = None;
+        let mut policy = StopPolicy::new(limits, POLICY_RATE);
+        assert_eq!(run(&mut policy, QUIET, 1_700_000), None);
+        assert_eq!(
+            run(&mut policy, QUIET, 200_000),
+            Some((StopSignal::Ceiling, 1_800_000))
+        );
+    }
+
+    #[test]
+    fn room_noise_breaks_the_silence_run() {
+        // Between the silence and speech thresholds: not silent, so the
+        // silence rule never fires, and the ceiling still does.
+        let mut policy = StopPolicy::new(limits(false), POLICY_RATE);
+        assert_eq!(
+            run(&mut policy, 0.02, 2_000_000),
+            Some((StopSignal::Ceiling, 1_800_000))
+        );
+    }
+
+    #[test]
+    fn the_policy_fires_once() {
+        let mut policy = StopPolicy::new(limits(false), POLICY_RATE);
+        assert!(run(&mut policy, QUIET, 700_000).is_some());
+        assert_eq!(run(&mut policy, QUIET, 3_000_000), None);
+    }
+
+    #[test]
+    fn limits_follow_the_settings_and_the_start_kind() {
+        let settings = AppSettings::default();
+        let toggle = StopLimits::for_recording(&settings, None, false, true);
+        assert_eq!(
+            toggle,
+            StopLimits {
+                silence_ms: Some(60_000),
+                silence_from_start: true,
+                long_recording_ms: 600_000,
+                ceiling_ms: 1_800_000,
+            }
+        );
+        let hold = StopLimits::for_recording(&settings, None, false, false);
+        assert!(!hold.silence_from_start);
+        assert_eq!(hold.silence_ms, Some(60_000));
+
+        let off = AppSettings {
+            silence_auto_stop_enabled: false,
+            ..AppSettings::default()
+        };
+        assert_eq!(
+            StopLimits::for_recording(&off, None, false, true).silence_ms,
+            None
+        );
+
+        // A test clip: fixed length, no silence rule.
+        let clip = StopLimits::for_recording(&settings, Some(4_000), true, false);
+        assert_eq!(clip.silence_ms, None);
+        assert_eq!(clip.ceiling_ms, 4_000);
+        assert_eq!(clip.long_recording_ms, 4_000);
     }
 
     #[test]

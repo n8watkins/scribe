@@ -45,6 +45,7 @@ const SETTINGS_ALLOW_LIST: &[&str] = &[
     "autoInstallUpdates",
     "minRecordingMs",
     "maxRecordingMs",
+    "recordingCeilingMs",
     "silenceTrimEnabled",
     "silenceAutoStopEnabled",
     "silenceAutoStopMs",

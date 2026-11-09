@@ -138,7 +138,11 @@ export type AppSettings = {
   devHotkeysSeeded: boolean;
   recordingMode: RecordingMode;
   minRecordingMs: number;
+  /** Past this length the silence auto-stop also covers hold-to-talk and no
+   * longer needs speech first. Never cuts anyone off while talking. */
   maxRecordingMs: number;
+  /** Safety ceiling (ms, 60000-3600000): stops even mid-sentence. */
+  recordingCeilingMs: number;
   silenceTrimEnabled: boolean;
   silenceAutoStopEnabled: boolean;
   silenceAutoStopMs: number;
@@ -339,6 +343,7 @@ export type RecordingSessionInfo = {
   sampleRate: number;
   channels: number;
   startedAt: string;
+  /** Hard stop for this recording (the safety ceiling). */
   maxDurationMs: number;
   isTestClip: boolean;
   isNote: boolean;
