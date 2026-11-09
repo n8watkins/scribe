@@ -21,7 +21,7 @@ Yes, as betas: a universal macOS app (Apple Silicon and Intel, macOS 13.3 or lat
 Each platform has a guide with install steps, permissions, what works there and known limits: [Windows](docs/install/windows.md), [macOS](docs/install/macos.md), [Linux](docs/install/linux.md).
 
 - **macOS:** the app is not notarized (Scribe has no Apple Developer ID), so the first open needs **Open Anyway** in System Settings → Privacy & Security; the [macOS guide](docs/install/macos.md#the-first-open-scribe-is-not-notarized) has every step.
-- **Linux:** hotkeys and pasting work on X11; on Wayland they only reach X11 apps for now ([details and workarounds](docs/install/linux.md#x11-and-wayland)).
+- **Linux:** hotkeys and pasting work on X11 and on Wayland; on Wayland your desktop asks once for permission, and desktops without the portals get a copy fallback or a command to bind ([details](docs/install/linux.md#x11-and-wayland)).
 - **Updates:** the Mac and Linux betas don't update themselves yet; About tells you when a new version is out, and you install it from the latest release.
 - Testing a beta? Follow the [testing checklist](docs/install/testing-checklist.md) and send back what you find.
 
