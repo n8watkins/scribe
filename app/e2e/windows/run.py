@@ -1120,6 +1120,19 @@ class Run:
         check_words(request["instruction"], ["make", "text", "uppercase"], "The spoken instruction")
         wait_idle()
 
+    def dashboard_shot(self, name: str) -> None:
+        """Brings the dashboard to the front and saves a screenshot of it, for
+        the model status line. A screenshot never fails a check."""
+        try:
+            hwnd = wait_until("the dashboard window", self.app.main_window, 30)
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0003)  # topmost, keep size and place
+            time.sleep(1.5)
+            self.shot(name)
+            user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, 0x0003)  # not topmost
+        except Exception as error:
+            print(f"Dashboard screenshot {name} failed: {error}")
+
     def owned_engines(self) -> list[dict]:
         pid = self.app.process.pid
         return [p for p in speech_processes() if p["ParentProcessId"] == pid and p["Name"] != "whisper-cli.exe"]
@@ -1142,6 +1155,7 @@ class Run:
         patch_settings({"keepWhisperLoaded": False})
         self.app.launch()
         stays("no model loaded after launch", lambda: not self.owned_engines(), 5)
+        self.dashboard_shot("keep-loaded-off-home")
         target = self.targets["A"]
         self.prepare(target, "clipboard before keep-loaded off")
         transcript = self.toggle_dictation("jfk")
@@ -1173,6 +1187,7 @@ class Run:
         names = sorted(p["Name"].lower() for p in self.owned_engines())
         check(names == ["scribe-parakeet.exe"], f"Expected only the Parakeet sidecar, found {names}")
         print(f"Parakeet loaded: {engines}")
+        self.dashboard_shot("parakeet-loaded-home")
         target = self.targets["A"]
         self.prepare(target, "clipboard before Parakeet")
         transcript = self.toggle_dictation("jfk")
