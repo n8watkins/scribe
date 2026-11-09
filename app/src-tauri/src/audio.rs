@@ -1716,14 +1716,13 @@ fn resample_with_rubato(
     let mut output = Vec::with_capacity(expected_len + resampler.output_frames_max());
     let mut buffer = resampler.output_buffer_allocate(true);
 
-    let mut chunks = samples.chunks_exact(RESAMPLE_CHUNK_FRAMES);
-    for chunk in &mut chunks {
+    let (chunks, remainder) = samples.as_chunks::<RESAMPLE_CHUNK_FRAMES>();
+    for chunk in chunks {
         let (_, written) = resampler
             .process_into_buffer(&[chunk], &mut buffer, None)
             .ok()?;
         output.extend_from_slice(&buffer[0][..written]);
     }
-    let remainder = chunks.remainder();
     if !remainder.is_empty() {
         let (_, written) = resampler
             .process_partial_into_buffer(Some(&[remainder]), &mut buffer, None)
