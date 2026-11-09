@@ -468,9 +468,78 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # The Linux and macOS (beta) bundles: each workflow builds them, installs and
+  # launches them on a fresh runner and transcribes a clip, and keeps the
+  # tested files as an artifact. Stable builds only; Scribe Dev is Windows only.
+  linux:
+    name: Linux
+    if: (inputs.flavor || 'stable') == 'stable'
+    uses: ./.github/workflows/linux.yml
+    with:
+      release: true
+
+  macos:
+    name: macOS
+    if: (inputs.flavor || 'stable') == 'stable'
+    uses: ./.github/workflows/macos.yml
+    with:
+      release: true
+
+  # One folder with every platform's tested files and one SHA256SUMS.txt over
+  # all of them. Manual stable runs assemble it too, so the whole path short
+  # of publishing can be tried from a branch.
+  assemble:
+    name: Assemble release files
+    needs: [build-windows, smoke-install, linux, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: scribe-release-candidate
+          path: parts/windows
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: scribe-linux
+          path: parts/linux
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: scribe-macos
+          path: parts/macos
+
+      - name: Merge and checksum
+        run: |
+          set -euo pipefail
+          mkdir release
+          for part in windows linux macos; do
+            (cd "parts/$part" && sha256sum --check --quiet SHA256SUMS.txt)
+            # The Windows list is written on Windows, with CRLF line ends.
+            while read -r _ name; do
+              name="${name%$'\r'}"
+              if [ -e "release/$name" ]; then
+                echo "$name is in more than one platform's files" >&2
+                exit 1
+              fi
+              cp "parts/$part/$name" "release/$name"
+            done < "parts/$part/SHA256SUMS.txt"
+          done
+          for name in Scribe-macos-universal.dmg Scribe-linux-x86_64.AppImage Scribe-linux-amd64.deb latest.json; do
+            test -s "release/$name" || { echo "Missing $name" >&2; exit 1; }
+          done
+          (cd release && sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
+      - name: Upload release files
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: scribe-release
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14
+
   publish:
     name: Publish verified release
-    needs: [build-windows, smoke-install]
+    needs: assemble
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -487,7 +556,9 @@ jobs:
 
       # User-facing notes from the Conventional Commits since the previous
       # release (release-kit), the same section the release commit wrote to
-      # CHANGELOG.md; not GitHub's list of pull request titles.
+      # CHANGELOG.md; not GitHub's list of pull request titles. The download
+      # guide (which file for which system, the macOS Gatekeeper steps and
+      # what beta means) follows them on every release.
       - name: Release notes
         env:
           TAG: ${{ github.ref_name }}
@@ -495,28 +566,25 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund --allow-git=root
           npx --no-install release-kit notes --to "$TAG" > release-notes.md
           test -s release-notes.md
+          printf '\n' >> release-notes.md
+          cat .github/release-downloads.md >> release-notes.md
 
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: scribe-release-candidate
-          path: candidate
+          name: scribe-release
+          path: release
 
-      - name: Attach verified candidate to release
+      - name: Attach verified files to release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           tag="${{ github.ref_name }}"
           repo="${{ github.repository }}"
-          assets=(
-            candidate/*-setup.exe
-            candidate/*-setup.exe.sig
-            candidate/*.msi
-            candidate/latest.json
-            candidate/*.cdx.json
-            candidate/SHA256SUMS.txt
-          )
+          assets=(release/*)
           if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --clobber --repo "$repo"
+            gh release edit "$tag" --notes-file release-notes.md --repo "$repo"
           else
             gh release create "$tag" "${assets[@]}" --notes-file release-notes.md --verify-tag --repo "$repo"
           fi
@@ -527,9 +595,15 @@ jobs:
         run: |
           mkdir downloaded
           gh release download "${{ github.ref_name }}" --repo "${{ github.repository }}" --dir downloaded
-          cp candidate/SHA256SUMS.txt downloaded/
+          cp release/SHA256SUMS.txt downloaded/
           cd downloaded
           sha256sum --check SHA256SUMS.txt
+          # Nothing on the release that the checksums do not cover.
+          extra="$(comm -13 <(awk '{print $2}' SHA256SUMS.txt | sort) <(ls | grep -vx SHA256SUMS.txt | sort))"
+          if [ -n "$extra" ]; then
+            echo "The release has files SHA256SUMS.txt does not cover: $extra" >&2
+            exit 1
+          fi
 
   # The rolling `dev` pre-release that Scribe Dev updates from. A pre-release
   # never becomes "latest", so stable installs (which read
