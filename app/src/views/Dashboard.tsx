@@ -94,7 +94,7 @@ export function DashboardView({
           <div>
             <strong>Download a model to start dictating</strong>
             <span>
-              Transcription needs a local Whisper model on this device.
+              Transcription needs a local speech model on this device.
             </span>
           </div>
           <button

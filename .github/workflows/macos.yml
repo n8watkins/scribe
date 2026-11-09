@@ -116,7 +116,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/whisper-macos
-          key: whisper-macos-${{ env.WHISPER_CPP_COMMIT }}-${{ env.WHISPER_MACOS_BUILD }}-${{ env.MACOSX_DEPLOYMENT_TARGET }}
+          key: whisper-macos-${{ env.WHISPER_CPP_COMMIT }}-${{ env.WHISPER_MACOS_BUILD }}-${{ env.MACOSX_DEPLOYMENT_TARGET }}-${{ hashFiles('app/sidecar/**') }}
 
       # Statically linked, so the two binaries need no whisper or ggml dylibs
       # next to them, only system frameworks (Metal, Accelerate, Foundation).
@@ -138,6 +138,8 @@ jobs:
             echo "whisper.cpp commit $actual did not match reviewed commit $WHISPER_CPP_COMMIT" >&2
             exit 1
           fi
+          # Scribe's own Parakeet sidecar builds inside the same tree.
+          echo "add_subdirectory(\"$GITHUB_WORKSPACE/app/sidecar/scribe-parakeet\" \"\${CMAKE_BINARY_DIR}/scribe-parakeet\")" >> "$src/examples/CMakeLists.txt"
           for arch in arm64 x86_64; do
             metal=ON
             extra=()
@@ -158,11 +160,11 @@ jobs:
               -DWHISPER_BUILD_TESTS=OFF \
               -DWHISPER_BUILD_SERVER=ON \
               ${extra[@]+"${extra[@]}"}
-            cmake --build "$src/build-$arch" -j "$(sysctl -n hw.ncpu)" --target whisper-cli whisper-server
+            cmake --build "$src/build-$arch" -j "$(sysctl -n hw.ncpu)" --target whisper-cli whisper-server scribe-parakeet
           done
           out="$RUNNER_TEMP/whisper-macos"
           mkdir -p "$out"
-          for name in whisper-cli whisper-server; do
+          for name in whisper-cli whisper-server scribe-parakeet; do
             lipo -create "$src/build-arm64/bin/$name" "$src/build-x86_64/bin/$name" -output "$out/$name"
           done
 
@@ -185,7 +187,7 @@ jobs:
           fi
           dest=app/src-tauri/resources/bin/macos
           mkdir -p "$dest"
-          for name in whisper-cli whisper-server; do
+          for name in whisper-cli whisper-server scribe-parakeet; do
             install -m 0755 "$RUNNER_TEMP/whisper-macos/$name" "$dest/$name"
             archs="$(lipo -archs "$dest/$name")"
             echo "$name: $archs"
@@ -215,6 +217,8 @@ jobs:
           done
           "$dest/whisper-cli" --help > /dev/null
           arch -x86_64 "$dest/whisper-cli" --help > /dev/null
+          "$dest/scribe-parakeet" --help 2> /dev/null
+          arch -x86_64 "$dest/scribe-parakeet" --help 2> /dev/null
 
       # Same install as the Windows build: scripts off, esbuild's run on its own.
       - name: Install application dependencies
@@ -250,7 +254,7 @@ jobs:
           app="${apps[0]}"
           main="$app/Contents/MacOS/Scribe"
           echo "Scribe: $(lipo -archs "$main")"
-          for name in whisper-cli whisper-server; do
+          for name in whisper-cli whisper-server scribe-parakeet; do
             if [ ! -x "$app/Contents/Resources/bin/macos/$name" ]; then
               echo "The app is missing Resources/bin/macos/$name" >&2
               exit 1

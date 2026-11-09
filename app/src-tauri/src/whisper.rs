@@ -80,7 +80,7 @@ pub fn transcribe(
         return Err(CommandError::new(
             "whisper_model_missing",
             format!(
-                "Selected Whisper model is missing at {}. Re-download the model or choose another model.",
+                "The selected speech model is missing at {}. Re-download the model or choose another model.",
                 request.model_path.display()
             ),
         ));

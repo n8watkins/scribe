@@ -2,8 +2,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_MODEL_ID: &str = "small.en-q5_1";
+pub const PARAKEET_V3_ID: &str = "parakeet-tdt-0.6b-v3";
 const HUGGING_FACE_REVISION: &str = "5359861c739e955e79d9a303bcbc70fb988958b1";
 const HUGGING_FACE_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve";
+/// ggml-org's official GGUF conversions of NVIDIA Parakeet for whisper.cpp,
+/// pinned to a reviewed revision like the Whisper models.
+const PARAKEET_REVISION: &str = "35156454d1a39de06863303dd209fd2bed6ee079";
+const PARAKEET_BASE_URL: &str = "https://huggingface.co/ggml-org/parakeet-GGUF/resolve";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -98,7 +103,27 @@ pub struct CatalogModel {
     /// translate is selected against an English-only model.
     pub multilingual: bool,
     pub engine: EngineKind,
+    /// Attribution the model's license asks for, shown with the model.
+    pub credit: Option<ModelCredit>,
 }
+
+/// Who made a model and under which license, for models whose license
+/// requires credit (Parakeet: NVIDIA, CC BY 4.0).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCredit {
+    pub text: &'static str,
+    pub license: &'static str,
+    pub license_url: &'static str,
+    pub source_url: &'static str,
+}
+
+/// The languages Parakeet TDT 0.6B v3 transcribes (it detects which one is
+/// spoken by itself), as ISO 639-1 codes.
+pub const PARAKEET_V3_LANGUAGES: [&str; 25] = [
+    "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it", "lv", "lt", "mt",
+    "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk",
+];
 
 impl CatalogModel {
     /// The short name the status line and the tray use, like
@@ -112,10 +137,18 @@ impl CatalogModel {
     }
 
     pub fn download_url(self) -> String {
-        format!(
-            "{}/{}/{}",
-            HUGGING_FACE_BASE_URL, HUGGING_FACE_REVISION, self.filename
-        )
+        match self.engine {
+            EngineKind::Whisper => format!(
+                "{}/{}/{}",
+                HUGGING_FACE_BASE_URL, HUGGING_FACE_REVISION, self.filename
+            ),
+            EngineKind::Parakeet => {
+                format!(
+                    "{}/{}/{}",
+                    PARAKEET_BASE_URL, PARAKEET_REVISION, self.filename
+                )
+            }
+        }
     }
 
     pub fn checksum(self) -> Option<ModelChecksum> {
@@ -145,6 +178,7 @@ pub struct ModelInfo {
     /// multilingual labeling + the non-English pair guard).
     pub multilingual: bool,
     pub engine: EngineKind,
+    pub credit: Option<ModelCredit>,
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +207,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_size_bytes: 77_704_715,
             multilingual: false,
             engine: EngineKind::Whisper,
+            credit: None,
         },
         CatalogModel {
             id: "base.en",
@@ -183,6 +218,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_size_bytes: 147_964_211,
             multilingual: false,
             engine: EngineKind::Whisper,
+            credit: None,
         },
         CatalogModel {
             id: "small.en",
@@ -193,6 +229,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_size_bytes: 487_614_201,
             multilingual: false,
             engine: EngineKind::Whisper,
+            credit: None,
         },
         CatalogModel {
             id: DEFAULT_MODEL_ID,
@@ -203,6 +240,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_size_bytes: 190_098_681,
             multilingual: false,
             engine: EngineKind::Whisper,
+            credit: None,
         },
         CatalogModel {
             id: "medium.en",
@@ -213,6 +251,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_size_bytes: 1_533_774_781,
             multilingual: false,
             engine: EngineKind::Whisper,
+            credit: None,
         },
         // Multilingual Whisper builds. These transcribe ~99 languages and can
         // translate any of them to English (the Translate-to-English setting).
@@ -228,6 +267,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_size_bytes: 77_691_713,
             multilingual: true,
             engine: EngineKind::Whisper,
+            credit: None,
         },
         CatalogModel {
             id: "base",
@@ -238,6 +278,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_size_bytes: 147_951_465,
             multilingual: true,
             engine: EngineKind::Whisper,
+            credit: None,
         },
         CatalogModel {
             id: "small",
@@ -248,6 +289,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_size_bytes: 487_601_967,
             multilingual: true,
             engine: EngineKind::Whisper,
+            credit: None,
         },
         CatalogModel {
             id: "medium",
@@ -258,6 +300,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_size_bytes: 1_533_763_059,
             multilingual: true,
             engine: EngineKind::Whisper,
+            credit: None,
         },
         CatalogModel {
             id: "large-v3-turbo-q5_0",
@@ -268,6 +311,7 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_size_bytes: 574_041_195,
             multilingual: true,
             engine: EngineKind::Whisper,
+            credit: None,
         },
         // Full-precision (fp16) large-v3-turbo: the most accurate model offered.
         // ~3x the q5_0 size and slow on CPU, so it's really meant for the GPU
@@ -281,6 +325,28 @@ pub fn catalog() -> &'static [CatalogModel] {
             expected_size_bytes: 1_624_555_275,
             multilingual: true,
             engine: EngineKind::Whisper,
+            credit: None,
+        },
+        // NVIDIA Parakeet TDT 0.6B v3 through whisper.cpp's Parakeet support,
+        // in Scribe's own resident sidecar (scribe-parakeet). 25 European
+        // languages, detected automatically; punctuation and capitals built
+        // in; no initial prompt, so the context hint doesn't apply. q8_0 keeps
+        // accuracy next to f16 at about half the size.
+        CatalogModel {
+            id: PARAKEET_V3_ID,
+            name: "Parakeet v3 (25 European languages)",
+            filename: "ggml-parakeet-tdt-0.6b-v3-q8_0.bin",
+            disk_size_label: "638 MiB",
+            expected_sha256: "4d64e9e96c2792186d072fde0034df0ad670cf680a2f53069052ead827fd600e",
+            expected_size_bytes: 668_757_119,
+            multilingual: true,
+            engine: EngineKind::Parakeet,
+            credit: Some(ModelCredit {
+                text: "Parakeet TDT 0.6B v3 by NVIDIA, converted to GGUF and quantized to q8_0 by ggml-org.",
+                license: "CC BY 4.0",
+                license_url: "https://creativecommons.org/licenses/by/4.0/",
+                source_url: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3",
+            }),
         },
     ]
 }
@@ -351,6 +417,25 @@ mod tests {
         assert_eq!(q5.expected_sha256.len(), 64);
         assert_eq!(full.expected_sha256.len(), 64);
         assert!(full.expected_size_bytes > q5.expected_size_bytes);
+    }
+
+    #[test]
+    fn parakeet_v3_is_pinned_credited_and_on_its_own_engine() {
+        let model = catalog_model(PARAKEET_V3_ID).expect("Parakeet in the catalog");
+        assert_eq!(model.engine, EngineKind::Parakeet);
+        assert_eq!(model.status_name(), "Parakeet v3");
+        assert_eq!(
+            model.download_url(),
+            "https://huggingface.co/ggml-org/parakeet-GGUF/resolve/35156454d1a39de06863303dd209fd2bed6ee079/ggml-parakeet-tdt-0.6b-v3-q8_0.bin"
+        );
+        let credit = model.credit.expect("CC BY 4.0 requires credit");
+        assert!(credit.text.contains("NVIDIA"));
+        assert_eq!(credit.license, "CC BY 4.0");
+        assert_eq!(PARAKEET_V3_LANGUAGES.len(), 25);
+        // Every other model is Whisper and needs no extra credit.
+        for other in catalog().iter().filter(|m| m.id != PARAKEET_V3_ID) {
+            assert_eq!(other.engine, EngineKind::Whisper, "{}", other.id);
+        }
     }
 
     #[test]

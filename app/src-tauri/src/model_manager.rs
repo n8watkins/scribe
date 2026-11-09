@@ -234,7 +234,7 @@ pub fn select_model(
         return Err(CommandError::new(
             "whisper_model_missing",
             format!(
-                "Selected Whisper model is missing. Re-download {} or place {} in a known model cache.",
+                "The selected speech model is missing. Re-download {} or place {} in a known model cache.",
                 catalog_model.name, catalog_model.filename
             ),
         ));
@@ -245,7 +245,7 @@ pub fn select_model(
         return Err(CommandError::new(
             "whisper_model_missing",
             format!(
-                "Selected Whisper model is missing. Re-download {} or choose another model.",
+                "The selected speech model is missing. Re-download {} or choose another model.",
                 catalog_model.name
             ),
         ));
@@ -294,7 +294,7 @@ pub fn selected_model_path(
         return Err(CommandError::new(
             "whisper_model_missing",
             format!(
-                "Selected Whisper model is missing. Re-download {} or place {} in a known model cache.",
+                "The selected speech model is missing. Re-download {} or place {} in a known model cache.",
                 catalog_model.name, catalog_model.filename
             ),
         ));
@@ -668,6 +668,7 @@ fn model_info_for_catalog(
         downloaded_at: record.and_then(|record| record.downloaded_at),
         multilingual: catalog_model.multilingual,
         engine: catalog_model.engine,
+        credit: catalog_model.credit,
     })
 }
 
@@ -723,6 +724,8 @@ fn resolve_model_file(
 pub fn smallest_downloaded_model_path(app: &AppHandle) -> Option<PathBuf> {
     crate::models::catalog()
         .iter()
+        // The probe runs whisper-cli, which only loads Whisper models.
+        .filter(|model| model.engine == models::EngineKind::Whisper)
         .filter_map(|model| {
             resolve_model_file(app, *model)
                 .ok()
@@ -771,7 +774,7 @@ fn catalog_model(model_id: &str) -> Result<CatalogModel, CommandError> {
         CommandError::new(
             "unknown_model",
             format!(
-                "Unknown Whisper model '{}'. Choose a model from the catalog.",
+                "Unknown speech model '{}'. Choose a model from the catalog.",
                 model_id
             ),
         )

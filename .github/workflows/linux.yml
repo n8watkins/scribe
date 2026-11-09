@@ -143,6 +143,8 @@ jobs:
             echo "whisper.cpp commit $actual did not match reviewed commit $WHISPER_CPP_COMMIT" >&2
             exit 1
           fi
+          # Scribe's own Parakeet sidecar builds inside the same tree.
+          echo "add_subdirectory(\"$GITHUB_WORKSPACE/app/sidecar/scribe-parakeet\" \"\${CMAKE_BINARY_DIR}/scribe-parakeet\")" >> "$src/examples/CMakeLists.txt"
           cmake -S "$src" -B "$src/build" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_NATIVE=OFF \
@@ -151,20 +153,56 @@ jobs:
             -DWHISPER_BUILD_EXAMPLES=ON \
             -DWHISPER_BUILD_TESTS=OFF \
             -DWHISPER_BUILD_SERVER=ON
-          cmake --build "$src/build" -j --target whisper-cli whisper-server
+          cmake --build "$src/build" -j --target whisper-cli whisper-server scribe-parakeet
           dest=app/src-tauri/resources/bin/linux
           mkdir -p "$dest"
-          for name in whisper-cli whisper-server; do
+          for name in whisper-cli whisper-server scribe-parakeet; do
             install -m 0755 "$src/build/bin/$name" "$dest/$name"
           done
           # Nothing but system libraries may be left to resolve at run time.
-          for name in whisper-cli whisper-server; do
+          for name in whisper-cli whisper-server scribe-parakeet; do
             if ldd "$dest/$name" | grep -E 'libwhisper|libggml|not found'; then
               echo "$name links a library the bundle does not ship" >&2
               exit 1
             fi
           done
           "$dest/whisper-cli" --help > /dev/null
+
+      # The Parakeet sidecar loads the real model and transcribes the JFK
+      # clip, the way Scribe drives it (JSON lines over stdin and stdout).
+      - name: Restore the Parakeet model
+        id: parakeet-model
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/parakeet-model
+          key: parakeet-tdt-0.6b-v3-q8_0-4d64e9e96c27
+
+      - name: Download the Parakeet model
+        if: steps.parakeet-model.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/parakeet-model"
+          mkdir -p "$dir"
+          curl -fsSL -o "$dir/ggml-parakeet-tdt-0.6b-v3-q8_0.bin" \
+            "https://huggingface.co/ggml-org/parakeet-GGUF/resolve/35156454d1a39de06863303dd209fd2bed6ee079/ggml-parakeet-tdt-0.6b-v3-q8_0.bin"
+          echo "4d64e9e96c2792186d072fde0034df0ad670cf680a2f53069052ead827fd600e  $dir/ggml-parakeet-tdt-0.6b-v3-q8_0.bin" | sha256sum -c -
+
+      - name: Save the Parakeet model
+        if: steps.parakeet-model.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/parakeet-model
+          key: ${{ steps.parakeet-model.outputs.cache-primary-key }}
+
+      - name: Parakeet sidecar transcribes a clip
+        run: |
+          set -euo pipefail
+          out="$(printf '{"wav":"%s"}\n' "$PWD/app/src-tauri/tests/fixtures/jfk.wav" \
+            | timeout 120 app/src-tauri/resources/bin/linux/scribe-parakeet \
+                --model "$RUNNER_TEMP/parakeet-model/ggml-parakeet-tdt-0.6b-v3-q8_0.bin" --threads 4)"
+          echo "$out"
+          grep -q '"ready":true' <<< "$out"
+          grep -qi 'fellow Americans' <<< "$out"
 
       # Same install as the Windows build: scripts off, esbuild's run on its own.
       - name: Install application dependencies
@@ -196,7 +234,7 @@ jobs:
             exit 1
           fi
           contents="$(dpkg-deb --contents "${deb[0]}")"
-          for name in whisper-cli whisper-server; do
+          for name in whisper-cli whisper-server scribe-parakeet; do
             if ! grep -q "bin/linux/$name\$" <<< "$contents"; then
               echo "The .deb is missing bin/linux/$name" >&2
               exit 1

@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Check,
   ChevronDown,
@@ -360,7 +361,7 @@ export function ModelsView({
               </div>
             ) : null}
             {!modelsLoading && models.length === 0 ? (
-              <EmptyState message="No Whisper models are available from the local catalog." />
+              <EmptyState message="No speech models are available from the local catalog." />
             ) : null}
             {models.length > 0 ? (
               <div className="control-grid single">
@@ -434,15 +435,31 @@ export function ModelsView({
                           <span className="model-row-sub">
                             {model.diskSizeLabel}
                             {" · "}
-                            {model.multilingual
-                              ? "Multilingual"
-                              : "English-only"}
+                            {model.engine === "parakeet"
+                              ? "Parakeet · 25 European languages · no context hint"
+                              : model.multilingual
+                                ? "Multilingual"
+                                : "English-only"}
                             {" · "}
                             {model.filename}
                             {model.source === "external_cache"
                               ? " · external model dir"
                               : ""}
                           </span>
+                          {model.credit ? (
+                            <span className="model-row-credit">
+                              {model.credit.text}{" "}
+                              <a
+                                href={model.credit.licenseUrl}
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  void openUrl(model.credit!.licenseUrl);
+                                }}
+                              >
+                                {model.credit.license}
+                              </a>
+                            </span>
+                          ) : null}
                           {isDownloading ? (
                             <div className="progress-track">
                               <div style={{ width: `${percent}%` }} />
