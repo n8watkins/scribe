@@ -91,9 +91,7 @@ mod imp {
     pub fn spawn(mut command: Command) -> io::Result<Child> {
         let job = job()?;
         let mut child = command.spawn()?;
-        let assigned = unsafe {
-            AssignProcessToJobObject(job, HANDLE(child.as_raw_handle() as *mut core::ffi::c_void))
-        };
+        let assigned = unsafe { AssignProcessToJobObject(job, HANDLE(child.as_raw_handle())) };
         if let Err(error) = assigned {
             // A child outside the job could outlive Scribe; don't keep it.
             let _ = child.kill();
