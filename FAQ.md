@@ -2,6 +2,16 @@
 
 Answers to questions that come up while using or building Scribe. Newest at the top.
 
+## Is there a Mac or Linux version?
+
+Yes, as betas: a universal macOS app (Apple Silicon and Intel, macOS 13.3 or later) and a Linux `.deb` and AppImage (x86_64), on every release next to the Windows installers.
+Each platform has a guide with install steps, permissions, what works there and known limits: [Windows](docs/install/windows.md), [macOS](docs/install/macos.md), [Linux](docs/install/linux.md).
+
+- **macOS:** the app is not notarized (Scribe has no Apple Developer ID), so the first open needs **Open Anyway** in System Settings → Privacy & Security; the [macOS guide](docs/install/macos.md#the-first-open-scribe-is-not-notarized) has every step.
+- **Linux:** hotkeys and pasting work on X11; on Wayland they only reach X11 apps for now ([details and workarounds](docs/install/linux.md#x11-and-wayland)).
+- **Updates:** the Mac and Linux betas don't update themselves yet; About tells you when a new version is out, and you install it from the latest release.
+- Testing a beta? Follow the [testing checklist](docs/install/testing-checklist.md) and send back what you find.
+
 ## Why is the taskbar or Task Manager icon wrong or old?
 
 The app icon **is** the Scribe mic logo in every build. If the **window** icon looks right but the **taskbar** or **Task Manager** icon is old or generic, that's **Windows' icon cache**, not Scribe: Windows caches an app's shell icon and does **not** refresh it when the app updates itself in place. The window icon is read live (so it's correct), while the taskbar/Task Manager pull from the stale cache.
@@ -10,7 +20,8 @@ The app icon **is** the Scribe mic logo in every build. If the **window** icon l
 
 ## How do updates work? Can I install one from the app, or dismiss it?
 
-Yes to both.
+Yes to both, on Windows.
+The macOS and Linux betas only tell you about a new version for now; install it from the [latest release](https://github.com/n8watkins/scribe/releases/latest).
 
 - **Notification:** Scribe checks for new releases shortly after launch, every six hours, and whenever you refocus the window. When one is found you get an **OS notification** (even when minimized) plus an **"Update available"** chip in the top-right.
 - **Install from the app:** **About → "Check for updates"**, then click the **"Install update"** button that appears; *that* one downloads, installs, and restarts. ("Check for updates" alone only checks.)
