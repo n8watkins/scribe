@@ -67,6 +67,7 @@ CLIPS = {
     "discard": "This sentence should never be pasted anywhere at all.",
     "instruction": "Make this text uppercase, please.",
     "slow_app": "The busy spreadsheet finally opened after lunch.",
+    "ignored_paste": "Nobody reads the clipboard in this window today.",
 }
 # How long the slow stand-in app is busy before it reads the clipboard on
 # Ctrl+V (target.ps1 -PasteDelayMs); well past Scribe's old fixed 180 ms wait.
@@ -838,6 +839,7 @@ class Run:
         self.targets["A"] = Target("A", self.work, 20)
         self.targets["B"] = Target("B", self.work, 520)
         self.targets["Slow"] = Target("Slow", self.work, 20, top=300, paste_delay_ms=SLOW_APP_PASTE_DELAY_MS)
+        self.targets["Deaf"] = Target("Deaf", self.work, 520, top=300, paste_delay_ms=-1)
 
     # -- building blocks ---------------------------------------------------
 
@@ -914,6 +916,20 @@ class Run:
         check(pasted != sentinel, "The slow app pasted the old clipboard instead of the dictation")
         check(pasted == transcript["text"].strip(), f"The slow app pasted {pasted!r}")
         wait_until("the clipboard to be restored", lambda: self.clipboard.read() == sentinel, 10)
+        check("Paste clipboard: Read" in log_text(), "Scribe did not see the slow app read the clipboard")
+
+    def ignored_paste(self) -> None:
+        """An app that never reads the clipboard on Ctrl+V must still get the
+        user's clipboard back once Scribe stops waiting for the read."""
+        target = self.targets["Deaf"]
+        sentinel = "clipboard before an ignored paste"
+        self.prepare(target, sentinel)
+        transcript = self.toggle_dictation("ignored_paste")
+        check_words(transcript["text"], key_words(CLIPS["ignored_paste"]), "The transcript")
+        # The dictation is saved after its paste and restore, so both are done.
+        check(self.clipboard.read() == sentinel, "The clipboard was not restored after the ignored paste")
+        check("restoring the clipboard anyway" in log_text(), "Scribe did not wait for the ignored paste to time out")
+        stays("nothing pasted", lambda: target.text == "")
 
     def save_only(self) -> None:
         patch_settings({"outputMode": "save_only"})
@@ -1047,6 +1063,7 @@ class Run:
                     ("Toggle dictation pastes and restores the clipboard", self.toggle_paste_restores_clipboard),
                     ("Hold to talk", self.hold_to_talk),
                     ("A slow app still pastes the dictation", self.slow_app_paste),
+                    ("An app that ignores the paste gets its clipboard back", self.ignored_paste),
                     ("Output mode: Save Only", self.save_only),
                     ("Output mode: Copy to Clipboard", self.copy_clipboard),
                     ("Output mode: Copy + Paste", self.copy_and_paste),
