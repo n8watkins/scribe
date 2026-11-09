@@ -1,5 +1,6 @@
 pub mod app_state;
 pub mod audio;
+pub mod child_guard;
 pub mod commands;
 pub mod data_hygiene;
 pub mod db;
@@ -23,6 +24,7 @@ pub mod note_analysis;
 pub mod note_sync;
 pub mod output;
 pub mod platform;
+pub mod process_info;
 pub mod release_notes;
 pub mod remote_command;
 pub mod selection_transform;
@@ -416,6 +418,12 @@ pub fn run() {
                             migration_complete,
                         )
                     })?;
+            }
+            // Stop any speech engine an earlier Scribe left running (a crash
+            // or a forced kill on a system without a kernel-level guard).
+            let stale = child_guard::init(app.path().app_cache_dir()?.join("speech-processes.json"));
+            if stale > 0 {
+                log::warn!("Stopped {} speech engine process(es) left by an earlier run", stale);
             }
             app.manage(whisper_server::WarmTranscriber::new());
             // Offer Scribe's live dictation state to external tools over an

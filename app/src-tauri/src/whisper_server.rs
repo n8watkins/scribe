@@ -12,6 +12,9 @@
 //!   changes never require a server restart.
 //! - After 10 minutes without a transcription a watchdog thread stops the
 //!   server so it does not linger holding model memory.
+//! - The server is started through `child_guard`, so it dies with Scribe even
+//!   when Scribe crashes or is killed, and a survivor is stopped at the next
+//!   start.
 //! - Any server-path failure falls back to the `whisper-cli.exe` path for
 //!   that request. After 3 consecutive server failures the server path is
 //!   disabled for the rest of the session; a model/language change re-enables
@@ -136,6 +139,7 @@ impl ServerProcess {
     fn kill(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        crate::child_guard::untrack(self.child.id());
     }
 }
 
@@ -569,9 +573,12 @@ fn spawn_server_process(
         command.env("GGML_VK_VISIBLE_DEVICES", devices);
     }
 
-    command
-        .spawn()
-        .map_err(|error| format!("Could not start whisper-server. {}", error))
+    // Dies with Scribe however Scribe ends, and is noted so a later start
+    // can stop it if it ever survives (src/child_guard.rs).
+    let child = crate::child_guard::spawn(command)
+        .map_err(|error| format!("Could not start whisper-server. {}", error))?;
+    crate::child_guard::track(child.id());
+    Ok(child)
 }
 
 fn wait_until_healthy(

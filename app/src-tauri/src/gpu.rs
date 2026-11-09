@@ -196,7 +196,7 @@ fn probe_uncached(app: &AppHandle) -> GpuProbe {
     command.args(&args);
     crate::whisper::suppress_console_window(&mut command);
 
-    let output = command.output();
+    let output = crate::child_guard::output(command);
     let _ = std::fs::remove_file(&wav_path);
 
     match output {

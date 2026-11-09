@@ -293,7 +293,7 @@ fn run_whisper_command(
     }
     suppress_console_window(&mut command);
 
-    command.output().map_err(|error| {
+    crate::child_guard::output(command).map_err(|error| {
         CommandError::new(
             "whisper_transcription_failed",
             format!("Could not start whisper.cpp executable. {}", error),
