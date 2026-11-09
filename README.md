@@ -68,7 +68,7 @@ Each platform has a full guide: install, update and uninstall, permissions, what
   If macOS says the app "is damaged", run `xattr -dr com.apple.quarantine /Applications/Scribe.app`.
   Then allow the **Microphone** and turn on **Accessibility** so Scribe can paste.
 - **Linux:** `sudo apt install ./Scribe-linux-amd64.deb`, or make the AppImage executable (it needs FUSE 2: `libfuse2t64` on Ubuntu 24.04).
-  Hotkeys and pasting work on X11; on Wayland they only reach X11 apps for now, and native Wayland support is coming.
+  Hotkeys and pasting work on X11 and on Wayland, where the desktop asks once for permission ([details](docs/install/linux.md#x11-and-wayland)).
 - Trying a beta on a real Mac or Linux machine? The [testing checklist](docs/install/testing-checklist.md) says what to check and what to send back.
 
 ### First run (all platforms)

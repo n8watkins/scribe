@@ -15,6 +15,7 @@ import {
 import type { ViewActions } from "../types";
 import { formatHotkey, HOTKEY_LABELS, hotkeyRows } from "../lib/format";
 import { InlineError } from "../components/feedback";
+import { WaylandShortcutHelp } from "../components/WaylandShortcuts";
 import "./hotkeys.css";
 
 const hotkeyActionLabels: Record<string, string> = HOTKEY_LABELS;
@@ -324,8 +325,12 @@ export function HotkeysView({
       registered: false,
       error: null,
       disabledReason: null,
+      systemTrigger: null,
     }));
 
+  // On Wayland with the GlobalShortcuts portal the desktop owns the keys:
+  // the rows show what it assigned and can't be rebound here.
+  const desktopManaged = status?.backend === "portal";
   const noteChordActive = status?.noteChordActive ?? false;
   // Assume support until the status loads, so Windows never flickers.
   const noteChordSupported = status?.noteChordSupported ?? true;
@@ -334,15 +339,17 @@ export function HotkeysView({
     <section className="view-grid">
       <article className="panel-card span-2" data-setting="Hotkeys">
         <div className="hotkeys-toolbar">
-          <button
-            className="secondary-button"
-            disabled={hotkeyBusy || captureAction !== null}
-            onClick={() => void handleResetDefaults()}
-            type="button"
-          >
-            <RotateCcw aria-hidden="true" size={13} />
-            Reset to defaults
-          </button>
+          {desktopManaged ? null : (
+            <button
+              className="secondary-button"
+              disabled={hotkeyBusy || captureAction !== null}
+              onClick={() => void handleResetDefaults()}
+              type="button"
+            >
+              <RotateCcw aria-hidden="true" size={13} />
+              Reset to defaults
+            </button>
+          )}
           <button
             className="ghost-button"
             disabled={statusLoading}
@@ -352,7 +359,9 @@ export function HotkeysView({
             <RefreshCw aria-hidden="true" size={13} />
             Refresh
           </button>
-          <p className="hotkeys-toolbar-note">Global shortcuts</p>
+          <p className="hotkeys-toolbar-note">
+            {desktopManaged ? "Managed by your desktop" : "Global shortcuts"}
+          </p>
         </div>
         {statusError ? (
           <InlineError message={statusError} onRetry={loadStatus} />
@@ -401,7 +410,7 @@ export function HotkeysView({
                       </span>
                     ) : (
                       <span className="hotkeys-row-desc">
-                        {binding.action === "toggleDictation"
+                        {binding.action === "toggleDictation" && !desktopManaged
                           ? toggleHint(
                               binding.trigger,
                               noteChordActive,
@@ -439,41 +448,56 @@ export function HotkeysView({
                         ))}
                       </div>
                     ) : null}
-                    <div className="hotkeys-bind-cell">
-                      <button
-                        type="button"
-                        className={`hotkeys-bind${
-                          isCapturing ? " hotkeys-bind-capturing" : ""
-                        }${failed && !isCapturing ? " hotkeys-bind-failed" : ""}`}
-                        disabled={bindDisabled}
-                        aria-label={
-                          isCapturing
-                            ? `Capturing new keys for ${bindLabel}. Press Escape to cancel`
-                            : `${bindLabel}: ${formatHotkey(binding.shortcut)}. Click to change.`
-                        }
-                        title={isCapturing ? "Press Esc to cancel" : "Click to change"}
-                        onClick={() =>
-                          isCapturing
-                            ? cancelCapture()
-                            : startCapture(binding.action as HotkeyAction)
-                        }
-                      >
-                        {isCapturing
-                          ? capturePreview
-                            ? `${formatHotkey(capturePreview)} ...`
-                            : "Press keys..."
-                          : formatHotkey(binding.shortcut)}
-                      </button>
-                      <span className="hotkeys-bind-hint" aria-hidden="true">
-                        {isCapturing ? "Esc to cancel" : "click to change"}
-                      </span>
-                    </div>
+                    {desktopManaged ? (
+                      <div className="hotkeys-bind-cell">
+                        <kbd
+                          className={`hotkeys-bind hotkeys-bind-system${
+                            failed ? " hotkeys-bind-failed" : ""
+                          }`}
+                        >
+                          {binding.systemTrigger ?? "Not set"}
+                        </kbd>
+                      </div>
+                    ) : (
+                      <div className="hotkeys-bind-cell">
+                        <button
+                          type="button"
+                          className={`hotkeys-bind${
+                            isCapturing ? " hotkeys-bind-capturing" : ""
+                          }${failed && !isCapturing ? " hotkeys-bind-failed" : ""}`}
+                          disabled={bindDisabled}
+                          aria-label={
+                            isCapturing
+                              ? `Capturing new keys for ${bindLabel}. Press Escape to cancel`
+                              : `${bindLabel}: ${formatHotkey(binding.shortcut)}. Click to change.`
+                          }
+                          title={isCapturing ? "Press Esc to cancel" : "Click to change"}
+                          onClick={() =>
+                            isCapturing
+                              ? cancelCapture()
+                              : startCapture(binding.action as HotkeyAction)
+                          }
+                        >
+                          {isCapturing
+                            ? capturePreview
+                              ? `${formatHotkey(capturePreview)} ...`
+                              : "Press keys..."
+                            : formatHotkey(binding.shortcut)}
+                        </button>
+                        <span className="hotkeys-bind-hint" aria-hidden="true">
+                          {isCapturing ? "Esc to cancel" : "click to change"}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
               );
             })}
           </div>
         )}
+        {status ? (
+          <WaylandShortcutHelp onStatus={setStatus} status={status} />
+        ) : null}
         <div className="hotkeys-notes">
           {status?.holdReleaseVerificationRequired ? (
             <p className="hotkey-note">

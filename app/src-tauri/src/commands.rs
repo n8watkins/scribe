@@ -660,42 +660,136 @@ pub async fn refresh_basic_stats(app: tauri::AppHandle) -> Result<BasicStats, Co
     .await
 }
 
-/// Whether pasting into other apps needs a permission the user grants in
-/// the system settings (Accessibility on macOS), and whether it has been.
+/// Whether pasting into other apps needs a permission, whether it has been
+/// given, and how dictations reach other apps right now.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PastePermission {
     pub required: bool,
     pub granted: bool,
+    /// Which permission: "accessibility" (macOS, granted in System
+    /// Settings), "waylandPortal" (Linux on Wayland, granted once in a
+    /// desktop dialog) or "none".
+    pub kind: &'static str,
+    /// The user turned the Wayland request down; Scribe copies instead and
+    /// doesn't ask again on its own.
+    pub declined: bool,
+    /// The insert method in effect (the Dashboard shows it).
+    pub method: crate::platform::InsertMethod,
 }
 
-#[cfg(target_os = "macos")]
-#[tauri::command]
-pub fn get_paste_permission() -> PastePermission {
-    PastePermission {
-        required: true,
-        granted: crate::platform::accessibility_granted(),
-    }
-}
-
-/// Windows and Linux (X11) let any app send keystrokes.
-#[cfg(not(target_os = "macos"))]
-#[tauri::command]
-pub fn get_paste_permission() -> PastePermission {
-    PastePermission {
-        required: false,
-        granted: true,
-    }
-}
-
-/// Starts granting the paste permission where one is needed (on macOS, the
-/// system prompt and the Accessibility settings). The grant itself happens
-/// in System Settings, so the result is usually still not granted.
-#[tauri::command]
-pub fn request_paste_permission() -> PastePermission {
+fn paste_permission() -> PastePermission {
+    let method = crate::platform::insert_method();
     #[cfg(target_os = "macos")]
-    crate::platform::request_accessibility();
-    get_paste_permission()
+    {
+        PastePermission {
+            required: true,
+            granted: crate::platform::accessibility_granted(),
+            kind: "accessibility",
+            declined: false,
+            method,
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use crate::platform::PortalPaste;
+        match crate::platform::wayland_paste_permission() {
+            Some((state, granted)) => PastePermission {
+                required: true,
+                granted,
+                kind: "waylandPortal",
+                declined: state == PortalPaste::Declined,
+                method,
+            },
+            // X11 lets any app send keystrokes.
+            None => PastePermission {
+                required: false,
+                granted: true,
+                kind: "none",
+                declined: false,
+                method,
+            },
+        }
+    }
+    // Windows lets any app send keystrokes.
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        PastePermission {
+            required: false,
+            granted: true,
+            kind: "none",
+            declined: false,
+            method,
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn get_paste_permission(app: tauri::AppHandle) -> Result<PastePermission, CommandError> {
+    off_main(app, |_| Ok(paste_permission())).await
+}
+
+/// Starts granting the paste permission where one is needed: on macOS the
+/// system prompt and the Accessibility settings (the grant happens there, so
+/// the result is usually still not granted), on Wayland the desktop's
+/// one-time dialog (which this waits for).
+#[tauri::command]
+pub async fn request_paste_permission(
+    app: tauri::AppHandle,
+) -> Result<PastePermission, CommandError> {
+    off_main(app, |_| {
+        #[cfg(target_os = "macos")]
+        crate::platform::request_accessibility();
+        #[cfg(target_os = "linux")]
+        crate::platform::request_wayland_paste_permission()?;
+        Ok(paste_permission())
+    })
+    .await
+}
+
+/// Shows the desktop's GlobalShortcuts dialog again after it was cancelled
+/// (Wayland), then reports the hotkeys.
+#[tauri::command]
+pub async fn bind_portal_shortcuts(app: tauri::AppHandle) -> Result<HotkeyStatus, CommandError> {
+    off_main(app, move |app| {
+        #[cfg(target_os = "linux")]
+        {
+            crate::platform::shortcuts::bind_again()
+                .map_err(|message| CommandError::new("portal_shortcuts_failed", message))?;
+            let settings = app.state::<BackendState>().inner().db()?.get_settings()?;
+            hotkeys::status(app, &settings.hotkeys)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = app;
+            Err(CommandError::new(
+                "portal_shortcuts_unsupported",
+                "Desktop-managed shortcuts exist only on Linux.",
+            ))
+        }
+    })
+    .await
+}
+
+/// Opens the desktop's own settings for Scribe's shortcuts (Wayland, on
+/// portals that offer it).
+#[tauri::command]
+pub async fn configure_portal_shortcuts(app: tauri::AppHandle) -> Result<(), CommandError> {
+    off_main(app, |_| {
+        #[cfg(target_os = "linux")]
+        {
+            crate::platform::shortcuts::configure()
+                .map_err(|message| CommandError::new("portal_shortcuts_failed", message))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(CommandError::new(
+                "portal_shortcuts_unsupported",
+                "Desktop-managed shortcuts exist only on Linux.",
+            ))
+        }
+    })
+    .await
 }
 
 #[tauri::command]
@@ -718,6 +812,14 @@ pub async fn rebind_hotkey(
         let state = app.state::<BackendState>().inner();
         let _writes = settings_store::lock(state.settings_writes());
         let action = hotkeys::HotkeyAction::parse(&action)?;
+        // An X11 grab needs a key and takes a bare key from every app.
+        #[cfg(target_os = "linux")]
+        if crate::settings::unusable_on_linux(&shortcut) {
+            return Err(CommandError::new(
+                "invalid_hotkey",
+                "Linux needs a key with Ctrl, Alt or Super, such as Ctrl+Alt+Space. Function keys such as F9 also work alone.",
+            ));
+        }
         let mut settings = state.db()?.get_settings()?;
         let previous_hotkeys = settings.hotkeys.clone();
         let mut next_hotkeys = previous_hotkeys.clone();

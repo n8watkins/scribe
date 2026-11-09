@@ -19,12 +19,13 @@ Standing rules: Conventional Commits under 100 chars, no Co-Authored-By trailer,
 
 - [ ] In `linux.yml`: run the AppImage under Xvfb (X11) and under a headless Wayland compositor (weston or sway headless), with a PulseAudio/PipeWire null sink as the microphone fed from speech WAVs.
 - [ ] Same flow as the macOS test (3.0): hotkey via XTEST, dictate, check the paste into a test window (a small GTK or xterm target) and the clipboard restore, type-out, paste guard with a second app, Transform with the stand-in LLM, discard.
-- [ ] Wayland run: today it should show the copy fallback message; once 2.1 lands it becomes the portal paste test.
+- [ ] Wayland run: the portal paste path needs a portal backend in the headless session (the D-Bus round trip against a stand-in portal already runs in `backend-linux`).
 - [ ] Screenshots uploaded as artifacts.
 
 ### 2.1 Must-have for a usable Linux build
-- [ ] **Wayland paste and typing.** Today paste works only through X11/XWayland (#64). Options: XDG RemoteDesktop portal (keyboard injection with a one-time user consent), `wtype` (wlroots compositors only), `ydotool` (needs uinput access). Recommendation: portal first, fall back to copy with a clear message.
-- [ ] **Wayland global shortcuts.** Hotkeys are X11 grabs, so on native Wayland they fire only while an X11 window has focus. Use the XDG GlobalShortcuts portal (GNOME 48+, KDE 5.27+), and keep X11 grabs as the fallback.
+- [x] **Wayland paste and typing** through the XDG RemoteDesktop portal, with the grant remembered and a copy fallback.
+- [x] **Wayland global shortcuts** through the XDG GlobalShortcuts portal, X11 grabs and a bindable `Scribe toggle` command as the fallback.
+- [ ] Confirm both on real GNOME and KDE Wayland desktops ([Testing Scribe on Wayland](install/linux-wayland-testing.md)).
 - [ ] **Transform Selection on Wayland**: currently falls back to the typed panel; revisit once the portal paste path exists.
 - [ ] **Updates for Linux.** Add a signed AppImage updater artifact (`createUpdaterArtifacts` is false in `tauri.linux.conf.json`) and a `linux-x86_64` entry in `latest.json` from `release.yml`. Only after 2.1 works end to end, so nobody is auto-updated onto a half-working build.
 - [ ] **About page wording on Linux** says updates install on launch, which is false until the item above lands. Fix with it, or hide the auto-install toggle on Linux until then.

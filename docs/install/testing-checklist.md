@@ -53,9 +53,11 @@ Use the default hotkeys from the guide (Mac `Control+Option+…`, Linux `Ctrl+Al
 
 ### Wayland only (Linux)
 
-18. With a native Wayland app in front (GNOME Text Editor, Firefox on Wayland), press the hotkeys: do they fire? (Expected today: no.)
-19. Start dictation from the tray icon instead; is the text copied with "Scribe can't paste into Wayland apps yet"?
-20. With an X11 app in front (for example `xterm`, or an app started with `GDK_BACKEND=x11`), do the hotkeys and paste work?
+The longer walk-through, with what to expect on GNOME and KDE, is in [Testing Scribe on Wayland](linux-wayland-testing.md).
+
+18. **Hotkeys:** on first start, did your desktop show a dialog listing Scribe's shortcuts? With a native Wayland app in front (GNOME Text Editor, Kate, Firefox), do hold to talk and toggle fire? What does the **Hotkeys** page say at the top right ("Managed by your desktop" or "Global shortcuts")?
+19. **Paste:** dictate into a native Wayland app. Did the desktop ask once to allow remote control? After allowing it, did the text appear? Dictate again, and again after restarting Scribe: no second dialog?
+20. **X11 apps:** with an X11 app in front (for example `xterm`, or an app started with `GDK_BACKEND=x11`), do the hotkeys and paste work?
 
 ### App behaviour
 

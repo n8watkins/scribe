@@ -156,6 +156,28 @@ pub struct HotkeyStatus {
     /// Modifier-only hold chords (Ctrl+Shift) need the native key watcher,
     /// which only Windows has; the Hotkeys page explains it there.
     pub hold_release_verification_required: bool,
+    /// What delivers the hotkeys: "native" (Windows, macOS, X11 sessions),
+    /// "portal" (the desktop's GlobalShortcuts portal on Wayland) or
+    /// "x11OnWayland" (X11 grabs on a Wayland desktop without that portal,
+    /// which only fire while an X11 app has focus).
+    pub backend: &'static str,
+    /// The portal's progress when `backend` is "portal".
+    pub portal_state: Option<PortalState>,
+    /// The portal can open the desktop's shortcut settings for Scribe.
+    pub portal_configurable: bool,
+    /// On Linux, the command a desktop keyboard shortcut can run to control
+    /// Scribe, without the action (`<command> toggle`).
+    pub control_command: Option<String>,
+}
+
+/// Where the desktop's GlobalShortcuts portal stands (Wayland).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PortalState {
+    Starting,
+    Unavailable,
+    Declined,
+    Active,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -172,6 +194,9 @@ pub struct HotkeyBindingStatus {
     /// Selection while Local AI is off), so the UI shows why instead of a
     /// registration failure.
     pub disabled_reason: Option<String>,
+    /// The keys the desktop assigned, when the GlobalShortcuts portal owns
+    /// the hotkeys (as the desktop words them, such as "Ctrl+Alt+Space").
+    pub system_trigger: Option<String>,
 }
 
 /// One hotkey binding that could not be registered. Serialized into the
@@ -309,6 +334,9 @@ pub struct HotkeyRuntimeState {
     /// Mirrors the Local AI switch: Transform Selection is only registered
     /// while it is on, so its chord is free for other apps otherwise.
     transform_enabled: AtomicBool,
+    /// The desktop's GlobalShortcuts portal delivers the hotkeys (native
+    /// Wayland); nothing is registered with the global-shortcut plugin then.
+    portal_owns_hotkeys: AtomicBool,
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -442,8 +470,14 @@ pub fn setup(
         .store(transform_enabled, Ordering::SeqCst);
     app.manage(runtime);
     validate_hotkeys(hotkeys)?;
+    #[cfg(target_os = "linux")]
+    wayland::start_portal(app, hotkeys);
 
     let failures = register_hotkey_set(app, hotkeys);
+    if portal_owns_hotkeys(app) {
+        log::info!("Hotkeys are delivered by the desktop's GlobalShortcuts portal");
+        return Ok(());
+    }
     let active = HOTKEY_ACTIONS
         .into_iter()
         .filter(|action| action_enabled(*action, transform_enabled))
@@ -758,6 +792,18 @@ fn register_hotkey_set(
         });
     };
 
+    if portal_owns_hotkeys(app) {
+        // The desktop owns the keys; nothing to grab. Bindings changed here
+        // only become the suggestion for the next time the desktop asks.
+        if let Some(runtime) = app.try_state::<HotkeyRuntimeState>() {
+            runtime.replace_bindings(HashMap::new());
+            runtime.store_registration_errors(&[]);
+        }
+        configure_chord_watcher(app, Vec::new());
+        configure_toggle_watcher(app, None, hotkeys.toggle_dictation_trigger);
+        return failures;
+    }
+
     let transform_enabled = transform_enabled(app);
     for action in HOTKEY_ACTIONS {
         if !action_enabled(action, transform_enabled) {
@@ -801,8 +847,9 @@ fn register_hotkey_set(
                         action,
                         shortcut_text,
                         format!(
-                            "Could not register {}. Modifier-only shortcuts are only supported on Windows.",
-                            shortcut_text
+                            "Could not register {}. {}",
+                            shortcut_text,
+                            modifier_only_unsupported()
                         ),
                     );
                 }
@@ -902,6 +949,10 @@ fn configure_chord_watcher(app: &AppHandle, bindings: Vec<(ModifierChord, Hotkey
 }
 
 pub fn status(app: &AppHandle, hotkeys: &HotkeySettings) -> Result<HotkeyStatus, CommandError> {
+    #[cfg(target_os = "linux")]
+    if portal_owns_hotkeys(app) {
+        return Ok(wayland::status(app, hotkeys));
+    }
     let runtime = app.try_state::<HotkeyRuntimeState>();
     let transform_enabled = transform_enabled(app);
     let mut bindings = Vec::new();
@@ -923,6 +974,7 @@ pub fn status(app: &AppHandle, hotkeys: &HotkeySettings) -> Result<HotkeyStatus,
                 disabled_reason: Some(
                     "Off while Local AI is off. Turn on Local AI to use it.".to_string(),
                 ),
+                system_trigger: None,
             });
             continue;
         }
@@ -945,9 +997,7 @@ pub fn status(app: &AppHandle, hotkeys: &HotkeySettings) -> Result<HotkeyStatus,
                     None
                 } else {
                     registration_error.or_else(|| {
-                        (!cfg!(windows)).then(|| {
-                            "Modifier-only shortcuts are only supported on Windows.".to_string()
-                        })
+                        (!cfg!(windows)).then(|| modifier_only_unsupported().to_string())
                     })
                 };
 
@@ -964,6 +1014,7 @@ pub fn status(app: &AppHandle, hotkeys: &HotkeySettings) -> Result<HotkeyStatus,
             registered,
             error,
             disabled_reason: None,
+            system_trigger: None,
         });
     }
 
@@ -972,7 +1023,41 @@ pub fn status(app: &AppHandle, hotkeys: &HotkeySettings) -> Result<HotkeyStatus,
         note_chord_active: note_chord_active(hotkeys),
         note_chord_supported: cfg!(windows),
         hold_release_verification_required: cfg!(windows),
+        backend: grab_backend(),
+        portal_state: None,
+        portal_configurable: false,
+        control_command: control_command(),
     })
+}
+
+/// "native", or "x11OnWayland" when X11 grabs stand in on a Wayland desktop.
+fn grab_backend() -> &'static str {
+    #[cfg(target_os = "linux")]
+    if crate::platform::session_kind() == crate::platform::SessionKind::Wayland {
+        return "x11OnWayland";
+    }
+    "native"
+}
+
+fn control_command() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    return crate::platform::control_command();
+    #[cfg(not(target_os = "linux"))]
+    None
+}
+
+/// Why a modifier-only chord can't be registered on this system.
+fn modifier_only_unsupported() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "macOS needs a key in the shortcut, such as Ctrl+Alt+Z."
+    } else {
+        "Linux needs a key in the shortcut, such as Ctrl+Alt+Space."
+    }
+}
+
+fn portal_owns_hotkeys(app: &AppHandle) -> bool {
+    app.try_state::<HotkeyRuntimeState>()
+        .is_some_and(|runtime| runtime.portal_owns_hotkeys.load(Ordering::SeqCst))
 }
 
 /// The hold-toggle-key + tap-Q note chord works only when the toggle acts on
@@ -992,7 +1077,7 @@ fn note_chord_active(hotkeys: &HotkeySettings) -> bool {
 /// trigger is Press. Reached by the plugin shortcut handler (on the main
 /// thread) and the modifier-chord watcher, so dictation actions only queue
 /// work on the dictation worker and return.
-fn handle_press_edge(app: &AppHandle, action: HotkeyAction) {
+pub(crate) fn handle_press_edge(app: &AppHandle, action: HotkeyAction) {
     if action == HotkeyAction::HoldToTalk {
         let _ = app.emit("scribe:hotkey-action", action.event_name());
         dictation_worker::submit(app, Intent::StartHold);
@@ -1006,7 +1091,7 @@ fn handle_press_edge(app: &AppHandle, action: HotkeyAction) {
 
 /// Release edge of a binding. Hold-to-talk always stops here; single-shot
 /// actions fire only when their configured trigger is Release.
-fn handle_release_edge(app: &AppHandle, action: HotkeyAction) {
+pub(crate) fn handle_release_edge(app: &AppHandle, action: HotkeyAction) {
     if action == HotkeyAction::HoldToTalk {
         dictation_worker::submit(app, Intent::Stop);
         return;
@@ -1027,7 +1112,7 @@ fn trigger_of(app: &AppHandle, action: HotkeyAction) -> TriggerEdge {
 /// Performs a single-shot action (toggle / paste / open dashboard) and emits
 /// the frontend hotkey-action event. Called on whichever edge the action's
 /// trigger selects. Hold-to-talk is not a single-shot action and is ignored.
-fn run_action(app: &AppHandle, action: HotkeyAction) {
+pub(crate) fn run_action(app: &AppHandle, action: HotkeyAction) {
     let _ = app.emit("scribe:hotkey-action", action.event_name());
 
     let result = match action {
@@ -1459,6 +1544,164 @@ mod windows_chord {
     }
 }
 
+/// Hotkeys through the desktop's GlobalShortcuts portal on Wayland.
+#[cfg(target_os = "linux")]
+mod wayland {
+    use std::sync::{atomic::Ordering, Arc};
+
+    use tauri::{AppHandle, Manager};
+
+    use super::{
+        action_enabled, handle_press_edge, handle_release_edge, run_action, transform_enabled,
+        HotkeyAction, HotkeyBindingStatus, HotkeyRuntimeState, HotkeyStatus, PortalState,
+        HOTKEY_ACTIONS,
+    };
+    use crate::{
+        platform::{
+            shortcuts::{self, PortalShortcutsState, ShortcutSpec},
+            SessionKind,
+        },
+        settings::HotkeySettings,
+    };
+
+    /// What the desktop's dialog lists for each action.
+    fn description(action: HotkeyAction) -> &'static str {
+        match action {
+            HotkeyAction::HoldToTalk => "Hold to talk (Scribe)",
+            HotkeyAction::ToggleDictation => "Start or stop dictation (Scribe)",
+            HotkeyAction::PasteLastTranscript => "Paste the last dictation (Scribe)",
+            HotkeyAction::OpenDashboard => "Show Scribe",
+            HotkeyAction::DiscardDictation => "Cancel the recording (Scribe)",
+            HotkeyAction::TransformSelection => "Transform the selected text (Scribe)",
+        }
+    }
+
+    pub(super) fn specs(hotkeys: &HotkeySettings) -> Vec<ShortcutSpec> {
+        HOTKEY_ACTIONS
+            .into_iter()
+            .map(|action| ShortcutSpec {
+                id: action.event_name().to_string(),
+                description: description(action).to_string(),
+                preferred_trigger: shortcuts::xdg_trigger(action.shortcut(hotkeys)),
+            })
+            .collect()
+    }
+
+    /// On a Wayland session, hands the hotkeys to the GlobalShortcuts portal
+    /// when the desktop has one. Without it, the X11 grabs stay (they fire
+    /// while an X11 app has focus) and the Hotkeys page explains how to bind
+    /// Scribe's command in the desktop's keyboard settings.
+    pub(super) fn start_portal(app: &AppHandle, hotkeys: &HotkeySettings) {
+        if crate::platform::session_kind() != SessionKind::Wayland {
+            return;
+        }
+        let handle = app.clone();
+        let owns = shortcuts::start(
+            specs(hotkeys),
+            Arc::new(move |id: &str, down: bool| on_portal_event(&handle, id, down)),
+        );
+        log::info!(
+            "Wayland session: hotkeys through {}",
+            if owns {
+                "the GlobalShortcuts portal"
+            } else {
+                "X11 grabs (no GlobalShortcuts portal)"
+            }
+        );
+        if let Some(runtime) = app.try_state::<HotkeyRuntimeState>() {
+            runtime.portal_owns_hotkeys.store(owns, Ordering::SeqCst);
+        }
+    }
+
+    /// A portal shortcut went down or up. Hold to talk uses both edges; the
+    /// other actions act on press, since the desktop, not Scribe, decides
+    /// the keys there and some desktops don't report releases reliably.
+    fn on_portal_event(app: &AppHandle, id: &str, down: bool) {
+        let Ok(action) = HotkeyAction::parse(id) else {
+            log::debug!("Ignoring unknown portal shortcut {id}");
+            return;
+        };
+        if !action_enabled(action, transform_enabled(app)) {
+            return;
+        }
+        let Some(runtime) = app.try_state::<HotkeyRuntimeState>() else {
+            return;
+        };
+        // A portal that answered after startup gave up on it: the X11 grabs
+        // are in charge then, and one key press must not act twice.
+        if !runtime.portal_owns_hotkeys.load(Ordering::SeqCst) {
+            return;
+        }
+        if down {
+            if !runtime.mark_pressed_once(action) {
+                return;
+            }
+            if action == HotkeyAction::HoldToTalk {
+                handle_press_edge(app, action);
+            } else {
+                run_action(app, action);
+            }
+        } else if runtime.mark_released_once(action) && action == HotkeyAction::HoldToTalk {
+            handle_release_edge(app, action);
+        }
+    }
+
+    pub(super) fn status(app: &AppHandle, hotkeys: &HotkeySettings) -> HotkeyStatus {
+        let portal = shortcuts::status().unwrap_or_default();
+        let state = match portal.state {
+            PortalShortcutsState::Starting => PortalState::Starting,
+            PortalShortcutsState::Unavailable => PortalState::Unavailable,
+            PortalShortcutsState::Declined => PortalState::Declined,
+            PortalShortcutsState::Active => PortalState::Active,
+        };
+        let transform_enabled = transform_enabled(app);
+        let bindings = HOTKEY_ACTIONS
+            .into_iter()
+            .map(|action| {
+                let trigger = portal
+                    .triggers
+                    .get(action.event_name())
+                    .filter(|trigger| !trigger.trim().is_empty())
+                    .cloned();
+                let enabled = action_enabled(action, transform_enabled);
+                let registered = enabled && state == PortalState::Active && trigger.is_some();
+                let error = (enabled && !registered).then(|| {
+                    match state {
+                        PortalState::Starting => "Waiting for your desktop's shortcut dialog.",
+                        PortalState::Declined => {
+                            "Not set up: the desktop's shortcut dialog was cancelled."
+                        }
+                        _ => "No keys assigned in your desktop's shortcut settings.",
+                    }
+                    .to_string()
+                });
+                HotkeyBindingStatus {
+                    action,
+                    shortcut: action.shortcut(hotkeys).to_string(),
+                    normalized_shortcut: None,
+                    trigger: None,
+                    registered,
+                    error,
+                    disabled_reason: (!enabled).then(|| {
+                        "Off while Local AI is off. Turn on Local AI to use it.".to_string()
+                    }),
+                    system_trigger: trigger,
+                }
+            })
+            .collect();
+        HotkeyStatus {
+            bindings,
+            note_chord_active: false,
+            note_chord_supported: false,
+            hold_release_verification_required: false,
+            backend: "portal",
+            portal_state: Some(state),
+            portal_configurable: portal.configurable,
+            control_command: crate::platform::control_command(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1592,6 +1835,16 @@ mod tests {
         };
 
         assert!(validate_hotkeys(&hotkeys).is_ok());
+    }
+
+    /// Windows and macOS never report a Wayland hotkey backend or a
+    /// desktop-shortcut command, so the Hotkeys page never shows the Wayland
+    /// guidance there.
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn only_linux_reports_wayland_hotkeys() {
+        assert_eq!(grab_backend(), "native");
+        assert_eq!(control_command(), None);
     }
 
     #[test]

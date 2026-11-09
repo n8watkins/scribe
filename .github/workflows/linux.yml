@@ -85,6 +85,15 @@ jobs:
             cargo test --locked --lib secret_service_round_trips_a_credential -- --ignored
           '
 
+      # The Wayland portal clients against a stand-in
+      # org.freedesktop.portal.Desktop on a private session bus: the real
+      # RemoteDesktop and GlobalShortcuts D-Bus traffic (restore tokens,
+      # keyboard-only persistent grants, keysyms, shortcut binding and
+      # activation) without a desktop.
+      - name: Run the Wayland portal round trip
+        working-directory: app/src-tauri
+        run: dbus-run-session -- cargo test --locked --lib portal_dbus -- --ignored
+
   build-linux:
     name: Build Linux bundles
     # The oldest supported runner, so the AppImage runs on older glibc too.

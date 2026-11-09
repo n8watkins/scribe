@@ -435,7 +435,22 @@ export type HotkeyBinding = {
   /** Why the binding is intentionally off (Transform Selection while Local AI
    * is off); not a registration failure. */
   disabledReason: string | null;
+  /** The keys the desktop assigned, when its GlobalShortcuts portal owns
+   * the hotkeys (Wayland), as the desktop words them. */
+  systemTrigger: string | null;
 };
+
+/** What delivers the hotkeys: "native" (Windows, macOS, X11 sessions),
+ * "portal" (the desktop's GlobalShortcuts portal on Wayland), or
+ * "x11OnWayland" (X11 grabs on a Wayland desktop without that portal, which
+ * only fire while an X11 app has focus). */
+export type HotkeyBackend = "native" | "portal" | "x11OnWayland";
+
+export type PortalShortcutsState =
+  | "starting"
+  | "unavailable"
+  | "declined"
+  | "active";
 
 export type HotkeyStatus = {
   bindings: HotkeyBinding[];
@@ -444,13 +459,31 @@ export type HotkeyStatus = {
   /** False where the note chord can't work at all (it needs Windows). */
   noteChordSupported: boolean;
   holdReleaseVerificationRequired: boolean;
+  backend: HotkeyBackend;
+  portalState: PortalShortcutsState | null;
+  /** The portal can open the desktop's shortcut settings for Scribe. */
+  portalConfigurable: boolean;
+  /** Linux: the command a desktop keyboard shortcut runs to control Scribe,
+   * without the action (`<command> toggle`). */
+  controlCommand: string | null;
 };
 
-/** Whether pasting into other apps needs a permission granted in the
- * system settings (Accessibility on macOS), and whether it has been. */
+/** How a dictation reaches the app in front: the system's own input
+ * (Windows, macOS), X11 keystrokes, the Wayland RemoteDesktop portal, or
+ * nothing, so it is copied. */
+export type InsertMethod = "native" | "x11" | "portal" | "copyOnly";
+
+/** Whether pasting into other apps needs a permission, whether it has been
+ * given, and how dictations reach other apps right now. */
 export type PastePermission = {
   required: boolean;
   granted: boolean;
+  /** "accessibility" (macOS, granted in System Settings), "waylandPortal"
+   * (Linux on Wayland, granted once in a desktop dialog) or "none". */
+  kind: "accessibility" | "waylandPortal" | "none";
+  /** The Wayland request was turned down; Scribe copies instead. */
+  declined: boolean;
+  method: InsertMethod;
 };
 
 export type HotkeyRegistrationFailure = {
@@ -518,9 +551,20 @@ export function getPastePermission(): Promise<PastePermission> {
 }
 
 /** Shows the system prompt and opens the settings where the user grants the
- * paste permission. */
+ * paste permission (macOS), or the desktop's one-time dialog (Wayland). */
 export function requestPastePermission(): Promise<PastePermission> {
   return invoke("request_paste_permission");
+}
+
+/** Wayland: shows the desktop's shortcut dialog again after it was
+ * cancelled. */
+export function bindPortalShortcuts(): Promise<HotkeyStatus> {
+  return invoke("bind_portal_shortcuts");
+}
+
+/** Wayland: opens the desktop's own settings for Scribe's shortcuts. */
+export function configurePortalShortcuts(): Promise<void> {
+  return invoke("configure_portal_shortcuts");
 }
 
 export function getLastTranscript(): Promise<Transcript | null> {
@@ -549,7 +593,8 @@ export function copyTranscript(id: string): Promise<OutputResult> {
 
 /** Selected-text transform: copies whatever text is highlighted in the focused
  * app, rewrites it with the local LLM per `instruction`, and pastes the result
- * back over the selection. Windows-only (errors elsewhere). */
+ * back over the selection. Needs an app Scribe can send Ctrl+C to (Windows,
+ * macOS, X11 apps on Linux). */
 export function transformSelection(
   instruction: string,
 ): Promise<OutputResult> {
