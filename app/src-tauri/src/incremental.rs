@@ -349,7 +349,7 @@ impl WorkerLink {
 
     fn send_segment(&mut self, samples: Vec<f32>) {
         let mut normalized =
-            audio::normalize_to_whisper_wav_samples(&samples, self.segmenter.sample_rate);
+            audio::normalize_to_whisper_wav_samples(samples, self.segmenter.sample_rate);
         let pad_samples = (audio::TARGET_SAMPLE_RATE as u64 * SEGMENT_TAIL_PAD_MS / 1_000) as usize;
         normalized.extend(std::iter::repeat_n(0.0, pad_samples));
         let path = self.temp_dir.join(format!(

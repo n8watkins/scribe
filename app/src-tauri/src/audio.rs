@@ -1014,7 +1014,7 @@ fn finalize_recording(
     }
 
     let samples = trim_silence(samples, source_sample_rate, silence_trim_enabled);
-    let normalized = normalize_to_whisper_wav_samples(&samples, source_sample_rate);
+    let normalized = normalize_to_whisper_wav_samples(samples, source_sample_rate);
     let wav_path = temp_dir.join(format!("{}.wav", info.session_id));
     write_wav(&wav_path, &normalized)?;
     let bytes_written = fs::metadata(&wav_path).ok().map(|metadata| metadata.len());
@@ -1511,18 +1511,32 @@ fn trim_silence(samples: Vec<f32>, sample_rate: u32, enabled: bool) -> Vec<f32> 
     let padding = (sample_rate as usize * TRIM_PADDING_MS as usize) / 1_000;
     let start = first_loud_sample.saturating_sub(padding);
     let end = (loud_end_sample + padding).min(samples.len());
-    samples[start..end].to_vec()
+    // In place: a copy would double the memory of a long recording.
+    let mut samples = samples;
+    samples.truncate(end);
+    samples.drain(..start);
+    samples
 }
 
+/// Converts mono samples at the source rate into Whisper's 16 kHz input,
+/// clamped to [-1, 1]. Takes the samples by value so a recording already at
+/// 16 kHz is clamped in place instead of copied: a long recording's buffer is
+/// the biggest allocation the app makes.
 pub(crate) fn normalize_to_whisper_wav_samples(
-    samples: &[f32],
+    samples: Vec<f32>,
     source_sample_rate: u32,
 ) -> Vec<f32> {
-    let resampled = resample_to_target_rate(samples, source_sample_rate, TARGET_SAMPLE_RATE);
+    let mut resampled = if source_sample_rate == TARGET_SAMPLE_RATE {
+        samples
+    } else {
+        let resampled = resample_to_target_rate(&samples, source_sample_rate, TARGET_SAMPLE_RATE);
+        drop(samples);
+        resampled
+    };
+    for sample in &mut resampled {
+        *sample = sample.clamp(-1.0, 1.0);
+    }
     resampled
-        .into_iter()
-        .map(|sample| sample.clamp(-1.0, 1.0))
-        .collect()
 }
 
 fn resample_to_target_rate(
@@ -1542,6 +1556,12 @@ fn resample_to_target_rate(
         .unwrap_or_else(|| resample_linear(samples, source_sample_rate, target_sample_rate))
 }
 
+/// Input frames the sinc resampler takes per call. Streaming the recording
+/// through in fixed chunks keeps the resampler's own buffers small; handing
+/// it the whole recording as one chunk made it allocate several more copies
+/// of a recording that can be half an hour long.
+const RESAMPLE_CHUNK_FRAMES: usize = 4_096;
+
 fn resample_with_rubato(
     samples: &[f32],
     source_sample_rate: u32,
@@ -1560,25 +1580,47 @@ fn resample_with_rubato(
     };
     let mut resampler = SincFixedIn::<f32>::new(
         target_sample_rate as f64 / source_sample_rate as f64,
-        2.0,
+        1.0,
         params,
-        samples.len(),
+        RESAMPLE_CHUNK_FRAMES,
         1,
     )
     .ok()?;
-    let input = vec![samples.to_vec()];
-    let mut output = resampler.process(&input, None).ok()?.into_iter().next()?;
     let expected_len = ((samples.len() as f64) * (target_sample_rate as f64)
         / (source_sample_rate as f64))
         .round()
         .max(1.0) as usize;
+    // SincFixedIn starts its output aligned with the input (measured: under
+    // a sample of shift), so nothing is dropped from the front; the end is
+    // flushed below until the whole length is out.
+    let mut output = Vec::with_capacity(expected_len + resampler.output_frames_max());
+    let mut buffer = resampler.output_buffer_allocate(true);
 
-    match output.len().cmp(&expected_len) {
-        std::cmp::Ordering::Greater => output.truncate(expected_len),
-        std::cmp::Ordering::Less => output.resize(expected_len, 0.0),
-        std::cmp::Ordering::Equal => {}
+    let mut chunks = samples.chunks_exact(RESAMPLE_CHUNK_FRAMES);
+    for chunk in &mut chunks {
+        let (_, written) = resampler
+            .process_into_buffer(&[chunk], &mut buffer, None)
+            .ok()?;
+        output.extend_from_slice(&buffer[0][..written]);
+    }
+    let remainder = chunks.remainder();
+    if !remainder.is_empty() {
+        let (_, written) = resampler
+            .process_partial_into_buffer(Some(&[remainder]), &mut buffer, None)
+            .ok()?;
+        output.extend_from_slice(&buffer[0][..written]);
+    }
+    while output.len() < expected_len {
+        let (_, written) = resampler
+            .process_partial_into_buffer(None::<&[&[f32]]>, &mut buffer, None)
+            .ok()?;
+        if written == 0 {
+            break;
+        }
+        output.extend_from_slice(&buffer[0][..written]);
     }
 
+    output.resize(expected_len, 0.0);
     Some(output)
 }
 
@@ -1736,9 +1778,58 @@ mod tests {
     #[test]
     fn resamples_to_target_rate() {
         let samples = vec![0.0; 48_000];
-        let resampled = normalize_to_whisper_wav_samples(&samples, 48_000);
+        let resampled = normalize_to_whisper_wav_samples(samples, 48_000);
 
         assert_eq!(resampled.len(), 16_000);
+    }
+
+    #[test]
+    fn chunked_resampling_matches_one_shot_resampling() {
+        use rubato::{
+            Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType,
+            WindowFunction,
+        };
+
+        // A 220 Hz tone at 48 kHz, 2.5 s long: not a whole number of chunks.
+        let tone = |i: usize, rate: f32| {
+            (2.0 * std::f32::consts::PI * 220.0 * i as f32 / rate).sin() * 0.5
+        };
+        let source: Vec<f32> = (0..120_000).map(|i| tone(i, 48_000.0)).collect();
+
+        // What the resampler gives when handed the whole recording at once
+        // (how it was used before chunking).
+        let params = SincInterpolationParameters {
+            sinc_len: 128,
+            f_cutoff: 0.95,
+            interpolation: SincInterpolationType::Linear,
+            oversampling_factor: 128,
+            window: WindowFunction::BlackmanHarris2,
+        };
+        let mut one_shot = SincFixedIn::<f32>::new(1.0 / 3.0, 1.0, params, source.len(), 1)
+            .unwrap()
+            .process(std::slice::from_ref(&source), None)
+            .unwrap()
+            .remove(0);
+        one_shot.truncate(39_900);
+
+        let resampled = normalize_to_whisper_wav_samples(source, 48_000);
+        assert_eq!(resampled.len(), 40_000);
+        assert_eq!(&resampled[..one_shot.len()], one_shot.as_slice());
+        // The end is flushed through the filter instead of padded with zeros.
+        let tail = &resampled[39_950..];
+        for (offset, sample) in tail.iter().enumerate() {
+            let expected = tone(39_950 + offset, 16_000.0);
+            assert!(
+                (sample - expected).abs() < 0.05,
+                "tail {offset}: {sample} vs {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalizing_16_khz_audio_only_clamps() {
+        let resampled = normalize_to_whisper_wav_samples(vec![0.25, 1.5, -2.0], 16_000);
+        assert_eq!(resampled, vec![0.25, 1.0, -1.0]);
     }
 
     #[test]
