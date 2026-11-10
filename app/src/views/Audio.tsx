@@ -15,7 +15,11 @@ import {
   type RecordingErrorEvent,
 } from "../backend";
 import type { ViewActions } from "../types";
-import { cleanMicName, selectedMicrophoneLabel } from "../lib/format";
+import {
+  cleanMicName,
+  microphoneDisplayName,
+  resolveMicrophone,
+} from "../lib/format";
 import { InlineError } from "../components/feedback";
 import { SectionPanel, SettingRow } from "../components/layout";
 import { MsInput, Toggle } from "../components/primitives";
@@ -95,9 +99,27 @@ export function MicrophoneView({
   const defaultMicLabel = defaultMic
     ? `Default input device (${cleanMicName(defaultMic.name)})`
     : "Default input device";
-  const selectedMicrophone = settings.selectedMicId
-    ? cleanMicName(selectedMicrophoneLabel(microphones, settings.selectedMicId))
-    : defaultMicLabel;
+  // The device a recording will actually use. Until the first scan finishes
+  // (or when it failed) the list is unknown, not empty.
+  const resolvedMic = resolveMicrophone(
+    microphonesError || (microphonesLoading && microphones.length === 0)
+      ? null
+      : microphones,
+    settings.selectedMicId,
+  );
+  const micFellBack = resolvedMic.kind === "device" && resolvedMic.fellBack;
+  const selectedMicrophone =
+    resolvedMic.kind === "device" && settings.selectedMicId === null
+      ? defaultMicLabel
+      : microphoneDisplayName(resolvedMic);
+  // A saved microphone that isn't connected selects "Default input device"
+  // rather than a value that matches no option.
+  const selectValue =
+    resolvedMic.kind === "device" &&
+    !resolvedMic.fellBack &&
+    settings.selectedMicId !== null
+      ? resolvedMic.microphone.id
+      : "default";
 
   const handleRecordTestClip = useCallback(async () => {
     setTestingMic(true);
@@ -175,6 +197,15 @@ export function MicrophoneView({
           <p className="muted audio-input-name" title={selectedMicrophone}>
             {selectedMicrophone}
           </p>
+          {micFellBack ? (
+            <p className="muted audio-input-fallback" role="status">
+              Your saved microphone isn't connected, so Scribe records with{" "}
+              {resolvedMic.microphone.isDefault
+                ? "the default microphone"
+                : "the first microphone it finds"}{" "}
+              instead.
+            </p>
+          ) : null}
 
           {microphonesError ? (
             <InlineError message={microphonesError} onRetry={loadMicrophones} />
@@ -198,7 +229,7 @@ export function MicrophoneView({
                         : event.currentTarget.value,
                   })
                 }
-                value={settings.selectedMicId ?? "default"}
+                value={selectValue}
               >
                 <option value="default">{defaultMicLabel}</option>
                 {microphones.map((microphone) => (

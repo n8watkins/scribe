@@ -242,24 +242,6 @@ export function progressPercent(
   return 0;
 }
 
-export function selectedMicrophoneLabel(
-  microphones: MicrophoneInfo[],
-  selectedMicId: string | null,
-) {
-  if (!selectedMicId) {
-    return (
-      microphones.find((microphone) => microphone.isDefault)?.name ??
-      "Default input device"
-    );
-  }
-
-  // Never render raw device IDs; show a neutral placeholder until resolved.
-  return (
-    microphones.find((microphone) => microphone.id === selectedMicId)?.name ??
-    "-"
-  );
-}
-
 /** Windows wraps capture devices as "Microphone (Realtek(R) Audio)"; show the
  * inner device name so tiles read "Realtek(R) Audio", not the boilerplate. */
 export function cleanMicName(name: string): string {
@@ -268,26 +250,58 @@ export function cleanMicName(name: string): string {
   return wrapped ? wrapped[1].trim() : trimmed;
 }
 
-export function microphoneDisplayName(
+/** Which microphone a recording will use, worked out the same way the
+ * backend picks its input (`choose_input_index` in src-tauri/src/audio.rs):
+ * the saved microphone matched by id or by name, else the system default,
+ * else the first device. `fellBack` is true when a microphone was saved but
+ * isn't connected, so the shown device is the fallback. */
+export type ResolvedMicrophone =
+  | { kind: "loading" }
+  | { kind: "none" }
+  | { kind: "device"; microphone: MicrophoneInfo; fellBack: boolean };
+
+export function resolveMicrophone(
   microphones: MicrophoneInfo[] | null,
   selectedMicId: string | null,
-) {
-  // The list is still loading; show a neutral placeholder rather than a
-  // generic "Default input device" that might be wrong.
+): ResolvedMicrophone {
   if (!microphones) {
-    return "-";
+    return { kind: "loading" };
   }
 
-  // No explicit selection: resolve the actual default device's real name so
-  // the tile shows the device the user will record with, not a generic label.
-  if (!selectedMicId) {
-    return cleanMicName(
-      microphones.find((microphone) => microphone.isDefault)?.name ??
-        "Default input device",
+  if (selectedMicId !== null) {
+    const saved = microphones.find(
+      (microphone) =>
+        microphone.id === selectedMicId || microphone.name === selectedMicId,
     );
+    if (saved) {
+      return { kind: "device", microphone: saved, fellBack: false };
+    }
   }
 
-  return cleanMicName(selectedMicrophoneLabel(microphones, selectedMicId));
+  const fallback =
+    microphones.find((microphone) => microphone.isDefault) ?? microphones[0];
+  if (!fallback) {
+    return { kind: "none" };
+  }
+  return {
+    kind: "device",
+    microphone: fallback,
+    fellBack: selectedMicId !== null,
+  };
+}
+
+export const NO_MICROPHONE_LABEL = "No microphone found";
+
+/** The name to show for a resolved microphone; never a raw device id. */
+export function microphoneDisplayName(resolved: ResolvedMicrophone) {
+  switch (resolved.kind) {
+    case "loading":
+      return "-";
+    case "none":
+      return NO_MICROPHONE_LABEL;
+    case "device":
+      return cleanMicName(resolved.microphone.name);
+  }
 }
 
 // Dashboard "Current status" tile value. The StatePill badge already shows the
