@@ -126,7 +126,8 @@ export function DataPrivacyView({
         </SettingRow>
         <SettingRow
           description="Older dictations and their audio are deleted."
-          label="Keep dictations for"
+          blockedBy={!settings.historyEnabled ? { reason: "Keep history is off: new dictations aren't saved, notes still are." } : null}
+                label="Keep dictations for"
         >
           <select
             disabled={actions.savingSettings}
@@ -171,7 +172,8 @@ export function DataPrivacyView({
         <SettingRow
           description="Keep recordings so you can play them back."
           more="Clips go when their dictation does."
-          label="Save audio clips"
+          blockedBy={!settings.historyEnabled ? { reason: "Keep history is off: new dictations aren't saved, notes still are." } : null}
+                label="Save audio clips"
         >
           <Toggle
             checked={settings.saveAudioClips}

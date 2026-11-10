@@ -44,7 +44,14 @@ export function CustomWords({
       {parakeet ? (
         <p className="custom-words-unused" role="status">
           <strong>Not used by Parakeet.</strong> Kept for Whisper models.
-          Replacements work with every model.
+          Replacements work with every model.{" "}
+          <button
+            className="setting-more"
+            onClick={() => actions.openView("Models & language")}
+            type="button"
+          >
+            Change model
+          </button>
         </p>
       ) : (
         <p className="muted vocab-hint">

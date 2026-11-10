@@ -201,6 +201,7 @@ export function SettingRow({
   description,
   label,
   more,
+  blockedBy,
   stacked = false,
 }: {
   children: ReactNode;
@@ -209,6 +210,9 @@ export function SettingRow({
   label: string;
   /** Details behind a small "More", for the few who need them. */
   more?: string;
+  /** Another setting turns this one off or makes it do nothing: the reason,
+   * and a link to that setting when it lives on another page. */
+  blockedBy?: Blocked | null;
   /** Put a wide control (text field, text area) under the label. */
   stacked?: boolean;
 }) {
@@ -240,8 +244,36 @@ export function SettingRow({
             )
           ) : null}
         </small>
+        {blockedBy ? <BlockedNote blocked={blockedBy} /> : null}
       </span>
       <div className="setting-control">{children}</div>
     </div>
+  );
+}
+
+/** Why a setting is off or does nothing, and where to change that. */
+export type Blocked = {
+  reason: string;
+  open?: { label: string; onClick: () => void };
+};
+
+/** The "Off because ..." line under a setting another one controls. */
+export function BlockedNote({ blocked }: { blocked: Blocked }) {
+  return (
+    <span className="setting-blocked" role="note">
+      {blocked.reason}
+      {blocked.open ? (
+        <>
+          {" "}
+          <button
+            className="setting-more"
+            onClick={blocked.open.onClick}
+            type="button"
+          >
+            {blocked.open.label}
+          </button>
+        </>
+      ) : null}
+    </span>
   );
 }

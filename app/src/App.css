@@ -3418,3 +3418,42 @@ kbd {
   text-underline-offset: 2px;
   cursor: pointer;
 }
+
+/* "Off because ...": a setting another one controls. */
+.setting-blocked {
+  display: block;
+  margin-top: 3px;
+  color: var(--scribe-warning);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.replacement-import {
+  display: grid;
+  gap: 6px;
+}
+
+.replacement-preview {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.replacement-preview ul {
+  margin: 0;
+  max-height: 140px;
+  overflow-y: auto;
+  padding: 6px 10px 6px 22px;
+  color: var(--scribe-text-secondary);
+  background: rgba(var(--scribe-surface-rgb), 0.45);
+  border: 1px solid var(--scribe-border);
+  border-radius: 6px;
+}
+
+.replacement-preview-summary {
+  color: var(--scribe-text-muted);
+}
+
+.replacement-preview-error {
+  color: var(--scribe-danger);
+}

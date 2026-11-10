@@ -6,7 +6,12 @@ import {
   PROMPT_TOKEN_LIMIT,
   trimHintToChars,
 } from "./promptBudget";
-import { DEVELOPER_REPLACEMENTS, missingFrom, parseReplacementLines } from "./replacementSets";
+import {
+  DEVELOPER_REPLACEMENTS,
+  formatReplacementLines,
+  missingFrom,
+  parseReplacementLines,
+} from "./replacementSets";
 import { modelGuide } from "./modelGuide";
 
 // whisper.cpp's tokenizer (base.en) counts this 401-character hint as 137
@@ -64,14 +69,54 @@ describe("replacement sets", () => {
     expect(missing.length).toBe(DEVELOPER_REPLACEMENTS.length - 1);
   });
 
-  it("reads pasted lines with ->, => or a tab", () => {
-    expect(
-      parseReplacementLines("nate builds -> n8builds\nsuperbase => Supabase\nwork tree\tworktree\nnot a rule"),
-    ).toEqual([
+  it("ships only real mishearings, not spacing, hyphen or case variants", () => {
+    const letters = (text: string) => text.toLowerCase().replace(/[^a-z0-9]/g, "");
+    for (const row of DEVELOPER_REPLACEMENTS) {
+      expect(letters(row.from), row.from).not.toBe(letters(row.to));
+    }
+  });
+
+  it("reads every separator, and drops bullets, numbering and quotes", () => {
+    const { pairs, errors } = parseReplacementLines(
+      [
+        "nate builds -> n8builds",
+        "superbase => Supabase",
+        "versal → Vercel",
+        "monoripo = monorepo",
+        "clawed, Claude",
+        "tari\tTauri",
+        "- cloud md -> CLAUDE.md",
+        "2. shared cn -> shadcn",
+        '"cloud code" -> "Claude Code"',
+        "",
+        "# a comment",
+        "// another",
+        "not a rule",
+      ].join("\n"),
+    );
+    expect(pairs).toEqual([
       { from: "nate builds", to: "n8builds" },
       { from: "superbase", to: "Supabase" },
-      { from: "work tree", to: "worktree" },
+      { from: "versal", to: "Vercel" },
+      { from: "monoripo", to: "monorepo" },
+      { from: "clawed", to: "Claude" },
+      { from: "tari", to: "Tauri" },
+      { from: "cloud md", to: "CLAUDE.md" },
+      { from: "shared cn", to: "shadcn" },
+      { from: "cloud code", to: "Claude Code" },
     ]);
+    expect(errors).toEqual([{ line: 13, text: "not a rule" }]);
+  });
+
+  it("prefers an arrow over a comma, so a phrase can hold one", () => {
+    expect(parseReplacementLines("my email, work -> me@example.com").pairs).toEqual([
+      { from: "my email, work", to: "me@example.com" },
+    ]);
+  });
+
+  it("copies out in the same format it reads", () => {
+    const text = formatReplacementLines([...DEVELOPER_REPLACEMENTS, { from: " ", to: "" }]);
+    expect(parseReplacementLines(text).pairs).toEqual(DEVELOPER_REPLACEMENTS);
   });
 });
 

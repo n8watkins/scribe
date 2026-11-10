@@ -20,9 +20,10 @@ import { currentPlatform } from "../lib/platform";
 import { CustomWords } from "../components/CustomWords";
 import {
   DEVELOPER_REPLACEMENTS,
+  formatReplacementLines,
   missingFrom,
-  parseReplacementLines,
 } from "../lib/replacementSets";
+import { ReplacementsImport } from "../components/ReplacementsImport";
 
 // Groups of setting rows. The sidebar pages in views/pages.tsx place them:
 // Dictation, Words, Models & language, Local AI, Appearance and General.
@@ -123,9 +124,8 @@ export function LanguageSettings({ actions, settings }: GroupProps) {
       </SettingRow>
       {showMultilingualNotice ? (
         <p className="muted vocab-hint" role="status">
-          Your model only understands English, so this won't take effect.
-          Download and choose a multilingual model above, such as Base or Small
-          Multilingual.
+          Your model only understands English, so this won't take effect. Pick
+          a multilingual one above, such as Small (Multilingual).
         </p>
       ) : null}
     </>
@@ -173,7 +173,8 @@ export function FillerSettings({ actions, settings }: GroupProps) {
           <SettingRow
             description="The pause around a filler before it goes."
           more="Lower removes more (100 to 1500 ms)."
-            label="Pause before removing (ms)"
+            blockedBy={!settings.fillerSuppressionEnabled ? { reason: "Off because Remove filler words is off." } : null}
+                label="Pause before removing (ms)"
           >
             <MsInput
               ariaLabel="Pause length before removing a filler, in milliseconds"
@@ -213,7 +214,8 @@ export function PillSettings({ actions, settings }: GroupProps) {
       </SettingRow>
       <SettingRow
         description="What the pill shows while you dictate."
-        label="Pill style"
+        blockedBy={!settings.showFloatingPill ? { reason: "Not shown while Show floating pill is off." } : null}
+                label="Pill style"
       >
         <select
           aria-label="Pill style"
@@ -384,8 +386,6 @@ export function ContextHintSettings({ actions, settings }: GroupProps) {
 
 /** "Say this, write that" replacements. */
 export function ReplacementsSettings({ actions, settings }: GroupProps) {
-  const [pasting, setPasting] = useState(false);
-  const [pasted, setPasted] = useState("");
   const starter = missingFrom(settings.textReplacements, DEVELOPER_REPLACEMENTS);
   const addRows = (rows: TextReplacement[]) =>
     actions.updateSettings({
@@ -410,7 +410,7 @@ export function ReplacementsSettings({ actions, settings }: GroupProps) {
               className="secondary-button"
               disabled={actions.savingSettings}
               onClick={() => addRows(starter)}
-              title={starter.map((row) => `${row.from} -> ${row.to}`).join("\n")}
+              title={formatReplacementLines(starter)}
               type="button"
             >
               <Plus aria-hidden="true" size={14} />
@@ -433,47 +433,11 @@ export function ReplacementsSettings({ actions, settings }: GroupProps) {
         onChange={(textReplacements) => actions.updateSettings({ textReplacements })}
         value={settings.textReplacements}
       />
-      {pasting ? (
-        <div className="replacement-paste">
-          <textarea
-            aria-label="Replacements to add, one per line"
-            className="vocab-textarea"
-            onChange={(event) => setPasted(event.currentTarget.value)}
-            placeholder={"nate builds -> n8builds\nsuperbase -> Supabase"}
-            rows={4}
-            value={pasted}
-          />
-          <div className="row-actions">
-            <button
-              className="secondary-button"
-              disabled={parseReplacementLines(pasted).length === 0}
-              onClick={() => {
-                addRows(parseReplacementLines(pasted));
-                setPasted("");
-                setPasting(false);
-              }}
-              type="button"
-            >
-              Add {parseReplacementLines(pasted).length || ""}
-            </button>
-            <button
-              className="ghost-button"
-              onClick={() => setPasting(false)}
-              type="button"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : (
-        <button
-          className="ghost-button"
-          onClick={() => setPasting(true)}
-          type="button"
-        >
-          Paste a list
-        </button>
-      )}
+      <ReplacementsImport
+        current={settings.textReplacements}
+        disabled={actions.savingSettings}
+        onAdd={addRows}
+      />
     </>
   );
 }
@@ -499,7 +463,8 @@ export function LocalAiSettings({ actions, settings }: GroupProps) {
       <SettingRow
         description="LM Studio, Ollama or any OpenAI-compatible server."
           more="LM Studio uses http://127.0.0.1:1234/v1."
-        label="Server address"
+        blockedBy={!settings.notesAnalysisEnabled ? { reason: "Not used while Use local AI is off." } : null}
+                label="Server address"
         stacked
       >
         <BlurSavedInput
@@ -513,7 +478,8 @@ export function LocalAiSettings({ actions, settings }: GroupProps) {
       </SettingRow>
       <SettingRow
         description="Leave empty to use whichever model the server has loaded."
-        label="Model"
+        blockedBy={!settings.notesAnalysisEnabled ? { reason: "Not used while Use local AI is off." } : null}
+                label="Model"
         stacked
       >
         <BlurSavedInput
@@ -527,7 +493,8 @@ export function LocalAiSettings({ actions, settings }: GroupProps) {
       </SettingRow>
       <SettingRow
         description="Sent with each note you analyze. It decides what you get back."
-        label="Analysis prompt"
+        blockedBy={!settings.notesAnalysisEnabled ? { reason: "Not used while Use local AI is off." } : null}
+                label="Analysis prompt"
         stacked
       >
         <BlurSavedTextArea

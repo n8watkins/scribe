@@ -920,6 +920,7 @@ function App() {
     lastOutput,
     recordingBusy,
     openSettings,
+    openView: setActiveView,
     pasteLastTranscript: handlePasteLastTranscript,
     pastingLastTranscript,
     refresh,
