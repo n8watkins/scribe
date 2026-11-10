@@ -76,6 +76,12 @@ pub fn transcribe_recording_for_app(
         .take(&recording.session_id);
 
     let result = transcribe_recording_checked(app, &recording, incremental, stopped);
+    // The dictation is done with its model. If another one was chosen
+    // meanwhile, load it now, so the next dictation starts warm.
+    crate::session_model::global().release(&recording.session_id);
+    if let Some(warm) = app.try_state::<crate::whisper_server::WarmTranscriber>() {
+        warm.load_if_kept();
+    }
     // A transform recording that failed before reaching the transform engine
     // still holds the captured selection; dropping it restores the clipboard.
     if recording.is_transform {
@@ -221,7 +227,7 @@ fn transcribe_recording_inner(
     let settings = state.db()?.get_settings()?;
     let (model_id, model_path) = {
         let db = state.db()?;
-        model_manager::selected_model_path(app, &db)?
+        model_manager::session_model_path(app, &db, &recording.session_id)?
     };
     let language = whisper_language(&settings.language);
 

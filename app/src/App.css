@@ -3100,3 +3100,174 @@ kbd {
     gap: 6px;
   }
 }
+
+/* Words > Custom words: budget meter, warnings, and the unused state when
+   the engine (Parakeet) doesn't read the words. */
+.custom-words {
+  display: grid;
+  gap: 6px;
+}
+
+.custom-words.is-unused .vocab-textarea {
+  opacity: 0.55;
+}
+
+.custom-words-unused {
+  margin: 0;
+  padding: 7px 9px;
+  color: var(--scribe-text-secondary);
+  background: rgba(var(--scribe-surface-rgb), 0.5);
+  border: 1px dashed var(--scribe-border);
+  border-radius: 6px;
+  font-size: 12.5px;
+}
+
+.hint-meter {
+  display: grid;
+  gap: 4px;
+}
+
+.hint-meter-bar {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(var(--scribe-surface-rgb), 0.7);
+}
+
+.hint-meter-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--scribe-accent);
+}
+
+.hint-meter.is-near .hint-meter-bar span {
+  background: var(--scribe-warning);
+}
+
+.hint-meter.is-over .hint-meter-bar span {
+  background: var(--scribe-danger);
+}
+
+.hint-meter-text {
+  color: var(--scribe-text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.hint-warning {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  color: var(--scribe-danger);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.hint-warning.is-soft {
+  color: var(--scribe-warning);
+}
+
+.hint-warning svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.replacement-suggestion,
+.model-suggestion {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  padding: 8px 10px;
+  color: var(--scribe-text-secondary);
+  background: var(--scribe-accent-glow);
+  border: 1px solid var(--scribe-accent-soft);
+  border-radius: 7px;
+  font-size: 12.5px;
+}
+
+.replacement-suggestion > span,
+.model-suggestion > div:first-of-type {
+  flex: 1 1 220px;
+  display: grid;
+  gap: 2px;
+}
+
+.model-suggestion {
+  margin-bottom: 8px;
+}
+
+.model-suggestion > svg {
+  color: var(--scribe-accent-bright);
+}
+
+.model-suggestion strong {
+  color: var(--scribe-text);
+}
+
+.replacement-paste {
+  display: grid;
+  gap: 6px;
+}
+
+/* Models list: size, accuracy and speed at a glance. */
+.model-recommended {
+  margin-left: 8px;
+  vertical-align: 1px;
+}
+
+.model-guide {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 2px;
+}
+
+.model-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.model-meter-label {
+  margin-right: 4px;
+  color: var(--scribe-text-muted);
+  font-size: 11.5px;
+}
+
+.model-meter-bar {
+  width: 9px;
+  height: 6px;
+  border-radius: 2px;
+  background: rgba(148, 163, 184, 0.22);
+}
+
+.model-meter-bar.is-on {
+  background: var(--scribe-accent);
+}
+
+.model-row .model-guide-note {
+  color: var(--scribe-text-secondary);
+  font-size: 12px;
+}
+
+.model-trade {
+  display: grid;
+  gap: 2px;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--scribe-accent-soft);
+  font-size: 12px;
+}
+
+.model-row .model-trade span {
+  color: var(--scribe-text-secondary);
+  font-size: 12px;
+}
+
+.model-trade strong {
+  margin-right: 4px;
+  color: var(--scribe-text);
+}

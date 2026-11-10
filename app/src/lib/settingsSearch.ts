@@ -29,7 +29,7 @@ export const SETTINGS_INDEX: readonly SettingsEntry[] = [
   { label: "Pill style", page: "Dictation", keywords: "pill display mode waveform visualizer dot live text" },
 
   // Words
-  { label: "Context hint", page: "Words", keywords: "vocabulary names jargon spelling dictionary prompt custom words expect" },
+  { label: "Custom words", page: "Words", keywords: "context hint vocabulary names jargon spelling dictionary prompt terms expect budget" },
   { label: "Replacements", page: "Words", keywords: "replace substitute autocorrect say get dictionary find fix" },
   { label: "Remove filler words", page: "Words", keywords: "um uh er hmm filler cleanup" },
   { label: "Filler words", page: "Words", keywords: "um uh er hmm list" },

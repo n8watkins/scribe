@@ -17,6 +17,12 @@ import type { ViewActions } from "../types";
 import { SettingRow } from "../components/layout";
 import { MsInput, Toggle } from "../components/primitives";
 import { currentPlatform } from "../lib/platform";
+import { CustomWords } from "../components/CustomWords";
+import {
+  DEVELOPER_REPLACEMENTS,
+  missingFrom,
+  parseReplacementLines,
+} from "../lib/replacementSets";
 
 // Groups of setting rows. The sidebar pages in views/pages.tsx place them:
 // Dictation, Words, Models & language, Local AI, Appearance and General.
@@ -365,45 +371,105 @@ export function AppBehaviorSettings({ actions, settings }: GroupProps) {
   );
 }
 
-/** Names and words the speech model should expect. */
+/** Names and words Whisper should expect (the context hint). */
 export function ContextHintSettings({ actions, settings }: GroupProps) {
   return (
-    <>
-      <p className="muted vocab-hint">
-        Names, jargon and spellings Scribe should expect, for example "Tauri,
-        natkins, whisper.cpp". This nudges recognition toward them but can't
-        guarantee an exact result; for that, use Replacements.
-      </p>
-      {settings.selectedModelId === PARAKEET_V3_ID ? (
-        <p className="muted vocab-hint" role="status">
-          Parakeet v3 has no context hint, so this applies only when a Whisper
-          model is active. Replacements work with every model.
-        </p>
-      ) : null}
-      <BlurSavedTextArea
-        ariaLabel="Context hint"
-        onSave={(vocabularyPrompt) => actions.updateSettings({ vocabularyPrompt })}
-        placeholder="Tauri, natkins, whisper.cpp"
-        value={settings.vocabularyPrompt}
-      />
-    </>
+    <CustomWords actions={actions} settings={settings} TextArea={BlurSavedTextArea} />
   );
 }
 
 /** "Say this, write that" replacements. */
 export function ReplacementsSettings({ actions, settings }: GroupProps) {
+  const [pasting, setPasting] = useState(false);
+  const [pasted, setPasted] = useState("");
+  const starter = missingFrom(settings.textReplacements, DEVELOPER_REPLACEMENTS);
+  const addRows = (rows: TextReplacement[]) =>
+    actions.updateSettings({
+      textReplacements: [
+        ...settings.textReplacements.filter((row) => row.from.trim()),
+        ...missingFrom(settings.textReplacements, rows),
+      ],
+    });
   return (
     <>
       <p className="muted vocab-hint">
-        Whenever you say the phrase on the left, Scribe writes the text on the
-        right. For example, "my email" can become your address, or "clawed"
-        can become "Claude". Case doesn't matter, and only whole words match.
+        Say the left, get the right. No limit, and they work with every model.
       </p>
+      {starter.length > 0 && !settings.replacementSuggestionDismissed ? (
+        <div className="replacement-suggestion">
+          <span>
+            <strong>{starter.length} common developer fixes</strong>, such as
+            clawed to Claude and superbase to Supabase.
+          </span>
+          <div className="row-actions">
+            <button
+              className="secondary-button"
+              disabled={actions.savingSettings}
+              onClick={() => addRows(starter)}
+              title={starter.map((row) => `${row.from} -> ${row.to}`).join("\n")}
+              type="button"
+            >
+              <Plus aria-hidden="true" size={14} />
+              Add them
+            </button>
+            <button
+              className="ghost-button"
+              onClick={() =>
+                actions.updateSettings({ replacementSuggestionDismissed: true })
+              }
+              type="button"
+            >
+              No thanks
+            </button>
+          </div>
+        </div>
+      ) : null}
       <ReplacementsEditor
         disabled={actions.savingSettings}
         onChange={(textReplacements) => actions.updateSettings({ textReplacements })}
         value={settings.textReplacements}
       />
+      {pasting ? (
+        <div className="replacement-paste">
+          <textarea
+            aria-label="Replacements to add, one per line"
+            className="vocab-textarea"
+            onChange={(event) => setPasted(event.currentTarget.value)}
+            placeholder={"nate builds -> n8builds\nsuperbase -> Supabase"}
+            rows={4}
+            value={pasted}
+          />
+          <div className="row-actions">
+            <button
+              className="secondary-button"
+              disabled={parseReplacementLines(pasted).length === 0}
+              onClick={() => {
+                addRows(parseReplacementLines(pasted));
+                setPasted("");
+                setPasting(false);
+              }}
+              type="button"
+            >
+              Add {parseReplacementLines(pasted).length || ""}
+            </button>
+            <button
+              className="ghost-button"
+              onClick={() => setPasting(false)}
+              type="button"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          className="ghost-button"
+          onClick={() => setPasting(true)}
+          type="button"
+        >
+          Paste a list
+        </button>
+      )}
     </>
   );
 }
@@ -634,12 +700,17 @@ function BlurSavedInput({
 
 function BlurSavedTextArea({
   ariaLabel,
+  disabled,
+  onDraftChange,
   onSave,
   placeholder,
   rows = 3,
   value,
 }: {
   ariaLabel: string;
+  disabled?: boolean;
+  /** Called on every keystroke, for live feedback such as a counter. */
+  onDraftChange?: (value: string) => void;
   onSave: (value: string) => void;
   placeholder?: string;
   rows?: number;
@@ -648,9 +719,12 @@ function BlurSavedTextArea({
   const [draft, setDraft] = useState(value);
   const latestRef = useRef({ draft, onSave, value });
   latestRef.current = { draft, onSave, value };
+  const onDraftChangeRef = useRef(onDraftChange);
+  onDraftChangeRef.current = onDraftChange;
 
   useEffect(() => {
     setDraft(value);
+    onDraftChangeRef.current?.(value);
   }, [value]);
 
   // Flush an unsaved draft if the view unmounts before blur fires.
@@ -668,12 +742,16 @@ function BlurSavedTextArea({
     <textarea
       aria-label={ariaLabel}
       className="vocab-textarea"
+      disabled={disabled}
       onBlur={() => {
         if (draft !== value) {
           onSave(draft);
         }
       }}
-      onChange={(event) => setDraft(event.currentTarget.value)}
+      onChange={(event) => {
+        setDraft(event.currentTarget.value);
+        onDraftChange?.(event.currentTarget.value);
+      }}
       placeholder={placeholder}
       rows={rows}
       value={draft}

@@ -282,12 +282,18 @@ fn whisper_args(
         args.push("--translate".to_string());
     }
 
-    let vocabulary_prompt = vocabulary_prompt.trim();
+    // Trimmed to what whisper.cpp reads, keeping the front (it would keep the
+    // end), and carried into every 30 s window of a long recording.
+    let vocabulary_prompt = crate::prompt_budget::fit_front(
+        vocabulary_prompt,
+        crate::prompt_budget::PROMPT_TOKEN_LIMIT,
+    );
     if !vocabulary_prompt.is_empty() {
         // Separate argv entries: no shell is involved, so the prompt text
         // needs no quoting or escaping.
         args.push("--prompt".to_string());
         args.push(vocabulary_prompt.to_string());
+        args.push("--carry-initial-prompt".to_string());
     }
 
     args
@@ -742,7 +748,8 @@ mod tests {
             args[prompt_index + 1],
             "Scribe, Tauri, WASAPI; \"quoted\" & spaced terms"
         );
-        assert_eq!(args.len(), prompt_index + 2);
+        assert_eq!(args[prompt_index + 2], "--carry-initial-prompt");
+        assert_eq!(args.len(), prompt_index + 3);
     }
 
     #[test]

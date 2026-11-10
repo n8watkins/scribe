@@ -205,6 +205,10 @@ export type AppSettings = {
   windowHeight: number | null;
   /** Whether the saved window size is in logical pixels. */
   windowSizeLogical: boolean;
+  /** The one-time Small English suggestion was answered. */
+  modelSuggestionDismissed: boolean;
+  /** The one-time developer replacements offer was answered. */
+  replacementSuggestionDismissed: boolean;
 };
 
 export type Transcript = {
