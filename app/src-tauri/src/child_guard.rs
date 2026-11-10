@@ -365,7 +365,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("speech-processes.json");
 
-        let mut survivor = long_sleeper().spawn().unwrap();
+        // Spawned the way Scribe spawns speech engines. A plain
+        // `Command::spawn` can return before the child has exec'd on Linux
+        // while other test threads fork, so its identity would still name the
+        // test binary and never match the sleeper again.
+        let mut survivor = spawn(long_sleeper()).unwrap();
         // Wait until the OS reports the process, then record it.
         let identity = {
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -379,7 +383,7 @@ mod tests {
         };
         // A second entry with the right pid but another start time stands
         // for a pid the OS has given to some other program: never stopped.
-        let mut bystander = long_sleeper().spawn().unwrap();
+        let mut bystander = spawn(long_sleeper()).unwrap();
         let mut bystander_identity = process_info::identity(bystander.id()).unwrap();
         bystander_identity.start_time += 1;
 
