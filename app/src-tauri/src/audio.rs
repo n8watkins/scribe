@@ -447,6 +447,12 @@ pub fn start_recording_for_app(
         )?;
 
         if outcome.started {
+            // This dictation keeps the model it starts with, even if another
+            // model is chosen while it runs (applies from the next one).
+            crate::session_model::global().pin(
+                &outcome.info.session_id,
+                settings.selected_model_id.as_deref(),
+            );
             // Remember where the user is dictating, so the text goes back
             // there even if they switch apps while it transcribes.
             state.set_paste_target(crate::output::current_paste_target());

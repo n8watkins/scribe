@@ -53,9 +53,13 @@ import {
 export function ModelsView({
   children,
   actions,
+  dictating = false,
   settings,
 }: {
   actions: ViewActions;
+  /** A dictation is recording or transcribing: a new choice applies from
+   * the next one. */
+  dictating?: boolean;
   /** Language and GPU panels shown under the model list. */
   children?: ReactNode;
   settings: AppSettings;
@@ -278,6 +282,13 @@ export function ModelsView({
           <InlineError message={modelsError} onRetry={loadModels} />
         ) : null}
 
+        {dictating ? (
+          <p className="model-next-note" role="status">
+            You're dictating. A model you pick now is used from your next
+            dictation, and loads in the background when this one is done.
+          </p>
+        ) : null}
+
         <div className="models-summary">
           <div className="models-summary-item">
             <span className="models-summary-label">Active model</span>
@@ -357,6 +368,10 @@ export function ModelsView({
 
         {catalogOpen ? (
           <>
+            <p className="muted vocab-hint">
+              Downloads go to Scribe's models folder on this computer and work
+              offline after that.
+            </p>
             {modelsLoading ? (
               <div className="pending-panel">
                 <RefreshCw aria-hidden="true" size={16} />

@@ -119,3 +119,23 @@ describe("ModelsView delete", () => {
     expect(deleteModelMock).not.toHaveBeenCalled();
   });
 });
+
+describe("ModelsView while dictating", () => {
+  beforeEach(() => {
+    listModelsMock.mockReset();
+    listModelsMock.mockResolvedValue([tinyEn]);
+  });
+
+  it("says a new choice applies from the next dictation", async () => {
+    render(<ModelsView actions={actions} dictating settings={settings} />);
+    expect(
+      await screen.findByText(/used from your next\s+dictation/),
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing about it when not dictating", async () => {
+    render(<ModelsView actions={actions} settings={settings} />);
+    await screen.findByRole("button", { name: /browse models/i });
+    expect(screen.queryByText(/used from your next/)).not.toBeInTheDocument();
+  });
+});

@@ -1093,7 +1093,15 @@ function renderView(
     case "Microphone":
       return <MicrophonePage actions={actions} settings={data.settings} />;
     case "Models & language":
-      return <ModelsAndLanguagePage actions={actions} settings={data.settings} />;
+      return (
+        <ModelsAndLanguagePage
+          actions={actions}
+          dictating={["Recording", "Stopping", "Transcribing"].includes(
+            data.appState.status,
+          )}
+          settings={data.settings}
+        />
+      );
     case "Hotkeys":
       return <HotkeysView actions={actions} settings={data.settings} />;
     case "Local AI":
