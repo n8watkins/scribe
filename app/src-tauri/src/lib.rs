@@ -471,6 +471,11 @@ pub fn run() {
                 ));
                 let watch_app = app.handle().clone();
                 store.watch(move |info| {
+                    log::info!(
+                        "Reloaded replacements.txt: {} replacements, {} lines skipped",
+                        info.rows.len(),
+                        info.skipped_lines.len()
+                    );
                     let _ = watch_app.emit(commands::REPLACEMENTS_CHANGED_EVENT, info);
                     // Back the edited file up with the notes, when backup is on.
                     if let Some(worker) = watch_app.try_state::<note_sync::NoteSyncWorker>() {

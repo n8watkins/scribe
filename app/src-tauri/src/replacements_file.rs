@@ -217,8 +217,13 @@ impl ReplacementStore {
                     let _ = fs::write(backup, json);
                 }
             }
-            if let Err(error) = write_atomic(&path, &format_file(legacy)) {
-                log::warn!("Could not create {}: {}", path.display(), error);
+            match write_atomic(&path, &format_file(legacy)) {
+                Ok(()) => log::info!(
+                    "Created {} with {} replacements from settings",
+                    path.display(),
+                    legacy.len()
+                ),
+                Err(error) => log::warn!("Could not create {}: {}", path.display(), error),
             }
         }
         let store = Self {
