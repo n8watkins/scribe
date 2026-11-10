@@ -48,6 +48,13 @@ impl SessionModels {
             .map(|(_, model)| model.clone())
     }
 
+    /// The model a dictation uses: the one it started with, else the one
+    /// selected now (a dictation that started before any model was chosen).
+    pub fn model_for(&self, session_id: &str, selected_now: Option<&str>) -> Option<String> {
+        self.pinned(session_id)
+            .or_else(|| selected_now.map(str::to_string))
+    }
+
     /// Forgets a finished dictation.
     pub fn release(&self, session_id: &str) {
         self.lock().retain(|(session, _)| session != session_id);
@@ -72,6 +79,34 @@ mod tests {
         assert_eq!(models.pinned("s1").as_deref(), Some("base.en"));
         models.release("s1");
         assert_eq!(models.pinned("s1"), None);
+    }
+
+    /// The owner's report: switching from Base to Parakeet in the middle of
+    /// a dictation. Before this fix the dictation read the selected model
+    /// when its first live segment was transcribed and again at the end, so
+    /// it took the new model and stalled on cold loads.
+    #[test]
+    fn switching_mid_dictation_applies_from_the_next_one() {
+        let models = SessionModels::default();
+        models.pin("first", Some("base.en"));
+        // The user picks Parakeet while "first" is still recording.
+        let selected_now = Some("parakeet-tdt-0.6b-v3");
+        assert_eq!(
+            models.model_for("first", selected_now).as_deref(),
+            Some("base.en")
+        );
+        models.release("first");
+        // The next dictation starts with the new model.
+        models.pin("second", selected_now);
+        assert_eq!(
+            models.model_for("second", selected_now).as_deref(),
+            Some("parakeet-tdt-0.6b-v3")
+        );
+        // A session that was never pinned follows the selection.
+        assert_eq!(
+            models.model_for("unknown", selected_now).as_deref(),
+            selected_now
+        );
     }
 
     #[test]

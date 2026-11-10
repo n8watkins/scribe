@@ -328,11 +328,12 @@ pub fn session_model_path(
     db: &Database,
     session_id: &str,
 ) -> Result<(String, PathBuf), CommandError> {
-    match crate::session_model::global().pinned(session_id) {
-        Some(model_id) => {
+    let selected = db.get_settings()?.selected_model_id;
+    match crate::session_model::global().model_for(session_id, selected.as_deref()) {
+        Some(model_id) if Some(model_id.as_str()) != selected.as_deref() => {
             model_path_for_id(app, &model_id).or_else(|_| selected_model_path(app, db))
         }
-        None => selected_model_path(app, db),
+        _ => selected_model_path(app, db),
     }
 }
 
