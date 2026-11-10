@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.16.0 - 2026-11-10
+
+### New
+
+- Replacements live in a text file, and Home and the window fit better ([#122](https://github.com/n8watkins/scribe/pull/122))
+
 ## 0.15.0 - 2026-11-10
 
 ### New
