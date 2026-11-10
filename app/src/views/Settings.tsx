@@ -75,7 +75,8 @@ export function LanguageSettings({ actions, settings }: GroupProps) {
   if (settings.selectedModelId === PARAKEET_V3_ID) {
     return (
       <SettingRow
-        description={`Parakeet v3 detects the language you speak. It understands 25 European languages: ${PARAKEET_V3_LANGUAGES.join(", ")}. For other languages, or to translate into English, choose a Whisper model (99 languages).`}
+        description="Parakeet detects which of its 25 languages you speak."
+        more={`${PARAKEET_V3_LANGUAGES.join(", ")}. For other languages, or to translate into English, pick a Whisper model (99 languages).`}
         label="Language"
       >
         <span className="pill ready">Detected</span>
@@ -86,7 +87,8 @@ export function LanguageSettings({ actions, settings }: GroupProps) {
   return (
     <>
       <SettingRow
-        description="The language you speak. Auto-detect and any language other than English need a multilingual model."
+        description="The language you speak."
+          more="Auto-detect and anything but English need a multilingual model."
         label="Language"
       >
         <select
@@ -106,7 +108,8 @@ export function LanguageSettings({ actions, settings }: GroupProps) {
         </select>
       </SettingRow>
       <SettingRow
-        description="Speak any language and get the text in English. Needs a multilingual model."
+        description="Get English text from any language."
+          more="Needs a multilingual model."
         label="Translate to English"
       >
         <Toggle
@@ -135,9 +138,8 @@ export function FillerSettings({ actions, settings }: GroupProps) {
   return (
     <>
       <SettingRow
-        description={
-          'Remove words like "um" and "uh", but only when you pause around them, so fluent uses ("oh no", "like this") stay. Runs on this computer.'
-        }
+        description='Remove "um" and "uh" when you pause around them.'
+        more='Fluent uses such as "oh no" or "like this" stay. Runs on this computer.'
         label="Remove filler words"
       >
         <Toggle
@@ -150,7 +152,8 @@ export function FillerSettings({ actions, settings }: GroupProps) {
         />
       </SettingRow>
       <SettingRow
-        description="The words to remove, separated by commas. Riskier ones such as oh, like and so are safe to add because of the pause check."
+        description="Words to remove, separated by commas."
+          more="Riskier ones such as oh, like and so are safe to add because of the pause check."
         label="Filler words"
         stacked
       >
@@ -168,7 +171,8 @@ export function FillerSettings({ actions, settings }: GroupProps) {
         <summary>Advanced</summary>
         <div className="settings-list">
           <SettingRow
-            description="How long the pause next to a filler word must be before it is removed. Lower removes more (100 to 1500 ms)."
+            description="The pause around a filler before it goes."
+          more="Lower removes more (100 to 1500 ms)."
             label="Pause before removing (ms)"
           >
             <MsInput
@@ -195,7 +199,7 @@ export function PillSettings({ actions, settings }: GroupProps) {
   return (
     <>
       <SettingRow
-        description="A small bar that stays on top of other windows and shows when Scribe is listening."
+        description="A small bar on top of other windows while Scribe listens."
         label="Show floating pill"
       >
         <Toggle
@@ -307,7 +311,7 @@ export function AppBehaviorSettings({ actions, settings }: GroupProps) {
         />
       </SettingRow>
       <SettingRow
-        description="Keep Scribe available from the system tray."
+        description="Closing the window keeps Scribe in the tray."
         label="Minimize to tray"
       >
         <Toggle
@@ -318,7 +322,7 @@ export function AppBehaviorSettings({ actions, settings }: GroupProps) {
         />
       </SettingRow>
       <SettingRow
-        description="Pressing the Open Scribe hotkey while this window is in front hides it again."
+        description="The Open Scribe hotkey also hides this window."
         label="Open Scribe hotkey hides it"
       >
         <Toggle
@@ -331,7 +335,7 @@ export function AppBehaviorSettings({ actions, settings }: GroupProps) {
         />
       </SettingRow>
       <SettingRow
-        description="Show a short message when a dictation finishes or fails."
+        description="A short message when a dictation finishes or fails."
         label="Notifications"
       >
         <Toggle
@@ -355,7 +359,7 @@ export function AppBehaviorSettings({ actions, settings }: GroupProps) {
         />
       </SettingRow>
       <SettingRow
-        description="Add a Developer page to the sidebar with diagnostics such as the window size."
+        description="Adds a Developer page with diagnostics."
         label="Developer settings"
       >
         <Toggle
@@ -479,7 +483,8 @@ export function LocalAiSettings({ actions, settings }: GroupProps) {
   return (
     <>
       <SettingRow
-        description="Turns on note analysis and transform selection. Text goes only to the server below."
+        description="Turns on note analysis and transform selection."
+          more="Text goes only to the server below."
         label="Use local AI"
       >
         <Toggle
@@ -492,7 +497,8 @@ export function LocalAiSettings({ actions, settings }: GroupProps) {
         />
       </SettingRow>
       <SettingRow
-        description="LM Studio, Ollama or any OpenAI-compatible server. LM Studio uses http://127.0.0.1:1234/v1."
+        description="LM Studio, Ollama or any OpenAI-compatible server."
+          more="LM Studio uses http://127.0.0.1:1234/v1."
         label="Server address"
         stacked
       >

@@ -86,7 +86,8 @@ function PermissionRow({
   }
   return (
     <SettingRow
-      description="macOS needs it before Scribe can paste or type into other apps. Until it's on, your words are copied for you to paste with Cmd+V. After a Scribe update you may need to turn it on again."
+      description="Needed to paste into other apps."
+          more="Until it's on, your words are copied for you to paste with Cmd+V. After a Scribe update you may need to turn it on again."
       label="Accessibility permission"
     >
       <button className="secondary-button" onClick={request} type="button">

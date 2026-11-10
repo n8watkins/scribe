@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { AlertTriangle, ArrowUpRight, type LucideIcon } from "lucide-react";
 import type { AppSettings, BasicStats } from "../backend";
 import {
@@ -200,14 +200,19 @@ export function SettingRow({
   children,
   description,
   label,
+  more,
   stacked = false,
 }: {
   children: ReactNode;
+  /** One plain line. */
   description: string;
   label: string;
+  /** Details behind a small "More", for the few who need them. */
+  more?: string;
   /** Put a wide control (text field, text area) under the label. */
   stacked?: boolean;
 }) {
+  const [open, setOpen] = useState(false);
   return (
     <div
       className={stacked ? "settings-row stacked" : "settings-row"}
@@ -215,7 +220,26 @@ export function SettingRow({
     >
       <span>
         <strong>{label}</strong>
-        <small>{description}</small>
+        <small>
+          {description}
+          {more ? (
+            open ? (
+              <span className="setting-more-text"> {more}</span>
+            ) : (
+              <>
+                {" "}
+                <button
+                  aria-label={`More about ${label}`}
+                  className="setting-more"
+                  onClick={() => setOpen(true)}
+                  type="button"
+                >
+                  More
+                </button>
+              </>
+            )
+          ) : null}
+        </small>
       </span>
       <div className="setting-control">{children}</div>
     </div>

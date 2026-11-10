@@ -110,7 +110,8 @@ export function DeveloperView({
         title="Window resolution"
       >
         <SettingRow
-          description="The webview content size (window.innerWidth x innerHeight). This is the value CSS breakpoints respond to."
+          description="What the page layout sees."
+          more="window.innerWidth x innerHeight, the size CSS breakpoints respond to."
           label="Content size (CSS px)"
         >
           <strong>
@@ -118,7 +119,8 @@ export function DeveloperView({
           </strong>
         </SettingRow>
         <SettingRow
-          description="The Tauri outer window size in physical pixels, including the window frame."
+          description="The whole window in physical pixels."
+          more="Including the frame."
           label="Outer window (physical px)"
         >
           <strong>
@@ -137,7 +139,8 @@ export function DeveloperView({
           title="Developer hotkeys"
         >
           <SettingRow
-            description="Scribe Dev seeds non-conflicting binds (Ctrl+Shift+ variants) so it can run alongside stable Scribe. Load your production binds to use your real shortcuts when running Dev alone."
+            description="Use your real shortcuts in Scribe Dev."
+          more="Scribe Dev starts with Ctrl+Shift binds so it can run next to Scribe."
             label="Load my production defaults"
           >
             <button

@@ -125,7 +125,7 @@ export function DataPrivacyView({
           />
         </SettingRow>
         <SettingRow
-          description="Older dictations, their audio and failed recordings are deleted."
+          description="Older dictations and their audio are deleted."
           label="Keep dictations for"
         >
           <select
@@ -169,7 +169,8 @@ export function DataPrivacyView({
           </select>
         </SettingRow>
         <SettingRow
-          description="Keep each recording so you can play it back. Clips go when their dictation does."
+          description="Keep recordings so you can play them back."
+          more="Clips go when their dictation does."
           label="Save audio clips"
         >
           <Toggle

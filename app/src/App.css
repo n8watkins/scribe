@@ -3187,7 +3187,10 @@ kbd {
   font-size: 12.5px;
 }
 
-.replacement-suggestion > span,
+.replacement-suggestion > span {
+  flex: 1 1 220px;
+}
+
 .model-suggestion > div:first-of-type {
   flex: 1 1 220px;
   display: grid;
@@ -3270,4 +3273,87 @@ kbd {
 .model-trade strong {
   margin-right: 4px;
   color: var(--scribe-text);
+}
+
+.model-next-note {
+  margin: 0 0 8px;
+  padding: 7px 9px;
+  color: var(--scribe-text-secondary);
+  background: rgba(var(--scribe-surface-rgb), 0.5);
+  border: 1px solid var(--scribe-accent-soft);
+  border-radius: 6px;
+  font-size: 12.5px;
+}
+
+/* Home: what's on and off for dictation. Each chip opens its setting; a
+   warning chip carries a one-click fix. */
+.setup-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.setup-chip {
+  display: inline-flex;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid var(--scribe-border);
+  border-radius: 999px;
+  background: rgba(var(--scribe-surface-rgb), 0.45);
+}
+
+.setup-chip-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  color: var(--scribe-text-muted);
+  background: transparent;
+  border: none;
+  font: inherit;
+  font-size: 12px;
+}
+
+.setup-chip-open:hover {
+  color: var(--scribe-text);
+}
+
+.setup-chip-value {
+  color: var(--scribe-text);
+  font-weight: 700;
+}
+
+.setup-chip.is-muted .setup-chip-value {
+  color: var(--scribe-text-muted);
+  font-weight: 600;
+}
+
+.setup-chip.is-warn {
+  border-color: rgba(252, 211, 77, 0.45);
+}
+
+.setup-chip.is-warn .setup-chip-value {
+  color: var(--scribe-warning);
+}
+
+.setup-chip-fix {
+  padding: 0 10px;
+  color: var(--scribe-accent-on);
+  background: var(--scribe-accent);
+  border: none;
+  font-size: 11.5px;
+  font-weight: 760;
+}
+
+/* A setting's details behind a small "More". */
+.setting-more {
+  padding: 0;
+  color: var(--scribe-accent-bright);
+  background: none;
+  border: none;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
 }

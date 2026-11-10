@@ -155,9 +155,13 @@ export function MicrophonePage({ actions, settings }: PageProps) {
   return <MicrophoneView actions={actions} settings={settings} />;
 }
 
-export function ModelsAndLanguagePage({ actions, settings }: PageProps) {
+export function ModelsAndLanguagePage({
+  actions,
+  dictating,
+  settings,
+}: PageProps & { dictating: boolean }) {
   return (
-    <ModelsView actions={actions} settings={settings}>
+    <ModelsView actions={actions} dictating={dictating} settings={settings}>
       <SectionPanel
         icon={<Languages aria-hidden="true" size={16} />}
         title="Language"

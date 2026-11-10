@@ -375,7 +375,8 @@ export function SyncView({
                 automatically as you go, and you can force one any time.
               </p>
               <SettingRow
-                description="An existing private repo installed for Scribe Local Backup, as owner/name, for example alice/scribe-notes."
+                description="Your private backup repo, as owner/name."
+          more="It needs the Scribe Local Backup app installed. For example alice/scribe-notes."
                 label="Repository"
                 stacked
               >
