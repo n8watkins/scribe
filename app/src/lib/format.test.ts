@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   AppSettings,
+  MicrophoneInfo,
   OutputMode,
   OutputResult,
   PasteMethod,
@@ -10,7 +11,9 @@ import {
   clipboardOutcome,
   clipboardStatus,
   insertMethodOf,
+  microphoneDisplayName,
   outputSettingsFor,
+  resolveMicrophone,
   type AfterDictation,
   type InsertMethod,
 } from "./format";
@@ -145,5 +148,82 @@ describe("clipboard outcome label", () => {
     expect(outcome({ pasted: false, clipboardPreservation: "untouched" })).toBe(
       "Clipboard untouched",
     );
+  });
+});
+
+describe("resolveMicrophone", () => {
+  const mic = (
+    id: string,
+    name: string,
+    isDefault = false,
+  ): MicrophoneInfo => ({
+    id,
+    name,
+    endpointId: id,
+    isDefault,
+    isSelected: false,
+    isAvailable: true,
+  });
+  const headset = mic("{0.0.1}.{headset}", "Headset Microphone (HyperX)");
+  const fifine = mic("{0.0.1}.{fifine}", "Microphone (FIFINE)", true);
+  const lifecam = mic("{0.0.1}.{lifecam}", "Microphone (LifeCam)");
+  const devices = [headset, fifine, lifecam];
+
+  it("uses the saved microphone when its id matches", () => {
+    expect(resolveMicrophone(devices, headset.id)).toEqual({
+      kind: "device",
+      microphone: headset,
+      fellBack: false,
+    });
+  });
+
+  it("matches the saved value against the device name too", () => {
+    expect(resolveMicrophone(devices, "Microphone (LifeCam)")).toEqual({
+      kind: "device",
+      microphone: lifecam,
+      fellBack: false,
+    });
+  });
+
+  it("uses the default without a fallback when nothing is saved", () => {
+    expect(resolveMicrophone(devices, null)).toEqual({
+      kind: "device",
+      microphone: fifine,
+      fellBack: false,
+    });
+  });
+
+  it("falls back to the default when the saved microphone is gone", () => {
+    const resolved = resolveMicrophone(
+      devices,
+      "{0.0.1.00000000}.{5be65c4e-0d9c-45ee-803c-f4d863cbde3c}",
+    );
+    expect(resolved).toEqual({
+      kind: "device",
+      microphone: fifine,
+      fellBack: true,
+    });
+    expect(microphoneDisplayName(resolved)).toBe("FIFINE");
+  });
+
+  it("falls back to the first device when none is the default", () => {
+    expect(resolveMicrophone([headset, lifecam], "gone")).toEqual({
+      kind: "device",
+      microphone: headset,
+      fellBack: true,
+    });
+  });
+
+  it("reports no microphone for an empty list", () => {
+    const resolved = resolveMicrophone([], "gone");
+    expect(resolved).toEqual({ kind: "none" });
+    expect(microphoneDisplayName(resolved)).toBe("No microphone found");
+    expect(resolveMicrophone([], null)).toEqual({ kind: "none" });
+  });
+
+  it("is still loading while the list is unknown", () => {
+    const resolved = resolveMicrophone(null, headset.id);
+    expect(resolved).toEqual({ kind: "loading" });
+    expect(microphoneDisplayName(resolved)).toBe("-");
   });
 });
