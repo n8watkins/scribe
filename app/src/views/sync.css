@@ -223,3 +223,16 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Your data: export's two choices and its button on one line. */
+.export-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.export-row select {
+  flex: 1 1 120px;
+  min-width: 0;
+}

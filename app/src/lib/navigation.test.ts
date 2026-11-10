@@ -12,11 +12,11 @@ const labels = (developer: boolean) =>
   );
 
 describe("sidebar", () => {
-  it("groups the pages under Use, Set up, Integrations and App", () => {
+  it("groups the pages under Use, Dictation setup, Connections and App", () => {
     expect(NAV_GROUPS.map((group) => group.title)).toEqual([
       "Use",
-      "Set up",
-      "Integrations",
+      "Dictation setup",
+      "Connections",
       "App",
     ]);
   });

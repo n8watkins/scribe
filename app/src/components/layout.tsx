@@ -27,7 +27,7 @@ export function StatsRow({ stats }: { stats: BasicStats }) {
       value: formatOptionalDuration(stats.averageTranscriptionLatencyMs),
     },
     {
-      label: "Recording length",
+      label: "Recording time",
       value: formatOptionalDuration(stats.averageRecordingDurationMs),
     },
     { label: "Total words", value: formatNumber(stats.totalWordsTranscribed) },
@@ -40,12 +40,25 @@ export function StatsRow({ stats }: { stats: BasicStats }) {
       data-setting="Your stats"
       title="Averages and totals from the history on this device"
     >
-      {items.map((item) => (
-        <div className="stats-row-item" key={item.label}>
-          <span>{item.label}</span>
-          <strong>{item.value}</strong>
-        </div>
-      ))}
+      {items.map((item) => {
+        // "148 wpm" -> a big 148 and a small unit, so the numbers carry the row.
+        const match = /^([\d.,]+)\s*([a-z]+)$/i.exec(item.value);
+        return (
+          <div className="stats-row-item" key={item.label}>
+            <span>{item.label}</span>
+            <strong>
+              {match ? (
+                <>
+                  {match[1]}
+                  <small className="stats-row-unit">{match[2]}</small>
+                </>
+              ) : (
+                item.value
+              )}
+            </strong>
+          </div>
+        );
+      })}
     </section>
   );
 }
@@ -126,13 +139,23 @@ export function StatusCard({
   status?: ReactNode;
   value: string;
 }) {
+  // The whole card is the button: a bigger target than the old corner arrow,
+  // and one less control competing for the card's width.
   return (
-    <article className="metric-card status-card">
+    <button
+      className="metric-card status-card"
+      onClick={onAction}
+      title={action}
+      type="button"
+    >
       <span className="status-card-icon" aria-hidden="true">
-        <Icon size={17} />
+        <Icon size={16} />
       </span>
       <span className="status-card-main">
-        <span className="status-card-label">{label}</span>
+        <span className="status-card-label">
+          {label}
+          {status ?? null}
+        </span>
         <strong title={value}>{value}</strong>
         {detail ? (
           <span className="status-card-detail" role="status" title={detail}>
@@ -140,17 +163,8 @@ export function StatusCard({
           </span>
         ) : null}
       </span>
-      {status ?? null}
-      <button
-        aria-label={action}
-        className="status-card-go"
-        onClick={onAction}
-        title={action}
-        type="button"
-      >
-        <ArrowUpRight aria-hidden="true" size={15} />
-      </button>
-    </article>
+      <ArrowUpRight aria-hidden="true" className="status-card-go" size={14} />
+    </button>
   );
 }
 

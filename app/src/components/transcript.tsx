@@ -77,18 +77,22 @@ export function LastTranscriptCard({
         <>
           <p className="transcript-text buffer-preview">{transcript.text}</p>
 
-          <div className="metadata-row">
-            <span>{formatCount(transcript.wordCount, "word")}</span>
-            <span>{formatCount(transcript.characterCount, "char")}</span>
-            <span>{formatDuration(transcript.durationMs)}</span>
-            <span>{transcript.modelId ?? "No model recorded"}</span>
-            <span>{formatDateTime(transcript.createdAt)}</span>
-          </div>
         </>
       ) : (
         <EmptyState message="Your last dictation shows up here, ready to paste again." />
       )}
 
+      <div className="buffer-footer">
+        {transcript ? (
+          <div className="metadata-row">
+            <span>{formatCount(transcript.wordCount, "word")}</span>
+            <span>{formatDuration(transcript.durationMs)}</span>
+            <span>{transcript.modelId ?? "No model recorded"}</span>
+            <span>{formatDateTime(transcript.createdAt)}</span>
+          </div>
+        ) : (
+          <span />
+        )}
       <div className="button-row">
         <IconButton
           disabled={!hasTranscript || outputBusy}
@@ -112,6 +116,7 @@ export function LastTranscriptCard({
         >
           <Eraser aria-hidden="true" size={15} />
         </IconButton>
+      </div>
       </div>
     </article>
   );

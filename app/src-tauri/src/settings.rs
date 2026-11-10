@@ -235,13 +235,16 @@ pub struct AppSettings {
     /// not migrate existing data.
     #[serde(default)]
     pub data_dir: Option<String>,
-    /// Saved main-window size (physical pixels). None means the shipped default
-    /// from tauri.conf.json. Stored like pill_x/pill_y so the window reopens at
-    /// the size the user last saved.
+    /// Saved main-window size. None means the shipped default from
+    /// tauri.conf.json. Logical pixels when `window_size_logical` is set
+    /// (every save since window presets); physical pixels from older versions.
     #[serde(default)]
     pub window_width: Option<i32>,
     #[serde(default)]
     pub window_height: Option<i32>,
+    /// Whether `window_width`/`window_height` are logical pixels.
+    #[serde(default)]
+    pub window_size_logical: bool,
     pub hotkeys: HotkeySettings,
 }
 
@@ -848,6 +851,7 @@ impl Default for AppSettings {
             data_dir: None,
             window_width: None,
             window_height: None,
+            window_size_logical: false,
             hotkeys: HotkeySettings::default(),
         }
     }

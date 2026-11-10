@@ -27,7 +27,7 @@ const hotkeyActionHints: Record<string, string> = {
   openDashboard: "Show this window",
   discardDictation: "Cancel the current recording without transcribing",
   transformSelection:
-    "Tap, speak an instruction for the highlighted text, then tap again (or pause). Scribe rewrites it in place. You can also type one on the Local AI page.",
+    "Tap, say how to rewrite the selected text, then tap again. Or type the instruction on the Local AI page.",
 };
 
 const triggerLabels: Record<TriggerEdge, string> = {

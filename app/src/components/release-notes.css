@@ -57,11 +57,6 @@
   cursor: pointer;
 }
 
-.release-notes-current {
-  display: grid;
-  gap: 12px;
-  justify-items: start;
-}
 
 .release-notes-empty {
   margin: 0;
@@ -130,4 +125,54 @@
 
 .about-update-notes {
   margin-top: 4px;
+}
+
+/* About > Release notes: every release in one list that scrolls inside the
+   panel, newest first. */
+.release-history {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.release-history-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0 4px 0 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  list-style: none;
+}
+
+.release-history-item {
+  padding: 10px 2px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.release-history-item:first-child {
+  padding-top: 2px;
+}
+
+.release-history-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.release-history-head strong {
+  color: var(--scribe-text);
+  font-size: 14px;
+}
+
+.release-history-head time {
+  color: var(--scribe-text-muted);
+  font-size: 12px;
+}
+
+.release-history-head .pill {
+  align-self: center;
 }

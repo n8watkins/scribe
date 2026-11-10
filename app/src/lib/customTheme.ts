@@ -148,6 +148,6 @@ export function deriveCustomThemeVars(colors: CustomThemeColors): Record<string,
     // muted toward the background so the three tiers stay evenly spaced.
     "--scribe-text-secondary": mix(text, textMuted, 0.5),
     "--scribe-text-muted": textMuted,
-    "--scribe-text-faint": mix(textMuted, background, 0.4),
+    "--scribe-text-faint": mix(textMuted, background, 0.2),
   };
 }

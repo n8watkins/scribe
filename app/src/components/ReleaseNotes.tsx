@@ -8,6 +8,7 @@ import {
 } from "../backend";
 import {
   bundledNotes,
+  bundledReleaseHistory,
   parseInline,
   parseNotes,
   shortVersion,
@@ -86,37 +87,51 @@ export function ReleaseNotesBody({
   );
 }
 
-/** The release notes of the running version, from the changelog bundled in
- * the app, with a link to every release on GitHub. */
-export function CurrentReleaseNotes() {
+/** Every release's notes, newest first, in one scrolling list; the running
+ * version is marked. Bundled with the app, so it works offline. */
+export function ReleaseHistory() {
   const [version, setVersion] = useState<string | null>(null);
   useEffect(() => {
     void getVersion()
       .then(setVersion)
       .catch(() => setVersion(""));
   }, []);
-  if (version === null) {
-    return null;
-  }
-  const notes = version ? bundledNotes(version) : null;
+  const releases = bundledReleaseHistory();
   return (
-    <div className="release-notes-current">
-      {notes ? (
-        <ReleaseNotesBody markdown={notes} />
-      ) : (
-        <p className="release-notes-empty">
-          This build has no release notes. Every release's notes are on GitHub.
-        </p>
-      )}
+    <div className="release-history">
+      <ol className="release-history-list">
+        {releases.map((release) => (
+          <li className="release-history-item" key={release.version}>
+            <header className="release-history-head">
+              <strong>{release.version}</strong>
+              {release.date ? (
+                <time dateTime={release.date}>{formatReleaseDate(release.date)}</time>
+              ) : null}
+              {release.version === version ? (
+                <span className="pill selected">Installed</span>
+              ) : null}
+            </header>
+            <ReleaseNotesBody markdown={release.notes} />
+          </li>
+        ))}
+      </ol>
       <button
         className="ghost-button release-notes-all"
         onClick={() => void openReleasePage(RELEASES_URL).catch(() => {})}
         type="button"
       >
-        All release notes
+        Releases on GitHub
       </button>
     </div>
   );
+}
+
+/** "2026-11-09" -> "Nov 9, 2026" in the user's locale. */
+function formatReleaseDate(date: string): string {
+  const parsed = new Date(`${date}T12:00:00`);
+  return Number.isNaN(parsed.getTime())
+    ? date
+    : new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(parsed);
 }
 
 /** A dismissible "What's new in X.Y" card, shown once after an update. */

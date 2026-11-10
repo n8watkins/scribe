@@ -413,7 +413,7 @@ export function LocalAiSettings({ actions, settings }: GroupProps) {
   return (
     <>
       <SettingRow
-        description="Turns on Notes analysis and Transform selection, and their hotkey. Text goes only to the server below; with a local address it never leaves this computer."
+        description="Turns on note analysis and transform selection. Text goes only to the server below."
         label="Use local AI"
       >
         <Toggle
@@ -426,7 +426,7 @@ export function LocalAiSettings({ actions, settings }: GroupProps) {
         />
       </SettingRow>
       <SettingRow
-        description="Where your AI server (LM Studio, Ollama or another OpenAI-compatible server) listens. LM Studio uses http://127.0.0.1:1234/v1."
+        description="LM Studio, Ollama or any OpenAI-compatible server. LM Studio uses http://127.0.0.1:1234/v1."
         label="Server address"
         stacked
       >
@@ -454,7 +454,7 @@ export function LocalAiSettings({ actions, settings }: GroupProps) {
         />
       </SettingRow>
       <SettingRow
-        description="Sent with each note when you analyze it, so it decides what you get back (a summary, action items, tags)."
+        description="Sent with each note you analyze. It decides what you get back."
         label="Analysis prompt"
         stacked
       >
@@ -464,7 +464,7 @@ export function LocalAiSettings({ actions, settings }: GroupProps) {
             actions.updateSettings({ notesAnalysisPrompt })
           }
           placeholder="Summarize this dictated note..."
-          rows={4}
+          rows={3}
           value={settings.notesAnalysisPrompt}
         />
       </SettingRow>

@@ -502,30 +502,24 @@ export function SyncView({
             title="Export to a file"
           >
             <p className="muted vocab-hint">
-              Save your transcripts to a local file. No account needed: this writes
-              straight to a folder you pick.
+              Save your transcripts to a file in a folder you pick. Markdown
+              reads well, CSV opens in a spreadsheet, JSON keeps everything.
             </p>
-            <SettingRow
-              description="Markdown for reading, CSV for spreadsheets, JSON for the full raw data."
-              label="Format"
-            >
+            <div className="export-row">
               <select
+                aria-label="Export format"
                 disabled={exporting}
                 onChange={(event) =>
                   setExportFormat(event.currentTarget.value as ExportFormat)
                 }
                 value={exportFormat}
               >
-                <option value="markdown">Markdown (.md)</option>
-                <option value="csv">CSV (.csv)</option>
-                <option value="json">JSON (.json)</option>
+                <option value="markdown">Markdown</option>
+                <option value="csv">CSV</option>
+                <option value="json">JSON</option>
               </select>
-            </SettingRow>
-            <SettingRow
-              description="Which transcripts to include in the export."
-              label="What to export"
-            >
               <select
+                aria-label="What to export"
                 disabled={exporting}
                 onChange={(event) =>
                   setExportScope(event.currentTarget.value as ExportScope)
@@ -536,8 +530,6 @@ export function SyncView({
                 <option value="notes">Notes only</option>
                 <option value="dictation">Dictation only</option>
               </select>
-            </SettingRow>
-            <div className="setting-control">
               <button
                 className="secondary-button"
                 disabled={exporting}
@@ -555,13 +547,10 @@ export function SyncView({
             title="Restore from a backup"
           >
             <p className="muted vocab-hint">
-              Restore a JSON file previously exported by Scribe. The file is
-              validated and previewed before local history changes.
+              Pick a JSON file Scribe exported. You see what it adds before
+              anything changes; transcripts you already have are skipped.
             </p>
-            <SettingRow
-              description="Existing transcripts are skipped by default. Audio file paths from another device are never imported."
-              label="Scribe JSON export"
-            >
+            <div className="export-row">
               <button
                 className="secondary-button"
                 disabled={importing}
@@ -571,7 +560,7 @@ export function SyncView({
                 <FileJson aria-hidden="true" size={15} />
                 {importing && !importPreview ? "Checking…" : "Choose backup…"}
               </button>
-            </SettingRow>
+            </div>
           </SectionPanel>
 
         </>

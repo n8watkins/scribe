@@ -79,18 +79,18 @@ export const SETTINGS_INDEX: readonly SettingsEntry[] = [
 
   // Your data
   { label: "Keep history", page: "Your data", keywords: "save history privacy transcripts off" },
-  { label: "Transcript retention", page: "Your data", keywords: "delete keep days auto-delete cleanup privacy" },
-  { label: "Notes retention", page: "Your data", keywords: "delete keep days auto-delete cleanup" },
+  { label: "Keep dictations for", page: "Your data", keywords: "transcript retention delete days auto-delete cleanup privacy" },
+  { label: "Keep notes for", page: "Your data", keywords: "notes retention delete days auto-delete cleanup" },
   { label: "Save audio clips", page: "Your data", keywords: "raw audio recordings privacy keep playback wav" },
-  { label: "Folders on this device", page: "Your data", target: "Local data", keywords: "folder location path logs models data directory" },
+  { label: "Folders on this device", page: "Your data", target: "On this device", keywords: "folder location path logs models data directory local" },
   { label: "Export to a file", page: "Your data", keywords: "export download markdown csv json backup" },
   { label: "Restore from a backup", page: "Your data", keywords: "import restore json backup" },
-  { label: "Delete data", page: "Your data", keywords: "delete clear erase wipe remove history buffer" },
+  { label: "Delete data", page: "Your data", target: "On this device", keywords: "delete clear erase wipe remove history buffer" },
 
   // Appearance
   { label: "Color theme", page: "Appearance", keywords: "theme dark light colors midnight pewter custom look" },
   { label: "Pill colors", page: "Appearance", keywords: "floating pill color waveform note background" },
-  { label: "Window size", page: "Appearance", keywords: "default size resize window" },
+  { label: "Window size", page: "Appearance", keywords: "default size resize window compact standard large preset" },
 
   // General
   { label: "Launch at startup", page: "General", keywords: "boot windows start login autostart" },
@@ -101,7 +101,7 @@ export const SETTINGS_INDEX: readonly SettingsEntry[] = [
   { label: "Developer settings", page: "General", keywords: "debug diagnostics advanced" },
 
   // About
-  { label: "Updates", page: "About", keywords: "update version install upgrade automatic check release" },
+  { label: "Updates", page: "General", keywords: "update version install upgrade automatic check release" },
   { label: "Release notes", page: "About", keywords: "what's new whats new changelog changes version history" },
   { label: "Copy diagnostics", page: "About", target: "Diagnostics", keywords: "bug report support logs troubleshoot debug problem error" },
 ];

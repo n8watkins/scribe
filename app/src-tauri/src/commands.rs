@@ -1167,30 +1167,25 @@ pub fn get_failed_recordings_dir(app: tauri::AppHandle) -> Result<String, Comman
     Ok(failed_recordings_dir(&app)?.to_string_lossy().into_owned())
 }
 
-/// Reads the main window's current inner size and persists it as the default
-/// window size, mirroring how the pill stores its position. The saved size is
-/// restored on the next launch (see lib.rs setup).
+/// Saves the main window's current inner size, in logical pixels, as the size
+/// Scribe opens at (Appearance > Window size). Restored at launch by
+/// `window_size::restore`.
 #[tauri::command]
 pub async fn save_window_size(app: tauri::AppHandle) -> Result<AppSettings, CommandError> {
     off_main(app, move |app| {
         let state = app.state::<BackendState>().inner();
-        let window = app.get_webview_window("main").ok_or_else(|| {
-            CommandError::new("window_unavailable", "The main window is not available.")
-        })?;
-        let size = window.inner_size().map_err(|error| {
-            CommandError::new(
-                "window_size_unavailable",
-                format!("Could not read the window size. {}", error),
-            )
+        let (width, height) = crate::window_size::current_logical(app).ok_or_else(|| {
+            CommandError::new("window_size_unavailable", "Could not read the window size.")
         })?;
 
         let _writes = settings_store::lock(state.settings_writes());
         let mut settings = state.db()?.get_settings()?;
-        settings.window_width = Some(size.width as i32);
-        settings.window_height = Some(size.height as i32);
+        settings.window_width = Some(width as i32);
+        settings.window_height = Some(height as i32);
+        settings.window_size_logical = true;
         state.db()?.save_settings(&settings)?;
         settings_store::emit_changed(app, &settings);
-        log::info!("Saved default window size {}x{}", size.width, size.height);
+        log::info!("Saved default window size {}x{}", width, height);
         Ok(settings)
     })
     .await

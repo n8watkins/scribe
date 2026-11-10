@@ -203,6 +203,8 @@ export type AppSettings = {
   /** Saved default main-window size (physical pixels); null uses the config default. */
   windowWidth: number | null;
   windowHeight: number | null;
+  /** Whether the saved window size is in logical pixels. */
+  windowSizeLogical: boolean;
 };
 
 export type Transcript = {

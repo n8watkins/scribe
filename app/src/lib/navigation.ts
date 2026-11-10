@@ -21,8 +21,9 @@ import type { ViewName } from "../types";
 export type NavItem = { label: ViewName; Icon: LucideIcon };
 export type NavGroup = { title: string; items: NavItem[] };
 
-/** The sidebar, grouped by job: using Scribe, setting it up, the two
- * connections to outside services, and the app itself. */
+/** The sidebar, grouped by job: using Scribe, setting up dictation, the
+ * two connections to outside services, and the app itself (General holds
+ * startup, tray, sounds and updates). */
 export const NAV_GROUPS: readonly NavGroup[] = [
   {
     title: "Use",
@@ -33,7 +34,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     ],
   },
   {
-    title: "Set up",
+    title: "Dictation setup",
     items: [
       { label: "Dictation", Icon: Mic },
       { label: "Words", Icon: BookOpen },
@@ -43,7 +44,7 @@ export const NAV_GROUPS: readonly NavGroup[] = [
     ],
   },
   {
-    title: "Integrations",
+    title: "Connections",
     items: [
       { label: "Local AI", Icon: Sparkles },
       { label: "GitHub backup", Icon: Cloud },
