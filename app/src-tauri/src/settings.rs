@@ -249,10 +249,6 @@ pub struct AppSettings {
     /// Models page was answered (switched or kept the current model).
     #[serde(default)]
     pub model_suggestion_dismissed: bool,
-    /// The one-time "common developer fixes" replacements offer on the Words
-    /// page was answered.
-    #[serde(default)]
-    pub replacement_suggestion_dismissed: bool,
     pub hotkeys: HotkeySettings,
 }
 
@@ -861,7 +857,6 @@ impl Default for AppSettings {
             window_height: None,
             window_size_logical: false,
             model_suggestion_dismissed: false,
-            replacement_suggestion_dismissed: false,
             hotkeys: HotkeySettings::default(),
         }
     }

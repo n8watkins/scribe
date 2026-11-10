@@ -273,6 +273,9 @@ export function SyncView({
       {part !== "files" ? (
         <>
           <SectionPanel
+            // Alone on the page until an account is connected, so it takes
+            // the full width instead of half.
+            className={connected && !unconfigured ? undefined : "span-2"}
             icon={<Cloud aria-hidden="true" size={16} />}
             title="Connection"
           >
@@ -406,7 +409,7 @@ export function SyncView({
               <SettingRow
                 description={
                   repoValid
-                    ? "Save a copy to GitHub whenever a note is saved or analyzed."
+                    ? "Notes, and your replacements.txt, whenever they change."
                     : "Set a valid owner/name repository above first."
                 }
                 label="Back up notes"

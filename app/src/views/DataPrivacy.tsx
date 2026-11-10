@@ -265,9 +265,9 @@ export function DataPrivacyView({
 /** Window size presets, in logical pixels so they look the same at any
  * display scale. Standard is the size Scribe opens at on a new install. */
 const WINDOW_PRESETS = [
-  { id: "compact", label: "Compact", width: 900, height: 620 },
-  { id: "standard", label: "Standard", width: 1024, height: 700 },
-  { id: "large", label: "Large", width: 1240, height: 820 },
+  { id: "compact", label: "Compact", width: 960, height: 660 },
+  { id: "standard", label: "Standard", width: 1120, height: 760 },
+  { id: "large", label: "Large", width: 1320, height: 880 },
 ] as const;
 
 /** Window size (Appearance): pick a preset, which resizes the window now and

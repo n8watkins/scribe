@@ -102,3 +102,68 @@ export function ConfirmDialog({
     </div>
   );
 }
+
+/** A dialog that only shows information, with one Close button. Escape and
+ * a click outside close it too. */
+export function InfoDialog({
+  children,
+  onClose,
+  open,
+  title,
+}: {
+  children: ReactNode;
+  onClose: () => void;
+  open: boolean;
+  title: string;
+}) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const titleId = useId();
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    closeRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [onClose, open]);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div
+      className="modal-overlay"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+      role="presentation"
+    >
+      <div aria-labelledby={titleId} aria-modal="true" className="modal-panel" role="dialog">
+        <div className="modal-heading">
+          <h2 id={titleId}>{title}</h2>
+        </div>
+        {children}
+        <div className="modal-actions">
+          <button
+            className="primary-button"
+            onClick={onClose}
+            ref={closeRef}
+            type="button"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

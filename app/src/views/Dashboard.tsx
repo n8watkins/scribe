@@ -23,7 +23,7 @@ import {
   statusCardValue,
 } from "../lib/format";
 import { HotkeyList, StatsRow, StatusCard } from "../components/layout";
-import { LastTranscriptCard, LiveTranscript } from "../components/transcript";
+import { LastTranscriptCard, LiveTranscriptCard } from "../components/transcript";
 import { WhatsNewCard } from "../components/ReleaseNotes";
 import { SetupStrip } from "../components/SetupStrip";
 import { isParakeetModel } from "../lib/engine";
@@ -67,10 +67,12 @@ export function DashboardView({
   const microphone = resolveMicrophone(microphones, settings.selectedMicId);
   const microphoneFellBack =
     microphone.kind === "device" && microphone.fellBack;
+  // Amber only when something needs action: no microphone at all. A saved
+  // microphone that is unplugged is fine, Scribe records on the default.
   const microphoneDot =
     microphone.kind === "loading"
       ? "status-dot"
-      : microphone.kind === "none" || microphoneFellBack
+      : microphone.kind === "none"
         ? "status-dot warning"
         : "status-dot success";
   const hotkeyHealth = useHotkeyHealth(
@@ -103,11 +105,12 @@ export function DashboardView({
       ? `${engineName} · ${engineStateLabel(engineStatus)}`
       : engineName;
   const liveText = liveTranscript?.text.trim() ?? "";
+  // While a dictation is live, its words take the Last transcript card's
+  // place, so nothing on Home moves.
   const showLive =
-    liveText.length > 0 &&
-    (appState.status === "Recording" ||
-      appState.status === "Stopping" ||
-      appState.status === "Transcribing");
+    appState.status === "Recording" ||
+    appState.status === "Stopping" ||
+    appState.status === "Transcribing";
 
   return (
     <>
@@ -142,6 +145,17 @@ export function DashboardView({
         <StatusCard
           action="Open Microphone"
           detail={microphoneFellBack ? "Saved mic not connected" : undefined}
+          quiet={
+            microphoneFellBack && microphone.kind === "device"
+              ? {
+                  label: "Make this my microphone",
+                  onClick: () =>
+                    actions.updateSettings({
+                      selectedMicId: microphone.microphone.id,
+                    }),
+                }
+              : undefined
+          }
           Icon={Mic}
           label="Microphone"
           onAction={() => setActiveView("Microphone")}
@@ -173,27 +187,22 @@ export function DashboardView({
 
       <StatsRow stats={stats} />
 
-      {showLive ? (
-        <article className="panel-card live-card">
-          <div className="section-heading compact">
-            <h2>Hearing you</h2>
-          </div>
-          <LiveTranscript text={liveText} />
-        </article>
-      ) : null}
-
       <section className="main-grid">
-        <LastTranscriptCard
-          clearing={actions.clearingLastTranscript}
-          copying={actions.copyingLastTranscript}
-          lastOutput={actions.lastOutput}
-          onClear={actions.clearLastTranscript}
-          onCopy={actions.copyLastTranscript}
-          onPaste={actions.pasteLastTranscript}
-          pasting={actions.pastingLastTranscript}
-          settings={settings}
-          transcript={lastTranscript}
-        />
+        {showLive ? (
+          <LiveTranscriptCard text={liveText} />
+        ) : (
+          <LastTranscriptCard
+            clearing={actions.clearingLastTranscript}
+            copying={actions.copyingLastTranscript}
+            lastOutput={actions.lastOutput}
+            onClear={actions.clearLastTranscript}
+            onCopy={actions.copyLastTranscript}
+            onPaste={actions.pasteLastTranscript}
+            pasting={actions.pastingLastTranscript}
+            settings={settings}
+            transcript={lastTranscript}
+          />
+        )}
 
         <article className="panel-card">
           <div className="section-heading compact">
