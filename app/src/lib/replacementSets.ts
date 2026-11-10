@@ -20,6 +20,13 @@ export const DEVELOPER_REPLACEMENTS: readonly TextReplacement[] = [
   { from: "shared cn", to: "shadcn" },
   { from: "sub agent", to: "subagent" },
   { from: "sub-agent", to: "subagent" },
+  { from: "sub agents", to: "subagents" },
+  { from: "local host", to: "localhost" },
+  { from: "cloud flare", to: "Cloudflare" },
+  { from: "cloudfare", to: "Cloudflare" },
+  { from: "vercell", to: "Vercel" },
+  { from: "turbo pack", to: "Turbopack" },
+  { from: "cloud md", to: "CLAUDE.md" },
 ];
 
 /** The entries of `set` not already in `current` (by spoken phrase). */
