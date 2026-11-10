@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.15.0 - 2026-11-10
+
+### New
+
+- Every page fits the window, with bigger stats, release history and window size presets ([#118](https://github.com/n8watkins/scribe/pull/118))
+- Settings follow the selected engine, with a custom words limit and a setup row on Home ([#119](https://github.com/n8watkins/scribe/pull/119))
+
+### Fixed
+
+- Home shows the microphone Scribe will record with, even when the saved one is unplugged ([#115](https://github.com/n8watkins/scribe/pull/115))
+- Deleting a model or transcript asks in a Scribe dialog, not a browser popup ([#116](https://github.com/n8watkins/scribe/pull/116))
+- Pages no longer shift sideways when a scrollbar appears ([#117](https://github.com/n8watkins/scribe/pull/117))
+- Switching models during a dictation applies from the next one ([#120](https://github.com/n8watkins/scribe/pull/120))
+
 ## 0.14.0 - 2026-11-09
 
 ### New
