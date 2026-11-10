@@ -18,6 +18,7 @@ import {
   Sparkles,
   Square,
   Trash2,
+  X,
 } from "lucide-react";
 import {
   cancelModelDownload,
@@ -45,7 +46,7 @@ import { IconButton, Toggle } from "../components/primitives";
 import { SettingRow } from "../components/layout";
 import { ConfirmDialog } from "../components/modal";
 import { deleteModelMessage } from "../lib/deleteConfirm";
-import { modelGuide, PARAKEET_TRADE } from "../lib/modelGuide";
+import { engineSupport, modelGuide } from "../lib/modelGuide";
 import {
   engineStateLabel,
   keepLoadedCaveat,
@@ -305,13 +306,10 @@ export function ModelsView({
           <div className="model-suggestion" role="status">
             <Sparkles aria-hidden="true" size={16} />
             <div>
-              <strong>Small English gets more of your words right</strong>
+              <strong>Try Small English</strong>
               <span>
-                In our test it caught 89% of developer terms in real
-                dictation, against {suggestion.from.name}'s{" "}
-                {suggestion.from.id.startsWith("tiny") ? "73%" : "82%"}. It's a{" "}
-                {suggestion.to.diskSizeLabel} download and takes about twice
-                as long per dictation.
+                More accurate than {suggestion.from.name}, a{" "}
+                {suggestion.to.diskSizeLabel} download.
               </span>
             </div>
             <div className="row-actions">
@@ -523,16 +521,25 @@ export function ModelsView({
                             <span className="model-guide">
                               <Meter label="Accuracy" value={guide.accuracy} />
                               <Meter label="Speed" value={guide.speed} />
-                              <span className="model-guide-note">{guide.note}</span>
-                            </span>
-                          ) : null}
-                          {model.engine === "parakeet" && !selected ? (
-                            <span className="model-trade">
-                              <span>
-                                <strong>Gains</strong> {PARAKEET_TRADE.gains}
-                              </span>
-                              <span>
-                                <strong>Gives up</strong> {PARAKEET_TRADE.givesUp}
+                              <span className="model-support">
+                                {engineSupport(model.engine).map((item) => (
+                                  <span
+                                    className={
+                                      item.supported
+                                        ? "model-support-item"
+                                        : "model-support-item is-off"
+                                    }
+                                    key={item.label}
+                                  >
+                                    {item.supported ? (
+                                      <Check aria-hidden="true" size={12} />
+                                    ) : (
+                                      <X aria-hidden="true" size={12} />
+                                    )}
+                                    {item.label}
+                                    {item.supported ? "" : " (not used)"}
+                                  </span>
+                                ))}
                               </span>
                             </span>
                           ) : null}

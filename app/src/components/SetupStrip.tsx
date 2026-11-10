@@ -5,23 +5,24 @@ import {
   type GpuProbe,
 } from "../backend";
 import type { ViewActions, ViewName } from "../types";
-import { analyzeHint, HINT_TOKEN_BUDGET } from "../lib/promptBudget";
+import { HINT_CHAR_LIMIT } from "../lib/promptBudget";
 import { isParakeetModel } from "../lib/engine";
 
-type Chip = {
+type Cell = {
   key: string;
   label: string;
   value: string;
-  /** "warn": off or over, and turning it on would help. "muted": not used. */
+  /** "warn": off or over, and changing it would help. "muted": not used. */
   tone?: "warn" | "muted";
   target: ViewName;
   title: string;
-  /** A one-click fix shown next to a warning. */
+  /** A one-click fix shown under a warning. */
   fix?: { label: string; run: () => void };
 };
 
-/** Home: what's on and off for dictation, at a glance. Each chip opens its
- * setting; a setting that would help but is off says so, with a fix. */
+/** Home: what's on and off for dictation, one full-width row. Each cell
+ * opens its setting; a setting that would help but is off says so, with a
+ * one-click fix. */
 export function SetupStrip({
   actions,
   settings,
@@ -33,7 +34,7 @@ export function SetupStrip({
 }) {
   const gpu = useGpuProbe(settings.gpuAcceleration === "off");
   const parakeet = isParakeetModel(settings.selectedModelId);
-  const hint = analyzeHint(settings.vocabularyPrompt);
+  const hintLength = settings.vocabularyPrompt.trim().length;
   const replacements = settings.textReplacements.filter((row) =>
     row.from.trim(),
   ).length;
@@ -43,41 +44,34 @@ export function SetupStrip({
   const gpuName =
     gpu?.devices.find((device) => device.index === gpu.recommendedIndex)?.name ??
     gpu?.devices[0]?.name;
+  const gpuOff = settings.gpuAcceleration === "off";
 
-  const chips: Chip[] = [
-    settings.gpuAcceleration === "off"
-      ? gpu?.available
-        ? {
-            key: "gpu",
-            label: "GPU",
-            value: "Off",
-            tone: "warn",
-            target: "Models & language",
-            title: `${gpuName ?? "A graphics card"} is available. Using it makes the bigger models fast enough for live dictation.`,
-            fix: {
+  const cells: Cell[] = [
+    {
+      key: "gpu",
+      label: "GPU",
+      value: gpuOff ? "Off" : "On",
+      tone: gpuOff && gpu?.available ? "warn" : undefined,
+      target: "Models & language",
+      title:
+        gpuOff && gpu?.available
+          ? `${gpuName ?? "A graphics card"} is available and much faster for the bigger models.`
+          : gpuOff
+            ? "Transcribing on the processor."
+            : "Transcribing on the graphics card when it can.",
+      fix:
+        gpuOff && gpu?.available
+          ? {
               label: "Turn on",
               run: () => actions.updateSettings({ gpuAcceleration: "auto" }),
-            },
-          }
-        : {
-            key: "gpu",
-            label: "GPU",
-            value: "Off",
-            target: "Models & language",
-            title: "Transcribing on the processor.",
-          }
-      : {
-          key: "gpu",
-          label: "GPU",
-          value: "On",
-          target: "Models & language",
-          title: "Transcribing on the graphics card when it can.",
-        },
+            }
+          : undefined,
+    },
     parakeet
       ? {
           key: "words",
           label: "Custom words",
-          value: "Not used by Parakeet",
+          value: "Not used",
           tone: "muted",
           target: "Words",
           title: "Parakeet can't take a word list. Replacements still work.",
@@ -85,16 +79,13 @@ export function SetupStrip({
       : {
           key: "words",
           label: "Custom words",
-          value: settings.vocabularyPrompt.trim()
-            ? hint.overLimit
-              ? `${hint.terms} terms, too long`
-              : `${hint.terms} terms, ${Math.round((hint.tokens / HINT_TOKEN_BUDGET) * 100)}% full`
-            : "None",
-          tone: hint.overLimit ? "warn" : undefined,
+          value: hintLength ? `${hintLength} / ${HINT_CHAR_LIMIT}` : "None",
+          tone: hintLength > HINT_CHAR_LIMIT ? "warn" : undefined,
           target: "Words",
-          title: hint.overLimit
-            ? `Too long: Whisper never sees the last ${hint.dropped.length} terms.`
-            : "Names and jargon Whisper expects. Room for about 35 to 40.",
+          title:
+            hintLength > HINT_CHAR_LIMIT
+              ? "Too long: Whisper won't see the end."
+              : "Names and jargon Whisper expects.",
         },
     {
       key: "replacements",
@@ -110,65 +101,59 @@ export function SetupStrip({
       target: "Models & language",
       title: keepLoaded
         ? "Dictation starts at once."
-        : "Saves memory between dictations; the first one after a pause is slower.",
+        : "Saves memory; the first dictation after a pause is slower.",
     },
-    settings.incrementalTranscriptionEnabled
-      ? {
-          key: "live",
-          label: "Live transcription",
-          value: "On",
-          target: "Microphone",
-          title: "Transcribes while you talk, so text is ready when you stop.",
-        }
-      : {
-          key: "live",
-          label: "Live transcription",
-          value: "Off",
-          tone: "warn",
-          target: "Microphone",
-          title: "Turn it on and long dictations are ready sooner.",
-          fix: {
+    {
+      key: "live",
+      label: "Live transcription",
+      value: settings.incrementalTranscriptionEnabled ? "On" : "Off",
+      tone: settings.incrementalTranscriptionEnabled ? undefined : "warn",
+      target: "Microphone",
+      title: "Transcribes while you talk, so text is ready when you stop.",
+      fix: settings.incrementalTranscriptionEnabled
+        ? undefined
+        : {
             label: "Turn on",
             run: () =>
               actions.updateSettings({ incrementalTranscriptionEnabled: true }),
           },
-        },
+    },
   ];
 
   return (
     <section aria-label="Dictation setup" className="setup-strip">
-      {chips.map((chip) => (
-        <span
-          className={chip.tone ? `setup-chip is-${chip.tone}` : "setup-chip"}
-          key={chip.key}
+      {cells.map((cell) => (
+        <div
+          className={cell.tone ? `setup-cell is-${cell.tone}` : "setup-cell"}
+          key={cell.key}
         >
           <button
-            className="setup-chip-open"
-            onClick={() => setActiveView(chip.target)}
-            title={chip.title}
+            className="setup-cell-open"
+            onClick={() => setActiveView(cell.target)}
+            title={cell.title}
             type="button"
           >
-            <span className="setup-chip-label">{chip.label}</span>
-            <span className="setup-chip-value">{chip.value}</span>
+            <span className="setup-cell-label">{cell.label}</span>
+            <span className="setup-cell-value">{cell.value}</span>
           </button>
-          {chip.fix ? (
+          {cell.fix ? (
             <button
-              className="setup-chip-fix"
+              className="setup-cell-fix"
               disabled={actions.savingSettings}
-              onClick={chip.fix.run}
+              onClick={cell.fix.run}
               type="button"
             >
-              {chip.fix.label}
+              {cell.fix.label}
             </button>
           ) : null}
-        </span>
+        </div>
       ))}
     </section>
   );
 }
 
 /** Whether a usable GPU is present, asked only when GPU acceleration is off
- * (the answer is cached by the backend after its first probe). */
+ * (the backend caches its first probe). */
 function useGpuProbe(wanted: boolean): GpuProbe | null {
   const [probe, setProbe] = useState<GpuProbe | null>(null);
   useEffect(() => {
