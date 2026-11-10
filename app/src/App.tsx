@@ -1032,8 +1032,9 @@ function App() {
         {loadState === "error" && !dashboardData ? (
           <ErrorPanel message={loadError} onRetry={refresh} />
         ) : null}
-        {dashboardData
-          ? renderView(
+        {dashboardData ? (
+          <div className={`view view-${viewSlug(activeView)}`}>
+            {renderView(
               activeView,
               setActiveView,
               dashboardData,
@@ -1044,8 +1045,9 @@ function App() {
               showNotice,
               lastUpdateCheck,
               updateInfo,
-            )
-          : null}
+            )}
+          </div>
+        ) : null}
         {toasts.length > 0 ? (
           <div className="toast-stack">
             {toasts.map((notice) => (
@@ -1057,6 +1059,14 @@ function App() {
       </div>
     </div>
   );
+}
+
+/** "Models & language" -> "models-language", for per-view layout rules. */
+function viewSlug(view: ViewName): string {
+  return view
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
 }
 
 function renderView(

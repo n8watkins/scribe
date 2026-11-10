@@ -18,37 +18,37 @@ const THEMES: ThemeOption[] = [
   {
     key: "midnight",
     name: "Midnight",
-    description: "The classic deep navy with a cyan accent.",
+    description: "Deep navy, cyan accent",
     swatches: ["#070b14", "#0d1320", "#22d3ee", "#38bdf8", "#f8fafc"],
   },
   {
     key: "ocean",
     name: "Ocean",
-    description: "Teal-leaning depths with a bright sky-blue accent.",
+    description: "Deep teal, sky-blue accent",
     swatches: ["#04141c", "#0a2230", "#2dd4bf", "#38bdf8", "#ecfeff"],
   },
   {
     key: "slate",
     name: "Slate",
-    description: "Neutral graphite with a soft indigo accent.",
+    description: "Graphite, indigo accent",
     swatches: ["#0b0e14", "#151a23", "#818cf8", "#a5b4fc", "#f1f5f9"],
   },
   {
     key: "emerald",
     name: "Emerald",
-    description: "Dark forest ground with a vivid green accent.",
+    description: "Forest, green accent",
     swatches: ["#05140d", "#0a2117", "#10b981", "#34d399", "#ecfdf5"],
   },
   {
     key: "violet",
     name: "Violet",
-    description: "Deep plum with a luminous purple accent.",
+    description: "Plum, purple accent",
     swatches: ["#0c0a1a", "#181233", "#a78bfa", "#c084fc", "#f5f3ff"],
   },
   {
     key: "daylight",
     name: "Pewter",
-    description: "A calm, muted light theme with soft pewter-gray surfaces, easy on the eyes.",
+    description: "Light, soft gray",
     swatches: ["#d6dadf", "#e8ebef", "#075985", "#0c4a6e", "#1f2937"],
   },
 ];
@@ -93,9 +93,8 @@ export function ThemesView({
             Color theme
           </h2>
         </div>
-        <p className="muted" style={{ margin: "0 0 4px" }}>
-          Choose a color theme for this window. The floating pill has its own
-          colors, under Pill colors below.
+        <p className="muted" style={{ margin: "0 0 2px" }}>
+          For this window. The floating pill has its own colors below.
         </p>
 
         <div className="theme-grid" role="radiogroup" aria-label="Color theme">
@@ -123,7 +122,7 @@ export function ThemesView({
                 </div>
                 <div className="theme-card-body">
                   <strong>{theme.name}</strong>
-                  <small>{theme.description}</small>
+                  <small title={theme.description}>{theme.description}</small>
                 </div>
                 {isActive ? (
                   <span className="theme-card-check" aria-hidden="true">
@@ -154,7 +153,7 @@ export function ThemesView({
             </div>
             <div className="theme-card-body">
               <strong>Custom</strong>
-              <small>Your own palette from five core colors.</small>
+              <small>Your own colors</small>
             </div>
             {isCustomActive ? (
               <span className="theme-card-check" aria-hidden="true">

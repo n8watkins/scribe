@@ -57,7 +57,7 @@
   align-items: center;
   column-gap: 14px;
   row-gap: 6px;
-  padding: 9px 11px;
+  padding: 7px 11px;
   border: 1px solid rgba(148, 163, 184, 0.13);
   border-radius: 8px;
   background: rgba(var(--scribe-surface-rgb), 0.32);
@@ -121,7 +121,15 @@
   flex: 0 0 auto;
 }
 
+/* Thin Press/Release switch: the bind is the row's main control. */
+.hotkeys-row-controls .trigger-segments {
+  padding: 2px;
+}
+
 .hotkeys-row-controls .trigger-segments button {
+  min-height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -137,15 +145,15 @@
   /* Wide enough for the usual three-key binds, so the Press/Release switches
      line up from row to row. */
   min-width: 148px;
-  min-height: 38px;
-  padding: 7px 14px;
+  min-height: 32px;
+  padding: 5px 14px;
   color: var(--scribe-text);
   background: var(--scribe-bg);
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-bottom-color: rgba(148, 163, 184, 0.4);
   border-radius: 8px;
   font-family: inherit;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 800;
   letter-spacing: 0.01em;
   white-space: nowrap;

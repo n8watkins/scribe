@@ -1,7 +1,7 @@
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   Check,
-  ChevronDown,
   Copy,
   Eraser,
   FolderOpen,
@@ -47,7 +47,6 @@ export function DataPrivacyView({
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [logsDir, setLogsDir] = useState<string | null>(null);
   const [failedDir, setFailedDir] = useState<string | null>(null);
-  const [foldersOpen, setFoldersOpen] = useState(false);
 
   // The models folder is the data dir's "models" subfolder (see the Rust
   // model_manager::models_dir). Derive it for display/copy using whichever
@@ -109,13 +108,13 @@ export function DataPrivacyView({
   }, []);
 
   return (
-    <section className="view-grid align-start">
+    <section className="view-grid data-grid">
       <SectionPanel
         icon={<ShieldCheck aria-hidden="true" size={16} />}
-        title="History and audio clips"
+        title="History"
       >
         <SettingRow
-          description="Save each dictation on this computer so you can search it later in History."
+          description="Save each dictation so you can search it in History."
           label="Keep history"
         >
           <Toggle
@@ -126,8 +125,8 @@ export function DataPrivacyView({
           />
         </SettingRow>
         <SettingRow
-          description="Delete dictations, their audio and failed recordings older than this. Notes keep their text, but their audio is deleted after this long too."
-          label="Transcript retention"
+          description="Older dictations, their audio and failed recordings are deleted."
+          label="Keep dictations for"
         >
           <select
             disabled={actions.savingSettings}
@@ -148,8 +147,8 @@ export function DataPrivacyView({
           </select>
         </SettingRow>
         <SettingRow
-          description="Delete saved notes older than this. Notes are kept forever by default."
-          label="Notes retention"
+          description="Notes stay until you delete them, unless you set a limit."
+          label="Keep notes for"
         >
           <select
             disabled={actions.savingSettings}
@@ -170,7 +169,7 @@ export function DataPrivacyView({
           </select>
         </SettingRow>
         <SettingRow
-          description="Keep each recording so you can play it back. Clips are deleted with their transcript, or after the transcript retention period for notes. Turn this off to stop saving new recordings."
+          description="Keep each recording so you can play it back. Clips go when their dictation does."
           label="Save audio clips"
         >
           <Toggle
@@ -182,70 +181,42 @@ export function DataPrivacyView({
         </SettingRow>
       </SectionPanel>
 
-      <div className="stack">
-        <SectionPanel
-          icon={<HardDrive aria-hidden="true" size={16} />}
-          title="Local data"
-        >
-          {dataError ? (
-            <InlineError message={dataError} onRetry={actions.refresh} />
-          ) : null}
-          <button
-            aria-expanded={foldersOpen}
-            className="accordion-toggle"
-            onClick={() => setFoldersOpen((open) => !open)}
-            type="button"
-          >
-            <span className="accordion-toggle-label">
-              <FolderOpen aria-hidden="true" size={15} />
-              Folders on this device
-            </span>
-            <span className="accordion-toggle-meta">
-              <ChevronDown
-                aria-hidden="true"
-                className={foldersOpen ? "accordion-chevron is-open" : "accordion-chevron"}
-                size={16}
-              />
-            </span>
-          </button>
-
-          {foldersOpen ? (
-            <div className="local-data-accordion">
-              <FolderRow
-                label="Local data folder"
-                note="Database and audio clips."
-                onOpen={() => void handleOpenFolder(openDataFolder)}
-                path={dataDir}
-              />
-              <hr className="local-data-divider" />
-              <FolderRow
-                label="Local models folder"
-                note="Downloaded Whisper models."
-                onOpen={() => void handleOpenFolder(openModelsFolder)}
-                path={modelsDir}
-              />
-              <hr className="local-data-divider" />
-              <FolderRow
-                label="Local logs folder"
-                note="Rotating diagnostic logs for bug reports."
-                onOpen={() => void handleOpenFolder(openLogsFolder)}
-                path={logsDir}
-              />
-              <hr className="local-data-divider" />
-              <FolderRow
-                label="Failed recordings folder"
-                note="Audio kept when a transcription fails, so it isn't lost. Up to 20, deleted after the transcript retention period."
-                onOpen={() => void handleOpenFolder(openFailedRecordingsFolder)}
-                path={failedDir}
-              />
-            </div>
-          ) : null}
-        </SectionPanel>
-
-        <SectionPanel
-          icon={<Trash2 aria-hidden="true" size={16} />}
-          title="Delete data"
-        >
+      <SectionPanel
+        className="device-panel"
+        icon={<HardDrive aria-hidden="true" size={16} />}
+        title="On this device"
+      >
+        {dataError ? (
+          <InlineError message={dataError} onRetry={actions.refresh} />
+        ) : null}
+        <div className="local-data-list">
+          <FolderRow
+            label="Data"
+            note="Database and audio clips"
+            onOpen={() => void handleOpenFolder(openDataFolder)}
+            path={dataDir}
+          />
+          <FolderRow
+            label="Models"
+            note="Downloaded speech models"
+            onOpen={() => void handleOpenFolder(openModelsFolder)}
+            path={modelsDir}
+          />
+          <FolderRow
+            label="Logs"
+            note="For bug reports"
+            onOpen={() => void handleOpenFolder(openLogsFolder)}
+            path={logsDir}
+          />
+          <FolderRow
+            label="Failed recordings"
+            note="Up to 20, kept so you can retry"
+            onOpen={() => void handleOpenFolder(openFailedRecordingsFolder)}
+            path={failedDir}
+          />
+        </div>
+        <div className="device-delete">
+          <span className="device-delete-label">Delete</span>
           <div className="button-row data-delete-actions">
             <button
               className="secondary-button"
@@ -256,7 +227,7 @@ export function DataPrivacyView({
               <Eraser aria-hidden="true" size={15} />
               {actions.clearingLastTranscript
                 ? "Clearing..."
-                : "Clear last transcript"}
+                : "Last transcript"}
             </button>
             <button
               className="ghost-button danger"
@@ -265,11 +236,11 @@ export function DataPrivacyView({
               type="button"
             >
               <Trash2 aria-hidden="true" size={15} />
-              {clearingHistory ? "Clearing..." : "Clear transcript history"}
+              {clearingHistory ? "Clearing..." : "All history"}
             </button>
           </div>
-        </SectionPanel>
-      </div>
+        </div>
+      </SectionPanel>
 
       {children}
 
@@ -288,58 +259,99 @@ export function DataPrivacyView({
   );
 }
 
-/** Saves the current window size as the default (Appearance). */
+/** Window size presets, in logical pixels so they look the same at any
+ * display scale. Standard is the size Scribe opens at on a new install. */
+const WINDOW_PRESETS = [
+  { id: "compact", label: "Compact", width: 900, height: 620 },
+  { id: "standard", label: "Standard", width: 1024, height: 700 },
+  { id: "large", label: "Large", width: 1240, height: 820 },
+] as const;
+
+/** Window size (Appearance): pick a preset, which resizes the window now and
+ * keeps it as the size Scribe opens at, or keep the size you dragged it to. */
 export function WindowSizeSettings({ actions }: { actions: ViewActions }) {
   const [dataError, setDataError] = useState<string | null>(null);
-  const [savingWindowSize, setSavingWindowSize] = useState(false);
-  const [windowSizeSaved, setWindowSizeSaved] = useState(false);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [size, setSize] = useState({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  });
 
-  const handleSaveWindowSize = useCallback(async () => {
-    setDataError(null);
-    setSavingWindowSize(true);
-    setWindowSizeSaved(false);
+  useEffect(() => {
+    const onResize = () =>
+      setSize({ width: window.innerWidth, height: window.innerHeight });
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
-    try {
-      await saveWindowSize();
-      await actions.refresh();
-      setWindowSizeSaved(true);
-      window.setTimeout(() => setWindowSizeSaved(false), 2500);
-    } catch (error) {
-      setDataError(commandErrorMessage(error));
-    } finally {
-      setSavingWindowSize(false);
-    }
-  }, [actions]);
+  const activePreset = WINDOW_PRESETS.find(
+    (preset) =>
+      Math.abs(preset.width - size.width) <= 2 &&
+      Math.abs(preset.height - size.height) <= 2,
+  );
+
+  const apply = useCallback(
+    async (id: string, width?: number, height?: number) => {
+      setDataError(null);
+      setSaving(id);
+      try {
+        if (width && height) {
+          await getCurrentWindow().setSize(new LogicalSize(width, height));
+        }
+        await saveWindowSize();
+        await actions.refresh();
+      } catch (error) {
+        setDataError(commandErrorMessage(error));
+      } finally {
+        setSaving(null);
+      }
+    },
+    [actions],
+  );
 
   return (
-    <>
-      <SectionPanel
-        icon={<Maximize2 aria-hidden="true" size={16} />}
-        title="Window size"
-      >
-        <SettingRow
-          description="Open Scribe at the size the window is now."
-          label="Default window size"
-        >
+    <SectionPanel
+      icon={<Maximize2 aria-hidden="true" size={16} />}
+      title="Window size"
+    >
+      <p className="muted vocab-hint">
+        The size Scribe opens at. Now {size.width} x {size.height}.
+      </p>
+      <div className="window-presets" role="radiogroup" aria-label="Window size">
+        {WINDOW_PRESETS.map((preset) => (
           <button
-            className="secondary-button"
-            disabled={savingWindowSize}
-            onClick={() => void handleSaveWindowSize()}
+            aria-checked={activePreset?.id === preset.id}
+            className={
+              activePreset?.id === preset.id
+                ? "window-preset is-active"
+                : "window-preset"
+            }
+            disabled={saving !== null}
+            key={preset.id}
+            onClick={() => void apply(preset.id, preset.width, preset.height)}
+            role="radio"
             type="button"
           >
-            <Maximize2 aria-hidden="true" size={15} />
-            {savingWindowSize
-              ? "Saving..."
-              : windowSizeSaved
-                ? "Saved"
-                : "Save current size"}
+            <strong>{preset.label}</strong>
+            <small>
+              {preset.width} x {preset.height}
+            </small>
           </button>
-        </SettingRow>
-      </SectionPanel>
+        ))}
+      </div>
+      <button
+        className="ghost-button"
+        disabled={saving !== null || Boolean(activePreset)}
+        onClick={() => void apply("current")}
+        type="button"
+      >
+        <Maximize2 aria-hidden="true" size={14} />
+        {saving === "current" ? "Saving..." : "Keep the current size"}
+      </button>
       {dataError ? (
         <InlineError message={dataError} onRetry={actions.refresh} />
       ) : null}
-    </>
+    </SectionPanel>
   );
 }
 
@@ -373,14 +385,11 @@ function FolderRow({
   }, [path]);
 
   return (
-    <div className="local-data-row">
+    <div className="local-data-row" title={path ?? undefined}>
       <span className="local-data-meta">
         <span className="local-data-label">{label}</span>
         <span className="local-data-note">{note}</span>
       </span>
-      <code className="local-data-path" title={path ?? undefined}>
-        {path ?? "Loading..."}
-      </code>
       <span className="local-data-actions">
         <button
           aria-label={`Open ${label.toLowerCase()}`}

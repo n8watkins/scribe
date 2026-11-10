@@ -9,7 +9,6 @@ import {
   Clock,
   Download,
   ExternalLink,
-  FolderOpen,
   History,
   Info,
   Keyboard,
@@ -21,8 +20,6 @@ import {
 } from "lucide-react";
 import {
   commandErrorMessage,
-  getDataDir,
-  openDataFolder,
   openReleasePage,
   type UpdateCheckResult,
 } from "../backend";
@@ -30,7 +27,7 @@ import { detectUpdate, updatesInstallInApp } from "../lib/updates";
 import type { ViewName } from "../types";
 import { Toggle } from "../components/primitives";
 import {
-  CurrentReleaseNotes,
+  ReleaseHistory,
   ReleaseNotesBody,
 } from "../components/ReleaseNotes";
 import { CopyDiagnostics } from "../components/CopyDiagnostics";
@@ -44,32 +41,32 @@ const FEATURES = [
   {
     Icon: Keyboard,
     title: "Dictate anywhere",
-    text: "Hold-to-talk or toggle with a global hotkey. Your voice lands as text in any app, no window switching.",
+    text: "Hold the hotkey, talk, let go. The text lands at your cursor, in any app.",
   },
   {
     Icon: Mic,
-    title: "Private, on-device Whisper",
-    text: "Speech is transcribed locally with Whisper. Your audio never leaves the machine and dictation keeps working offline.",
+    title: "Runs on your computer",
+    text: "Whisper or Parakeet transcribes on this machine. Your audio never leaves it, and dictation works offline.",
   },
   {
     Icon: Clock,
-    title: "Last Transcript Buffer",
-    text: "Your latest dictation stays parked and ready to paste on demand, without ever clobbering your clipboard.",
+    title: "Paste it again",
+    text: "Your last dictation stays one hotkey away. Scribe puts your clipboard back after every paste.",
   },
   {
     Icon: StickyNote,
-    title: "Quick notes, smart recap",
-    text: "Capture a spoken note with ~ + Q, then let a local model summarise and pull out the action items.",
+    title: "Quick notes",
+    text: "Hold the toggle key and tap Q to save a spoken note instead of pasting it. Local AI can sum it up and pull out the to-dos.",
   },
   {
     Icon: History,
     title: "Searchable history",
-    text: "Every transcript is kept in a fast, local, searchable log, with retention limits you control.",
+    text: "Every dictation is kept on this device, searchable by text and date, for as long as you choose.",
   },
   {
     Icon: Replace,
-    title: "Text replacements",
-    text: "Names, jargon, and shorthand get fixed automatically with your own find-and-replace rules.",
+    title: "Your words",
+    text: "A context hint teaches Scribe your names and jargon; replacements fix the mistakes it keeps making.",
   },
 ];
 
@@ -80,21 +77,21 @@ const SETUP_STEPS: {
   target: ViewName;
 }[] = [
   {
-    title: "Download a model",
-    text: "Scribe transcribes with a local Whisper model. Open Models and language and download one. A smaller model is faster, a larger one is more accurate.",
-    action: "Download a model",
+    title: "Download a speech model",
+    text: "Pick one on Models and language. Base English is small and quick; Small English and Parakeet v3 get more of your words right.",
+    action: "Open Models and language",
     target: "Models & language",
   },
   {
-    title: "Choose a microphone",
-    text: "Pick the input device Scribe records from under Microphone, then run the level test so you know your voice is coming through.",
-    action: "Choose a microphone",
+    title: "Pick your microphone",
+    text: "Choose it on Microphone and record a short test to hear yourself back.",
+    action: "Open Microphone",
     target: "Microphone",
   },
   {
-    title: "Set your hotkeys",
-    text: "Confirm your hold-to-talk, toggle, and paste-last shortcuts in Hotkeys. Then press your hold-to-talk key anywhere and start dictating.",
-    action: "Set your hotkeys",
+    title: "Try your hotkeys",
+    text: "Check hold to talk and paste last on Hotkeys, then click into any text box, hold the key and talk.",
+    action: "Open Hotkeys",
     target: "Hotkeys",
   },
 ];
@@ -125,7 +122,6 @@ export function AboutView({
   onToggleAutoInstall?: (enabled: boolean) => void;
 }) {
   const [version, setVersion] = useState("...");
-  const [dataDir, setDataDir] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(
     null,
@@ -136,7 +132,6 @@ export function AboutView({
 
   useEffect(() => {
     void getAppVersion().then(setVersion).catch(() => setVersion("unknown"));
-    void getDataDir().then(setDataDir).catch(() => setDataDir(null));
   }, []);
 
   const handleCheckForUpdate = async () => {
@@ -245,9 +240,6 @@ export function AboutView({
               <strong>Version</strong>
               <span className="about-version">v{version}</span>
             </div>
-            <small>
-              The packaged application version running on this device.
-            </small>
           </div>
 
           <div className="about-block" data-setting="Updates">
@@ -353,32 +345,9 @@ export function AboutView({
               <span className="pill preserve">Local-first</span>
             </div>
             <small>
-              Audio is recorded and transcribed entirely on your device. Once a
-              model is downloaded, dictation works offline and nothing is sent
-              to any server.
+              Your audio is recorded and transcribed on this device and never
+              uploaded. Your files are listed under Your data.
             </small>
-          </div>
-
-          <div className="about-block">
-            <div className="about-block-head">
-              <strong>Local data path</strong>
-            </div>
-            <small>
-              Where Scribe keeps your database, audio clips, and models.
-            </small>
-            <div className="about-path-row">
-              <code className="about-path" title={dataDir ?? undefined}>
-                {dataDir ?? "Loading..."}
-              </code>
-              <button
-                aria-label="Open data folder"
-                className="icon-button"
-                onClick={() => void openDataFolder()}
-                type="button"
-              >
-                <FolderOpen aria-hidden="true" size={15} />
-              </button>
-            </div>
           </div>
 
           <CopyDiagnostics />
@@ -391,11 +360,8 @@ export function AboutView({
       title: "Release notes",
       icon: <ScrollText aria-hidden="true" size={16} />,
       render: () => (
-        <article className="panel-card">
-          <div className="settings-list">
-            <p className="about-lead">What changed in v{version}.</p>
-            <CurrentReleaseNotes />
-          </div>
+        <article className="panel-card about-releases-card">
+          <ReleaseHistory />
         </article>
       ),
     },
@@ -406,8 +372,8 @@ export function AboutView({
       render: () => (
         <article className="panel-card about-features-card">
           <p className="about-lead">
-            Fast, private voice-to-text that lives in your tray and works in
-            every app. Here's what you get.
+            Private speech-to-text that works in every app and never sends
+            your voice anywhere.
           </p>
           <ul className="feature-grid">
             {FEATURES.map(({ Icon, title, text }) => (
@@ -431,8 +397,7 @@ export function AboutView({
         <article className="panel-card">
           <div className="settings-list">
           <p className="about-lead">
-            Three steps get you dictating. Each one jumps to the page where you
-            set it up.
+            Three steps and you're dictating.
           </p>
           <ol className="about-steps">
             {SETUP_STEPS.map(({ title, text, action, target }) => (

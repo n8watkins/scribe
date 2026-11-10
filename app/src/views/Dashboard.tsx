@@ -29,7 +29,14 @@ import { engineStateLabel, useEngineStatus } from "../lib/engineStatus";
 
 /** The hotkeys Home always lists; any other hotkey shows up only when it
  * failed to register, so a conflict is never hidden. */
-const HOME_HOTKEYS = ["holdToTalk", "toggleDictation", "pasteLastTranscript"];
+const HOME_HOTKEYS = [
+  "holdToTalk",
+  "toggleDictation",
+  "pasteLastTranscript",
+  "discardDictation",
+  "openDashboard",
+  "transformSelection",
+];
 
 const AFTER_DICTATION_LABELS = {
   insert: "Insert at cursor",

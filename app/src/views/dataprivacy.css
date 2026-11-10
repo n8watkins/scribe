@@ -3,52 +3,43 @@
    label/description on the left, the monospace path, and a pair of small
    icon-buttons (open folder + copy path) pinned to the right. */
 
-.local-data-accordion {
+/* "On this device": one compact row per folder (name and what it holds on
+   the left, open and copy on the right; the full path is the row's tooltip),
+   then the delete actions under a divider. */
+.local-data-list {
   display: grid;
-  gap: 10px;
 }
 
-/* One folder entry: label + note stacked, then the path, then the icon
-   actions. The path takes the remaining width and the actions never shrink. */
 .local-data-row {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 10px;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 40px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
 }
 
-/* Shrinkable and capped at the row width, so a long note wraps instead of
-   widening the panel past the window. */
 .local-data-meta {
-  display: grid;
-  gap: 1px;
-  flex: 0 1 auto;
-  min-width: 130px;
-  max-width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
 }
 
 .local-data-label {
+  flex: 0 0 auto;
   color: var(--scribe-text);
-  font-size: 12px;
-  font-weight: 760;
+  font-size: 12.5px;
+  font-weight: 700;
 }
 
 .local-data-note {
-  color: var(--scribe-text-faint);
-  font-size: 11px;
-}
-
-.local-data-path {
-  flex: 1 1 220px;
-  min-width: 0;
-  padding: 7px 9px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 6px;
-  background: var(--scribe-bg-elevated);
-  color: var(--scribe-text);
-  font-family: ui-monospace, "Cascadia Code", "Fira Code", monospace;
-  font-size: 12px;
-  word-break: break-all;
+  overflow: hidden;
+  color: var(--scribe-text-muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .local-data-actions {
@@ -58,15 +49,75 @@
   flex: 0 0 auto;
 }
 
+.device-delete {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 10px;
+}
+
+.device-delete-label {
+  color: var(--scribe-text-secondary);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
 /* Copy button flips to cyan for a moment after a successful copy. */
 .icon-button.is-copied {
   color: var(--scribe-accent);
   border-color: var(--scribe-accent-soft);
 }
 
-.local-data-divider {
-  height: 1px;
-  margin: 0;
-  border: 0;
-  background: rgba(148, 163, 184, 0.12);
+/* Your data: the panels in a row share one height. */
+.data-grid {
+  align-items: stretch;
+}
+
+/* The delete actions sit at the bottom of the panel, apart from the folders. */
+.device-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.device-panel > .settings-list {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.device-panel .device-delete {
+  margin-top: auto;
+}
+
+/* Appearance > Window size: three presets as a segmented choice. */
+.window-presets {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.window-preset {
+  display: grid;
+  gap: 1px;
+  padding: 7px 8px;
+  color: var(--scribe-text);
+  text-align: left;
+  background: rgba(var(--scribe-surface-rgb), 0.32);
+  border: 1px solid var(--scribe-border);
+  border-radius: 7px;
+}
+
+.window-preset small {
+  color: var(--scribe-text-muted);
+  font-size: 11.5px;
+}
+
+.window-preset:hover:not(:disabled) {
+  border-color: var(--scribe-accent-soft);
+}
+
+.window-preset.is-active {
+  border-color: var(--scribe-accent);
+  box-shadow: 0 0 0 1px var(--scribe-accent);
 }

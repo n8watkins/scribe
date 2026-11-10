@@ -40,6 +40,45 @@ export function notesForVersion(
   return body || null;
 }
 
+/** One release in the changelog: its version, date and notes. */
+export type ReleaseEntry = { version: string; date: string | null; notes: string };
+
+/** Every `## <version> - <date>` section of a Keep-a-Changelog style file,
+ * newest first (the file's own order). Sections with no notes are left out. */
+export function releaseHistory(markdown: string): ReleaseEntry[] {
+  const entries: ReleaseEntry[] = [];
+  const lines = markdown.split(/\r?\n/);
+  let current: { version: string; date: string | null; body: string[] } | null =
+    null;
+  const flush = () => {
+    const notes = current?.body.join("\n").trim();
+    if (current && notes) {
+      entries.push({ version: current.version, date: current.date, notes });
+    }
+  };
+  for (const line of lines) {
+    const heading = /^##\s+v?(\d+\.\d+\.\d+[^\s]*)(?:\s+\S\s+(\d{4}-\d{2}-\d{2}))?/.exec(
+      line,
+    );
+    if (heading) {
+      flush();
+      current = { version: heading[1], date: heading[2] ?? null, body: [] };
+    } else if (/^##\s/.test(line)) {
+      flush();
+      current = null;
+    } else if (current) {
+      current.body.push(line);
+    }
+  }
+  flush();
+  return entries;
+}
+
+/** Every release bundled with this build, newest first. */
+export function bundledReleaseHistory(): ReleaseEntry[] {
+  return releaseHistory(changelog);
+}
+
 /** The bundled notes for `version`, or null. */
 export function bundledNotes(version: string): string | null {
   return notesForVersion(changelog, version);

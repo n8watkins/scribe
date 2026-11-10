@@ -402,16 +402,14 @@ export function ModelsView({
                     const isManagedDownload = model.source === "app_data";
                     const statusLabel = modelStatusLabel(status);
                     const statusClass = modelStatusClass(status);
-                    // Download-state pill is interesting on its own when the
-                    // model is not in use, or when the state is actionable
-                    // (downloading / failed / update available) even if it is.
+                    // The row's buttons already say whether a model is on
+                    // this device (Download, or Delete), so a state pill
+                    // shows only for states a button doesn't explain.
                     const actionableState =
                       status === "downloading" ||
                       status === "failed" ||
                       status === "update_available";
-                    const showStatusPill =
-                      statusLabel !== "" && (!selected || actionableState);
-                    const showRestingState = !selected && statusLabel === "";
+                    const showStatusPill = statusLabel !== "" && actionableState;
                     return (
                       <div
                         className={selected ? "model-row is-selected" : "model-row"}
@@ -478,9 +476,6 @@ export function ModelsView({
                               so the pill only appears for actionable states. */}
                           {showStatusPill ? (
                             <span className={statusClass}>{statusLabel}</span>
-                          ) : null}
-                          {showRestingState ? (
-                            <span className="model-row-resting">Not downloaded</span>
                           ) : null}
                         </div>
                         <div className="row-actions">
