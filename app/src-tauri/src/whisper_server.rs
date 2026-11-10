@@ -73,25 +73,6 @@ const INFERENCE_TIMEOUT: Duration = Duration::from_secs(300);
 /// Consecutive server failures before the server path is disabled.
 const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 
-/// Whether a dictation is recording or being transcribed right now.
-fn dictation_in_progress(app: &AppHandle) -> bool {
-    app.try_state::<crate::commands::BackendState>()
-        .and_then(|state| {
-            state
-                .app_state()
-                .ok()
-                .map(|machine| machine.status().clone())
-        })
-        .is_some_and(|status| {
-            matches!(
-                status,
-                crate::app_state::AppStatus::Recording
-                    | crate::app_state::AppStatus::Stopping
-                    | crate::app_state::AppStatus::Transcribing
-            )
-        })
-}
-
 /// Whether `engine` can stay resident on this system. Whisper's warm server
 /// runs on Windows; elsewhere each dictation runs whisper-cli.
 pub fn resident_supported(engine: EngineKind) -> bool {
