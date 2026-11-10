@@ -27,7 +27,7 @@ export function StatsRow({ stats }: { stats: BasicStats }) {
       value: formatOptionalDuration(stats.averageTranscriptionLatencyMs),
     },
     {
-      label: "Recording length",
+      label: "Recording time",
       value: formatOptionalDuration(stats.averageRecordingDurationMs),
     },
     { label: "Total words", value: formatNumber(stats.totalWordsTranscribed) },

@@ -682,6 +682,14 @@ button:disabled {
   margin-bottom: 8px;
 }
 
+@media (max-width: 959px) {
+  /* Compact window: the four cards keep one row and give the icon's room
+     to the text. */
+  .status-grid .status-card-icon {
+    display: none;
+  }
+}
+
 @media (max-width: 879px) {
   .status-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
