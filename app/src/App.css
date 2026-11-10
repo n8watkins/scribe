@@ -3042,10 +3042,21 @@ kbd {
   width: fit-content;
 }
 
-/* Home: live text while recording, and the hotkey conflict note. */
-.live-card {
-  margin-bottom: 8px;
+/* Home while dictating: the live card wears the Last transcript card's
+   shape. */
+.live-buffer-card .eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
+
+.live-buffer-card .live-buffer-text {
+  color: var(--scribe-text-secondary);
+  white-space: pre-wrap;
+  border-color: var(--scribe-accent-soft);
+}
+
+/* Home: the hotkey conflict note. */
 
 .hotkey-summary-note {
   margin: 8px 0 0;

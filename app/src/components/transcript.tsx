@@ -274,6 +274,43 @@ export function TranscriptRow({
   );
 }
 
+/** Home while you dictate: takes the Last transcript card's place, same
+ * size, so nothing on Home moves. The words scroll inside, newest in view. */
+export function LiveTranscriptCard({ text }: { text: string }) {
+  const scrollRef = useRef<HTMLParagraphElement | null>(null);
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (node) {
+      node.scrollTop = node.scrollHeight;
+    }
+  }, [text]);
+
+  return (
+    <article className="buffer-card live-buffer-card" data-setting="Last transcript">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">
+            <span aria-hidden="true" className="live-transcript-dot" /> Hearing you
+          </p>
+          <h2>Your words appear as you talk</h2>
+        </div>
+      </div>
+      <p
+        aria-live="polite"
+        className="transcript-text buffer-preview live-buffer-text"
+        ref={scrollRef}
+      >
+        {text || "Listening..."}
+      </p>
+      <div className="buffer-footer">
+        <span className="muted vocab-hint">
+          The finished text lands here when you stop.
+        </span>
+      </div>
+    </article>
+  );
+}
+
 export function LiveTranscript({ text }: { text: string }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 

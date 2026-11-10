@@ -23,7 +23,7 @@ import {
   statusCardValue,
 } from "../lib/format";
 import { HotkeyList, StatsRow, StatusCard } from "../components/layout";
-import { LastTranscriptCard, LiveTranscript } from "../components/transcript";
+import { LastTranscriptCard, LiveTranscriptCard } from "../components/transcript";
 import { WhatsNewCard } from "../components/ReleaseNotes";
 import { SetupStrip } from "../components/SetupStrip";
 import { isParakeetModel } from "../lib/engine";
@@ -105,11 +105,12 @@ export function DashboardView({
       ? `${engineName} · ${engineStateLabel(engineStatus)}`
       : engineName;
   const liveText = liveTranscript?.text.trim() ?? "";
+  // While a dictation is live, its words take the Last transcript card's
+  // place, so nothing on Home moves.
   const showLive =
-    liveText.length > 0 &&
-    (appState.status === "Recording" ||
-      appState.status === "Stopping" ||
-      appState.status === "Transcribing");
+    appState.status === "Recording" ||
+    appState.status === "Stopping" ||
+    appState.status === "Transcribing";
 
   return (
     <>
@@ -186,27 +187,22 @@ export function DashboardView({
 
       <StatsRow stats={stats} />
 
-      {showLive ? (
-        <article className="panel-card live-card">
-          <div className="section-heading compact">
-            <h2>Hearing you</h2>
-          </div>
-          <LiveTranscript text={liveText} />
-        </article>
-      ) : null}
-
       <section className="main-grid">
-        <LastTranscriptCard
-          clearing={actions.clearingLastTranscript}
-          copying={actions.copyingLastTranscript}
-          lastOutput={actions.lastOutput}
-          onClear={actions.clearLastTranscript}
-          onCopy={actions.copyLastTranscript}
-          onPaste={actions.pasteLastTranscript}
-          pasting={actions.pastingLastTranscript}
-          settings={settings}
-          transcript={lastTranscript}
-        />
+        {showLive ? (
+          <LiveTranscriptCard text={liveText} />
+        ) : (
+          <LastTranscriptCard
+            clearing={actions.clearingLastTranscript}
+            copying={actions.copyingLastTranscript}
+            lastOutput={actions.lastOutput}
+            onClear={actions.clearLastTranscript}
+            onCopy={actions.copyLastTranscript}
+            onPaste={actions.pasteLastTranscript}
+            pasting={actions.pastingLastTranscript}
+            settings={settings}
+            transcript={lastTranscript}
+          />
+        )}
 
         <article className="panel-card">
           <div className="section-heading compact">
