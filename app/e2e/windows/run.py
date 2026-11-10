@@ -56,6 +56,7 @@ HOTKEYS = {
     "openDashboard": ("Ctrl+Alt+F12", 0x7B),
 }
 
+PARAKEET_ID = "parakeet-tdt-0.6b-v3"
 JFK_WORDS = ["fellow", "americans", "ask", "country", "can", "do", "for", "you"]
 CLIPS = {
     "hold": "Please schedule the meeting for next Tuesday afternoon.",
@@ -1119,6 +1120,25 @@ class Run:
         check_words(request["instruction"], ["make", "text", "uppercase"], "The spoken instruction")
         wait_idle()
 
+    def dashboard_shot(self, name: str) -> None:
+        """Brings the dashboard to the front and saves a screenshot of it, for
+        the model status line. A screenshot never fails a check."""
+        targets = [target.form for target in self.targets.values()]
+        try:
+            for form in targets:
+                user32.ShowWindow(form, 6)  # SW_MINIMIZE: the stand-in apps sit on top
+            hwnd = wait_until("the dashboard window", self.app.main_window, 30)
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0003)  # topmost, keep size and place
+            time.sleep(1.5)
+            self.shot(name)
+            user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, 0x0003)  # not topmost
+        except Exception as error:
+            print(f"Dashboard screenshot {name} failed: {error}")
+        finally:
+            for form in targets:
+                user32.ShowWindow(form, 9)  # SW_RESTORE
+
     def owned_engines(self) -> list[dict]:
         pid = self.app.process.pid
         return [p for p in speech_processes() if p["ParentProcessId"] == pid and p["Name"] != "whisper-cli.exe"]
@@ -1141,6 +1161,7 @@ class Run:
         patch_settings({"keepWhisperLoaded": False})
         self.app.launch()
         stays("no model loaded after launch", lambda: not self.owned_engines(), 5)
+        self.dashboard_shot("keep-loaded-off-home")
         target = self.targets["A"]
         self.prepare(target, "clipboard before keep-loaded off")
         transcript = self.toggle_dictation("jfk")
@@ -1155,6 +1176,31 @@ class Run:
         patch_settings({"keepWhisperLoaded": True})
         self.app.launch()
         wait_until("the model to load at startup again", self.owned_engines, 90, 0.2)
+
+    def parakeet_engine(self) -> None:
+        """Switching to Parakeet v3: Whisper's server is gone, the Parakeet
+        sidecar loads at startup, and a dictation transcribes through it.
+        Parakeet stays loaded for the hard-kill scenario after this one."""
+        self.app.stop()
+        patch_settings({"selectedModelId": PARAKEET_ID})
+        self.app.launch()
+        engines = wait_until(
+            "the Parakeet sidecar to load at startup",
+            lambda: [p for p in self.owned_engines() if p["Name"].lower() == "scribe-parakeet.exe"],
+            120,
+            0.2,
+        )
+        names = sorted(p["Name"].lower() for p in self.owned_engines())
+        check(names == ["scribe-parakeet.exe"], f"Expected only the Parakeet sidecar, found {names}")
+        print(f"Parakeet loaded: {engines}")
+        self.dashboard_shot("parakeet-loaded-home")
+        target = self.targets["A"]
+        self.prepare(target, "clipboard before Parakeet")
+        transcript = self.toggle_dictation("jfk")
+        check_words(transcript["text"], JFK_WORDS, "The Parakeet transcript")
+        print(f"Parakeet transcript: {transcript['text']}")
+        names = sorted(p["Name"].lower() for p in self.owned_engines())
+        check(names == ["scribe-parakeet.exe"], f"After the dictation expected only Parakeet, found {names}")
 
     def hard_kill_stops_speech_engine(self) -> None:
         """Ends Scribe the way a crash or Task Manager does (TerminateProcess:
@@ -1215,6 +1261,7 @@ class Run:
                     ("Discard a dictation", self.discard),
                     ("Transform Selection with a local AI server", self.transform_selection),
                     ("Keep the speech model loaded off: loads on dictation, unloads after a minute", self.keep_loaded_off),
+                    ("Parakeet v3: switch engines, dictate, never both loaded", self.parakeet_engine),
                     ("Never two speech models in memory at once", self.never_two_models),
                     # Last: it ends the app.
                     ("A hard kill takes the speech model down with Scribe", self.hard_kill_stops_speech_engine),

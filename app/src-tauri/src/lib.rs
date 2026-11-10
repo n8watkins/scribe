@@ -23,6 +23,7 @@ pub mod models;
 pub mod note_analysis;
 pub mod note_sync;
 pub mod output;
+pub mod parakeet;
 pub mod platform;
 pub mod process_info;
 pub mod release_notes;

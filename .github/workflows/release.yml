@@ -184,6 +184,8 @@ jobs:
           if ($actual -ne $env:WHISPER_CPP_COMMIT) {
             throw "whisper.cpp commit $actual did not match reviewed commit $env:WHISPER_CPP_COMMIT"
           }
+          # Scribe's own Parakeet sidecar builds inside the same tree.
+          Add-Content "$src\examples\CMakeLists.txt" "add_subdirectory(`"$($env:GITHUB_WORKSPACE -replace '\\','/')/app/sidecar/scribe-parakeet`" `"`${CMAKE_BINARY_DIR}/scribe-parakeet`")"
           Push-Location $src
           cmake -B build -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
@@ -200,7 +202,7 @@ jobs:
           $bin = Split-Path $cli.FullName
           $dest = "app/src-tauri/resources/bin/windows"
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
-          $needed = @("whisper-cli.exe", "whisper-server.exe", "whisper.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll", "ggml-vulkan.dll")
+          $needed = @("whisper-cli.exe", "whisper-server.exe", "scribe-parakeet.exe", "whisper.dll", "parakeet.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll", "ggml-vulkan.dll")
           foreach ($name in $needed) {
             $file = Get-ChildItem -Path $bin -Recurse -Filter $name | Select-Object -First 1
             if (-not $file) { throw "Missing $name in the Vulkan build output" }
@@ -395,7 +397,7 @@ jobs:
           $exe = if ($exePath) { Get-Item $exePath }
           if (-not $exe) { throw "Installed Scribe executable was not found" }
           $installDir = $exe.Directory.FullName
-          foreach ($name in @("whisper-cli.exe", "whisper-server.exe", "whisper.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll", "ggml-vulkan.dll")) {
+          foreach ($name in @("whisper-cli.exe", "whisper-server.exe", "scribe-parakeet.exe", "whisper.dll", "parakeet.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll", "ggml-vulkan.dll")) {
             if (-not (Get-ChildItem $installDir -Recurse -Filter $name -ErrorAction SilentlyContinue | Select-Object -First 1)) {
               throw "Installed bundle is missing $name"
             }

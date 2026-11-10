@@ -1987,6 +1987,18 @@ textarea {
   white-space: nowrap;
 }
 
+/* License credit a model's license asks for (Parakeet: NVIDIA, CC BY 4.0). */
+.model-row .model-row-credit {
+  display: block;
+  color: var(--scribe-text-faint);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.model-row .model-row-credit a {
+  color: var(--scribe-accent-bright);
+}
+
 .model-row-status {
   display: inline-flex;
   align-items: center;

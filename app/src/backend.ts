@@ -317,7 +317,28 @@ export type ModelInfo = {
   multilingual: boolean;
   /** The speech engine the model runs on. */
   engine: EngineKind;
+  /** Attribution the model's license asks for (Parakeet: NVIDIA, CC BY 4.0). */
+  credit: ModelCredit | null;
 };
+
+export type ModelCredit = {
+  text: string;
+  license: string;
+  licenseUrl: string;
+  sourceUrl: string;
+};
+
+/** NVIDIA Parakeet TDT 0.6B v3, the one Parakeet model in the catalog. */
+export const PARAKEET_V3_ID = "parakeet-tdt-0.6b-v3";
+
+/** The 25 European languages Parakeet v3 transcribes; it detects which one
+ * is spoken by itself. */
+export const PARAKEET_V3_LANGUAGES = [
+  "Bulgarian", "Croatian", "Czech", "Danish", "Dutch", "English", "Estonian",
+  "Finnish", "French", "German", "Greek", "Hungarian", "Italian", "Latvian",
+  "Lithuanian", "Maltese", "Polish", "Portuguese", "Romanian", "Russian",
+  "Slovak", "Slovenian", "Spanish", "Swedish", "Ukrainian",
+] as const;
 
 export type EngineKind = "whisper" | "parakeet";
 
@@ -1130,7 +1151,7 @@ function friendlyCommandErrorMessage(code: string): string | null {
     audio_too_short:
       "The recording was too short. Hold the hotkey a little longer and try again.",
     whisper_model_missing:
-      "Selected Whisper model is missing. Re-download the model or choose another downloaded model.",
+      "The selected speech model is missing. Re-download the model or choose another downloaded model.",
     missing_whisper_executable:
       `The bundled whisper.cpp executable is missing. Install a build that includes resources/bin/${whisperCli}.`,
     whisper_transcription_failed:

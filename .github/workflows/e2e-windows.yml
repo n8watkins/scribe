@@ -64,7 +64,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/whisper-cpu
-          key: whisper-windows-cpu-${{ env.WHISPER_CPP_COMMIT }}
+          key: whisper-windows-cpu-${{ env.WHISPER_CPP_COMMIT }}-${{ hashFiles('app/sidecar/**') }}
 
       # CPU only and statically linked: the test checks Scribe's behavior, not
       # GPU speed, and runners have no GPU. The release smoke test already runs
@@ -80,6 +80,8 @@ jobs:
           if ($actual -ne $env:WHISPER_CPP_COMMIT) {
             throw "whisper.cpp commit $actual did not match reviewed commit $env:WHISPER_CPP_COMMIT"
           }
+          # Scribe's own Parakeet sidecar builds inside the same tree.
+          Add-Content "$src\examples\CMakeLists.txt" "add_subdirectory(`"$($env:GITHUB_WORKSPACE -replace '\\','/')/app/sidecar/scribe-parakeet`" `"`${CMAKE_BINARY_DIR}/scribe-parakeet`")"
           cmake -S $src -B "$src\build" `
             -DGGML_NATIVE=OFF `
             -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON `
@@ -89,11 +91,11 @@ jobs:
             -DWHISPER_BUILD_TESTS=OFF `
             -DWHISPER_BUILD_SERVER=ON
           if ($LASTEXITCODE -ne 0) { throw "Configuring whisper.cpp failed" }
-          cmake --build "$src\build" --config Release -j --target whisper-cli whisper-server
+          cmake --build "$src\build" --config Release -j --target whisper-cli whisper-server scribe-parakeet
           if ($LASTEXITCODE -ne 0) { throw "Building whisper.cpp failed" }
           $out = "$env:RUNNER_TEMP\whisper-cpu"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-          foreach ($name in @("whisper-cli.exe", "whisper-server.exe")) {
+          foreach ($name in @("whisper-cli.exe", "whisper-server.exe", "scribe-parakeet.exe")) {
             $file = Get-ChildItem "$src\build" -Recurse -Filter $name | Select-Object -First 1
             if (-not $file) { throw "$name was not built" }
             Copy-Item $file.FullName $out
@@ -115,6 +117,37 @@ jobs:
           Copy-Item "$env:RUNNER_TEMP\whisper-cpu\*.exe" $dest
           & "$dest\whisper-cli.exe" --help | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "whisper-cli.exe does not run" }
+          & "$dest\scribe-parakeet.exe" --help 2>$null
+          if ($LASTEXITCODE -ne 0) { throw "scribe-parakeet.exe does not run" }
+
+      # The Parakeet v3 model for the Parakeet scenario, checked against the
+      # same SHA-256 the app's catalog pins. Scribe finds it through
+      # SCRIBE_MODEL_DIR, as it would a model in a known cache folder.
+      - name: Restore the Parakeet model
+        id: parakeet-model
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}\parakeet-model
+          key: parakeet-tdt-0.6b-v3-q8_0-4d64e9e96c27
+
+      - name: Download the Parakeet model
+        if: steps.parakeet-model.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ProgressPreference = "SilentlyContinue"
+          $dir = "$env:RUNNER_TEMP\parakeet-model"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $file = "$dir\ggml-parakeet-tdt-0.6b-v3-q8_0.bin"
+          Invoke-WebRequest "https://huggingface.co/ggml-org/parakeet-GGUF/resolve/35156454d1a39de06863303dd209fd2bed6ee079/ggml-parakeet-tdt-0.6b-v3-q8_0.bin" -OutFile $file
+          $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne "4d64e9e96c2792186d072fde0034df0ad670cf680a2f53069052ead827fd600e") { throw "Parakeet model checksum $hash" }
+
+      - name: Save the Parakeet model
+        if: steps.parakeet-model.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}\parakeet-model
+          key: ${{ steps.parakeet-model.outputs.cache-primary-key }}
 
       # Same install as the release build: scripts off, esbuild's run on its own.
       - name: Install application dependencies
@@ -148,6 +181,7 @@ jobs:
         shell: pwsh
         run: |
           python --version
+          $env:SCRIBE_MODEL_DIR = "$env:RUNNER_TEMP\parakeet-model"
           python app/e2e/windows/run.py --exe "$env:SCRIBE_EXE" --fixtures app/src-tauri/tests/fixtures --out "$env:E2E_OUT"
           if ($LASTEXITCODE -ne 0) { throw "End-to-end scenarios failed" }
 

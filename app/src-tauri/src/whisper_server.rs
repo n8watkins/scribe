@@ -46,6 +46,7 @@ use crate::{
     commands::BackendState,
     error::CommandError,
     models::{self, EngineKind},
+    parakeet::ParakeetProcess,
     settings::AppSettings,
     speech_engine::{EngineConfig, EngineStatus, Ensured, LoadState, Measurements, Resident, Slot},
     whisper::{self, WhisperRequest, WhisperTranscription},
@@ -83,14 +84,57 @@ pub fn resident_supported(engine: EngineKind) -> bool {
 
 impl EngineConfig {
     fn for_request(request: &WhisperRequest) -> Self {
+        // Parakeet detects the language itself and has no translate task, so
+        // those settings never restart it.
+        let parakeet = request.engine == EngineKind::Parakeet;
         Self {
             engine: request.engine,
             model_id: request.model_id.clone(),
             model_path: request.model_path.clone(),
-            language: request.language.clone(),
-            translate: request.translate,
+            language: if parakeet {
+                crate::settings::LANGUAGE_AUTO.to_string()
+            } else {
+                request.language.clone()
+            },
+            translate: request.translate && !parakeet,
             gpu: request.gpu,
             gpu_device_index: request.gpu_device_index,
+        }
+    }
+}
+
+/// The one resident engine process: whisper-server or the Parakeet sidecar.
+enum EngineProcess {
+    Whisper(ServerProcess),
+    Parakeet(ParakeetProcess),
+}
+
+impl Resident for EngineProcess {
+    fn pid(&self) -> u32 {
+        match self {
+            Self::Whisper(server) => server.pid(),
+            Self::Parakeet(sidecar) => sidecar.pid(),
+        }
+    }
+
+    fn config(&self) -> &EngineConfig {
+        match self {
+            Self::Whisper(server) => server.config(),
+            Self::Parakeet(sidecar) => sidecar.config(),
+        }
+    }
+
+    fn has_exited(&mut self) -> bool {
+        match self {
+            Self::Whisper(server) => server.has_exited(),
+            Self::Parakeet(sidecar) => sidecar.has_exited(),
+        }
+    }
+
+    fn stop(&mut self) {
+        match self {
+            Self::Whisper(server) => server.stop(),
+            Self::Parakeet(sidecar) => sidecar.stop(),
         }
     }
 }
@@ -179,7 +223,7 @@ impl Drop for ServerProcess {
 }
 
 struct Inner {
-    slot: Slot<ServerProcess>,
+    slot: Slot<EngineProcess>,
     /// Configuration of the most recent server attempt; used to detect model
     /// changes even while the server path is disabled.
     last_config: Option<EngineConfig>,
@@ -432,6 +476,10 @@ impl WarmTranscriber {
         // so suppression runs on the warm path with no model-reload overhead. The
         // whisper-cli path stays the fallback (and also handles filler).
 
+        if request.engine == EngineKind::Parakeet {
+            return self.transcribe_parakeet(&request);
+        }
+
         // Missing inputs are user-facing errors, not server failures; let the
         // CLI path produce its existing error messages without touching the
         // failure counter.
@@ -466,6 +514,97 @@ impl WarmTranscriber {
         };
         inner.last_used = Some(Instant::now());
         result
+    }
+
+    /// Parakeet always runs in its resident sidecar (there is no one-shot
+    /// fallback binary). A failed attempt restarts the sidecar and tries once
+    /// more, on the CPU when the GPU was in use.
+    fn transcribe_parakeet(
+        &self,
+        request: &WhisperRequest,
+    ) -> Result<WhisperTranscription, CommandError> {
+        if !request.model_path.is_file() {
+            return Err(CommandError::new(
+                "whisper_model_missing",
+                format!(
+                    "The selected speech model is missing at {}. Re-download the model or choose another model.",
+                    request.model_path.display()
+                ),
+            ));
+        }
+        if !request.wav_path.is_file() {
+            return Err(CommandError::new(
+                "recording_wav_missing",
+                format!(
+                    "Recording WAV is missing at {}. Record again.",
+                    request.wav_path.display()
+                ),
+            ));
+        }
+
+        let first = EngineConfig::for_request(request);
+        let retry = match cpu_retry_request(request) {
+            Some(cpu) => EngineConfig::for_request(&cpu),
+            None => first.clone(),
+        };
+        let mut inner = lock(&self.inner);
+        let started = Instant::now();
+        let mut last_error = String::new();
+        for (attempt, config) in [first, retry].iter().enumerate() {
+            match self.transcribe_via_parakeet(&mut inner, config, request) {
+                Ok(text) => {
+                    inner.last_used = Some(Instant::now());
+                    let memory = inner.slot.resident().and_then(|resident| {
+                        crate::process_info::resident_memory_bytes(resident.pid())
+                    });
+                    if let Some(bytes) = memory {
+                        inner.measurements.record_memory(&config.model_id, bytes);
+                    }
+                    drop(inner);
+                    self.publish(memory);
+                    return Ok(WhisperTranscription {
+                        text,
+                        latency_ms: started.elapsed().as_millis().min(u32::MAX as u128) as u32,
+                    });
+                }
+                Err(error) => {
+                    log::warn!("Parakeet attempt {} failed. {}", attempt + 1, error);
+                    if inner.slot.unload() {
+                        self.shared.after_unload();
+                    }
+                    last_error = error;
+                }
+            }
+        }
+        inner.last_used = Some(Instant::now());
+        drop(inner);
+        self.publish(None);
+        Err(CommandError::new(
+            "whisper_transcription_failed",
+            format!("Parakeet transcription failed. {}", last_error),
+        ))
+    }
+
+    fn transcribe_via_parakeet(
+        &self,
+        inner: &mut Inner,
+        config: &EngineConfig,
+        request: &WhisperRequest,
+    ) -> Result<String, String> {
+        let client = http_client(inner)?;
+        load(&self.shared, inner, config, &client)?;
+        let Some(EngineProcess::Parakeet(sidecar)) = inner.slot.resident_mut() else {
+            return Err("scribe-parakeet is not running".to_string());
+        };
+        let result = sidecar.transcribe(&request.wav_path)?;
+        // FILLER: Parakeet gives per-word timings too, so pause-aware filler
+        // removal works the same as on Whisper.
+        if let Some(filler) = &request.filler {
+            if !result.words.is_empty() {
+                return Ok(filler.apply(&result.words));
+            }
+        }
+        Ok(whisper::normalize_transcript_text(&result.text))
     }
 
     /// Stops the resident engine. Called on app exit; double-stop is safe.
@@ -511,10 +650,9 @@ impl WarmTranscriber {
                 inner.last_used = Some(Instant::now());
                 // The first inference allocates working buffers: sample now so
                 // the status and the measurement include them.
-                let memory = inner
-                    .slot
-                    .resident()
-                    .and_then(|resident| crate::process_info::private_memory_bytes(resident.pid()));
+                let memory = inner.slot.resident().and_then(|resident| {
+                    crate::process_info::resident_memory_bytes(resident.pid())
+                });
                 if let Some(bytes) = memory {
                     inner.measurements.record_memory(&desired.model_id, bytes);
                 }
@@ -557,7 +695,12 @@ impl WarmTranscriber {
         let url = inner
             .slot
             .resident()
-            .map(|server| inference_url(server.port, &server.request_path))
+            .and_then(|resident| match resident {
+                EngineProcess::Whisper(server) => {
+                    Some(inference_url(server.port, &server.request_path))
+                }
+                EngineProcess::Parakeet(_) => None,
+            })
             .ok_or_else(|| "whisper-server is not running".to_string())?;
 
         let wav_bytes = fs::read(&request.wav_path)
@@ -690,7 +833,7 @@ fn watchdog_tick(shared: &Shared, inner: &mut Inner) {
         shared.publish(None);
         return;
     }
-    if let Some(bytes) = crate::process_info::private_memory_bytes(pid) {
+    if let Some(bytes) = crate::process_info::resident_memory_bytes(pid) {
         inner.measurements.record_memory(&model_id, bytes);
         shared.publish_if_memory_moved(bytes, inner.measurements.get(&model_id));
     }
@@ -810,8 +953,13 @@ fn load(
         shared.publish(None);
     }
     let started = Instant::now();
-    let outcome = inner.slot.ensure(config, |config| {
-        launch_whisper_server(&shared.app, config, client)
+    let outcome = inner.slot.ensure(config, |config| match config.engine {
+        EngineKind::Whisper => {
+            launch_whisper_server(&shared.app, config, client).map(EngineProcess::Whisper)
+        }
+        EngineKind::Parakeet => {
+            ParakeetProcess::launch(&shared.app, config).map(EngineProcess::Parakeet)
+        }
     });
     lock(&shared.live).loading = None;
     match outcome {
@@ -820,7 +968,7 @@ fn load(
             let load_ms = started.elapsed().as_millis() as u64;
             let pid = inner.slot.resident().map(|r| r.pid()).unwrap_or_default();
             inner.measurements.record_load(&config.model_id, load_ms);
-            let memory = crate::process_info::private_memory_bytes(pid);
+            let memory = crate::process_info::resident_memory_bytes(pid);
             if let Some(bytes) = memory {
                 inner.measurements.record_memory(&config.model_id, bytes);
             }

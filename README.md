@@ -43,7 +43,9 @@ Scribe is free and open source under the MIT license.
 **Stays out of your way**
 
 - **All hotkeys rebindable** from the **Hotkeys** page, with per-bind **press / release** triggers and inline conflict reporting.
-- **Model manager:** download and switch between curated Whisper models (tiny to large-v3-turbo) on the **Models & language** page; they run entirely offline after the one-time download.
+- **Model manager:** download and switch between curated Whisper models (tiny to large-v3-turbo) and NVIDIA's Parakeet v3 on the **Models & language** page; they run entirely offline after the one-time download.
+- **Parakeet v3:** a second speech engine next to Whisper, fast on a CPU, with punctuation and capitals built in. It understands 25 European languages and detects which one you speak; it has no context hint and no translate task, so Whisper (99 languages) stays the choice for those.
+- **Keep the speech model loaded:** on by default, so dictation starts instantly. Turn it off to give the model's memory back between dictations; the Models page shows how much that saves and how much longer the first dictation after a pause takes, measured on your machine. Home, the Models page and the tray show which model is active and whether it is loaded. Only one model is ever in memory, and a loaded model never outlives Scribe, even if Scribe crashes.
 - **Auto-updates (Windows):** Scribe checks GitHub for new releases shortly after launch, on refocus, and every six hours, fires an OS notification when one is found, and installs it in-app. The updater artifact is cryptographically signed. Automatic checks can be turned off.
   The macOS and Linux betas don't update themselves yet: install the new version from the latest release.
 - **Tray app:** closing the window minimizes to the tray; dictation hotkeys keep working. Quit from the tray icon.
@@ -130,6 +132,9 @@ Prerequisites: Windows 10/11 x64, [Rust](https://rustup.rs/) (stable, MSVC toolc
    if ($actual -ne "f049fff95a089aa9969deb009cdd4892b3e74916") {
      throw "whisper.cpp commit $actual is not the reviewed commit"
    }
+   # Scribe's Parakeet sidecar builds inside the same tree.
+   $sidecar = (Resolve-Path "app/sidecar/scribe-parakeet").Path -replace '\\','/'
+   Add-Content "$src/examples/CMakeLists.txt" "add_subdirectory(`"$sidecar`" `"`${CMAKE_BINARY_DIR}/scribe-parakeet`")"
    cmake -S $src -B "$src/build" -G Ninja `
      -DCMAKE_BUILD_TYPE=Release `
      -DGGML_VULKAN=ON `
@@ -145,7 +150,8 @@ Prerequisites: Windows 10/11 x64, [Rust](https://rustup.rs/) (stable, MSVC toolc
    $bin = Split-Path $cli.FullName
    $dest = "app/src-tauri/resources/bin/windows"
    $needed = @(
-     "whisper-cli.exe", "whisper-server.exe", "whisper.dll", "ggml.dll",
+     "whisper-cli.exe", "whisper-server.exe", "scribe-parakeet.exe",
+     "whisper.dll", "parakeet.dll", "ggml.dll",
      "ggml-base.dll", "ggml-cpu.dll", "ggml-vulkan.dll"
    )
    foreach ($name in $needed) {
@@ -161,14 +167,16 @@ Prerequisites: Windows 10/11 x64, [Rust](https://rustup.rs/) (stable, MSVC toolc
    ```text
    whisper-cli.exe
    whisper-server.exe
+   scribe-parakeet.exe
    whisper.dll
+   parakeet.dll
    ggml.dll
    ggml-base.dll
    ggml-cpu.dll
    ggml-vulkan.dll
    ```
 
-   `whisper-server.exe` powers the warm transcriber, and `whisper-cli.exe` is the fallback path.
+   `whisper-server.exe` keeps a Whisper model loaded, `whisper-cli.exe` is the fallback path, and `scribe-parakeet.exe` (source in `app/sidecar/scribe-parakeet`) keeps a Parakeet model loaded.
    `ggml-vulkan.dll` enables GPU acceleration; CPU fallback remains available through `ggml-cpu.dll`.
 
 2. Build:
@@ -195,6 +203,13 @@ Contributions and issue reports are welcome.
 ## License
 
 [MIT](LICENSE)
+
+### Speech models
+
+Scribe downloads models only when you ask, and each keeps its own license.
+
+- Whisper models by OpenAI, MIT license, in ggml format from [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp).
+- [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) by NVIDIA, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Scribe uses the q8_0 GGUF conversion from [ggml-org/parakeet-GGUF](https://huggingface.co/ggml-org/parakeet-GGUF): converted to ggml format and quantized to 8 bits, otherwise unchanged.
 
 ## Release integrity
 

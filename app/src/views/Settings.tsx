@@ -4,6 +4,8 @@ import {
   commandErrorMessage,
   LANGUAGE_AUTO,
   listModels,
+  PARAKEET_V3_ID,
+  PARAKEET_V3_LANGUAGES,
   llmStatus,
   SUPPORTED_LANGUAGES,
   type AppSettings,
@@ -62,6 +64,18 @@ export function LanguageSettings({ actions, settings }: GroupProps) {
     (settings.language !== "en" && settings.language.length > 0);
   const showMultilingualNotice =
     wantsMultilingual && selectedModelMultilingual === false;
+
+  // Parakeet detects the language itself and has no translate task.
+  if (settings.selectedModelId === PARAKEET_V3_ID) {
+    return (
+      <SettingRow
+        description={`Parakeet v3 detects the language you speak. It understands 25 European languages: ${PARAKEET_V3_LANGUAGES.join(", ")}. For other languages, or to translate into English, choose a Whisper model (99 languages).`}
+        label="Language"
+      >
+        <span className="pill ready">Detected</span>
+      </SettingRow>
+    );
+  }
 
   return (
     <>
@@ -360,6 +374,12 @@ export function ContextHintSettings({ actions, settings }: GroupProps) {
         natkins, whisper.cpp". This nudges recognition toward them but can't
         guarantee an exact result; for that, use Replacements.
       </p>
+      {settings.selectedModelId === PARAKEET_V3_ID ? (
+        <p className="muted vocab-hint" role="status">
+          Parakeet v3 has no context hint, so this applies only when a Whisper
+          model is active. Replacements work with every model.
+        </p>
+      ) : null}
       <BlurSavedTextArea
         ariaLabel="Context hint"
         onSave={(vocabularyPrompt) => actions.updateSettings({ vocabularyPrompt })}
