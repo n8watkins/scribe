@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.14.0 - 2026-11-09
+
+### New
+
+- See which speech model is loaded and its memory, and unload it between dictations ([#110](https://github.com/n8watkins/scribe/pull/110))
+- Parakeet v3 from NVIDIA is a new speech engine next to Whisper: fast on a CPU, with punctuation built in, for 25 European languages
+
+### Fixed
+
+- A loaded speech model no longer keeps running after Scribe crashes or is closed from Task Manager
+
 ## 0.13.0 - 2026-11-09
 
 ### New
