@@ -1990,6 +1990,13 @@ pub const REPLACEMENTS_CHANGED_EVENT: &str = "scribe:replacements-changed";
 
 type Replacements = std::sync::Arc<crate::replacements_file::ReplacementStore>;
 
+/// Lets GitHub backup pick up a changed replacements.txt.
+fn notify_backup(app: &tauri::AppHandle) {
+    if let Some(worker) = app.try_state::<crate::note_sync::NoteSyncWorker>() {
+        worker.notify();
+    }
+}
+
 fn replacements_error(error: std::io::Error) -> CommandError {
     CommandError::new(
         "replacements_write_failed",
@@ -2012,9 +2019,12 @@ pub async fn add_replacements(
     rows: Vec<crate::text_replace::TextReplacement>,
 ) -> Result<crate::replacements_file::AddReport, CommandError> {
     off_main(app, move |app| {
-        app.state::<Replacements>()
+        let report = app
+            .state::<Replacements>()
             .add(&rows)
-            .map_err(replacements_error)
+            .map_err(replacements_error)?;
+        notify_backup(app);
+        Ok(report)
     })
     .await
 }
@@ -2026,9 +2036,12 @@ pub async fn remove_replacement(
     row: crate::text_replace::TextReplacement,
 ) -> Result<crate::replacements_file::ReplacementsInfo, CommandError> {
     off_main(app, move |app| {
-        app.state::<Replacements>()
+        let info = app
+            .state::<Replacements>()
             .remove(&row)
-            .map_err(replacements_error)
+            .map_err(replacements_error)?;
+        notify_backup(app);
+        Ok(info)
     })
     .await
 }

@@ -23,10 +23,10 @@ import {
   missingFrom,
   parseReplacementLines,
 } from "../lib/replacementSets";
-import { AI_PROMPT, FORMAT_RULES } from "../lib/replacementFormat";
+import { FORMAT_RULES } from "../lib/replacementFormat";
+import { InfoDialog } from "./modal";
 import { useReplacements } from "../lib/useReplacements";
 
-const SEARCH_ROWS = 5;
 
 /** Words > Replacements: a summary of replacements.txt, never the full list.
  * Add one, find and remove, paste or import a list, open the file, copy all. */
@@ -45,15 +45,15 @@ export function Replacements({
   const [importing, setImporting] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState<"all" | "prompt" | null>(null);
+  const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [showFormat, setShowFormat] = useState(false);
 
   const starter = missingFrom(rows, DEVELOPER_REPLACEMENTS);
-  const matches = useMemo(() => {
+  const shown = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) {
-      return [];
+      return rows;
     }
     return rows.filter(
       (row) =>
@@ -91,11 +91,11 @@ export function Replacements({
     }
   };
 
-  const copy = async (text: string, what: "all" | "prompt") => {
+  const copyAll = async () => {
     try {
-      await navigator.clipboard.writeText(text);
-      setCopied(what);
-      window.setTimeout(() => setCopied(null), 1600);
+      await navigator.clipboard.writeText(formatReplacementLines(rows));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
     } catch {
       // Clipboard can be refused; nothing else to do.
     }
@@ -140,20 +140,20 @@ export function Replacements({
           <button
             className="ghost-button"
             disabled={rows.length === 0}
-            onClick={() => void copy(formatReplacementLines(rows), "all")}
+            onClick={() => void copyAll()}
             type="button"
           >
-            {copied === "all" ? (
+            {copied ? (
               <Check aria-hidden="true" size={14} />
             ) : (
               <ClipboardCopy aria-hidden="true" size={14} />
             )}
-            {copied === "all" ? "Copied" : "Copy all"}
+            {copied ? "Copied" : "Copy all"}
           </button>
           <button
-            aria-expanded={showFormat}
+            aria-haspopup="dialog"
             className="setting-more"
-            onClick={() => setShowFormat((open) => !open)}
+            onClick={() => setShowFormat(true)}
             type="button"
           >
             Format
@@ -169,34 +169,31 @@ export function Replacements({
         </p>
       ) : null}
 
-      {showFormat ? (
-        <div className="replacements-format">
-          <ul>
-            {FORMAT_RULES.map((rule) => (
-              <li key={rule}>{rule}</li>
-            ))}
-          </ul>
-          <button
-            className="ghost-button"
-            onClick={() => void copy(AI_PROMPT, "prompt")}
-            title="A prompt for any AI chat that turns a messy list into this format"
-            type="button"
-          >
-            {copied === "prompt" ? (
-              <Check aria-hidden="true" size={14} />
-            ) : (
-              <ClipboardCopy aria-hidden="true" size={14} />
-            )}
-            {copied === "prompt" ? "Copied" : "Copy a prompt for an AI chat"}
-          </button>
-        </div>
-      ) : null}
+      <InfoDialog
+        onClose={() => setShowFormat(false)}
+        open={showFormat}
+        title="How to write replacements"
+      >
+        <ul className="replacements-format">
+          {FORMAT_RULES.map((rule) => (
+            <li key={rule}>{rule}</li>
+          ))}
+        </ul>
+      </InfoDialog>
 
       {starter.length > 0 && !settings.replacementSuggestionDismissed ? (
         <div className="replacement-suggestion">
           <span>
-            <strong>{starter.length} common developer fixes</strong>, such as
-            clawed to Claude and superbase to Supabase.
+            <strong>
+              {starter.length} suggested{" "}
+              {starter.length === 1 ? "fix" : "fixes"}
+            </strong>{" "}
+            for words speech models often mishear in developer talk:{" "}
+            {starter
+              .slice(0, 2)
+              .map((row) => `${row.from} to ${row.to}`)
+              .join(", ")}
+            {starter.length > 2 ? " and more" : ""}.
           </span>
           <div className="row-actions">
             <button
@@ -269,31 +266,28 @@ export function Replacements({
           value={query}
         />
       </label>
-      {query.trim() ? (
-        <ul className="replacements-matches">
-          {matches.slice(0, SEARCH_ROWS).map((row) => (
-            <li key={`${row.from}\u0000${row.to}`}>
-              <span>
-                {row.from} <span aria-hidden="true">→</span> {row.to}
-              </span>
-              <button
-                aria-label={`Remove ${row.from}`}
-                className="replacement-remove"
-                onClick={() => void remove(row)}
-                type="button"
-              >
-                <X aria-hidden="true" size={14} />
-              </button>
-            </li>
-          ))}
-          {matches.length === 0 ? <li className="muted">No match.</li> : null}
-          {matches.length > SEARCH_ROWS ? (
-            <li className="muted">
-              {matches.length - SEARCH_ROWS} more; type more to narrow it.
-            </li>
-          ) : null}
-        </ul>
-      ) : null}
+      <ul aria-label="Replacements" className="replacements-list">
+        {shown.map((row) => (
+          <li key={`${row.from}\u0000${row.to}`}>
+            <span className="replacements-from">{row.from}</span>
+            <span aria-hidden="true" className="replacements-arrow">
+              →
+            </span>
+            <span className="replacements-to">{row.to}</span>
+            <button
+              aria-label={`Remove ${row.from}`}
+              className="replacement-remove"
+              onClick={() => void remove(row)}
+              type="button"
+            >
+              <X aria-hidden="true" size={13} />
+            </button>
+          </li>
+        ))}
+        {info && shown.length === 0 ? (
+          <li className="muted">{query.trim() ? "No match." : "None yet."}</li>
+        ) : null}
+      </ul>
 
       {importing === null ? (
         <div className="row-actions">

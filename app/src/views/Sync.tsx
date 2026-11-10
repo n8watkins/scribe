@@ -409,7 +409,7 @@ export function SyncView({
               <SettingRow
                 description={
                   repoValid
-                    ? "Save a copy to GitHub whenever a note is saved or analyzed."
+                    ? "Notes, and your replacements.txt, whenever they change."
                     : "Set a valid owner/name repository above first."
                 }
                 label="Back up notes"

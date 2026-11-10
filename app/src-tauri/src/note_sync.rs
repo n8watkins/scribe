@@ -62,7 +62,10 @@ pub fn collect_and_sync(app: &AppHandle, service: &str) -> Result<SyncReport, Co
         (settings.github_repo, notes)
     };
 
-    if notes.is_empty() {
+    // replacements.txt goes along with the notes, when it changed since the
+    // last upload in this session.
+    let replacements = pending_replacements(app);
+    if notes.is_empty() && replacements.is_none() {
         return Ok(SyncReport {
             synced_notes: 0,
             files_written: 0,
@@ -70,8 +73,57 @@ pub fn collect_and_sync(app: &AppHandle, service: &str) -> Result<SyncReport, Co
     }
 
     let token = crate::github_oauth::access_token(service)?;
-    let result = GitHubBackup::new(token, &repo)?.sync_notes(&notes);
+    let result = sync_notes_and_replacements(token, &repo, &notes, replacements);
     clear_token_if_unauthorized(service, result)
+}
+
+/// Writes the notes' daily files, then replacements.txt when it changed.
+fn sync_notes_and_replacements(
+    token: String,
+    repo: &str,
+    notes: &[crate::transcript::Transcript],
+    replacements: Option<(String, u64)>,
+) -> Result<SyncReport, CommandError> {
+    let backup = GitHubBackup::new(token, repo)?;
+    let mut report = if notes.is_empty() {
+        SyncReport {
+            synced_notes: 0,
+            files_written: 0,
+        }
+    } else {
+        backup.sync_notes(notes)?
+    };
+    if let Some((text, hash)) = replacements {
+        backup.sync_file(REPLACEMENTS_PATH, &text)?;
+        *lock_uploaded() = Some(hash);
+        report.files_written += 1;
+    }
+    Ok(report)
+}
+
+/// Where replacements.txt is kept in the backup repository.
+const REPLACEMENTS_PATH: &str = "scribe/replacements.txt";
+
+fn lock_uploaded() -> std::sync::MutexGuard<'static, Option<u64>> {
+    static UPLOADED: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
+    UPLOADED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// replacements.txt and its hash, when it has content that this session
+/// hasn't uploaded yet.
+fn pending_replacements(app: &AppHandle) -> Option<(String, u64)> {
+    use std::hash::{Hash, Hasher};
+    let store = app.try_state::<std::sync::Arc<crate::replacements_file::ReplacementStore>>()?;
+    let text = std::fs::read_to_string(store.path()).ok()?;
+    if text.trim().is_empty() {
+        return None;
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    let hash = hasher.finish();
+    (*lock_uploaded() != Some(hash)).then_some((text, hash))
 }
 
 /// When a GitHub call comes back `github_unauthorized` (HTTP 401 — the token was

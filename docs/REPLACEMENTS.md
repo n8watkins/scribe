@@ -33,36 +33,17 @@ superbase -> Supabase
 - Skip spacing, hyphen and case variants such as "mono repo" or "Next js": they already read right.
 - For names the model misses in different ways each time, use Custom words instead.
 
-## Converting a messy list with an AI chat
-
-Words > Replacements > Format has a "Copy a prompt for an AI chat" button.
-Paste the prompt into any AI chat, add your list below it, and paste the result into Paste a list.
-The prompt is:
-
-```text
-Convert the list below into Scribe replacements.
-
-Rules:
-- Output only lines of the form: heard -> written
-- One replacement per line, nothing else (no numbering, bullets, quotes or commentary).
-- "heard" is what the speech model wrote; "written" is what it should be.
-- Drop entries where heard and written differ only in spacing, hyphens, case or punctuation (for example "mono repo -> monorepo" or "next js -> Next.js"); keep only real mishearings, where letters change.
-- Keep the written side exactly as given, including its capitals.
-- If the same heard phrase appears twice, keep the first.
-
-List:
-```
-
 ## Adding from the app
 
 - Add one appends a single line to the file.
 - Paste a list and Import file read the same format, also accepting `=`, a tab or a comma, and dropping bullets, numbering and quotes.
 - Before anything is added, they show which entries are new and which you already have.
-- Find a replacement shows only the matches, and each one can be removed.
+- The list of every replacement scrolls inside a small box; Find a replacement narrows it, and each entry can be removed.
+- Format opens these rules.
 - Copy all copies the whole file's replacements in this format.
 
 ## Upgrading from 0.15
 
 The first time Scribe 0.15.1 starts, it moves the replacements kept in its settings into `replacements.txt`, in the same order.
 It keeps a copy of that list next to the file, as `replacements-backup-from-settings.json`.
-GitHub backup covers notes and transcripts only, so `replacements.txt` is not backed up there.
+With GitHub backup on, `replacements.txt` is backed up with your notes as `scribe/replacements.txt` whenever it changes.

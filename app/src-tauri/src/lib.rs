@@ -472,6 +472,10 @@ pub fn run() {
                 let watch_app = app.handle().clone();
                 store.watch(move |info| {
                     let _ = watch_app.emit(commands::REPLACEMENTS_CHANGED_EVENT, info);
+                    // Back the edited file up with the notes, when backup is on.
+                    if let Some(worker) = watch_app.try_state::<note_sync::NoteSyncWorker>() {
+                        worker.notify();
+                    }
                 });
                 app.manage(store);
             }

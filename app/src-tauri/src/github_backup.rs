@@ -114,6 +114,13 @@ impl GitHubBackup {
         })
     }
 
+    /// Writes one whole file (created or replaced) at `path` in the repo, for
+    /// files Scribe keeps as they are, such as `scribe/replacements.txt`.
+    pub fn sync_file(&self, path: &str, content: &str) -> Result<(), CommandError> {
+        self.ensure_repo()?;
+        self.put_day_file(path, content)
+    }
+
     /// Backs up *every* supplied transcript into a DISTINCT `transcripts/`
     /// top-level folder, grouped by `YYYY-MM` with one daily Markdown file per
     /// local calendar day — mirroring `sync_notes` but for the full-history dump

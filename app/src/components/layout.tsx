@@ -127,6 +127,7 @@ export function StatusCard({
   Icon,
   label,
   onAction,
+  quiet,
   status,
   value,
 }: {
@@ -136,14 +137,18 @@ export function StatusCard({
   Icon: LucideIcon;
   label: string;
   onAction: () => void;
+  /** A small optional fix under the card, for something that works but
+   * could be tidier (never for a fault: that is amber). */
+  quiet?: { label: string; onClick: () => void };
   status?: ReactNode;
   value: string;
 }) {
   // The whole card is the button: a bigger target than the old corner arrow,
-  // and one less control competing for the card's width.
-  return (
+  // and one less control competing for the card's width. A quiet fix sits
+  // beside it, never inside it.
+  const card = (
     <button
-      className="metric-card status-card"
+      className={quiet ? "metric-card status-card has-quiet" : "metric-card status-card"}
       onClick={onAction}
       title={action}
       type="button"
@@ -165,6 +170,17 @@ export function StatusCard({
       </span>
       <ArrowUpRight aria-hidden="true" className="status-card-go" size={14} />
     </button>
+  );
+  if (!quiet) {
+    return card;
+  }
+  return (
+    <div className="status-card-wrap">
+      {card}
+      <button className="status-card-quiet" onClick={quiet.onClick} type="button">
+        {quiet.label}
+      </button>
+    </div>
   );
 }
 

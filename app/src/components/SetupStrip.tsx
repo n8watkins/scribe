@@ -13,11 +13,13 @@ type Cell = {
   key: string;
   label: string;
   value: string;
-  /** "warn": off or over, and changing it would help. "muted": not used. */
+  /** "warn": only when something needs action (words cut off, lines
+   * skipped). "muted": not used. Off is not a fault: it stays neutral, with
+   * a quiet fix when turning it on would help. */
   tone?: "warn" | "muted";
   target: ViewName;
   title: string;
-  /** A one-click fix shown under a warning. */
+  /** A quiet one-click fix, such as Turn on. */
   fix?: { label: string; run: () => void };
 };
 
@@ -36,7 +38,9 @@ export function SetupStrip({
   const gpu = useGpuProbe(settings.gpuAcceleration === "off");
   const parakeet = isParakeetModel(settings.selectedModelId);
   const hintLength = settings.vocabularyPrompt.trim().length;
-  const replacements = useReplacements().info?.rows.length ?? 0;
+  const replacementsInfo = useReplacements().info;
+  const replacements = replacementsInfo?.rows.length ?? 0;
+  const skipped = replacementsInfo?.skippedLines.length ?? 0;
   const keepLoaded = parakeet
     ? settings.keepParakeetLoaded
     : settings.keepWhisperLoaded;
@@ -50,7 +54,6 @@ export function SetupStrip({
       key: "gpu",
       label: "GPU",
       value: gpuOff ? "Off" : "On",
-      tone: gpuOff && gpu?.available ? "warn" : undefined,
       target: "Models & language",
       title:
         gpuOff && gpu?.available
@@ -90,6 +93,7 @@ export function SetupStrip({
       key: "replacements",
       label: "Replacements",
       value: String(replacements),
+      tone: skipped > 0 ? "warn" : undefined,
       target: "Words",
       title: "Fixes applied to every transcript, with any model.",
     },
@@ -106,7 +110,6 @@ export function SetupStrip({
       key: "live",
       label: "Live transcription",
       value: settings.incrementalTranscriptionEnabled ? "On" : "Off",
-      tone: settings.incrementalTranscriptionEnabled ? undefined : "warn",
       target: "Microphone",
       title: "Transcribes while you talk, so text is ready when you stop.",
       fix: settings.incrementalTranscriptionEnabled
@@ -137,7 +140,7 @@ export function SetupStrip({
           </button>
           {cell.fix ? (
             <button
-              className="setup-cell-fix"
+              className="setup-cell-quiet"
               disabled={actions.savingSettings}
               onClick={cell.fix.run}
               type="button"

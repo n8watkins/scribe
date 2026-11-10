@@ -704,23 +704,12 @@ button:disabled {
   }
 }
 
-/* Home is exactly the window's height: the cards above keep their size and
-   the transcript and hotkeys share what is left, so a long transcript
-   scrolls inside its card instead of stretching the page (and never pushes
-   "Hearing you" away). Below the minimum, the page scrolls. */
-.view-home {
-  flex: 1 1 0;
-}
-
+/* Last transcript and Hotkeys share one height, set by the taller card. */
 .main-grid {
-  flex: 1 1 0;
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(250px, 0.75fr);
-  grid-template-rows: minmax(0, 1fr);
-  /* Both cards share one height: the row stretches to fill the window. */
   align-items: stretch;
   gap: 8px;
-  min-height: 240px;
 }
 
 .metric-card,
@@ -747,7 +736,7 @@ button:disabled {
   overflow: hidden;
   min-width: 0;
   color: var(--scribe-text);
-  font-size: 12.5px;
+  font-size: 16px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -963,11 +952,12 @@ button:disabled {
 }
 
 /* The transcript takes whatever height the card has; long ones scroll. */
+/* The last transcript is a preview: about four lines, and a longer one
+   scrolls inside, so it never stretches the card or the page. */
 .buffer-card .buffer-preview {
-  flex: 1 1 auto;
   display: block;
-  min-height: 64px;
-  max-height: none;
+  min-height: 0;
+  max-height: calc(4 * 1.6em + 20px);
   overflow-y: auto;
   -webkit-line-clamp: unset;
 }
@@ -977,7 +967,8 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-top: 8px;
+  margin-top: auto;
+  padding-top: 8px;
 }
 
 .buffer-footer .metadata-row {
@@ -3093,7 +3084,7 @@ kbd {
   }
 
   .setup-cell-value {
-    font-size: 14px;
+    font-size: 17px;
   }
 
   .stats-row-item {
@@ -3364,7 +3355,7 @@ kbd {
 
 .setup-cell-label {
   overflow: hidden;
-  color: var(--scribe-text-secondary);
+  color: var(--scribe-text-muted);
   font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3373,7 +3364,7 @@ kbd {
 .setup-cell-value {
   overflow: hidden;
   color: var(--scribe-text);
-  font-size: 15px;
+  font-size: 20px;
   font-weight: 760;
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
@@ -3392,16 +3383,17 @@ kbd {
   color: var(--scribe-warning);
 }
 
-.setup-cell-fix {
+.setup-cell-quiet {
   flex: 0 0 auto;
-  min-height: 24px;
-  padding: 0 8px;
-  color: var(--scribe-accent-on);
-  background: var(--scribe-accent);
-  border: 1px solid var(--scribe-accent);
-  border-radius: 6px;
-  font-size: 11.5px;
-  font-weight: 760;
+  padding: 0 4px;
+  color: var(--scribe-accent-bright);
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
 }
 
 @media (max-width: 959px) {
@@ -3409,10 +3401,8 @@ kbd {
     padding-right: 6px;
   }
 
-  .setup-cell-fix {
-    min-height: 22px;
-    padding: 0 6px;
-    font-size: 11px;
+  .setup-cell-quiet {
+    font-size: 11.5px;
   }
 }
 
@@ -3489,24 +3479,13 @@ kbd {
 }
 
 .replacements-format {
-  display: grid;
-  gap: 6px;
-  padding: 8px 10px;
-  border: 1px solid var(--scribe-border);
-  border-radius: 6px;
-  background: rgba(var(--scribe-surface-rgb), 0.45);
-}
-
-.replacements-format ul {
-  margin: 0;
+  margin: 0 0 4px;
   padding-left: 18px;
   color: var(--scribe-text-secondary);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.replacements-format .ghost-button {
-  justify-self: start;
+  font-size: 13px;
+  line-height: 1.5;
+  display: grid;
+  gap: 4px;
 }
 
 .replacements-add {
@@ -3538,23 +3517,70 @@ kbd {
   background: transparent;
 }
 
-.replacements-matches {
+/* Every replacement in a small box of its own height: it scrolls inside
+   and never grows the page. Find filters it. */
+.replacements-list {
   display: grid;
+  align-content: start;
+  height: 156px;
   margin: 0;
-  padding: 0;
+  padding: 2px 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
   list-style: none;
+  border: 1px solid var(--scribe-border);
+  border-radius: 6px;
+  background: rgba(var(--scribe-surface-rgb), 0.45);
   font-size: 12.5px;
 }
 
-.replacements-matches li {
-  display: flex;
+.replacements-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 28px;
-  padding: 0 4px 0 8px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 2px 0 9px;
+}
+
+.replacements-list li.muted {
+  display: block;
+  padding-top: 5px;
+}
+
+.replacements-list li:nth-child(even) {
+  background: rgba(148, 163, 184, 0.05);
+}
+
+.replacements-from,
+.replacements-to {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.replacements-from {
   color: var(--scribe-text-secondary);
+}
+
+.replacements-to {
+  color: var(--scribe-text);
+  font-weight: 650;
+}
+
+.replacements-arrow {
+  color: var(--scribe-text-muted);
+}
+
+.replacements-list .replacement-remove {
+  width: 24px;
+  height: 24px;
+  opacity: 0.55;
+}
+
+.replacements-list li:hover .replacement-remove,
+.replacements-list .replacement-remove:focus-visible {
+  opacity: 1;
 }
 
 .replacements-file {
@@ -3567,4 +3593,35 @@ kbd {
   inset: 0;
   opacity: 0;
   cursor: pointer;
+}
+
+/* A status card with a quiet fix under its text. */
+.status-card-wrap {
+  position: relative;
+  display: grid;
+}
+
+.status-card.has-quiet {
+  padding-bottom: 28px;
+}
+
+.status-card-quiet {
+  position: absolute;
+  left: 50px;
+  bottom: 9px;
+  padding: 0;
+  color: var(--scribe-accent-bright);
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: 11.5px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+@media (max-width: 959px) {
+  .status-card-quiet {
+    left: 12px;
+  }
 }

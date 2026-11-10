@@ -49,11 +49,13 @@ afterEach(() => {
 });
 
 describe("Replacements", () => {
-  it("shows a count and the skipped lines, never the whole list", async () => {
+  it("shows a count, the skipped lines and a list that scrolls in place", async () => {
     render(<Replacements actions={actions} settings={settings} />);
     expect(await screen.findByText("3")).toBeInTheDocument();
     expect(screen.getByText(/2 lines skipped: 14, 31/)).toBeInTheDocument();
-    expect(screen.queryByText(/clawed/)).not.toBeInTheDocument();
+    const list = screen.getByRole("list", { name: "Replacements" });
+    expect(list).toHaveClass("replacements-list");
+    expect(list.querySelectorAll("li")).toHaveLength(3);
   });
 
   it("finds entries and removes one", async () => {
@@ -64,7 +66,7 @@ describe("Replacements", () => {
       target: { value: "nate" },
     });
     expect(screen.getAllByRole("button", { name: /Remove nate/ })).toHaveLength(2);
-    expect(screen.queryByText(/clawed/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove clawed" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Remove nate builds" }));
     expect(removeMock).toHaveBeenCalledWith({ from: "nate builds", to: "n8builds" });
   });
@@ -95,11 +97,27 @@ describe("Replacements", () => {
     );
   });
 
-  it("shows the format rules and the AI prompt on demand", async () => {
+  it("opens the format rules in a dialog, with no AI prompt", async () => {
     render(<Replacements actions={actions} settings={settings} />);
     await screen.findByText("3");
     fireEvent.click(screen.getByRole("button", { name: "Format" }));
-    expect(screen.getByText(/One replacement per line/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Copy a prompt for an AI chat/ })).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "How to write replacements" });
+    expect(dialog).toHaveTextContent("One replacement per line");
+    expect(screen.queryByText(/AI chat/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("says where the suggested fixes come from", async () => {
+    render(
+      <Replacements
+        actions={actions}
+        settings={{ replacementSuggestionDismissed: false } as unknown as AppSettings}
+      />,
+    );
+    await screen.findByText("3");
+    expect(
+      screen.getByText(/for words speech models often mishear in developer talk/),
+    ).toBeInTheDocument();
   });
 });

@@ -97,8 +97,8 @@ Field names are the ones in `AppSettings` (`app/src/backend.ts`, `app/src-tauri/
   - Edits in any editor are picked up within about 2 s.
   - App writes are atomic and only add or remove their own lines.
   - The list that settings kept before 0.15.1 (`textReplacements`) is moved into the file once and kept as a backup; the setting is no longer read.
-  - GitHub backup doesn't include the file.
-- Format: `docs/REPLACEMENTS.md`, also behind the Format link in the app.
+  - With GitHub backup on, the file is backed up with the notes as `scribe/replacements.txt` when it changes.
+- Format: `docs/REPLACEMENTS.md`; the Format link in the app opens the same rules.
 - UI label:
   - "No limit, and they work with every model".
   - "N lines skipped: ..." for unreadable lines.
@@ -224,7 +224,10 @@ Field names are the ones in `AppSettings` (`app/src/backend.ts`, `app/src-tauri/
 ### Theme, custom theme, window size (`windowWidth`, `windowHeight`, `windowSizeLogical`)
 
 - Connects to: the main window.
-- Implications: the saved size is in logical pixels and shrinks to fit the screen at launch.
+- Implications:
+  - A size picked in Appearance is kept in logical pixels and shrinks to fit the screen at launch.
+  - Without one, Scribe opens at the largest preset that fits the screen: Large on a 2560x1440 or 1920x1080 screen, Standard at 1920x1080 and 125%, Compact on a 1366x768 laptop.
+  - Sizes saved before 0.15 (physical pixels) are ignored, so those users get the preset that suits their screen once.
 
 ## Labels still missing
 

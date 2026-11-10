@@ -40,30 +40,32 @@ pub fn fit_to_work_area(wanted: (f64, f64), work_area: (f64, f64)) -> (f64, f64)
     )
 }
 
-/// Sizes the main window at launch: the saved size if there is one, then
-/// shrunk to the work area of the monitor it opens on.
+/// Room a preset leaves around itself on the screen.
+const ROOM: (f64, f64) = (40.0, 40.0);
+
+/// The size to open at when none is saved: the largest preset that fits the
+/// screen with a little room (Large on a 2560x1440 or 1920x1080 screen,
+/// Standard at 1920x1080 and 125%, Compact on a 1366x768 laptop), else
+/// Compact, which `fit_to_work_area` shrinks further.
+pub fn default_for_work_area(work_area: (f64, f64)) -> (f64, f64) {
+    PRESETS
+        .iter()
+        .find(|preset| preset.0 + ROOM.0 <= work_area.0 && preset.1 + ROOM.1 <= work_area.1)
+        .copied()
+        .unwrap_or(COMPACT)
+}
+
+/// Sizes the main window at launch: the size the user chose in Appearance if
+/// there is one, else the preset that suits the screen, then shrunk to the
+/// work area of the monitor it opens on. Sizes saved before presets existed
+/// (physical pixels, `window_size_logical` off) are ignored, so those users
+/// get the preset that suits their screen once.
 pub fn restore(window: &WebviewWindow, settings: &AppSettings) {
-    let scale = window.scale_factor().unwrap_or(1.0);
     let saved = match (settings.window_width, settings.window_height) {
-        (Some(width), Some(height)) if width > 0 && height > 0 => {
-            let (width, height) = (f64::from(width), f64::from(height));
-            Some(if settings.window_size_logical {
-                (width, height)
-            } else {
-                (width / scale, height / scale)
-            })
+        (Some(width), Some(height)) if width > 0 && height > 0 && settings.window_size_logical => {
+            Some((f64::from(width), f64::from(height)))
         }
         _ => None,
-    };
-    let wanted = match saved {
-        Some(size) => size,
-        None => match window.inner_size() {
-            Ok(size) => {
-                let logical = size.to_logical::<f64>(scale);
-                (logical.width, logical.height)
-            }
-            Err(_) => return,
-        },
     };
 
     let work_area = window
@@ -79,24 +81,29 @@ pub fn restore(window: &WebviewWindow, settings: &AppSettings) {
                 f64::from(area.height) / monitor_scale,
             )
         });
+
+    let wanted = match (saved, work_area) {
+        (Some(size), _) => size,
+        (None, Some(area)) => default_for_work_area(area),
+        (None, None) => return,
+    };
     let size = match work_area {
         Some(area) => fit_to_work_area(wanted, area),
         None => wanted,
     };
 
-    if saved.is_some() || size != wanted {
-        let _ = window.set_size(LogicalSize::new(size.0, size.1));
-        if size != wanted {
-            let _ = window.center();
-            log::info!(
-                "Opened the window at {:.0}x{:.0} to fit the screen ({:.0}x{:.0} wanted)",
-                size.0,
-                size.1,
-                wanted.0,
-                wanted.1
-            );
+    let _ = window.set_size(LogicalSize::new(size.0, size.1));
+    let _ = window.center();
+    log::info!(
+        "Opened the window at {:.0}x{:.0} ({})",
+        size.0,
+        size.1,
+        if saved.is_some() {
+            "saved size"
+        } else {
+            "suits the screen"
         }
-    }
+    );
 }
 
 /// The main window's current inner size in logical pixels, for saving.
@@ -143,6 +150,19 @@ mod tests {
             fit_to_work_area((1320.0, 880.0), (1536.0, 826.0)),
             (1120.0, 760.0)
         );
+    }
+
+    #[test]
+    fn a_big_screen_gets_large_and_a_laptop_gets_less() {
+        // The owner's 2560x1440 monitor at 100%, taskbar included.
+        assert_eq!(default_for_work_area((2560.0, 1392.0)), (1320.0, 880.0));
+        assert_eq!(default_for_work_area((1920.0, 1032.0)), (1320.0, 880.0));
+        // 1920x1080 at 125%: Standard fits, Large doesn't.
+        assert_eq!(default_for_work_area((1536.0, 826.0)), (1120.0, 760.0));
+        // A 1366x768 laptop: Compact.
+        assert_eq!(default_for_work_area((1366.0, 728.0)), COMPACT);
+        // Too small for any preset: Compact, then shrunk by fit_to_work_area.
+        assert_eq!(default_for_work_area((900.0, 600.0)), COMPACT);
     }
 
     #[test]

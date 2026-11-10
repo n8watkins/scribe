@@ -67,10 +67,12 @@ export function DashboardView({
   const microphone = resolveMicrophone(microphones, settings.selectedMicId);
   const microphoneFellBack =
     microphone.kind === "device" && microphone.fellBack;
+  // Amber only when something needs action: no microphone at all. A saved
+  // microphone that is unplugged is fine, Scribe records on the default.
   const microphoneDot =
     microphone.kind === "loading"
       ? "status-dot"
-      : microphone.kind === "none" || microphoneFellBack
+      : microphone.kind === "none"
         ? "status-dot warning"
         : "status-dot success";
   const hotkeyHealth = useHotkeyHealth(
@@ -142,6 +144,17 @@ export function DashboardView({
         <StatusCard
           action="Open Microphone"
           detail={microphoneFellBack ? "Saved mic not connected" : undefined}
+          quiet={
+            microphoneFellBack && microphone.kind === "device"
+              ? {
+                  label: "Make this my microphone",
+                  onClick: () =>
+                    actions.updateSettings({
+                      selectedMicId: microphone.microphone.id,
+                    }),
+                }
+              : undefined
+          }
           Icon={Mic}
           label="Microphone"
           onAction={() => setActiveView("Microphone")}
