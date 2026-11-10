@@ -3478,13 +3478,31 @@ kbd {
 }
 
 .replacements-format {
-  margin: 0 0 4px;
-  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+  margin-bottom: 4px;
   color: var(--scribe-text-secondary);
   font-size: 13px;
-  line-height: 1.5;
-  display: grid;
-  gap: 4px;
+  line-height: 1.45;
+}
+
+.replacements-format p {
+  margin: 0;
+}
+
+.replacements-format pre {
+  margin: 0;
+  padding: 8px 10px;
+  color: var(--scribe-text);
+  background: var(--scribe-surface-sunken);
+  border: 1px solid var(--scribe-border);
+  border-radius: 6px;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12.5px;
+}
+
+.replacements-format .setting-more {
+  justify-self: start;
 }
 
 .replacements-add {
@@ -3528,7 +3546,8 @@ kbd {
 .replacements-list {
   display: grid;
   align-content: start;
-  height: 156px;
+  /* Four rows at a time; more scroll inside. */
+  height: calc(4 * 26px + 6px);
   margin: 0;
   padding: 2px 0;
   overflow-y: auto;

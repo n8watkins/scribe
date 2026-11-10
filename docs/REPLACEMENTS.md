@@ -38,8 +38,8 @@ superbase -> Supabase
 - Add one appends a single line to the file.
 - Paste a list and Import file read the same format, also accepting `=`, a tab or a comma, and dropping bullets, numbering and quotes.
 - Before anything is added, they show which entries are new and which you already have.
-- The list of every replacement scrolls inside a small box; Find a replacement narrows it, and each entry can be removed.
-- Format opens these rules.
+- The list of every replacement shows four rows at a time and scrolls for more; Find a replacement narrows it, and each entry can be removed.
+- Format opens a short summary with an example, and links to this guide.
 - Copy all copies the whole file's replacements in this format.
 
 ## Upgrading from 0.15

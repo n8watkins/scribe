@@ -11,32 +11,29 @@ import {
 import {
   addReplacements,
   commandErrorMessage,
+  openReleasePage,
   openReplacementsFile,
   removeReplacement,
   type TextReplacement,
 } from "../backend";
-import type { AppSettings } from "../backend";
-import type { ViewActions } from "../types";
 import {
-  DEVELOPER_REPLACEMENTS,
   formatReplacementLines,
   missingFrom,
   parseReplacementLines,
 } from "../lib/replacementSets";
-import { FORMAT_RULES } from "../lib/replacementFormat";
 import { InfoDialog } from "./modal";
 import { useReplacements } from "../lib/useReplacements";
 
+const FORMAT_EXAMPLE = `nate builds -> n8builds
+clawed -> Claude
+# comment lines start with #`;
+
+const GUIDE_URL =
+  "https://github.com/n8watkins/scribe/blob/main/docs/REPLACEMENTS.md";
 
 /** Words > Replacements: a summary of replacements.txt, never the full list.
  * Add one, find and remove, paste or import a list, open the file, copy all. */
-export function Replacements({
-  actions,
-  settings,
-}: {
-  actions: ViewActions;
-  settings: AppSettings;
-}) {
+export function Replacements() {
   const { info, set } = useReplacements();
   const rows = useMemo(() => info?.rows ?? [], [info]);
   const [heard, setHeard] = useState("");
@@ -49,7 +46,6 @@ export function Replacements({
   const [busy, setBusy] = useState(false);
   const [showFormat, setShowFormat] = useState(false);
 
-  const starter = missingFrom(rows, DEVELOPER_REPLACEMENTS);
   const shown = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) {
@@ -174,50 +170,24 @@ export function Replacements({
         open={showFormat}
         title="How to write replacements"
       >
-        <ul className="replacements-format">
-          {FORMAT_RULES.map((rule) => (
-            <li key={rule}>{rule}</li>
-          ))}
-        </ul>
-      </InfoDialog>
-
-      {starter.length > 0 && !settings.replacementSuggestionDismissed ? (
-        <div className="replacement-suggestion">
-          <span>
-            <strong>
-              {starter.length} suggested{" "}
-              {starter.length === 1 ? "fix" : "fixes"}
-            </strong>{" "}
-            for words speech models often mishear in developer talk:{" "}
-            {starter
-              .slice(0, 2)
-              .map((row) => `${row.from} to ${row.to}`)
-              .join(", ")}
-            {starter.length > 2 ? " and more" : ""}.
-          </span>
-          <div className="row-actions">
-            <button
-              className="secondary-button"
-              disabled={busy}
-              onClick={() => void add(starter)}
-              title={formatReplacementLines(starter)}
-              type="button"
-            >
-              <Plus aria-hidden="true" size={14} />
-              Add them
-            </button>
-            <button
-              className="ghost-button"
-              onClick={() =>
-                actions.updateSettings({ replacementSuggestionDismissed: true })
-              }
-              type="button"
-            >
-              No thanks
-            </button>
-          </div>
+        <div className="replacements-format">
+          <p>
+            Each line fixes one phrase the speech model keeps getting wrong:
+            what it wrote, an arrow, then what it should be.
+          </p>
+          <pre>{FORMAT_EXAMPLE}</pre>
+          <p>
+            Whole words only, case is ignored, and longer phrases go first.
+          </p>
+          <button
+            className="setting-more"
+            onClick={() => void openReleasePage(GUIDE_URL).catch(() => {})}
+            type="button"
+          >
+            Full guide
+          </button>
         </div>
-      ) : null}
+      </InfoDialog>
 
       <form
         className="replacements-add"

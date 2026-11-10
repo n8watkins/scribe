@@ -207,8 +207,6 @@ export type AppSettings = {
   windowSizeLogical: boolean;
   /** The one-time Small English suggestion was answered. */
   modelSuggestionDismissed: boolean;
-  /** The one-time developer replacements offer was answered. */
-  replacementSuggestionDismissed: boolean;
 };
 
 export type Transcript = {

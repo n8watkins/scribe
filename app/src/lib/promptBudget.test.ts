@@ -7,7 +7,6 @@ import {
   trimHintToChars,
 } from "./promptBudget";
 import {
-  DEVELOPER_REPLACEMENTS,
   formatReplacementLines,
   missingFrom,
   parseReplacementLines,
@@ -63,17 +62,15 @@ describe("character limit", () => {
 });
 
 describe("replacement sets", () => {
-  it("offers only the fixes you don't have yet", () => {
-    const missing = missingFrom([{ from: "Clawed", to: "Claude" }], DEVELOPER_REPLACEMENTS);
-    expect(missing.some((row) => row.from === "clawed")).toBe(false);
-    expect(missing.length).toBe(DEVELOPER_REPLACEMENTS.length - 1);
-  });
-
-  it("ships only real mishearings, not spacing, hyphen or case variants", () => {
-    const letters = (text: string) => text.toLowerCase().replace(/[^a-z0-9]/g, "");
-    for (const row of DEVELOPER_REPLACEMENTS) {
-      expect(letters(row.from), row.from).not.toBe(letters(row.to));
-    }
+  it("finds the entries you don't have yet, ignoring case", () => {
+    const missing = missingFrom(
+      [{ from: "Clawed", to: "Claude" }],
+      [
+        { from: "clawed", to: "Claude" },
+        { from: "superbase", to: "Supabase" },
+      ],
+    );
+    expect(missing).toEqual([{ from: "superbase", to: "Supabase" }]);
   });
 
   it("reads every separator, and drops bullets, numbering and quotes", () => {
@@ -115,8 +112,12 @@ describe("replacement sets", () => {
   });
 
   it("copies out in the same format it reads", () => {
-    const text = formatReplacementLines([...DEVELOPER_REPLACEMENTS, { from: " ", to: "" }]);
-    expect(parseReplacementLines(text).pairs).toEqual(DEVELOPER_REPLACEMENTS);
+    const rows = [
+      { from: "nate builds", to: "n8builds" },
+      { from: "cloud code", to: "Claude Code" },
+    ];
+    const text = formatReplacementLines([...rows, { from: " ", to: "" }]);
+    expect(parseReplacementLines(text).pairs).toEqual(rows);
   });
 });
 

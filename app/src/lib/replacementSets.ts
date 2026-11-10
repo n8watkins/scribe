@@ -1,27 +1,6 @@
 import type { TextReplacement } from "../backend";
 
-/** Developer words Whisper and Parakeet mishear the same way, from a
- * held-out test on real dictation (November 2026). Only real mishearings,
- * where letters change; spacing, hyphen and case differences ("work tree",
- * "Next js") are left alone, since the words still read right. Offered once
- * on the Words page; nothing is added until you say so. */
-export const DEVELOPER_REPLACEMENTS: readonly TextReplacement[] = [
-  { from: "clawed", to: "Claude" },
-  { from: "cloud code", to: "Claude Code" },
-  { from: "cloud md", to: "CLAUDE.md" },
-  { from: "superbase", to: "Supabase" },
-  { from: "versal", to: "Vercel" },
-  { from: "vercell", to: "Vercel" },
-  { from: "verssell", to: "Vercel" },
-  { from: "cloudfare", to: "Cloudflare" },
-  { from: "monoripo", to: "monorepo" },
-  { from: "shad c and", to: "shadcn" },
-  { from: "shared cn", to: "shadcn" },
-  { from: "nex.js", to: "Next.js" },
-  { from: "tari", to: "Tauri" },
-];
-
-/** The entries of `set` not already in `current` (by spoken phrase). */
+/** The entries of `set` not already in `current` (by heard phrase). */
 export function missingFrom(
   current: readonly TextReplacement[],
   set: readonly TextReplacement[],

@@ -98,7 +98,7 @@ Field names are the ones in `AppSettings` (`app/src/backend.ts`, `app/src-tauri/
   - App writes are atomic and only add or remove their own lines.
   - The list that settings kept before 0.15.1 (`textReplacements`) is moved into the file once and kept as a backup; the setting is no longer read.
   - With GitHub backup on, the file is backed up with the notes as `scribe/replacements.txt` when it changes.
-- Format: `docs/REPLACEMENTS.md`; the Format link in the app opens the same rules.
+- Format: `docs/REPLACEMENTS.md`; the Format link in the app opens a short summary with an example and links to it.
 - UI label:
   - "No limit, and they work with every model".
   - "N lines skipped: ..." for unreadable lines.

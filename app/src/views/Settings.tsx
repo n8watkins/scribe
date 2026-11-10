@@ -378,8 +378,8 @@ export function ContextHintSettings({ actions, settings }: GroupProps) {
 }
 
 /** "Say this, write that" replacements, kept in replacements.txt. */
-export function ReplacementsSettings({ actions, settings }: GroupProps) {
-  return <Replacements actions={actions} settings={settings} />;
+export function ReplacementsSettings() {
+  return <Replacements />;
 }
 
 /** The one Local AI switch, the server connection, and the analysis prompt. */

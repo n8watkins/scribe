@@ -145,7 +145,7 @@ export function WordsPage({ actions, settings }: PageProps) {
         icon={<Repeat2 aria-hidden="true" size={16} />}
         title="Replacements"
       >
-        <ReplacementsSettings actions={actions} settings={settings} />
+        <ReplacementsSettings />
       </SectionPanel>
     </section>
   );
