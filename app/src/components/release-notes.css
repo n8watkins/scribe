@@ -104,6 +104,7 @@
 .whats-new-notes {
   max-height: 232px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 0 4px 12px 0;
   /* Fades the last visible line, so a long list reads as scrollable rather
      than cut off. */
@@ -119,6 +120,7 @@
 .update-notes {
   max-height: 180px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 12px 14px;
   border: 1px solid var(--scribe-border);
   border-radius: 10px;
