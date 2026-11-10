@@ -273,6 +273,9 @@ export function SyncView({
       {part !== "files" ? (
         <>
           <SectionPanel
+            // Alone on the page until an account is connected, so it takes
+            // the full width instead of half.
+            className={connected && !unconfigured ? undefined : "span-2"}
             icon={<Cloud aria-hidden="true" size={16} />}
             title="Connection"
           >

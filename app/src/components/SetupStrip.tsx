@@ -7,6 +7,7 @@ import {
 import type { ViewActions, ViewName } from "../types";
 import { HINT_CHAR_LIMIT } from "../lib/promptBudget";
 import { isParakeetModel } from "../lib/engine";
+import { useReplacements } from "../lib/useReplacements";
 
 type Cell = {
   key: string;
@@ -35,9 +36,7 @@ export function SetupStrip({
   const gpu = useGpuProbe(settings.gpuAcceleration === "off");
   const parakeet = isParakeetModel(settings.selectedModelId);
   const hintLength = settings.vocabularyPrompt.trim().length;
-  const replacements = settings.textReplacements.filter((row) =>
-    row.from.trim(),
-  ).length;
+  const replacements = useReplacements().info?.rows.length ?? 0;
   const keepLoaded = parakeet
     ? settings.keepParakeetLoaded
     : settings.keepWhisperLoaded;

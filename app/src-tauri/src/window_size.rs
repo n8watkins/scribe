@@ -11,9 +11,9 @@ use crate::settings::AppSettings;
 
 /// The presets in Appearance > Window size, largest first. Keep in step with
 /// WINDOW_PRESETS in src/views/DataPrivacy.tsx.
-pub const PRESETS: [(f64, f64); 3] = [(1240.0, 820.0), (1024.0, 700.0), COMPACT];
+pub const PRESETS: [(f64, f64); 3] = [(1320.0, 880.0), (1120.0, 760.0), COMPACT];
 /// The Compact preset.
-pub const COMPACT: (f64, f64) = (900.0, 620.0);
+pub const COMPACT: (f64, f64) = (960.0, 660.0);
 /// The smallest window Scribe allows (tauri.conf.json minWidth/minHeight).
 pub const MINIMUM: (f64, f64) = (820.0, 540.0);
 /// Room left around a window shrunk to fit, so it doesn't touch the taskbar.
@@ -114,22 +114,25 @@ mod tests {
 
     #[test]
     fn keeps_a_size_that_fits() {
+        // 1920x1080 at 125% leaves about 1536x826 above the taskbar.
         assert_eq!(
-            fit_to_work_area((1024.0, 700.0), (1366.0, 728.0)),
-            (1024.0, 700.0)
+            fit_to_work_area((1120.0, 760.0), (1536.0, 826.0)),
+            (1120.0, 760.0)
         );
     }
 
     #[test]
     fn drops_to_compact_on_a_short_screen() {
-        // 1920x1080 at 150% leaves about 1280x672 above the taskbar.
-        assert_eq!(fit_to_work_area((1024.0, 700.0), (1280.0, 672.0)), COMPACT);
+        // 1920x1080 at 150% leaves about 1280x672 above the taskbar, and a
+        // 1366x768 laptop about 1366x728.
+        assert_eq!(fit_to_work_area((1120.0, 760.0), (1280.0, 672.0)), COMPACT);
+        assert_eq!(fit_to_work_area((1120.0, 760.0), (1366.0, 728.0)), COMPACT);
     }
 
     #[test]
     fn shrinks_to_the_work_area_when_compact_does_not_fit() {
         assert_eq!(
-            fit_to_work_area((1024.0, 700.0), (1000.0, 600.0)),
+            fit_to_work_area((1120.0, 760.0), (1000.0, 600.0)),
             (976.0, 576.0)
         );
     }
@@ -137,14 +140,14 @@ mod tests {
     #[test]
     fn a_large_window_steps_down_to_the_largest_preset_that_fits() {
         assert_eq!(
-            fit_to_work_area((1240.0, 820.0), (1366.0, 728.0)),
-            (1024.0, 700.0)
+            fit_to_work_area((1320.0, 880.0), (1536.0, 826.0)),
+            (1120.0, 760.0)
         );
     }
 
     #[test]
     fn never_goes_below_the_minimum() {
-        assert_eq!(fit_to_work_area((1024.0, 700.0), (700.0, 500.0)), MINIMUM);
+        assert_eq!(fit_to_work_area((1120.0, 760.0), (700.0, 500.0)), MINIMUM);
     }
 
     #[test]

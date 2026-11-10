@@ -29,6 +29,7 @@ pub mod process_info;
 pub mod prompt_budget;
 pub mod release_notes;
 pub mod remote_command;
+pub mod replacements_file;
 pub mod selection_transform;
 pub mod self_test;
 pub mod session_model;
@@ -459,6 +460,21 @@ pub fn run() {
             platform::init(app_data_dir.clone(), &app.config().identifier);
             hotkeys::setup(app.handle(), &settings.hotkeys, settings.notes_analysis_enabled)?;
             tray::setup(app.handle())?;
+            // Replacements live in replacements.txt in the data folder; the
+            // first run moves the list kept in settings there. A watcher picks
+            // up edits made in any editor.
+            {
+                use tauri::Emitter;
+                let store = std::sync::Arc::new(replacements_file::ReplacementStore::open(
+                    app_data_dir.join(replacements_file::FILE_NAME),
+                    &settings.text_replacements,
+                ));
+                let watch_app = app.handle().clone();
+                store.watch(move |info| {
+                    let _ = watch_app.emit(commands::REPLACEMENTS_CHANGED_EVENT, info);
+                });
+                app.manage(store);
+            }
             // Open at the saved size (or the default), shrunk to fit the screen.
             if let Some(window) = app.get_webview_window("main") {
                 window_size::restore(&window, &settings);
@@ -570,6 +586,10 @@ pub fn run() {
             commands::record_test_clip,
             commands::get_test_clip_audio,
             commands::open_data_folder,
+            commands::get_replacements,
+            commands::add_replacements,
+            commands::remove_replacement,
+            commands::open_replacements_file,
             commands::open_models_folder,
             commands::open_logs_folder,
             commands::get_logs_dir,

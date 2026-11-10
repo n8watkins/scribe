@@ -297,7 +297,11 @@ fn transcribe_recording_inner(
     // `whisper_result.text`, so doing it here covers both. (The file-transcribe
     // path is intentionally left untouched.) An empty replacements list returns
     // the text unchanged.
-    let final_text = crate::text_replace::apply(&whisper_result.text, &settings.text_replacements);
+    let replacements = app
+        .try_state::<std::sync::Arc<crate::replacements_file::ReplacementStore>>()
+        .map(|store| store.current().rows)
+        .unwrap_or_else(|| settings.text_replacements.clone());
+    let final_text = crate::text_replace::apply(&whisper_result.text, &replacements);
 
     // A voice Transform Selection recording: the transcribed text is the user's
     // spoken *instruction*, not dictation. Route it to the transform engine —

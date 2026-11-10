@@ -1984,3 +1984,68 @@ pub async fn get_engine_status(
     })
     .await
 }
+
+/// Sent with the new contents when replacements.txt changes outside Scribe.
+pub const REPLACEMENTS_CHANGED_EVENT: &str = "scribe:replacements-changed";
+
+type Replacements = std::sync::Arc<crate::replacements_file::ReplacementStore>;
+
+fn replacements_error(error: std::io::Error) -> CommandError {
+    CommandError::new(
+        "replacements_write_failed",
+        format!("Could not save replacements.txt. {}", error),
+    )
+}
+
+/// The replacements in replacements.txt, and any lines that couldn't be read.
+#[tauri::command]
+pub async fn get_replacements(
+    app: tauri::AppHandle,
+) -> Result<crate::replacements_file::ReplacementsInfo, CommandError> {
+    off_main(app, move |app| Ok(app.state::<Replacements>().current())).await
+}
+
+/// Appends replacements whose heard phrase isn't in the file yet.
+#[tauri::command]
+pub async fn add_replacements(
+    app: tauri::AppHandle,
+    rows: Vec<crate::text_replace::TextReplacement>,
+) -> Result<crate::replacements_file::AddReport, CommandError> {
+    off_main(app, move |app| {
+        app.state::<Replacements>()
+            .add(&rows)
+            .map_err(replacements_error)
+    })
+    .await
+}
+
+/// Removes the first line holding this replacement.
+#[tauri::command]
+pub async fn remove_replacement(
+    app: tauri::AppHandle,
+    row: crate::text_replace::TextReplacement,
+) -> Result<crate::replacements_file::ReplacementsInfo, CommandError> {
+    off_main(app, move |app| {
+        app.state::<Replacements>()
+            .remove(&row)
+            .map_err(replacements_error)
+    })
+    .await
+}
+
+/// Opens replacements.txt in the default text editor.
+#[tauri::command]
+pub async fn open_replacements_file(app: tauri::AppHandle) -> Result<(), CommandError> {
+    off_main(app, move |app| {
+        let path = app.state::<Replacements>().path().to_path_buf();
+        app.opener()
+            .open_path(path.to_string_lossy(), None::<&str>)
+            .map_err(|error| {
+                CommandError::new(
+                    "replacements_open_failed",
+                    format!("Could not open replacements.txt. {}", error),
+                )
+            })
+    })
+    .await
+}

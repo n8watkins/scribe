@@ -80,17 +80,28 @@ Field names are the ones in `AppSettings` (`app/src/backend.ts`, `app/src-tauri/
   - A sentence works better than a comma list, which makes Whisper write in list style.
 - UI label: "Not used by Parakeet" with a Change model link. A red counter and "Over by N characters" when too long. Home shows "Not used" with Parakeet.
 
-### Replacements (`textReplacements`)
+### Replacements (`replacements.txt`)
 
-- Connects to: the finished text of every dictation, after filler removal.
+- Connects to:
+  - the finished text of every dictation, after filler removal;
+  - the file `replacements.txt` in the data folder, which is the source of truth (`src-tauri/src/replacements_file.rs`).
 - Engine: both. They are the only lever for your words with Parakeet.
-- Off or unavailable: an empty list changes nothing.
+- Off or unavailable:
+  - An empty file changes nothing.
+  - Lines that aren't `heard -> written` are skipped and reported by line number.
 - Implications:
   - No limit.
-  - Matching is case-insensitive on whole words.
+  - Matching is case-insensitive on whole words, longer phrases first.
   - Only add real mishearings; spacing and case variants read fine as they are.
   - File transcription doesn't apply them.
-- UI label: "No limit, and they work with every model".
+  - Edits in any editor are picked up within about 2 s.
+  - App writes are atomic and only add or remove their own lines.
+  - The list that settings kept before 0.15.1 (`textReplacements`) is moved into the file once and kept as a backup; the setting is no longer read.
+  - GitHub backup doesn't include the file.
+- Format: `docs/REPLACEMENTS.md`, also behind the Format link in the app.
+- UI label:
+  - "No limit, and they work with every model".
+  - "N lines skipped: ..." for unreadable lines.
 
 ### Remove filler words (`fillerSuppressionEnabled`), Filler words (`fillerWords`), Pause before removing (`fillerPauseThresholdMs`)
 

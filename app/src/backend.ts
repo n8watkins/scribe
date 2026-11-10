@@ -1194,3 +1194,41 @@ function friendlyCommandErrorMessage(code: string): string | null {
 
   return messages[code] ?? null;
 }
+
+/** replacements.txt: the replacements in it and lines that couldn't be read. */
+export type ReplacementsInfo = {
+  path: string;
+  rows: TextReplacement[];
+  /** 1-based numbers of lines that aren't `heard -> written`. */
+  skippedLines: number[];
+};
+
+export type AddReplacementsReport = {
+  added: number;
+  duplicates: number;
+  info: ReplacementsInfo;
+};
+
+/** Sent with the new contents when replacements.txt changes outside Scribe. */
+export const REPLACEMENTS_CHANGED_EVENT = "scribe:replacements-changed";
+
+export function getReplacements(): Promise<ReplacementsInfo> {
+  return invoke("get_replacements");
+}
+
+/** Appends replacements whose heard phrase isn't in the file yet. */
+export function addReplacements(
+  rows: TextReplacement[],
+): Promise<AddReplacementsReport> {
+  return invoke("add_replacements", { rows });
+}
+
+/** Removes the first line holding this replacement. */
+export function removeReplacement(row: TextReplacement): Promise<ReplacementsInfo> {
+  return invoke("remove_replacement", { row });
+}
+
+/** Opens replacements.txt in the default text editor. */
+export function openReplacementsFile(): Promise<void> {
+  return invoke("open_replacements_file");
+}

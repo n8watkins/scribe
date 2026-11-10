@@ -704,10 +704,19 @@ button:disabled {
   }
 }
 
+/* Home is exactly the window's height: the cards above keep their size and
+   the transcript and hotkeys share what is left, so a long transcript
+   scrolls inside its card instead of stretching the page (and never pushes
+   "Hearing you" away). Below the minimum, the page scrolls. */
+.view-home {
+  flex: 1 1 0;
+}
+
 .main-grid {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(250px, 0.75fr);
+  grid-template-rows: minmax(0, 1fr);
   /* Both cards share one height: the row stretches to fill the window. */
   align-items: stretch;
   gap: 8px;
@@ -3456,4 +3465,106 @@ kbd {
 
 .replacement-preview-error {
   color: var(--scribe-danger);
+}
+
+/* Words > Replacements: a summary of replacements.txt, never the full list. */
+.replacements {
+  display: grid;
+  gap: 8px;
+}
+
+.replacements-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  color: var(--scribe-text-secondary);
+  font-size: 13px;
+}
+
+.replacements-summary strong {
+  color: var(--scribe-text);
+  font-size: 15px;
+}
+
+.replacements-format {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--scribe-border);
+  border-radius: 6px;
+  background: rgba(var(--scribe-surface-rgb), 0.45);
+}
+
+.replacements-format ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--scribe-text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.replacements-format .ghost-button {
+  justify-self: start;
+}
+
+.replacements-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.replacements-add > span {
+  color: var(--scribe-text-muted);
+}
+
+.replacements-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--scribe-border);
+  border-radius: 6px;
+  background: rgba(var(--scribe-surface-rgb), 0.45);
+  color: var(--scribe-text-muted);
+}
+
+.replacements-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: transparent;
+}
+
+.replacements-matches {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12.5px;
+}
+
+.replacements-matches li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  padding: 0 4px 0 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  color: var(--scribe-text-secondary);
+}
+
+.replacements-file {
+  position: relative;
+  cursor: pointer;
+}
+
+.replacements-file input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
 }
