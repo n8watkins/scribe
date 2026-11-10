@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings, ReplacementsInfo } from "../backend";
 import type { ViewActions } from "../types";
@@ -104,7 +104,7 @@ describe("Replacements", () => {
     const dialog = screen.getByRole("dialog", { name: "How to write replacements" });
     expect(dialog).toHaveTextContent("One replacement per line");
     expect(screen.queryByText(/AI chat/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 

@@ -764,7 +764,7 @@ button:disabled {
 }
 
 .status-card-icon {
-  display: inline-flex;
+  display: none;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
@@ -989,8 +989,7 @@ button:disabled {
 }
 
 .main-grid > .panel-card .hotkey-list {
-  flex: 1 1 auto;
-  grid-auto-rows: minmax(38px, 48px);
+  grid-auto-rows: 38px;
 }
 
 .main-grid > .panel-card .hotkey-row {
@@ -3515,6 +3514,13 @@ kbd {
   min-width: 0;
   border: none;
   background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+
+.replacements-search:focus-within {
+  border-color: var(--scribe-accent-soft);
+  box-shadow: 0 0 0 2px var(--scribe-accent-ring);
 }
 
 /* Every replacement in a small box of its own height: it scrolls inside
@@ -3607,8 +3613,9 @@ kbd {
 
 .status-card-quiet {
   position: absolute;
-  left: 50px;
-  bottom: 9px;
+  left: 13px;
+  bottom: 10px;
+  white-space: nowrap;
   padding: 0;
   color: var(--scribe-accent-bright);
   background: none;
@@ -3620,8 +3627,3 @@ kbd {
   cursor: pointer;
 }
 
-@media (max-width: 959px) {
-  .status-card-quiet {
-    left: 12px;
-  }
-}
