@@ -555,7 +555,7 @@ impl WarmTranscriber {
                 Ok(text) => {
                     inner.last_used = Some(Instant::now());
                     let memory = inner.slot.resident().and_then(|resident| {
-                        crate::process_info::private_memory_bytes(resident.pid())
+                        crate::process_info::resident_memory_bytes(resident.pid())
                     });
                     if let Some(bytes) = memory {
                         inner.measurements.record_memory(&config.model_id, bytes);
@@ -650,10 +650,9 @@ impl WarmTranscriber {
                 inner.last_used = Some(Instant::now());
                 // The first inference allocates working buffers: sample now so
                 // the status and the measurement include them.
-                let memory = inner
-                    .slot
-                    .resident()
-                    .and_then(|resident| crate::process_info::private_memory_bytes(resident.pid()));
+                let memory = inner.slot.resident().and_then(|resident| {
+                    crate::process_info::resident_memory_bytes(resident.pid())
+                });
                 if let Some(bytes) = memory {
                     inner.measurements.record_memory(&desired.model_id, bytes);
                 }
@@ -834,7 +833,7 @@ fn watchdog_tick(shared: &Shared, inner: &mut Inner) {
         shared.publish(None);
         return;
     }
-    if let Some(bytes) = crate::process_info::private_memory_bytes(pid) {
+    if let Some(bytes) = crate::process_info::resident_memory_bytes(pid) {
         inner.measurements.record_memory(&model_id, bytes);
         shared.publish_if_memory_moved(bytes, inner.measurements.get(&model_id));
     }
@@ -969,7 +968,7 @@ fn load(
             let load_ms = started.elapsed().as_millis() as u64;
             let pid = inner.slot.resident().map(|r| r.pid()).unwrap_or_default();
             inner.measurements.record_load(&config.model_id, load_ms);
-            let memory = crate::process_info::private_memory_bytes(pid);
+            let memory = crate::process_info::resident_memory_bytes(pid);
             if let Some(bytes) = memory {
                 inner.measurements.record_memory(&config.model_id, bytes);
             }

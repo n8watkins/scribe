@@ -63,12 +63,14 @@ pub fn terminate_if_same(recorded: &ProcessIdentity) -> bool {
     imp::terminate(recorded.pid)
 }
 
-/// Memory the process holds for itself, in bytes: private commit on Windows
-/// (what Task Manager calls "Commit size"), anonymous resident memory on
-/// Linux, and the physical footprint Activity Monitor shows on macOS. This is
-/// what unloading the model gives back.
-pub fn private_memory_bytes(pid: u32) -> Option<u64> {
-    imp::private_memory_bytes(pid)
+/// Physical memory (RAM) the process uses, in bytes: the working set on
+/// Windows (close to Task Manager's "Memory" column), anonymous resident
+/// memory on Linux, and the physical footprint Activity Monitor shows on
+/// macOS. This is the RAM unloading the model gives back. (Windows' private
+/// commit is larger: ggml reserves buffers it never fills, so it would
+/// overstate the saving.)
+pub fn resident_memory_bytes(pid: u32) -> Option<u64> {
+    imp::resident_memory_bytes(pid)
 }
 
 #[cfg(windows)]
@@ -139,7 +141,7 @@ mod imp {
         unsafe { TerminateProcess(handle.0, 1).is_ok() }
     }
 
-    pub fn private_memory_bytes(pid: u32) -> Option<u64> {
+    pub fn resident_memory_bytes(pid: u32) -> Option<u64> {
         let handle = open(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
         let mut counters = PROCESS_MEMORY_COUNTERS_EX {
             cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32,
@@ -153,7 +155,7 @@ mod imp {
             )
             .ok()?;
         }
-        Some(counters.PrivateUsage as u64)
+        Some(counters.WorkingSetSize as u64)
     }
 }
 
@@ -180,7 +182,7 @@ mod imp {
         unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) == 0 }
     }
 
-    pub fn private_memory_bytes(pid: u32) -> Option<u64> {
+    pub fn resident_memory_bytes(pid: u32) -> Option<u64> {
         let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
         status.lines().find_map(|line| {
             let value = line.strip_prefix("RssAnon:")?;
@@ -233,7 +235,7 @@ mod imp {
         unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) == 0 }
     }
 
-    pub fn private_memory_bytes(pid: u32) -> Option<u64> {
+    pub fn resident_memory_bytes(pid: u32) -> Option<u64> {
         let mut info: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
         let result = unsafe {
             libc::proc_pid_rusage(
@@ -280,8 +282,8 @@ mod tests {
     }
 
     #[test]
-    fn reads_own_private_memory() {
-        let bytes = private_memory_bytes(std::process::id()).expect("own memory is readable");
+    fn reads_own_resident_memory() {
+        let bytes = resident_memory_bytes(std::process::id()).expect("own memory is readable");
         assert!(bytes > 0);
     }
 
