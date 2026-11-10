@@ -15,8 +15,10 @@ import {
   FolderOpen,
   HardDrive,
   RefreshCw,
+  Sparkles,
   Square,
   Trash2,
+  X,
 } from "lucide-react";
 import {
   cancelModelDownload,
@@ -44,6 +46,7 @@ import { IconButton, Toggle } from "../components/primitives";
 import { SettingRow } from "../components/layout";
 import { ConfirmDialog } from "../components/modal";
 import { deleteModelMessage } from "../lib/deleteConfirm";
+import { engineSupport, modelGuide } from "../lib/modelGuide";
 import {
   engineStateLabel,
   keepLoadedCaveat,
@@ -248,6 +251,23 @@ export function ModelsView({
     }
   }, [modelsLoading, models.length, downloadedCount]);
 
+  // A one-time nudge for people on Tiny or Base English: Small English gets
+  // clearly more words right. Answered once, never shown again.
+  const suggestion = useMemo(() => {
+    if (settings.modelSuggestionDismissed || !selectedModel) {
+      return null;
+    }
+    if (!/^(tiny|base)\.en$/.test(selectedModel.id)) {
+      return null;
+    }
+    const to = models.find((model) => model.id === "small.en-q5_1");
+    return to ? { from: selectedModel, to } : null;
+  }, [models, selectedModel, settings.modelSuggestionDismissed]);
+  const dismissSuggestion = useCallback(
+    () => actions.updateSettings({ modelSuggestionDismissed: true }),
+    [actions],
+  );
+
   const openFolder = useCallback(() => {
     void openModelsFolder().catch((error) =>
       setModelsError(commandErrorMessage(error)),
@@ -280,6 +300,47 @@ export function ModelsView({
         </div>
         {modelsError ? (
           <InlineError message={modelsError} onRetry={loadModels} />
+        ) : null}
+
+        {suggestion ? (
+          <div className="model-suggestion" role="status">
+            <Sparkles aria-hidden="true" size={16} />
+            <div>
+              <strong>Try Small English</strong>
+              <span>
+                More accurate than {suggestion.from.name}, a{" "}
+                {suggestion.to.diskSizeLabel} download.
+              </span>
+            </div>
+            <div className="row-actions">
+              <button
+                className="primary-button"
+                disabled={busyModelId !== null}
+                onClick={() => {
+                  const target = suggestion.to;
+                  dismissSuggestion();
+                  void runModelAction(target.id, async () => {
+                    if (!isModelDownloaded(effectiveStatus(target))) {
+                      await downloadModel(target.id);
+                    }
+                    await selectModel(target.id);
+                  });
+                }}
+                type="button"
+              >
+                {isModelDownloaded(effectiveStatus(suggestion.to))
+                  ? "Switch to Small English"
+                  : "Download and switch"}
+              </button>
+              <button
+                className="ghost-button"
+                onClick={dismissSuggestion}
+                type="button"
+              >
+                Keep {suggestion.from.name}
+              </button>
+            </div>
+          </div>
         ) : null}
 
         {dictating ? (
@@ -428,6 +489,7 @@ export function ModelsView({
                       status === "failed" ||
                       status === "update_available";
                     const showStatusPill = statusLabel !== "" && actionableState;
+                    const guide = modelGuide(model.id, model.engine);
                     return (
                       <div
                         className={selected ? "model-row is-selected" : "model-row"}
@@ -447,12 +509,45 @@ export function ModelsView({
                           />
                         </label>
                         <div className="model-row-main">
-                          <strong>{model.name}</strong>
+                          <strong>
+                            {model.name}
+                            {guide?.recommended ? (
+                              <span className="pill ready model-recommended">
+                                Recommended
+                              </span>
+                            ) : null}
+                          </strong>
+                          {guide ? (
+                            <span className="model-guide">
+                              <Meter label="Accuracy" value={guide.accuracy} />
+                              <Meter label="Speed" value={guide.speed} />
+                              <span className="model-support">
+                                {engineSupport(model.engine).map((item) => (
+                                  <span
+                                    className={
+                                      item.supported
+                                        ? "model-support-item"
+                                        : "model-support-item is-off"
+                                    }
+                                    key={item.label}
+                                  >
+                                    {item.supported ? (
+                                      <Check aria-hidden="true" size={12} />
+                                    ) : (
+                                      <X aria-hidden="true" size={12} />
+                                    )}
+                                    {item.label}
+                                    {item.supported ? "" : " (not used)"}
+                                  </span>
+                                ))}
+                              </span>
+                            </span>
+                          ) : null}
                           <span className="model-row-sub">
                             {model.diskSizeLabel}
                             {" · "}
                             {model.engine === "parakeet"
-                              ? "Parakeet · 25 European languages · no context hint"
+                              ? "25 European languages"
                               : model.multilingual
                                 ? "Multilingual"
                                 : "English-only"}
@@ -582,5 +677,25 @@ export function ModelsView({
         title={pendingDelete ? `Delete ${pendingDelete.name}?` : "Delete model?"}
       />
     </section>
+  );
+}
+
+/** Five small bars, filled up to `value`, with a label. */
+function Meter({ label, value }: { label: string; value: number }) {
+  return (
+    <span
+      aria-label={`${label} ${value} of 5`}
+      className="model-meter"
+      role="img"
+      title={`${label}: ${value} of 5`}
+    >
+      <span className="model-meter-label">{label}</span>
+      {[1, 2, 3, 4, 5].map((step) => (
+        <span
+          className={step <= value ? "model-meter-bar is-on" : "model-meter-bar"}
+          key={step}
+        />
+      ))}
+    </span>
   );
 }

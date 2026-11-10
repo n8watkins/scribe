@@ -26,6 +26,7 @@ pub mod output;
 pub mod parakeet;
 pub mod platform;
 pub mod process_info;
+pub mod prompt_budget;
 pub mod release_notes;
 pub mod remote_command;
 pub mod selection_transform;

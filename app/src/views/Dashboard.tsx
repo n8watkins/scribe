@@ -25,6 +25,8 @@ import {
 import { HotkeyList, StatsRow, StatusCard } from "../components/layout";
 import { LastTranscriptCard, LiveTranscript } from "../components/transcript";
 import { WhatsNewCard } from "../components/ReleaseNotes";
+import { SetupStrip } from "../components/SetupStrip";
+import { isParakeetModel } from "../lib/engine";
 import { insertMethodLabel, usePastePermission } from "../lib/pastePermission";
 import { engineStateLabel, useEngineStatus } from "../lib/engineStatus";
 
@@ -93,8 +95,13 @@ export function DashboardView({
     models?.find((model) => model.id === settings.selectedModelId)?.name ??
     settings.selectedModelId ??
     "Choose a model";
+  const engineName = isParakeetModel(settings.selectedModelId)
+    ? "Parakeet"
+    : "Whisper";
   const modelDetail =
-    modelReady && engineMatches ? engineStateLabel(engineStatus) : undefined;
+    modelReady && engineMatches
+      ? `${engineName} · ${engineStateLabel(engineStatus)}`
+      : engineName;
   const liveText = liveTranscript?.text.trim() ?? "";
   const showLive =
     liveText.length > 0 &&
@@ -157,6 +164,12 @@ export function DashboardView({
           value={afterValue}
         />
       </section>
+
+      <SetupStrip
+        actions={actions}
+        settings={settings}
+        setActiveView={setActiveView}
+      />
 
       <StatsRow stats={stats} />
 

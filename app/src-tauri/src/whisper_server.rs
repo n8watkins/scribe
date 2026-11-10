@@ -743,9 +743,16 @@ impl WarmTranscriber {
                 },
             );
 
-        let vocabulary_prompt = request.vocabulary_prompt.trim();
+        // Trimmed to what whisper.cpp reads, keeping the front, and carried
+        // into every 30 s window of a long recording (as in whisper_args).
+        let vocabulary_prompt = crate::prompt_budget::fit_front(
+            &request.vocabulary_prompt,
+            crate::prompt_budget::PROMPT_TOKEN_LIMIT,
+        );
         if !vocabulary_prompt.is_empty() {
-            form = form.text("prompt", vocabulary_prompt.to_string());
+            form = form
+                .text("prompt", vocabulary_prompt.to_string())
+                .text("carry_initial_prompt", "true");
         }
 
         let response = client

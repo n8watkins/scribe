@@ -21,7 +21,7 @@ import {
   resolveMicrophone,
 } from "../lib/format";
 import { InlineError } from "../components/feedback";
-import { SectionPanel, SettingRow } from "../components/layout";
+import { BlockedNote, SectionPanel, SettingRow } from "../components/layout";
 import { MsInput, Toggle } from "../components/primitives";
 import { Waveform } from "../components/transcript";
 
@@ -294,7 +294,7 @@ export function MicrophoneView({
             />
           </SettingRow>
           <SettingRow
-            description="End a hands-free recording after a long pause. Off: keep listening through pauses."
+            description="End a hands-free recording after a long pause."
             label="Auto-stop on silence"
           >
             <Toggle
@@ -307,7 +307,7 @@ export function MicrophoneView({
             />
           </SettingRow>
           <SettingRow
-            description="Transcribe phrases in the background while you talk so text is ready the moment you stop."
+            description="Transcribe while you talk, so text is ready when you stop."
             label="Live transcription"
           >
             <Toggle
@@ -324,6 +324,7 @@ export function MicrophoneView({
             <div className="settings-list">
               <SettingRow
                 description="How long a pause ends the recording."
+                blockedBy={!settings.silenceAutoStopEnabled ? { reason: "Off because Auto-stop on silence is off." } : null}
                 label="Auto-stop pause (ms)"
               >
                 <MsInput
@@ -339,7 +340,9 @@ export function MicrophoneView({
                 />
               </SettingRow>
               <SettingRow
-                description="Start a new phrase when you pause. Off: phrases split only at the longest phrase length, so fewer sentence breaks but text arrives in bigger chunks."
+                description="Start a new phrase when you pause."
+          more="Off: phrases split only at the longest phrase length, so fewer sentence breaks but bigger chunks."
+                blockedBy={!settings.incrementalTranscriptionEnabled ? { reason: "Off because Live transcription is off." } : null}
                 label="Split on pause"
               >
                 <Toggle
@@ -355,7 +358,9 @@ export function MicrophoneView({
                 />
               </SettingRow>
               <SettingRow
-                description="How long a pause starts a new phrase. Higher means fewer stray periods when you pause mid-sentence, with a little more delay (200 to 10000 ms)."
+                description="How long a pause starts a new phrase."
+          more="Higher means fewer stray periods mid-sentence, with a little more delay (200 to 10000 ms)."
+                blockedBy={!settings.incrementalTranscriptionEnabled ? { reason: "Off because Live transcription is off." } : !settings.segmentPauseEnabled ? { reason: "Off because Split on pause is off." } : null}
                 label="Pause before splitting (ms)"
               >
                 <MsInput
@@ -374,7 +379,9 @@ export function MicrophoneView({
                 />
               </SettingRow>
               <SettingRow
-                description="A phrase is split after this long even without a pause. The speech model handles about 30 seconds at once (10000 to 25000 ms)."
+                description="Split a phrase after this long, pause or not."
+          more="The speech model handles about 30 seconds at once (10000 to 25000 ms)."
+                blockedBy={!settings.incrementalTranscriptionEnabled ? { reason: "Off because Live transcription is off." } : null}
                 label="Longest phrase (ms)"
               >
                 <MsInput
@@ -406,7 +413,9 @@ export function MicrophoneView({
                 />
               </SettingRow>
               <SettingRow
-                description="Nobody is cut off while talking. Past this length, the auto-stop pause also ends hold-to-talk recordings, even if nothing was said (600000 ms is 10 minutes)."
+                description="After this long, a pause ends hold-to-talk recordings too."
+          more="Nobody is cut off while talking. 600000 ms is 10 minutes."
+                blockedBy={!settings.silenceAutoStopEnabled ? { reason: "Off because Auto-stop on silence is off." } : null}
                 label="Silence stops any recording after (ms)"
               >
                 <MsInput
@@ -422,7 +431,8 @@ export function MicrophoneView({
                 />
               </SettingRow>
               <SettingRow
-                description="Safety limit for a stuck key or a forgotten mic: recording stops at this length even mid-sentence, and the text is kept (1800000 ms is 30 minutes; 60000 to 3600000)."
+                description="Stops a stuck or forgotten recording; the text is kept."
+          more="It stops even mid-sentence. 1800000 ms is 30 minutes (60000 to 3600000)."
                 label="Hard stop (ms)"
               >
                 <MsInput
@@ -493,7 +503,8 @@ export function GpuSettings({
       title="GPU acceleration"
     >
       <SettingRow
-        description="Transcribe on your graphics card, a big speedup for the larger models. Scribe falls back to the processor if the card isn't available."
+        description="Transcribe on your graphics card."
+          more="A big speedup for the larger models. Scribe falls back to the processor if the card isn't available."
         label="Use GPU acceleration"
       >
         <Toggle
@@ -547,6 +558,11 @@ export function GpuSettings({
               ))}
             </select>
           </label>
+          {settings.gpuAcceleration === "off" ? (
+            <BlockedNote
+              blocked={{ reason: "Off because Use GPU acceleration is off." }}
+            />
+          ) : null}
         </div>
       ) : null}
     </SectionPanel>

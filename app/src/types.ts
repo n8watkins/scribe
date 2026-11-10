@@ -34,6 +34,8 @@ export type ViewActions = {
   pasteLastTranscript: () => Promise<void>;
   pastingLastTranscript: boolean;
   openSettings: (tabId?: string) => void;
+  /** Opens a page, for "Off because X" links to the setting that controls one. */
+  openView: (view: ViewName) => void;
   refresh: () => Promise<void>;
   saveError: string | null;
   savingSettings: boolean;

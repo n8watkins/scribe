@@ -56,9 +56,6 @@ const SILENCE_KEEP_MS: u64 = 1_000;
 /// final word when the audio ends abruptly mid-/right-after speech, which the
 /// tail segment otherwise does.
 const SEGMENT_TAIL_PAD_MS: u64 = 300;
-/// How much accumulated transcript text is appended to the vocabulary prompt
-/// for cross-segment continuity.
-const PROMPT_CONTEXT_CHARS: usize = 200;
 /// How long the dictation stop path waits for the coordinator's assembled
 /// text before falling back to full-clip transcription.
 pub const RESULT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -199,33 +196,6 @@ fn join_segments(texts: &[String]) -> String {
         .filter(|text| !text.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-/// Per-segment prompt: the vocabulary prompt plus the last
-/// [`PROMPT_CONTEXT_CHARS`] characters of the accumulated transcript, for
-/// cross-segment continuity.
-fn prompt_with_context(vocabulary_prompt: &str, accumulated: &str) -> String {
-    let vocabulary = vocabulary_prompt.trim();
-    let context = text_tail(accumulated.trim(), PROMPT_CONTEXT_CHARS);
-
-    match (vocabulary.is_empty(), context.is_empty()) {
-        (true, true) => String::new(),
-        (false, true) => vocabulary.to_string(),
-        (true, false) => context.to_string(),
-        (false, false) => format!("{} {}", vocabulary, context),
-    }
-}
-
-/// Last `max_chars` characters of `text`, on a char boundary.
-fn text_tail(text: &str, max_chars: usize) -> &str {
-    if max_chars == 0 {
-        return "";
-    }
-
-    match text.char_indices().rev().nth(max_chars - 1) {
-        Some((index, _)) => &text[index..],
-        None => text,
-    }
 }
 
 #[derive(Debug)]
@@ -540,7 +510,10 @@ fn transcribe_segment(
                 wav_path: wav_path.to_path_buf(),
                 language: context.language.clone(),
                 translate: context.translate,
-                vocabulary_prompt: prompt_with_context(&context.vocabulary_prompt, accumulated),
+                vocabulary_prompt: crate::prompt_budget::prompt_with_context(
+                    &context.vocabulary_prompt,
+                    accumulated,
+                ),
                 filler: context.filler.clone(), // FILLER
                 gpu: context.gpu,
                 gpu_device_index: context.gpu_device_index,
@@ -768,41 +741,5 @@ mod tests {
 
         assert_eq!(join_segments(&texts), "Hello there. Second phrase.");
         assert_eq!(join_segments(&[]), "");
-    }
-
-    #[test]
-    fn prompt_combines_vocabulary_and_context_tail() {
-        assert_eq!(prompt_with_context("", ""), "");
-        assert_eq!(prompt_with_context(" Scribe, Tauri ", ""), "Scribe, Tauri");
-        assert_eq!(prompt_with_context("", "previous text"), "previous text");
-        assert_eq!(
-            prompt_with_context("Scribe", "previous text"),
-            "Scribe previous text"
-        );
-    }
-
-    #[test]
-    fn prompt_context_is_limited_to_the_last_200_chars() {
-        let accumulated = "x".repeat(300);
-
-        let prompt = prompt_with_context("vocab", &accumulated);
-
-        assert_eq!(prompt, format!("vocab {}", "x".repeat(200)));
-    }
-
-    #[test]
-    fn prompt_context_truncation_respects_char_boundaries() {
-        let accumulated = "é".repeat(300);
-
-        let prompt = prompt_with_context("", &accumulated);
-
-        assert_eq!(prompt.chars().count(), 200);
-        assert!(prompt.chars().all(|character| character == 'é'));
-    }
-
-    #[test]
-    fn text_tail_returns_short_text_unchanged() {
-        assert_eq!(text_tail("short", 200), "short");
-        assert_eq!(text_tail("anything", 0), "");
     }
 }

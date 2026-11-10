@@ -9,7 +9,7 @@ import {
 } from "../backend";
 import { forPlatform } from "../lib/platform";
 import { detectUpdate, updatesInstallInApp } from "../lib/updates";
-import { SectionPanel } from "./layout";
+import { BlockedNote, SectionPanel } from "./layout";
 import { Toggle } from "./primitives";
 import { ReleaseNotesBody } from "./ReleaseNotes";
 import "../views/about.css";
@@ -207,9 +207,19 @@ export function UpdatesPanel({
                     onChange={(enabled) => onToggleAutoInstall?.(enabled)}
                   />
                 </div>
-                <small className="about-autoinstall-hint">
-                  Downloads and installs new versions on launch, with a Scribe screen and no Windows installer popups.
-                </small>
+                {autoCheckEnabled === false ? (
+                  <BlockedNote
+                    blocked={{
+                      reason:
+                        "Off because Automatically check for updates is off.",
+                    }}
+                  />
+                ) : (
+                  <small className="about-autoinstall-hint">
+                    Installs new versions on launch, with a Scribe screen and
+                    no Windows installer popups.
+                  </small>
+                )}
               </>
             ) : (
               <small className="about-autoinstall-hint">

@@ -130,7 +130,7 @@ export function WordsPage({ actions, settings }: PageProps) {
       <div className="stack">
         <SectionPanel
           icon={<BookOpen aria-hidden="true" size={16} />}
-          title="Context hint"
+          title="Custom words"
         >
           <ContextHintSettings actions={actions} settings={settings} />
         </SectionPanel>
