@@ -31,6 +31,27 @@ export default tseslint.config(
         "warn",
         { allowConstantExport: true },
       ],
+      // Native dialogs show up in the Windows app as an unbranded
+      // "tauri.localhost says" box. Ask with ConfirmDialog from
+      // components/modal.tsx instead.
+      "no-restricted-globals": [
+        "error",
+        ...["alert", "confirm", "prompt"].map((name) => ({
+          name,
+          message: "Use ConfirmDialog from components/modal.tsx, not a native dialog.",
+        })),
+      ],
+      "no-restricted-properties": [
+        "error",
+        ...["window", "globalThis", "self"].flatMap((object) =>
+          ["alert", "confirm", "prompt"].map((property) => ({
+            object,
+            property,
+            message:
+              "Use ConfirmDialog from components/modal.tsx, not a native dialog.",
+          })),
+        ),
+      ],
     },
   },
 );

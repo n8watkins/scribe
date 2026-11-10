@@ -134,7 +134,7 @@ export function TranscriptRow({
   item: Transcript;
   onAnalyze?: (id: string) => Promise<void>;
   onCopy?: (id: string) => Promise<void>;
-  onDelete?: (id: string) => Promise<void>;
+  onDelete?: (id: string) => void;
   onOpenExternally?: (id: string) => Promise<void>;
   onPaste?: (id: string) => Promise<void>;
   onPlay?: (id: string) => Promise<void>;
@@ -260,7 +260,7 @@ export function TranscriptRow({
           danger
           disabled={busy || !onDelete}
           label="Delete transcript"
-          onClick={() => void onDelete?.(item.id)}
+          onClick={() => onDelete?.(item.id)}
         >
           <Trash2 aria-hidden="true" size={15} />
         </IconButton>
