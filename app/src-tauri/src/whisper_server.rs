@@ -73,6 +73,25 @@ const INFERENCE_TIMEOUT: Duration = Duration::from_secs(300);
 /// Consecutive server failures before the server path is disabled.
 const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 
+/// Whether a dictation is recording or being transcribed right now.
+fn dictation_in_progress(app: &AppHandle) -> bool {
+    app.try_state::<crate::commands::BackendState>()
+        .and_then(|state| {
+            state
+                .app_state()
+                .ok()
+                .map(|machine| machine.status().clone())
+        })
+        .is_some_and(|status| {
+            matches!(
+                status,
+                crate::app_state::AppStatus::Recording
+                    | crate::app_state::AppStatus::Stopping
+                    | crate::app_state::AppStatus::Transcribing
+            )
+        })
+}
+
 /// Whether `engine` can stay resident on this system. Whisper's warm server
 /// runs on Windows; elsewhere each dictation runs whisper-cli.
 pub fn resident_supported(engine: EngineKind) -> bool {
@@ -366,7 +385,13 @@ impl WarmTranscriber {
                 .ok()
                 .and_then(|inner| inner.slot.resident().map(|r| r.config().clone()));
             if desired.is_some() && loaded_config != desired {
-                self.prewarm();
+                if dictation_in_progress(&self.shared.app) {
+                    // A dictation keeps the model it started with (see
+                    // session_model); the new one loads once it is done.
+                    log::info!("Model changed during a dictation; it loads after this one.");
+                } else {
+                    self.prewarm();
+                }
             }
             return;
         }
@@ -390,6 +415,19 @@ impl WarmTranscriber {
                 shared.publish(None);
             }
         });
+    }
+
+    /// After a dictation: loads the selected model in the background when
+    /// "Keep the speech model loaded" is on, so a model chosen during the
+    /// dictation is ready for the next one. A no-op when it is loaded.
+    pub fn load_if_kept(&self) {
+        let keep = lock(&self.shared.live)
+            .selection
+            .as_ref()
+            .is_some_and(|selection| selection.keep_loaded && resident_supported(selection.engine));
+        if keep {
+            self.prewarm();
+        }
     }
 
     /// Loads the selected model in the background unless it is already

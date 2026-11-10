@@ -30,6 +30,7 @@ pub mod release_notes;
 pub mod remote_command;
 pub mod selection_transform;
 pub mod self_test;
+pub mod session_model;
 pub mod settings;
 pub mod settings_store;
 pub mod speech_engine;

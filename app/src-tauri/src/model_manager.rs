@@ -303,6 +303,40 @@ pub fn selected_model_path(
     Ok((catalog_model.id.to_string(), resolved.path))
 }
 
+/// The file of a catalog model by id: the model a dictation started with,
+/// when it differs from the one selected now.
+pub fn model_path_for_id(
+    app: &AppHandle,
+    model_id: &str,
+) -> Result<(String, PathBuf), CommandError> {
+    let catalog_model = catalog_model(model_id)?;
+    match resolve_model_file(app, catalog_model)? {
+        Some(resolved) => Ok((catalog_model.id.to_string(), resolved.path)),
+        None => Err(CommandError::new(
+            "whisper_model_missing",
+            format!(
+                "{} is missing. Re-download it on the Models page.",
+                catalog_model.name
+            ),
+        )),
+    }
+}
+
+/// The model a dictation uses: the one it started with, else the selected one.
+pub fn session_model_path(
+    app: &AppHandle,
+    db: &Database,
+    session_id: &str,
+) -> Result<(String, PathBuf), CommandError> {
+    let selected = db.get_settings()?.selected_model_id;
+    match crate::session_model::global().model_for(session_id, selected.as_deref()) {
+        Some(model_id) if Some(model_id.as_str()) != selected.as_deref() => {
+            model_path_for_id(app, &model_id).or_else(|_| selected_model_path(app, db))
+        }
+        _ => selected_model_path(app, db),
+    }
+}
+
 fn download_model_inner(
     app: &AppHandle,
     state: &BackendState,

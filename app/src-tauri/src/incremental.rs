@@ -465,7 +465,7 @@ fn run_coordinator(
             Ok(Msg::Segment(path)) => {
                 if !failed {
                     let accumulated = join_segments(&texts);
-                    match transcribe_segment(&app, &mut context, &path, &accumulated) {
+                    match transcribe_segment(&app, &session_id, &mut context, &path, &accumulated) {
                         Ok(text) => {
                             segments += 1;
                             if !text.is_empty() {
@@ -519,12 +519,13 @@ fn run_coordinator(
 
 fn transcribe_segment(
     app: &AppHandle,
+    session_id: &str,
     context: &mut Option<SegmentContext>,
     wav_path: &Path,
     accumulated: &str,
 ) -> Result<String, String> {
     if context.is_none() {
-        *context = Some(segment_context(app)?);
+        *context = Some(segment_context(app, session_id)?);
     }
     let context = context.as_ref().expect("segment context resolved above");
 
@@ -550,12 +551,12 @@ fn transcribe_segment(
     Ok(transcription.text)
 }
 
-fn segment_context(app: &AppHandle) -> Result<SegmentContext, String> {
+fn segment_context(app: &AppHandle, session_id: &str) -> Result<SegmentContext, String> {
     let state = app.state::<BackendState>();
     let db = state.db().map_err(|error| error.message)?;
     let settings = db.get_settings().map_err(|error| error.message)?;
     let (model_id, model_path) =
-        model_manager::selected_model_path(app, &db).map_err(|error| error.message)?;
+        model_manager::session_model_path(app, &db, session_id).map_err(|error| error.message)?;
 
     Ok(SegmentContext {
         engine: crate::models::catalog_model(&model_id)
