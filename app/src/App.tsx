@@ -116,8 +116,8 @@ async function notifyUpdateAvailable(version: string) {
   await notifyOutsideApp(
     "Scribe update available",
     updatesInstallInApp()
-      ? `Version ${version} is ready to install. Open Scribe → About to update.`
-      : `Version ${version} is out. Open Scribe → About to download it.`,
+      ? `Version ${version} is ready to install. Open Scribe, then General, to update.`
+      : `Version ${version} is out. Open Scribe, then General, to download it.`,
   );
 }
 
@@ -216,7 +216,7 @@ function App() {
     useState<UpdateOverlayState | null>(null);
   // The release notes of the update the launch auto-install is applying.
   const [autoUpdateNotes, setAutoUpdateNotes] = useState<string | null>(null);
-  // Timestamp of the last successful auto poll, surfaced in About so the polling
+  // Timestamp of the last successful auto poll, surfaced in General so the polling
   // is observable (the "last checked" line ticks each cycle).
   const [lastUpdateCheck, setLastUpdateCheck] = useState<number | null>(null);
   // Mirror the auto-update-check setting into a ref so the long-lived poll
@@ -407,7 +407,7 @@ function App() {
     let stallTimer: number | undefined;
     try {
       // The updater's own check() resolves the *signed* package — the same call
-      // the manual About → Install path uses. null means no updater artifact is
+      // the manual General > Updates install uses. null means no updater artifact is
       // published for the latest release yet (e.g. the GitHub tag exists but
       // latest.json hasn't landed) OR the updater considers us current. On the
       // silent launch path that's NOT an error: just dismiss and keep the chip —
@@ -472,7 +472,7 @@ function App() {
       setAutoUpdateState({
         phase: "error",
         version,
-        message: `${message} You can still install it from About → Updates.`,
+        message: `${message} You can still install it from General, under Updates.`,
       });
     } finally {
       if (stallTimer) {
@@ -512,7 +512,7 @@ function App() {
   // whenever the window regains focus. The first time a given version is seen we
   // fire an in-app toast AND an OS notification (the latter reaches the user even
   // when minimized to the tray). Honors the "automatically check for updates"
-  // toggle; manual checks in About still work when it's off. Network failures
+  // toggle; manual checks in General still work when it's off. Network failures
   // (offline, rate limit) are ignored.
   useEffect(() => {
     let lastNotifiedVersion: string | null = null;
@@ -523,7 +523,7 @@ function App() {
       }
       void detectUpdate()
         .then((result) => {
-          // Record every successful poll so the "last checked" line in About
+          // Record every successful poll so the "last checked" line in General
           // advances — this is how the polling is observable even when you're
           // already on the latest version.
           setLastUpdateCheck(Date.now());
@@ -539,8 +539,8 @@ function App() {
             pushToast({
               tone: "info",
               message: updatesInstallInApp()
-                ? `Scribe ${result.latestVersion} is available. Open About to install it.`
-                : `Scribe ${result.latestVersion} is available. Open About to download it.`,
+                ? `Scribe ${result.latestVersion} is available. Open General to install it.`
+                : `Scribe ${result.latestVersion} is available. Open General to download it.`,
             });
             void notifyUpdateAvailable(result.latestVersion);
           }
@@ -981,8 +981,8 @@ function App() {
             {updateInfo?.updateAvailable ? (
               <button
                 className="secondary-button update-available-button"
-                onClick={() => setActiveView("About")}
-                title={`Scribe v${updateInfo.latestVersion} is available. Open About to ${updatesInstallInApp() ? "install" : "download"} it`}
+                onClick={() => setActiveView("General")}
+                title={`Scribe v${updateInfo.latestVersion} is available. Open General to ${updatesInstallInApp() ? "install" : "download"} it`}
                 type="button"
               >
                 <Download aria-hidden="true" size={14} />
@@ -1111,7 +1111,14 @@ function renderView(
     case "Appearance":
       return <AppearancePage actions={actions} settings={data.settings} />;
     case "General":
-      return <GeneralPage actions={actions} settings={data.settings} />;
+      return (
+        <GeneralPage
+          actions={actions}
+          lastUpdateCheck={lastUpdateCheck}
+          settings={data.settings}
+          updateInfo={updateInfo}
+        />
+      );
     case "Developer":
       return (
         <DeveloperView
@@ -1121,21 +1128,7 @@ function renderView(
         />
       );
     case "About":
-      return (
-        <AboutView
-          autoCheckEnabled={data.settings.autoUpdateCheckEnabled}
-          autoInstallEnabled={data.settings.autoInstallUpdates}
-          autoUpdateInfo={updateInfo}
-          lastUpdateCheck={lastUpdateCheck}
-          onToggleAutoCheck={(enabled) =>
-            actions.updateSettings({ autoUpdateCheckEnabled: enabled })
-          }
-          onToggleAutoInstall={(enabled) =>
-            actions.updateSettings({ autoInstallUpdates: enabled })
-          }
-          setActiveView={setActiveView}
-        />
-      );
+      return <AboutView setActiveView={setActiveView} />;
     case "Home":
     default:
       return (

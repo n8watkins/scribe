@@ -1,14 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { getVersion as getAppVersion } from "@tauri-apps/api/app";
-import { check as checkUpdaterPackage } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
 import { forPlatform } from "../lib/platform";
 import {
   ArrowUpRight,
   Check,
   Clock,
-  Download,
-  ExternalLink,
   History,
   Info,
   Keyboard,
@@ -18,24 +14,10 @@ import {
   ScrollText,
   StickyNote,
 } from "lucide-react";
-import {
-  commandErrorMessage,
-  openReleasePage,
-  type UpdateCheckResult,
-} from "../backend";
-import { detectUpdate, updatesInstallInApp } from "../lib/updates";
 import type { ViewName } from "../types";
-import { Toggle } from "../components/primitives";
-import {
-  ReleaseHistory,
-  ReleaseNotesBody,
-} from "../components/ReleaseNotes";
+import { ReleaseHistory } from "../components/ReleaseNotes";
 import { CopyDiagnostics } from "../components/CopyDiagnostics";
 import "./about.css";
-
-/** The GitHub releases list — every release with its notes, i.e. the changelog
- * the user can always reference. */
-const RELEASES_URL = "https://github.com/n8watkins/scribe/releases";
 
 const FEATURES = [
   {
@@ -98,121 +80,13 @@ const SETUP_STEPS: {
 
 export function AboutView({
   setActiveView,
-  lastUpdateCheck,
-  autoUpdateInfo,
-  autoCheckEnabled,
-  onToggleAutoCheck,
-  autoInstallEnabled,
-  onToggleAutoInstall,
 }: {
   setActiveView?: (view: ViewName) => void;
-  /** Timestamp (ms) of the last successful background update poll, so the
-   * polling is observable here. */
-  lastUpdateCheck?: number | null;
-  /** Latest auto-detected update from the app's background poll. Lets About
-   * always reflect an available update without the user manually checking. */
-  autoUpdateInfo?: UpdateCheckResult | null;
-  /** Whether background update checks are on (the toggle state). */
-  autoCheckEnabled?: boolean;
-  /** Flip the "automatically check for updates" setting. */
-  onToggleAutoCheck?: (enabled: boolean) => void;
-  /** Whether updates install silently on launch (the toggle state). */
-  autoInstallEnabled?: boolean;
-  /** Flip the "install updates automatically" setting. */
-  onToggleAutoInstall?: (enabled: boolean) => void;
 }) {
   const [version, setVersion] = useState("...");
-  const [checking, setChecking] = useState(false);
-  const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(
-    null,
-  );
-  const [updateError, setUpdateError] = useState<string | null>(null);
-  const [installing, setInstalling] = useState(false);
-  const [installStatus, setInstallStatus] = useState<string | null>(null);
-
   useEffect(() => {
     void getAppVersion().then(setVersion).catch(() => setVersion("unknown"));
   }, []);
-
-  const handleCheckForUpdate = async () => {
-    if (checking) {
-      return;
-    }
-    setChecking(true);
-    setUpdateError(null);
-    setUpdateResult(null);
-    try {
-      setUpdateResult(await detectUpdate());
-    } catch (cause) {
-      setUpdateError(commandErrorMessage(cause));
-    } finally {
-      setChecking(false);
-    }
-  };
-
-  const handleInstallUpdate = async () => {
-    if (installing) {
-      return;
-    }
-    setInstalling(true);
-    setUpdateError(null);
-    setInstallStatus("Contacting the release server...");
-    try {
-      const update = await checkUpdaterPackage();
-      if (!update) {
-        setInstallStatus(null);
-        setUpdateError(
-          "The latest release has no signed update package. Use View release to download the installer.",
-        );
-        return;
-      }
-      let downloaded = 0;
-      let total: number | null = null;
-      await update.downloadAndInstall((event) => {
-        switch (event.event) {
-          case "Started":
-            total = event.data.contentLength ?? null;
-            setInstallStatus("Downloading update...");
-            break;
-          case "Progress":
-            downloaded += event.data.chunkLength;
-            setInstallStatus(
-              total
-                ? `Downloading update... ${Math.round((downloaded / total) * 100)}%`
-                : "Downloading update...",
-            );
-            break;
-          case "Finished":
-            setInstallStatus("Installing... the app will restart.");
-            break;
-        }
-      });
-      // On Windows the installer closes and restarts the app itself, so
-      // execution rarely gets past downloadAndInstall; relaunch covers the
-      // platforms/paths where it does.
-      await relaunch();
-    } catch (cause) {
-      setInstallStatus(null);
-      setUpdateError(commandErrorMessage(cause));
-    } finally {
-      setInstalling(false);
-    }
-  };
-
-  // Prefer a manual check result if the user just ran one, otherwise fall back
-  // to the app's background-poll result so an available update always shows here
-  // (even after dismissing the topbar chip).
-  const effectiveUpdate = updateResult ?? autoUpdateInfo ?? null;
-  const inAppInstall = updatesInstallInApp();
-
-  const updateStatus =
-    updateError ??
-    installStatus ??
-    (effectiveUpdate
-      ? effectiveUpdate.updateAvailable
-        ? `You're on an old version. v${effectiveUpdate.latestVersion} is available.`
-        : "You're on the latest version."
-      : "Compare this install against the latest GitHub release.");
 
   const tabs: {
     id: string;
@@ -242,101 +116,22 @@ export function AboutView({
             </div>
           </div>
 
-          <div className="about-block" data-setting="Updates">
+          <div className="about-block">
             <div className="about-block-head">
               <strong>Updates</strong>
             </div>
-            <small>{updateStatus}</small>
-            {effectiveUpdate?.updateAvailable && effectiveUpdate.releaseNotes ? (
-              <ReleaseNotesBody
-                className="update-notes about-update-notes"
-                markdown={effectiveUpdate.releaseNotes}
-              />
-            ) : null}
-            <small className="about-update-poll">
-              {autoCheckEnabled === false
-                ? "Automatic checks are off"
-                : "Checks automatically"}
-              {lastUpdateCheck
-                ? ` · last checked ${new Date(lastUpdateCheck).toLocaleTimeString()}`
-                : ""}
-            </small>
+            <small>Checking and installing updates is on General.</small>
             <div className="about-block-actions">
-              {effectiveUpdate?.updateAvailable ? (
-                inAppInstall ? (
-                  <button
-                    className="primary-button about-update-button"
-                    disabled={installing}
-                    onClick={() => void handleInstallUpdate()}
-                    type="button"
-                  >
-                    <Download aria-hidden="true" size={15} />
-                    {installing
-                      ? "Installing..."
-                      : `Install v${effectiveUpdate.latestVersion}`}
-                  </button>
-                ) : (
-                  <button
-                    className="primary-button about-update-button"
-                    onClick={() => void openReleasePage(effectiveUpdate.releaseUrl)}
-                    type="button"
-                  >
-                    <Download aria-hidden="true" size={15} />
-                    {`Download v${effectiveUpdate.latestVersion}`}
-                  </button>
-                )
-              ) : null}
               <button
                 className="secondary-button about-update-button"
-                disabled={checking}
-                onClick={() => void handleCheckForUpdate()}
+                disabled={!setActiveView}
+                onClick={() => setActiveView?.("General")}
                 type="button"
               >
-                {checking ? "Checking..." : "Check for updates"}
-              </button>
-              <button
-                className="ghost-button about-update-button"
-                onClick={() => void openReleasePage(RELEASES_URL)}
-                type="button"
-              >
-                <ExternalLink aria-hidden="true" size={15} />
-                View releases
+                Open General
+                <ArrowUpRight aria-hidden="true" size={15} />
               </button>
             </div>
-            <div className="about-autocheck">
-              <span>Automatically check for updates</span>
-              <Toggle
-                checked={autoCheckEnabled ?? true}
-                label="Automatically check for updates"
-                onChange={(enabled) => onToggleAutoCheck?.(enabled)}
-              />
-            </div>
-            {inAppInstall ? (
-              <>
-                <div className="about-autocheck about-autoinstall">
-                  <span>Install updates automatically</span>
-                  <Toggle
-                    checked={autoInstallEnabled ?? true}
-                    disabled={autoCheckEnabled === false}
-                    label="Install updates automatically"
-                    onChange={(enabled) => onToggleAutoInstall?.(enabled)}
-                  />
-                </div>
-                <small className="about-autoinstall-hint">
-                  Downloads and installs new versions on launch, with a Scribe screen and no Windows installer popups.
-                </small>
-              </>
-            ) : (
-              <small className="about-autoinstall-hint">
-                {forPlatform({
-                  windows: "",
-                  macos:
-                    "The macOS beta doesn't install updates itself yet. Download the new version and drag it into Applications to replace this one.",
-                  linux:
-                    "The Linux beta doesn't install updates itself yet. Download the new .deb or AppImage and install it over this one.",
-                })}
-              </small>
-            )}
           </div>
 
           <div className="about-block">

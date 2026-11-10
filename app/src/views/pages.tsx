@@ -12,12 +12,13 @@ import {
   Sparkles,
   Wand2,
 } from "lucide-react";
-import type { AppSettings, DashboardData } from "../backend";
+import type { AppSettings, DashboardData, UpdateCheckResult } from "../backend";
 import type { ToastNotice, ViewActions } from "../types";
 import { formatHotkey } from "../lib/format";
 import { SectionPanel } from "../components/layout";
 import { OutputSettingRows } from "../components/OutputSettings";
 import { TransformSelectionPanel } from "../components/TransformSelectionPanel";
+import { UpdatesPanel } from "../components/UpdatesPanel";
 import {
   AppBehaviorSettings,
   ContextHintSettings,
@@ -251,13 +252,35 @@ export function AppearancePage({ actions, settings }: PageProps) {
   );
 }
 
-export function GeneralPage({ actions, settings }: PageProps) {
+export function GeneralPage({
+  actions,
+  settings,
+  lastUpdateCheck,
+  updateInfo,
+}: PageProps & {
+  lastUpdateCheck: number | null;
+  updateInfo: UpdateCheckResult | null;
+}) {
   return (
-    <SectionPanel
-      icon={<SlidersHorizontal aria-hidden="true" size={16} />}
-      title="App"
-    >
-      <AppBehaviorSettings actions={actions} settings={settings} />
-    </SectionPanel>
+    <section className="view-grid general-grid">
+      <SectionPanel
+        icon={<SlidersHorizontal aria-hidden="true" size={16} />}
+        title="App"
+      >
+        <AppBehaviorSettings actions={actions} settings={settings} />
+      </SectionPanel>
+      <UpdatesPanel
+        autoCheckEnabled={settings.autoUpdateCheckEnabled}
+        autoInstallEnabled={settings.autoInstallUpdates}
+        autoUpdateInfo={updateInfo}
+        lastUpdateCheck={lastUpdateCheck}
+        onToggleAutoCheck={(enabled) =>
+          actions.updateSettings({ autoUpdateCheckEnabled: enabled })
+        }
+        onToggleAutoInstall={(enabled) =>
+          actions.updateSettings({ autoInstallUpdates: enabled })
+        }
+      />
+    </section>
   );
 }

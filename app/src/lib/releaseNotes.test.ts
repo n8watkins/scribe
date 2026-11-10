@@ -4,6 +4,8 @@ import {
   notesForVersion,
   parseInline,
   parseNotes,
+  bundledReleaseHistory,
+  releaseHistory,
   shortVersion,
 } from "./releaseNotes";
 
@@ -76,5 +78,28 @@ describe("release notes", () => {
 
   it("bundles the real changelog", () => {
     expect(bundledNotes("0.8.0")).toContain("GitHub backup");
+  });
+});
+
+describe("release history", () => {
+  it("lists every release newest first with its date and notes", () => {
+    const history = releaseHistory(CHANGELOG);
+    expect(history.map((release) => release.version)).toEqual(["0.10.0", "0.9.0"]);
+    expect(history[0].date).toBe("2026-11-02");
+    expect(history[0].notes).toMatch(/^Summary line\./);
+    expect(history[1].notes).toBe("### Fixed\n\n- Older fix");
+  });
+
+  it("keeps a release without a date and skips empty sections", () => {
+    const history = releaseHistory(
+      "## 0.3.0 - baseline\n\n- First\n\n## 0.2.0 - 2026-01-01\n\n## Unreleased\n\n- Not a release\n",
+    );
+    expect(history).toEqual([{ version: "0.3.0", date: null, notes: "- First" }]);
+  });
+
+  it("reads the changelog bundled with the app", () => {
+    const history = bundledReleaseHistory();
+    expect(history.length).toBeGreaterThan(10);
+    expect(history[0].version).toMatch(/^\d+\.\d+\.\d+/);
   });
 });

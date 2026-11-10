@@ -87,39 +87,6 @@ export function ReleaseNotesBody({
   );
 }
 
-/** The release notes of the running version, from the changelog bundled in
- * the app, with a link to every release on GitHub. */
-export function CurrentReleaseNotes() {
-  const [version, setVersion] = useState<string | null>(null);
-  useEffect(() => {
-    void getVersion()
-      .then(setVersion)
-      .catch(() => setVersion(""));
-  }, []);
-  if (version === null) {
-    return null;
-  }
-  const notes = version ? bundledNotes(version) : null;
-  return (
-    <div className="release-notes-current">
-      {notes ? (
-        <ReleaseNotesBody markdown={notes} />
-      ) : (
-        <p className="release-notes-empty">
-          This build has no release notes. Every release's notes are on GitHub.
-        </p>
-      )}
-      <button
-        className="ghost-button release-notes-all"
-        onClick={() => void openReleasePage(RELEASES_URL).catch(() => {})}
-        type="button"
-      >
-        All release notes
-      </button>
-    </div>
-  );
-}
-
 /** Every release's notes, newest first, in one scrolling list; the running
  * version is marked. Bundled with the app, so it works offline. */
 export function ReleaseHistory() {

@@ -45,6 +45,7 @@ pub mod tray;
 pub mod update_check;
 pub mod whisper;
 pub mod whisper_server;
+pub mod window_size;
 
 use commands::BackendState;
 use db::Database;
@@ -456,18 +457,9 @@ pub fn run() {
             platform::init(app_data_dir.clone(), &app.config().identifier);
             hotkeys::setup(app.handle(), &settings.hotkeys, settings.notes_analysis_enabled)?;
             tray::setup(app.handle())?;
-            // Restore the user's saved default window size (physical pixels),
-            // mirroring how the pill restores its saved position. Absent values
-            // leave the tauri.conf.json default in place.
-            if let (Some(width), Some(height)) = (settings.window_width, settings.window_height) {
-                if width > 0 && height > 0 {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.set_size(tauri::PhysicalSize::new(
-                            width as u32,
-                            height as u32,
-                        ));
-                    }
-                }
+            // Open at the saved size (or the default), shrunk to fit the screen.
+            if let Some(window) = app.get_webview_window("main") {
+                window_size::restore(&window, &settings);
             }
             // The dev flavor must be tellable from stable at a glance: the
             // window title (and taskbar entry) carries the flavored name.

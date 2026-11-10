@@ -38,7 +38,7 @@ describe("settings search matching", () => {
   });
 
   it("matches the start of words, so partial typing works", () => {
-    expect(labels("trans ret")).toEqual(["Transcript retention"]);
+    expect(labels("trans ret")).toEqual(["Keep dictations for"]);
     expect(labels("gpu")).toContain("Use GPU acceleration");
   });
 
@@ -50,14 +50,14 @@ describe("settings search matching", () => {
       expect.arrayContaining(["After dictation", "Paste last transcript"]),
     );
     expect(labels("retention")).toEqual([
-      "Transcript retention",
-      "Notes retention",
+      "Keep dictations for",
+      "Keep notes for",
     ]);
     expect(labels("delete")).toEqual(
       expect.arrayContaining([
         "Delete data",
-        "Transcript retention",
-        "Notes retention",
+        "Keep dictations for",
+        "Keep notes for",
       ]),
     );
     expect(labels("dark")).toContain("Color theme");
@@ -75,7 +75,7 @@ describe("settings search matching", () => {
 
   it("needs every word of the query to match", () => {
     expect(labels("retention zebra")).toEqual([]);
-    expect(labels("notes retention")).toEqual(["Notes retention"]);
+    expect(labels("notes retention")).toEqual(["Keep notes for"]);
   });
 
   it("ranks a match on the name above a match on keywords only", () => {
