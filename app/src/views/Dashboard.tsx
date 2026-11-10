@@ -19,6 +19,7 @@ import {
   afterDictationOf,
   isSelectedModelReady,
   microphoneDisplayName,
+  resolveMicrophone,
   statusCardValue,
 } from "../lib/format";
 import { HotkeyList, StatsRow, StatusCard } from "../components/layout";
@@ -61,6 +62,15 @@ export function DashboardView({
 }) {
   const { appState, lastTranscript, settings, stats } = data;
   const modelReady = isSelectedModelReady(models, settings.selectedModelId);
+  const microphone = resolveMicrophone(microphones, settings.selectedMicId);
+  const microphoneFellBack =
+    microphone.kind === "device" && microphone.fellBack;
+  const microphoneDot =
+    microphone.kind === "loading"
+      ? "status-dot"
+      : microphone.kind === "none" || microphoneFellBack
+        ? "status-dot warning"
+        : "status-dot success";
   const hotkeyHealth = useHotkeyHealth(
     JSON.stringify(settings.hotkeys),
     settings.notesAnalysisEnabled,
@@ -124,11 +134,12 @@ export function DashboardView({
         />
         <StatusCard
           action="Open Microphone"
+          detail={microphoneFellBack ? "Saved mic not connected" : undefined}
           Icon={Mic}
           label="Microphone"
           onAction={() => setActiveView("Microphone")}
-          status={<span className="status-dot success" />}
-          value={microphoneDisplayName(microphones, settings.selectedMicId)}
+          status={<span className={microphoneDot} />}
+          value={microphoneDisplayName(microphone)}
         />
         <StatusCard
           action="Open Models and language"

@@ -42,6 +42,8 @@ import {
 import { EmptyState, InlineError } from "../components/feedback";
 import { IconButton, Toggle } from "../components/primitives";
 import { SettingRow } from "../components/layout";
+import { ConfirmDialog } from "../components/modal";
+import { deleteModelMessage } from "../lib/deleteConfirm";
 import {
   engineStateLabel,
   keepLoadedCaveat,
@@ -65,6 +67,7 @@ export function ModelsView({
   const [modelsLoading, setModelsLoading] = useState(true);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [busyModelId, setBusyModelId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<ModelInfo | null>(null);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [langFilter, setLangFilter] = useState<
     "all" | "english" | "multilingual"
@@ -529,17 +532,7 @@ export function ModelsView({
                               danger
                               disabled={isBusy || isDownloading}
                               label="Delete model"
-                              onClick={() => {
-                                if (
-                                  window.confirm(
-                                    `Delete ${model.name} from local model storage?`,
-                                  )
-                                ) {
-                                  void runModelAction(model.id, () =>
-                                    deleteModel(model.id),
-                                  );
-                                }
-                              }}
+                              onClick={() => setPendingDelete(model)}
                             >
                               <Trash2 aria-hidden="true" size={15} />
                             </IconButton>
@@ -555,6 +548,24 @@ export function ModelsView({
         ) : null}
       </article>
       {children}
+      <ConfirmDialog
+        busy={pendingDelete !== null && busyModelId === pendingDelete.id}
+        confirmLabel="Delete model"
+        danger
+        message={deleteModelMessage(pendingDelete, settings.selectedModelId)}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={() => {
+          if (!pendingDelete) {
+            return;
+          }
+          const { id } = pendingDelete;
+          void runModelAction(id, () => deleteModel(id)).finally(() =>
+            setPendingDelete(null),
+          );
+        }}
+        open={pendingDelete !== null}
+        title={pendingDelete ? `Delete ${pendingDelete.name}?` : "Delete model?"}
+      />
     </section>
   );
 }

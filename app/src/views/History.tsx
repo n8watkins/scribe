@@ -34,6 +34,7 @@ import {
 import type { ViewActions } from "../types";
 import { EmptyState, InlineError } from "../components/feedback";
 import { ConfirmDialog } from "../components/modal";
+import { deleteTranscriptMessage } from "../lib/deleteConfirm";
 import { TranscriptRow } from "../components/transcript";
 import "./history.css";
 
@@ -77,6 +78,7 @@ export function HistoryView({
   const [busyTranscriptId, setBusyTranscriptId] = useState<string | null>(null);
   const [clearingHistory, setClearingHistory] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<Transcript | null>(null);
   const [syncingToGithub, setSyncingToGithub] = useState(false);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
@@ -377,27 +379,33 @@ export function HistoryView({
     }
   }, [actions, closeCombine, combinedText, loadHistory]);
 
-  const handleDeleteTranscript = useCallback(
-    async (id: string) => {
-      if (!window.confirm("Delete this transcript from local history?")) {
-        return;
-      }
-
-      setBusyTranscriptId(id);
-      setHistoryError(null);
-
-      try {
-        await deleteTranscript(id);
-        setSelectedIds((previous) => previous.filter((value) => value !== id));
-        await refreshAfterMutation();
-      } catch (error) {
-        setHistoryError(commandErrorMessage(error));
-      } finally {
-        setBusyTranscriptId(null);
-      }
+  const requestDeleteTranscript = useCallback(
+    (id: string) => {
+      setPendingDelete(transcripts.find((item) => item.id === id) ?? null);
     },
-    [refreshAfterMutation],
+    [transcripts],
   );
+
+  const handleDeleteTranscript = useCallback(async () => {
+    if (!pendingDelete) {
+      return;
+    }
+    const { id } = pendingDelete;
+
+    setBusyTranscriptId(id);
+    setHistoryError(null);
+
+    try {
+      await deleteTranscript(id);
+      setSelectedIds((previous) => previous.filter((value) => value !== id));
+      await refreshAfterMutation();
+    } catch (error) {
+      setHistoryError(commandErrorMessage(error));
+    } finally {
+      setBusyTranscriptId(null);
+      setPendingDelete(null);
+    }
+  }, [pendingDelete, refreshAfterMutation]);
 
   const handleClearHistory = useCallback(async () => {
     setClearingHistory(true);
@@ -616,7 +624,7 @@ export function HistoryView({
                     : undefined
                 }
                 onCopy={handleCopyTranscript}
-                onDelete={handleDeleteTranscript}
+                onDelete={requestDeleteTranscript}
                 onOpenExternally={handleOpenExternally}
                 onPaste={handlePasteTranscript}
                 onPlay={handlePlayTranscript}
@@ -719,6 +727,17 @@ export function HistoryView({
         onConfirm={() => void handleClearHistory()}
         open={confirmClear}
         title={notesOnly ? "Clear all notes?" : "Clear transcript history?"}
+      />
+
+      <ConfirmDialog
+        busy={pendingDelete !== null && busyTranscriptId === pendingDelete.id}
+        confirmLabel={pendingDelete?.isNote ? "Delete note" : "Delete transcript"}
+        danger
+        message={deleteTranscriptMessage(pendingDelete)}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={() => void handleDeleteTranscript()}
+        open={pendingDelete !== null}
+        title={pendingDelete?.isNote ? "Delete this note?" : "Delete this transcript?"}
       />
     </section>
   );
