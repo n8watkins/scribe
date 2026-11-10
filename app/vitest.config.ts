@@ -10,6 +10,9 @@ export default defineConfig({
     },
   },
   test: {
+    // Stylesheets stay stubbed out, except `?raw` imports: tests read those
+    // as text to check style contracts (see scrollbarGutter.test.ts).
+    css: { include: [/\.css\?raw$/] },
     environment: "jsdom",
   },
 });

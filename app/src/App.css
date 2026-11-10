@@ -16,6 +16,9 @@
  * scope here — these variables apply to the main window only.
  */
 :root {
+  /* Width of the custom scrollbars below; scroll containers that reserve a
+     gutter subtract it from their padding. */
+  --scribe-scrollbar-size: 10px;
   font-family:
     Inter, "Segoe UI Variable", "Segoe UI", system-ui, -apple-system,
     BlinkMacSystemFont, sans-serif;
@@ -432,6 +435,10 @@ button {
   background: var(--scribe-sidebar-bg);
   backdrop-filter: blur(20px);
   overflow-y: auto;
+  /* Reserve the scrollbar's width so the nav doesn't shift when a short
+     window makes it scroll; the gutter stands in for the right padding. */
+  scrollbar-gutter: stable;
+  padding-right: 0;
 }
 
 .brand-badge {
@@ -510,8 +517,12 @@ button {
 .dashboard {
   flex: 1;
   min-width: 0;
-  padding: 14px 16px;
+  /* The right padding plus the always-reserved 10px scrollbar gutter equals
+     the 16px left padding, so pages don't shift sideways when a scrollbar
+     appears (opening Browse models, a long History page). */
+  padding: 14px calc(16px - var(--scribe-scrollbar-size)) 14px 16px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .topbar {
@@ -1202,6 +1213,8 @@ textarea {
   min-width: 0;
   flex: 1;
   overflow-y: auto;
+  /* Live text grows while you talk; keep the wrap width fixed. */
+  scrollbar-gutter: stable;
   color: var(--scribe-text-secondary);
   font-size: 12px;
   line-height: 1.45;
@@ -1370,6 +1383,7 @@ textarea {
 .history-scroll {
   max-height: calc(100vh - 252px);
   overflow-y: auto;
+  scrollbar-gutter: stable;
   overflow-x: hidden;
   padding-right: 2px;
 }
@@ -1907,6 +1921,7 @@ textarea {
   max-height: 320px;
   margin-top: 8px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   overflow-x: hidden;
   border: 1px solid rgba(148, 163, 184, 0.13);
   border-radius: 6px;
@@ -2554,6 +2569,9 @@ kbd {
     min-height: 0;
     border-right: 0;
     border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+    /* Stacked layout: the page scrolls, not the sidebar or main. */
+    padding-right: 10px;
+    scrollbar-gutter: auto;
   }
 
   .nav-list {
@@ -2562,6 +2580,7 @@ kbd {
 
   .dashboard {
     padding: 12px;
+    scrollbar-gutter: auto;
   }
 
   .topbar,
@@ -2660,8 +2679,8 @@ kbd {
 /* On-brand scrollbars: thin, transparent track, accent-tinted thumb (recolored
    per theme; the OS draws native scrollbars to match color-scheme too). */
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: var(--scribe-scrollbar-size);
+  height: var(--scribe-scrollbar-size);
 }
 
 ::-webkit-scrollbar-track {
