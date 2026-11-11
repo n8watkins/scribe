@@ -79,6 +79,8 @@ import {
   YourDataPage,
 } from "./views/pages";
 import { SettingsSearch } from "./components/SettingsSearch";
+import { WhatsNewBanner } from "./components/ReleaseNotes";
+import { requestAboutTab } from "./lib/aboutTab";
 import scribeIcon from "./assets/scribe-icon.png";
 
 // Dummy colors used only to enumerate the `--scribe-*` keys the custom theme
@@ -978,6 +980,12 @@ function App() {
           <div>
             <h1>{activeView}</h1>
           </div>
+          <WhatsNewBanner
+            onOpen={() => {
+              requestAboutTab("release-notes");
+              setActiveView("About");
+            }}
+          />
           <div className="topbar-actions">
             {updateInfo?.updateAvailable ? (
               <button

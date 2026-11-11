@@ -134,8 +134,9 @@ function formatReleaseDate(date: string): string {
     : new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(parsed);
 }
 
-/** A dismissible "What's new in X.Y" card, shown once after an update. */
-export function WhatsNewCard() {
+/** A slim "What's new in X.Y" line in the title bar row, shown once after an
+ * update. It never moves the page under it. */
+export function WhatsNewBanner({ onOpen }: { onOpen: () => void }) {
   const [version, setVersion] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -151,8 +152,7 @@ export function WhatsNewCard() {
     };
   }, []);
 
-  const notes = version ? bundledNotes(version) : null;
-  if (!version || !notes) {
+  if (!version || !bundledNotes(version)) {
     return null;
   }
 
@@ -162,30 +162,27 @@ export function WhatsNewCard() {
   };
 
   return (
-    <section
-      aria-labelledby="whats-new-title"
-      className="panel-card whats-new-card"
-    >
-      <header className="whats-new-head">
-        <span className="whats-new-icon" aria-hidden="true">
-          <Sparkles size={16} />
-        </span>
-        <h3 id="whats-new-title">What's new in {shortVersion(version)}</h3>
-        <button
-          aria-label="Dismiss what's new"
-          className="icon-button whats-new-dismiss"
-          onClick={dismiss}
-          type="button"
-        >
-          <X aria-hidden="true" size={15} />
-        </button>
-      </header>
-      <ReleaseNotesBody className="whats-new-notes" markdown={notes} />
-      <div className="whats-new-actions">
-        <button className="secondary-button" onClick={dismiss} type="button">
-          Got it
-        </button>
-      </div>
-    </section>
+    <div className="whats-new-banner" role="status">
+      <Sparkles aria-hidden="true" size={14} />
+      <span>What's new in {shortVersion(version)}</span>
+      <button
+        className="setting-more"
+        onClick={() => {
+          onOpen();
+          dismiss();
+        }}
+        type="button"
+      >
+        See what changed
+      </button>
+      <button
+        aria-label="Dismiss what's new"
+        className="whats-new-banner-close"
+        onClick={dismiss}
+        type="button"
+      >
+        <X aria-hidden="true" size={13} />
+      </button>
+    </div>
   );
 }
