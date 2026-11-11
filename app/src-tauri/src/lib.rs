@@ -692,3 +692,45 @@ fn style_native_titlebar(window: &tauri::WebviewWindow) {
         );
     }
 }
+
+#[cfg(test)]
+mod startup_order_tests {
+    /// Tauri builds every config window marked `create` (the default) before
+    /// it runs the setup closure, so the webview loads and invokes commands
+    /// while setup is still opening the database. Commands that read
+    /// `BackendState` then panic with "state() called before manage()". Every
+    /// window must therefore be left for setup to create, after the state.
+    #[test]
+    fn config_windows_are_left_for_setup_to_create() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let windows = config["app"]["windows"].as_array().unwrap();
+        assert!(!windows.is_empty());
+        for window in windows {
+            assert_eq!(
+                window["create"],
+                serde_json::Value::Bool(false),
+                "window {} is created before setup manages the backend state",
+                window["label"]
+            );
+        }
+    }
+
+    /// Setup creates the windows only after the last `manage()` call, so no
+    /// command can run before the state it reads exists.
+    #[test]
+    fn setup_creates_windows_after_managing_state() {
+        let source = include_str!("lib.rs");
+        let start = source.find(".setup(|app| {").unwrap();
+        let end = start + source[start..].find(".on_window_event(").unwrap();
+        let setup = &source[start..end];
+        let last_manage = setup.rfind("app.manage(").unwrap();
+        let create = setup
+            .find("create_config_windows(app)")
+            .expect("setup must create the config windows");
+        assert!(
+            create > last_manage,
+            "setup creates the windows before it manages all of its state"
+        );
+    }
+}
