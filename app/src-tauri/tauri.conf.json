@@ -14,6 +14,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "",
         "width": 1120,
         "height": 760,
@@ -23,6 +24,7 @@
       },
       {
         "label": "pill",
+        "create": false,
         "url": "index.html?view=pill",
         "title": "Scribe Pill",
         "width": 230,
