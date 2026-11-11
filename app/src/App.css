@@ -705,11 +705,21 @@ button:disabled {
 }
 
 /* Last transcript and Hotkeys share one height, set by the taller card. */
+/* Home is exactly the window's height. The cards above keep their size; the
+   transcript and Hotkeys cards share the rest, at every window size, and
+   their contents fill them. Below the minimum the page scrolls. */
+.view-home {
+  flex: 1 1 0;
+}
+
 .main-grid {
+  flex: 1 1 0;
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(250px, 0.75fr);
+  grid-template-rows: minmax(0, 1fr);
   align-items: stretch;
   gap: 8px;
+  min-height: 220px;
 }
 
 .metric-card,
@@ -954,12 +964,21 @@ button:disabled {
 /* The transcript takes whatever height the card has; long ones scroll. */
 /* The last transcript is a preview: about four lines, and a longer one
    scrolls inside, so it never stretches the card or the page. */
+/* The text box fills the card: it grows and shrinks with the window, and
+   longer text scrolls inside it. Its own height never sizes the card. */
 .buffer-card .buffer-preview {
   display: block;
-  min-height: 0;
-  max-height: calc(4 * 1.6em + 20px);
+  flex: 1 1 0;
+  height: 0;
+  min-height: calc(3 * 1.6em + 20px);
+  max-height: none;
   overflow-y: auto;
   -webkit-line-clamp: unset;
+}
+
+.buffer-preview.is-placeholder {
+  color: var(--scribe-text-muted);
+  font-style: italic;
 }
 
 .buffer-footer {
@@ -988,8 +1007,11 @@ button:disabled {
   gap: 0;
 }
 
+/* Hotkeys spread their rows over the card's height. */
 .main-grid > .panel-card .hotkey-list {
-  grid-auto-rows: 38px;
+  flex: 1 1 0;
+  min-height: 0;
+  grid-auto-rows: minmax(34px, 1fr);
 }
 
 .main-grid > .panel-card .hotkey-row {
@@ -3110,7 +3132,7 @@ kbd {
   }
 
   .main-grid > .panel-card .hotkey-list {
-    grid-auto-rows: minmax(28px, 40px);
+    grid-auto-rows: minmax(28px, 1fr);
   }
 
   .main-grid > .panel-card .hotkey-row {
@@ -3657,3 +3679,20 @@ kbd {
   cursor: pointer;
 }
 
+
+/* Large window: thicker theme cards and palette strips, in step with the
+   rest of the page. */
+@media (min-width: 1280px) and (min-height: 840px) {
+  .theme-card {
+    gap: 9px;
+    padding: 11px 12px;
+  }
+
+  .theme-swatches {
+    height: 20px;
+  }
+
+  .theme-card-body strong {
+    font-size: 14px;
+  }
+}

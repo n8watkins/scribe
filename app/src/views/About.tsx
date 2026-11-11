@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import type { ViewName } from "../types";
 import { ReleaseHistory } from "../components/ReleaseNotes";
+import { takeAboutTab } from "../lib/aboutTab";
 import { CopyDiagnostics } from "../components/CopyDiagnostics";
 import "./about.css";
 
@@ -219,7 +220,7 @@ export function AboutView({
     },
   ];
 
-  const [activeTab, setActiveTab] = useState(tabs[0].id);
+  const [activeTab, setActiveTab] = useState(() => takeAboutTab() ?? tabs[0].id);
   const active = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
 
   return (

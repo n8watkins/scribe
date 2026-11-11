@@ -23,7 +23,6 @@ describe("scrollbar gutter", () => {
     [css.app, ".history-scroll"],
     [css.app, ".model-scroll"],
     [css.app, ".live-transcript-text"],
-    [css.releaseNotes, ".whats-new-notes"],
     [css.releaseNotes, ".update-notes"],
     [css.transcribe, ".transcribe-file-result"],
   ])("%#: %s reserves the scrollbar gutter", (source, selector) => {

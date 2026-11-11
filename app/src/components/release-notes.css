@@ -64,53 +64,6 @@
   color: var(--scribe-text-muted);
 }
 
-.whats-new-card {
-  display: grid;
-  gap: 12px;
-  margin-bottom: 16px;
-  border-color: var(--scribe-accent-soft);
-}
-
-.whats-new-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.whats-new-head h3 {
-  flex: 1;
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--scribe-text);
-}
-
-.whats-new-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: var(--scribe-accent-soft);
-  color: var(--scribe-accent-bright);
-}
-
-.whats-new-notes {
-  max-height: 232px;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
-  padding: 0 4px 12px 0;
-  /* Fades the last visible line, so a long list reads as scrollable rather
-     than cut off. */
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
-}
-
-.whats-new-actions {
-  display: flex;
-  justify-content: flex-end;
-}
-
 /* Notes of an available update, in About and on the update screen. */
 .update-notes {
   max-height: 180px;
@@ -175,4 +128,45 @@
 
 .release-history-head .pill {
   align-self: center;
+}
+
+/* "What's new in X.Y": one slim line in the title bar row, so it never moves
+   the page under it. */
+.whats-new-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0 auto 0 16px;
+  padding: 1px 3px 1px 10px;
+  color: var(--scribe-text-secondary);
+  background: var(--scribe-accent-glow);
+  border: 1px solid var(--scribe-accent-soft);
+  border-radius: 999px;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.whats-new-banner > svg {
+  color: var(--scribe-accent-bright);
+  flex: 0 0 auto;
+}
+
+.whats-new-banner-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--scribe-text-muted);
+  background: none;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.whats-new-banner-close:hover {
+  color: var(--scribe-text);
+  background: rgba(148, 163, 184, 0.16);
 }

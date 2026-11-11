@@ -25,7 +25,6 @@ import {
   formatHotkey,
   transcriptMeta,
 } from "../lib/format";
-import { EmptyState } from "./feedback";
 import { IconButton } from "./primitives";
 
 export function LastTranscriptCard({
@@ -79,7 +78,9 @@ export function LastTranscriptCard({
 
         </>
       ) : (
-        <EmptyState message="Your last dictation shows up here, ready to paste again." />
+        <p className="transcript-text buffer-preview is-placeholder">
+          Your last dictation shows up here, ready to paste again.
+        </p>
       )}
 
       <div className="buffer-footer">
@@ -297,16 +298,16 @@ export function LiveTranscriptCard({ text }: { text: string }) {
       </div>
       <p
         aria-live="polite"
-        className="transcript-text buffer-preview live-buffer-text"
+        className={
+          text
+            ? "transcript-text buffer-preview live-buffer-text"
+            : "transcript-text buffer-preview live-buffer-text is-placeholder"
+        }
         ref={scrollRef}
       >
-        {text || "Listening..."}
+        {text ||
+          "Listening... The finished text lands here when you stop."}
       </p>
-      <div className="buffer-footer">
-        <span className="muted vocab-hint">
-          The finished text lands here when you stop.
-        </span>
-      </div>
     </article>
   );
 }

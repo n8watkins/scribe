@@ -114,6 +114,13 @@ describe("Home while dictating", () => {
     expect(screen.queryByText("The last thing I said.")).not.toBeInTheDocument();
   });
 
+  it("puts the hint inside the text box while it waits for words", () => {
+    const { container } = renderHome("Recording", "");
+    const box = container.querySelector(".main-grid .buffer-preview");
+    expect(box).toHaveTextContent("The finished text lands here when you stop.");
+    expect(box).toHaveClass("is-placeholder");
+  });
+
   it("shows the new last transcript again when the dictation ends", () => {
     renderHome("Idle", null);
     expect(screen.queryByText(/Hearing you/)).not.toBeInTheDocument();

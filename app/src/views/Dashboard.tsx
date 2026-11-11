@@ -24,7 +24,6 @@ import {
 } from "../lib/format";
 import { HotkeyList, StatsRow, StatusCard } from "../components/layout";
 import { LastTranscriptCard, LiveTranscriptCard } from "../components/transcript";
-import { WhatsNewCard } from "../components/ReleaseNotes";
 import { SetupStrip } from "../components/SetupStrip";
 import { isParakeetModel } from "../lib/engine";
 import { insertMethodLabel, usePastePermission } from "../lib/pastePermission";
@@ -114,7 +113,6 @@ export function DashboardView({
 
   return (
     <>
-      <WhatsNewCard />
       {!modelReady ? (
         <div className="setup-banner" role="alert">
           <Download aria-hidden="true" size={16} />
