@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.1 - 2026-11-10
+
+### Fixed
+
+- Create windows after setup manages backend state ([#124](https://github.com/n8watkins/scribe/pull/124))
+- Home's transcript box fills its card, and What's new no longer moves Home ([#125](https://github.com/n8watkins/scribe/pull/125))
+
 ## 0.16.0 - 2026-11-10
 
 ### New
