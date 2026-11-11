@@ -263,6 +263,59 @@ fn platform_script<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
         .build()
 }
 
+/// The state the commands read with `app.state::<T>()`, which panics when the
+/// state is not managed yet. Names are for the startup error only.
+fn missing_command_state(app: &tauri::App) -> Vec<&'static str> {
+    let mut missing = Vec::new();
+    if app.try_state::<BackendState>().is_none() {
+        missing.push("BackendState");
+    }
+    if app.try_state::<whisper_server::WarmTranscriber>().is_none() {
+        missing.push("WarmTranscriber");
+    }
+    if app
+        .try_state::<std::sync::Arc<replacements_file::ReplacementStore>>()
+        .is_none()
+    {
+        missing.push("ReplacementStore");
+    }
+    if app
+        .try_state::<dictation_worker::DictationWorker>()
+        .is_none()
+    {
+        missing.push("DictationWorker");
+    }
+    if app.try_state::<note_sync::NoteSyncWorker>().is_none() {
+        missing.push("NoteSyncWorker");
+    }
+    missing
+}
+
+/// Builds the windows declared in tauri.conf.json.
+///
+/// Tauri builds config windows marked `create` (the default) before it runs
+/// the setup closure, so their webviews load and invoke commands while setup
+/// is still opening the database; any command that reads the backend state
+/// then panicked with "state() called before manage()". The config marks every
+/// window `"create": false` and setup calls this last, once all state is
+/// managed, so no command can ever run ahead of the state it needs.
+fn create_config_windows(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let missing = missing_command_state(app);
+    if !missing.is_empty() {
+        return Err(format!(
+            "windows created before their state was managed: {}",
+            missing.join(", ")
+        )
+        .into());
+    }
+    for window_config in app.config().app.windows.iter().filter(|w| !w.create) {
+        if app.get_webview_window(&window_config.label).is_none() {
+            tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?.build()?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     install_panic_logger();
@@ -274,6 +327,13 @@ pub fn run() {
             // settings where Scribe can't register hotkeys (Wayland without
             // the GlobalShortcuts portal).
             if let Some(command) = remote_command::RemoteCommand::parse(&args) {
+                // A launch that lands while setup still runs (the callback
+                // can come off the main thread) must not reach state that
+                // isn't managed yet.
+                if app.try_state::<dictation_worker::DictationWorker>().is_none() {
+                    log::warn!("Scribe is still starting; ignored {:?}", command);
+                    return;
+                }
                 command.run(app);
                 return;
             }
@@ -484,6 +544,9 @@ pub fn run() {
                 });
                 app.manage(store);
             }
+            // Only now, with every piece of state managed, may a webview
+            // exist and invoke commands (see create_config_windows).
+            create_config_windows(app)?;
             // Open at the saved size (or the default), shrunk to fit the screen.
             if let Some(window) = app.get_webview_window("main") {
                 window_size::restore(&window, &settings);
@@ -689,6 +752,48 @@ fn style_native_titlebar(window: &tauri::WebviewWindow) {
             DWMWA_CAPTION_COLOR,
             &caption_color as *const _ as *const _,
             std::mem::size_of::<u32>() as u32,
+        );
+    }
+}
+
+#[cfg(test)]
+mod startup_order_tests {
+    /// Tauri builds every config window marked `create` (the default) before
+    /// it runs the setup closure, so the webview loads and invokes commands
+    /// while setup is still opening the database. Commands that read
+    /// `BackendState` then panic with "state() called before manage()". Every
+    /// window must therefore be left for setup to create, after the state.
+    #[test]
+    fn config_windows_are_left_for_setup_to_create() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let windows = config["app"]["windows"].as_array().unwrap();
+        assert!(!windows.is_empty());
+        for window in windows {
+            assert_eq!(
+                window["create"],
+                serde_json::Value::Bool(false),
+                "window {} is created before setup manages the backend state",
+                window["label"]
+            );
+        }
+    }
+
+    /// Setup creates the windows only after the last `manage()` call, so no
+    /// command can run before the state it reads exists.
+    #[test]
+    fn setup_creates_windows_after_managing_state() {
+        let source = include_str!("lib.rs");
+        let start = source.find(".setup(|app| {").unwrap();
+        let end = start + source[start..].find(".on_window_event(").unwrap();
+        let setup = &source[start..end];
+        let last_manage = setup.rfind("app.manage(").unwrap();
+        let create = setup
+            .find("create_config_windows(app)")
+            .expect("setup must create the config windows");
+        assert!(
+            create > last_manage,
+            "setup creates the windows before it manages all of its state"
         );
     }
 }
