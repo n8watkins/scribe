@@ -9,9 +9,9 @@ Everything under "Historical record" further down describes the 0.5.x and 0.6.0 
 
 Scribe is a free, open-source (MIT), Windows-only desktop app for private, on-device dictation, built with Tauri v2 (Rust backend in `app/src-tauri/src`, React and TypeScript front end in `app/src`), with local Whisper transcription.
 
-- Repository: https://github.com/n8watkins/scribe, cloned at `~/projects/tools/scribe/scribe-app`.
+- Repository: https://github.com/n8watkins/scribe, cloned at `~/projects/desktop/scribe/scribe-app`.
 - Releases: GitHub Releases (NSIS and MSI installers plus a signed updater `latest.json`); installed copies auto-update from the latest release.
-- Website: https://scribe.n8builds.dev, from the separate `n8watkins/scribe-web` repository (`~/projects/tools/scribe/scribe-web`).
+- Website: https://scribe.n8builds.dev, from the separate `n8watkins/scribe-web` repository (`~/projects/desktop/scribe/scribe-web`).
 
 Current product and operations docs are listed in the [documentation index](README.md); the current release state is in [STATUS_AND_NEXT_STEPS.md](STATUS_AND_NEXT_STEPS.md), and the assessment plan is [ASSESSMENT_PLAN_2026-10.md](ASSESSMENT_PLAN_2026-10.md).
 
