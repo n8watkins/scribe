@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.16.3 - 2026-11-25
+
+### Fixed
+
+- Windows shows n8builds.dev as Scribe's publisher ([#138](https://github.com/n8watkins/scribe/pull/138))
+
 ## 0.16.2 - 2026-11-25
 
 ### Fixed
