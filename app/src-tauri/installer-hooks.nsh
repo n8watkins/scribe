@@ -31,6 +31,9 @@
         StrCpy $INSTDIR $1
       ${EndIf}
     ${EndIf}
+    FileOpen $9 "$TEMP\scribe-hook-debug.log" a
+    FileWrite $9 "cmd=[$CmdLineInstallDir] new=[$0] old=[$1] instdir=[$INSTDIR]$\r$\n"
+    FileClose $9
     Pop $1
     Pop $0
   ${EndIf}

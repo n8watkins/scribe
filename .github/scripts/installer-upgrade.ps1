@@ -86,6 +86,7 @@ Check "v0.16.1 installed into the custom folder" (Test-Path (Join-Path $custom "
 Check "v0.16.1 recorded the folder under natkins" (Same-Folder (Default-Value $oldKey) $custom) "(was '$(Default-Value $oldKey)')"
 Check "v0.16.1 wrote no n8builds.dev key" (-not (Test-Path -LiteralPath $newKey))
 Run-Installer $Candidate "/S /UPDATE"
+Get-Content "$env:TEMP\scribe-hook-debug.log" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  DEBUG $_" }
 Check-Upgraded $custom
 Run-Uninstaller $custom
 
