@@ -31,9 +31,6 @@
         StrCpy $INSTDIR $1
       ${EndIf}
     ${EndIf}
-    FileOpen $9 "$TEMP\scribe-hook-debug.log" a
-    FileWrite $9 "cmd=[$CmdLineInstallDir] new=[$0] old=[$1] instdir=[$INSTDIR]$\r$\n"
-    FileClose $9
     Pop $1
     Pop $0
   ${EndIf}
@@ -67,6 +64,13 @@
 ; an unrelated whisper.cpp server owned by another application or the user.
 ; Failures are ignored because there is normally nothing to stop.
 !macro NSIS_HOOK_PREINSTALL
+  FileOpen $9 "$TEMP\scribe-hook-debug.log" a
+  FileWrite $9 "pre: passive=[$PassiveMode] update=[$UpdateMode] cmd=[$CmdLineInstallDir] instdir=[$INSTDIR]$\r$\n"
+  ReadRegStr $8 HKCU "${MANUPRODUCTKEY}" ""
+  FileWrite $9 "newkey=[$8]$\r$\n"
+  ReadRegStr $8 HKCU "Software\${SCRIBE_OLD_MANUFACTURER}\${PRODUCTNAME}" ""
+  FileWrite $9 "oldkey=[$8]$\r$\n"
+  FileClose $9
   ; Only a silent or passive run skips the folder page. PREINSTALL runs after
   ; the page, so an interactive run must keep whatever the user chose.
   ${If} ${Silent}
