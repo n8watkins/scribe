@@ -70,6 +70,13 @@
   FileWrite $9 "newkey=[$8]$\r$\n"
   ReadRegStr $8 HKCU "Software\${SCRIBE_OLD_MANUFACTURER}\${PRODUCTNAME}" ""
   FileWrite $9 "oldkey=[$8]$\r$\n"
+  ${If} $CmdLineInstallDir == ""
+    FileWrite $9 "cmdlineinstalldir is empty$\r$\n"
+  ${Else}
+    FileWrite $9 "cmdlineinstalldir is set to:$\r$\n"
+    FileWrite $9 $CmdLineInstallDir
+    FileWrite $9 "$\r$\n"
+  ${EndIf}
   FileClose $9
   ; Only a silent or passive run skips the folder page. PREINSTALL runs after
   ; the page, so an interactive run must keep whatever the user chose.
