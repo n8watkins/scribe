@@ -1176,6 +1176,8 @@ function friendlyCommandErrorMessage(code: string): string | null {
       linux:
         "Scribe could not write its autostart entry, so Launch at startup was not changed. Check that ~/.config/autostart is writable and try again.",
     }),
+    autostart_dev_build:
+      "This is a development build, so Launch at startup was not changed. Install Scribe to use it.",
     hotkey_registration_failed:
       "Could not register the hotkey. Another app may be using it; choose a different shortcut.",
     paste_failed:

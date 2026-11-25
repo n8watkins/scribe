@@ -93,7 +93,7 @@ export const SETTINGS_INDEX: readonly SettingsEntry[] = [
   { label: "Window size", page: "Appearance", keywords: "default size resize window compact standard large preset" },
 
   // General
-  { label: "Launch at startup", page: "General", keywords: "boot windows start login autostart" },
+  { label: "Launch at startup", page: "General", keywords: "boot windows start login autostart sign in startup apps restart reboot tray" },
   { label: "Minimize to tray", page: "General", keywords: "tray system close background" },
   { label: "Open Scribe hotkey hides it", page: "General", keywords: "dashboard toggle minimize window hotkey shortcut" },
   { label: "Notifications", page: "General", keywords: "toasts alerts messages popups" },

@@ -30,9 +30,11 @@ pub fn lock(writes: &Mutex<()>) -> MutexGuard<'_, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Tells every window the stored settings changed.
+/// Tells every window, and the tray menu, the stored settings changed.
 pub fn emit_changed(app: &AppHandle, settings: &AppSettings) {
     let _ = app.emit(SETTINGS_CHANGED_EVENT, settings);
+    // The tray menu's "Launch at startup" check mark shows the stored value.
+    crate::tray::sync_settings(app, settings);
 }
 
 /// Returns `current` with the fields named in `patch` replaced. Keys are the

@@ -1,6 +1,6 @@
 use serde::Serialize;
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager,
 };
@@ -9,6 +9,7 @@ use crate::{
     app_state::AppStatus,
     dictation_worker::{self, Intent},
     error::CommandError,
+    settings::AppSettings,
 };
 
 const TRAY_ID: &str = "scribe-main-tray";
@@ -18,7 +19,15 @@ const MENU_PASTE_LAST_TRANSCRIPT: &str = "paste_last_transcript";
 const MENU_OPEN_DASHBOARD: &str = "open_dashboard";
 const MENU_OPEN_HISTORY: &str = "open_history";
 const MENU_SETTINGS: &str = "settings";
+const MENU_LAUNCH_AT_STARTUP: &str = "launch_at_startup";
 const MENU_QUIT: &str = "quit";
+
+/// The same words as the switch in Settings > General.
+pub const LAUNCH_AT_STARTUP_LABEL: &str = "Launch at startup";
+
+/// The tray menu's "Launch at startup" item, kept so its check mark can follow
+/// the setting.
+struct LaunchAtStartupItem(CheckMenuItem<tauri::Wry>);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,7 +35,7 @@ struct NavigationPayload {
     route: String,
 }
 
-pub fn setup(app: &AppHandle) -> tauri::Result<()> {
+pub fn setup(app: &AppHandle, settings: &AppSettings) -> tauri::Result<()> {
     let start = MenuItem::with_id(
         app,
         MENU_START_DICTATION,
@@ -50,15 +59,33 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     )?;
     let dashboard = MenuItem::with_id(app, MENU_OPEN_DASHBOARD, "Open Scribe", true, None::<&str>)?;
     let history = MenuItem::with_id(app, MENU_OPEN_HISTORY, "Open History", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings", true, None::<&str>)?;
+    let settings_item = MenuItem::with_id(app, MENU_SETTINGS, "Settings", true, None::<&str>)?;
+    let launch_at_startup = CheckMenuItem::with_id(
+        app,
+        MENU_LAUNCH_AT_STARTUP,
+        LAUNCH_AT_STARTUP_LABEL,
+        true,
+        settings.launch_at_startup,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit", true, None::<&str>)?;
 
     let menu = Menu::with_items(
         app,
         &[
-            &start, &stop, &paste, &dashboard, &history, &settings, &quit,
+            &start,
+            &stop,
+            &paste,
+            &dashboard,
+            &history,
+            &settings_item,
+            &PredefinedMenuItem::separator(app)?,
+            &launch_at_startup,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
         ],
     )?;
+    app.manage(LaunchAtStartupItem(launch_at_startup));
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
@@ -66,15 +93,24 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         // Left-click opens the dashboard (handled below); the menu stays on
         // right-click only.
         .show_menu_on_left_click(false)
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
+        .on_tray_icon_event(|tray, event| match event {
+            TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 ..
-            } = event
-            {
+            } => {
                 let _ = open_dashboard(tray.app_handle(), None);
             }
+            // Before the menu opens (on hover, and on the right button going
+            // down; the menu opens when it comes up), refresh the "Launch at
+            // startup" tick from Windows' Startup apps switch.
+            TrayIconEvent::Enter { .. }
+            | TrayIconEvent::Click {
+                button: MouseButton::Right,
+                button_state: MouseButtonState::Down,
+                ..
+            } => refresh_launch_at_startup(tray.app_handle()),
+            _ => {}
         })
         .on_menu_event(|app, event| match event.id().as_ref() {
             // Dictation actions run on the dictation worker, never on this
@@ -91,6 +127,16 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
             MENU_SETTINGS => {
                 let _ = open_dashboard(app, Some("settings"));
             }
+            MENU_LAUNCH_AT_STARTUP => {
+                // The menu has already flipped the tick, so its state is what
+                // the user asked for.
+                let wanted = app
+                    .try_state::<LaunchAtStartupItem>()
+                    .and_then(|item| item.0.is_checked().ok());
+                if let Some(wanted) = wanted {
+                    set_launch_at_startup(app, wanted);
+                }
+            }
             MENU_QUIT => app.exit(0),
             _ => {}
         });
@@ -103,6 +149,55 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     update_tray_status(app, AppStatus::Idle);
 
     Ok(())
+}
+
+/// Sets "Launch at startup" from the tray to the state the user ticked, the
+/// same way the switch in Settings does. Runs off the main thread: it writes
+/// the registry and the database.
+fn set_launch_at_startup(app: &AppHandle, wanted: bool) {
+    let app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("launch-at-startup".into())
+        .spawn(move || {
+            if let Err(error) = crate::commands::set_launch_at_startup(&app, wanted) {
+                log::warn!("Could not change launch at startup. {}", error.message);
+                // Put the tick back to the stored value.
+                if let Some(state) = app.try_state::<crate::commands::BackendState>() {
+                    if let Ok(settings) = state.db().and_then(|db| db.get_settings()) {
+                        sync_settings(&app, &settings);
+                    }
+                }
+            }
+        });
+    if let Err(error) = spawned {
+        log::warn!("Could not change launch at startup. {}", error);
+    }
+}
+
+/// Copies Windows' Startup apps switch into "Launch at startup" (and so the
+/// tick). Never writes the startup entry. Runs off the main thread.
+fn refresh_launch_at_startup(app: &AppHandle) {
+    if !cfg!(windows) || app.try_state::<crate::commands::BackendState>().is_none() {
+        return;
+    }
+    let app = app.clone();
+    let _ = std::thread::Builder::new()
+        .name("launch-at-startup".into())
+        .spawn(move || {
+            if let Err(error) = crate::commands::sync_launch_at_startup(&app) {
+                log::warn!(
+                    "Could not follow Windows' Startup apps switch. {}",
+                    error.message
+                );
+            }
+        });
+}
+
+/// Shows the stored "Launch at startup" value in the tray menu.
+pub(crate) fn sync_settings(app: &AppHandle, settings: &AppSettings) {
+    if let Some(item) = app.try_state::<LaunchAtStartupItem>() {
+        let _ = item.0.set_checked(settings.launch_at_startup);
+    }
 }
 
 /// Dashboard hotkey behavior: when the window is already visible and focused,

@@ -53,6 +53,12 @@ describe("platform-specific error copy", () => {
     }
   });
 
+  it("says why a development build leaves Launch at startup alone", () => {
+    expect(message("autostart_dev_build")).toContain("development build");
+    window.__SCRIBE_PLATFORM__ = "linux";
+    expect(message("autostart_dev_build")).not.toMatch(/windows/i);
+  });
+
   it("points at this platform's whisper binary", () => {
     window.__SCRIBE_PLATFORM__ = "linux";
     expect(message("missing_whisper_executable")).toContain("resources/bin/linux/whisper-cli.");

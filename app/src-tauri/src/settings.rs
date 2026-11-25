@@ -796,7 +796,12 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             defaults_version: CURRENT_DEFAULTS_VERSION,
-            launch_at_startup: false,
+            // On for new Windows installs: a dictation app that is not
+            // running when the hotkey is pressed loses that dictation. It
+            // starts in the tray, and the user can turn it off in Settings,
+            // the tray menu or Windows' Startup apps list. macOS and Linux
+            // keep their earlier default (off).
+            launch_at_startup: cfg!(windows),
             minimize_to_tray: true,
             show_floating_pill: true,
             pill_display_mode: default_pill_display_mode(),
@@ -1084,6 +1089,11 @@ mod tests {
         let settings = AppSettings::default();
 
         assert_eq!(settings.defaults_version, CURRENT_DEFAULTS_VERSION);
+        assert_eq!(
+            settings.launch_at_startup,
+            cfg!(windows),
+            "new Windows installs start at sign-in"
+        );
         assert_eq!(settings.recording_mode, RecordingMode::Both);
         assert_eq!(settings.min_recording_ms, 300);
         assert_eq!(settings.max_recording_ms, 600_000);

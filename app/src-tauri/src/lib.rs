@@ -1,5 +1,6 @@
 pub mod app_state;
 pub mod audio;
+pub mod autostart;
 pub mod child_guard;
 pub mod commands;
 pub mod data_hygiene;
@@ -308,9 +309,16 @@ fn create_config_windows(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
         )
         .into());
     }
+    // Started by the sign-in entry: Scribe waits in the tray, window hidden.
+    let at_sign_in = autostart::launched_at_sign_in(&std::env::args().collect::<Vec<_>>());
     for window_config in app.config().app.windows.iter().filter(|w| !w.create) {
         if app.get_webview_window(&window_config.label).is_none() {
-            tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?.build()?;
+            let mut builder =
+                tauri::WebviewWindowBuilder::from_config(app.handle(), window_config)?;
+            if at_sign_in && window_config.label == "main" {
+                builder = builder.visible(false);
+            }
+            builder.build()?;
         }
     }
     Ok(())
@@ -330,11 +338,20 @@ pub fn run() {
                 // A launch that lands while setup still runs (the callback
                 // can come off the main thread) must not reach state that
                 // isn't managed yet.
-                if app.try_state::<dictation_worker::DictationWorker>().is_none() {
+                if app
+                    .try_state::<dictation_worker::DictationWorker>()
+                    .is_none()
+                {
                     log::warn!("Scribe is still starting; ignored {:?}", command);
                     return;
                 }
                 command.run(app);
+                return;
+            }
+            // The sign-in entry firing while Scribe already runs (started by
+            // hand during sign-in) must not pop the window open.
+            if autostart::launched_at_sign_in(&args) {
+                log::info!("Sign-in launch while already running; staying in the tray");
                 return;
             }
             log::info!("Second instance launch detected; focusing the main window");
@@ -374,12 +391,7 @@ pub fn run() {
                 })
                 .build(),
         )
-        .plugin(tauri_plugin_autostart::init(
-            // The macOS launcher choice is irrelevant boilerplate for this
-            // Windows app.
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
-        ))
+        .plugin(autostart::plugin())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
@@ -423,6 +435,9 @@ pub fn run() {
                     settings.hotkeys = crate::settings::HotkeySettings::dev_defaults();
                     log::info!("Seeded Scribe Dev hotkey defaults");
                 }
+                // A test build starts only when asked: never at sign-in by
+                // default, and never on the Windows test runners.
+                settings.launch_at_startup = false;
                 settings.dev_hotkeys_seeded = true;
                 settings_migrated = true;
             }
@@ -437,32 +452,15 @@ pub fn run() {
             );
             db.enforce_history_retention(settings.history_retention_days)?;
             db.enforce_notes_retention(settings.notes_retention_days)?;
-            // Reconcile the OS launch-at-startup registration with the stored
-            // setting (they can drift when the registry entry is removed by
-            // hand or the setting was saved while registration failed).
+            // Bring the sign-in entry and "Launch at startup" into step: repair
+            // an entry an older install left pointing at a missing program,
+            // write a missing one, and follow the switch in Windows' Startup
+            // apps list when the user changed it there (see autostart.rs).
+            if let Some(value) =
+                autostart::reconcile_at_launch(app.handle(), settings.launch_at_startup)
             {
-                use tauri_plugin_autostart::ManagerExt;
-                match app.autolaunch().is_enabled() {
-                    Ok(enabled) if enabled != settings.launch_at_startup => {
-                        log::info!(
-                            "Reconciling launch-at-startup: OS registration {} but setting {}; applying the setting",
-                            enabled,
-                            settings.launch_at_startup
-                        );
-                        if let Err(error) =
-                            commands::apply_autostart(app.handle(), settings.launch_at_startup)
-                        {
-                            log::warn!(
-                                "Could not reconcile launch at startup. {}",
-                                error.message
-                            );
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        log::warn!("Could not read launch-at-startup state. {}", error);
-                    }
-                }
+                settings.launch_at_startup = value;
+                db.save_settings(&settings)?;
             }
             let dirs = data_hygiene::DataDirs {
                 data_dir: app_data_dir.clone(),
@@ -487,9 +485,13 @@ pub fn run() {
             }
             // Stop any speech engine an earlier Scribe left running (a crash
             // or a forced kill on a system without a kernel-level guard).
-            let stale = child_guard::init(app.path().app_cache_dir()?.join("speech-processes.json"));
+            let stale =
+                child_guard::init(app.path().app_cache_dir()?.join("speech-processes.json"));
             if stale > 0 {
-                log::warn!("Stopped {} speech engine process(es) left by an earlier run", stale);
+                log::warn!(
+                    "Stopped {} speech engine process(es) left by an earlier run",
+                    stale
+                );
             }
             app.manage(whisper_server::WarmTranscriber::new(
                 app.handle().clone(),
@@ -518,8 +520,12 @@ pub fn run() {
             // the permission they grant, before the hotkeys start.
             #[cfg(target_os = "linux")]
             platform::init(app_data_dir.clone(), &app.config().identifier);
-            hotkeys::setup(app.handle(), &settings.hotkeys, settings.notes_analysis_enabled)?;
-            tray::setup(app.handle())?;
+            hotkeys::setup(
+                app.handle(),
+                &settings.hotkeys,
+                settings.notes_analysis_enabled,
+            )?;
+            tray::setup(app.handle(), &settings)?;
             // Replacements live in replacements.txt in the data folder; the
             // first run moves the list kept in settings there. A watcher picks
             // up edits made in any editor.
@@ -598,6 +604,24 @@ pub fn run() {
             }
             if window.label() != "main" {
                 return;
+            }
+
+            // Coming back to Scribe after switching it in Windows' Startup
+            // apps list shows the new value in Settings and the tray.
+            if let tauri::WindowEvent::Focused(true) = event {
+                let app = window.app_handle().clone();
+                if cfg!(windows) && app.try_state::<BackendState>().is_some() {
+                    let _ = std::thread::Builder::new()
+                        .name("launch-at-startup".into())
+                        .spawn(move || {
+                            if let Err(error) = commands::sync_launch_at_startup(&app) {
+                                log::warn!(
+                                    "Could not follow Windows' Startup apps switch. {}",
+                                    error.message
+                                );
+                            }
+                        });
+                }
             }
 
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -753,6 +777,22 @@ fn style_native_titlebar(window: &tauri::WebviewWindow) {
             &caption_color as *const _ as *const _,
             std::mem::size_of::<u32>() as u32,
         );
+    }
+}
+
+#[cfg(test)]
+mod install_identity_tests {
+    /// An existing install updates in place only while the app identifier
+    /// (data folder), product name (install folder, uninstall entry, MSI
+    /// upgrade code) and binary name stay the same. The sign-in entry is
+    /// named after the product too.
+    #[test]
+    fn the_install_identity_is_stable() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(config["identifier"], "com.natkins.scribe");
+        assert_eq!(config["productName"], "Scribe");
+        assert_eq!(config["mainBinaryName"], "Scribe");
     }
 }
 
