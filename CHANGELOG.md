@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.16.2 - 2026-11-25
+
+### Fixed
+
+- Scribe starts at sign-in again and shows in Windows' Startup apps ([#136](https://github.com/n8watkins/scribe/pull/136))
+
+### Safer
+
+- Update url, cookie and hono lockfile entries past new advisories ([#135](https://github.com/n8watkins/scribe/pull/135))
+
 ## 0.16.1 - 2026-11-10
 
 ### Fixed
