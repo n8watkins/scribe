@@ -86,7 +86,6 @@ Check "v0.16.1 installed into the custom folder" (Test-Path (Join-Path $custom "
 Check "v0.16.1 recorded the folder under natkins" (Same-Folder (Default-Value $oldKey) $custom) "(was '$(Default-Value $oldKey)')"
 Check "v0.16.1 wrote no n8builds.dev key" (-not (Test-Path -LiteralPath $newKey))
 Run-Installer $Candidate "/S /UPDATE"
-Get-Content "$env:TEMP\scribe-hook-debug.log" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  DEBUG $_" }
 Check-Upgraded $custom
 Run-Uninstaller $custom
 
@@ -116,6 +115,19 @@ Check "Scribe.exe is removed" (-not (Test-Path (Join-Path $defaultDir "Scribe.ex
 Check "the n8builds.dev key is gone after uninstall" (-not (Test-Path -LiteralPath $newKey))
 Check "the natkins key is gone after uninstall" (-not (Test-Path -LiteralPath $oldKey))
 Check "the Uninstall entry is gone" (-not (Test-Path -LiteralPath $uninstallKey))
+
+# ---- Scenario D: an explicit /D= folder wins over the old key ----
+Write-Host "Scenario D: v0.16.1 in a custom folder, candidate installed with an explicit /D= elsewhere"
+Reset-Machine
+$other = "C:\ScribeOther\Scribe"
+Remove-Item -LiteralPath "C:\ScribeOther" -Recurse -Force -ErrorAction SilentlyContinue
+Run-Installer (Old-Installer "v0.16.1") "/S /D=$custom"
+Run-Installer $Candidate "/S /UPDATE /D=$other"
+Check "Scribe.exe is in the /D= folder" (Test-Path (Join-Path $other "Scribe.exe"))
+Check "no copy in the default folder" (-not (Test-Path (Join-Path $defaultDir "Scribe.exe")))
+Check "the n8builds.dev key records the /D= folder" (Same-Folder (Default-Value $newKey) $other) "(was '$(Default-Value $newKey)')"
+Run-Uninstaller $other
+Run-Uninstaller $custom
 
 if ($failures.Count -gt 0) {
   throw "$($failures.Count) check(s) failed: $($failures -join '; ')"

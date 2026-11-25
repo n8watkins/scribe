@@ -12,15 +12,24 @@
 ;   so nothing the user picked can be overridden. An interactive run keeps
 ;   the folder page's default, so an interactive install over a version older
 ;   than 0.16.2 in a custom folder shows the default folder (the user can
-;   browse to the old one). A folder passed with /D= always wins.
+;   browse to the old one). A folder passed with /D= wins, except /D= of the
+;   default folder itself.
 ; - POSTINSTALL then removes the old key, and POSTUNINSTALL removes both keys
 ;   unless the run is an update.
 !define SCRIBE_OLD_MANUFACTURER "natkins"
 
-; Sets $INSTDIR to the folder the old publisher key recorded, when no folder
-; was passed with /D=, the new key records none, and the old folder exists.
+; Sets $INSTDIR to the folder the old publisher key recorded, when $INSTDIR is
+; still the default folder (so no other /D= folder was passed), the new key
+; records none, and the old folder exists.
+;
+; This cannot test the template's $CmdLineInstallDir: this file is parsed
+; before that variable is declared, so NSIS reads the name as the built-in
+; $CMDLINE followed by the text "InstallDir", which is never empty. (Found on a
+; Windows runner; see .github/workflows/installer-upgrade.yml.) The one case
+; this cannot tell apart is an explicit /D= of the default folder itself over
+; an old custom-folder key.
 !macro SCRIBE_ADOPT_OLD_INSTALL_DIR
-  ${If} $CmdLineInstallDir == ""
+  ${If} $INSTDIR == "$LOCALAPPDATA\${PRODUCTNAME}"
     Push $0
     Push $1
     ReadRegStr $0 HKCU "${MANUPRODUCTKEY}" ""
@@ -64,22 +73,6 @@
 ; an unrelated whisper.cpp server owned by another application or the user.
 ; Failures are ignored because there is normally nothing to stop.
 !macro NSIS_HOOK_PREINSTALL
-  FileOpen $9 "$TEMP\scribe-hook-debug.log" a
-  FileWrite $9 "pre: passive=[$PassiveMode] update=[$UpdateMode] cmd=[$CmdLineInstallDir] instdir=[$INSTDIR]$\r$\n"
-  ReadRegStr $8 HKCU "${MANUPRODUCTKEY}" ""
-  FileWrite $9 "newkey=[$8]$\r$\n"
-  ReadRegStr $8 HKCU "Software\${SCRIBE_OLD_MANUFACTURER}\${PRODUCTNAME}" ""
-  FileWrite $9 "oldkey=[$8]$\r$\n"
-  ${If} $CmdLineInstallDir == ""
-    FileWrite $9 "cmdlineinstalldir is empty$\r$\n"
-  ${Else}
-    FileWrite $9 "cmdlineinstalldir is set to:$\r$\n"
-    FileWrite $9 $CmdLineInstallDir
-    FileWrite $9 "$\r$\n"
-  ${EndIf}
-  FileClose $9
-  ; Only a silent or passive run skips the folder page. PREINSTALL runs after
-  ; the page, so an interactive run must keep whatever the user chose.
   ${If} ${Silent}
   ${OrIf} $PassiveMode = 1
     !insertmacro SCRIBE_ADOPT_OLD_INSTALL_DIR
