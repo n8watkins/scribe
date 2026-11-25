@@ -93,15 +93,24 @@ pub fn setup(app: &AppHandle, settings: &AppSettings) -> tauri::Result<()> {
         // Left-click opens the dashboard (handled below); the menu stays on
         // right-click only.
         .show_menu_on_left_click(false)
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
+        .on_tray_icon_event(|tray, event| match event {
+            TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 ..
-            } = event
-            {
+            } => {
                 let _ = open_dashboard(tray.app_handle(), None);
             }
+            // Before the menu opens (on hover, and on the right button going
+            // down; the menu opens when it comes up), refresh the "Launch at
+            // startup" tick from Windows' Startup apps switch.
+            TrayIconEvent::Enter { .. }
+            | TrayIconEvent::Click {
+                button: MouseButton::Right,
+                button_state: MouseButtonState::Down,
+                ..
+            } => refresh_launch_at_startup(tray.app_handle()),
+            _ => {}
         })
         .on_menu_event(|app, event| match event.id().as_ref() {
             // Dictation actions run on the dictation worker, never on this
@@ -118,7 +127,16 @@ pub fn setup(app: &AppHandle, settings: &AppSettings) -> tauri::Result<()> {
             MENU_SETTINGS => {
                 let _ = open_dashboard(app, Some("settings"));
             }
-            MENU_LAUNCH_AT_STARTUP => toggle_launch_at_startup(app),
+            MENU_LAUNCH_AT_STARTUP => {
+                // The menu has already flipped the tick, so its state is what
+                // the user asked for.
+                let wanted = app
+                    .try_state::<LaunchAtStartupItem>()
+                    .and_then(|item| item.0.is_checked().ok());
+                if let Some(wanted) = wanted {
+                    set_launch_at_startup(app, wanted);
+                }
+            }
             MENU_QUIT => app.exit(0),
             _ => {}
         });
@@ -133,21 +151,17 @@ pub fn setup(app: &AppHandle, settings: &AppSettings) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Flips "Launch at startup" from the tray, the same way the switch in
-/// Settings does. It first picks up a change made in Windows' Startup apps
-/// list, so the click always flips what the user last saw there. Runs off
-/// the main thread: it writes the registry and the database.
-fn toggle_launch_at_startup(app: &AppHandle) {
+/// Sets "Launch at startup" from the tray to the state the user ticked, the
+/// same way the switch in Settings does. Runs off the main thread: it writes
+/// the registry and the database.
+fn set_launch_at_startup(app: &AppHandle, wanted: bool) {
     let app = app.clone();
     let spawned = std::thread::Builder::new()
         .name("launch-at-startup".into())
         .spawn(move || {
-            let result = crate::commands::sync_launch_at_startup(&app).and_then(|current| {
-                crate::commands::set_launch_at_startup(&app, !current.launch_at_startup)
-            });
-            if let Err(error) = result {
+            if let Err(error) = crate::commands::set_launch_at_startup(&app, wanted) {
                 log::warn!("Could not change launch at startup. {}", error.message);
-                // Windows ticks a check item on click; put back the stored value.
+                // Put the tick back to the stored value.
                 if let Some(state) = app.try_state::<crate::commands::BackendState>() {
                     if let Ok(settings) = state.db().and_then(|db| db.get_settings()) {
                         sync_settings(&app, &settings);
@@ -158,6 +172,25 @@ fn toggle_launch_at_startup(app: &AppHandle) {
     if let Err(error) = spawned {
         log::warn!("Could not change launch at startup. {}", error);
     }
+}
+
+/// Copies Windows' Startup apps switch into "Launch at startup" (and so the
+/// tick). Never writes the startup entry. Runs off the main thread.
+fn refresh_launch_at_startup(app: &AppHandle) {
+    if !cfg!(windows) || app.try_state::<crate::commands::BackendState>().is_none() {
+        return;
+    }
+    let app = app.clone();
+    let _ = std::thread::Builder::new()
+        .name("launch-at-startup".into())
+        .spawn(move || {
+            if let Err(error) = crate::commands::sync_launch_at_startup(&app) {
+                log::warn!(
+                    "Could not follow Windows' Startup apps switch. {}",
+                    error.message
+                );
+            }
+        });
 }
 
 /// Shows the stored "Launch at startup" value in the tray menu.

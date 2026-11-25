@@ -56,7 +56,6 @@
   },
   "bundle": {
     "active": true,
-    "publisher": "n8builds.dev",
     "targets": [
       "nsis",
       "msi"

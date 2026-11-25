@@ -212,11 +212,13 @@ Field names are the ones in `AppSettings` (`app/src/backend.ts`, `app/src-tauri/
 
 - Connects to: the operating system and the window.
 - Implications: Open Scribe hotkey hides it only matters when the Open Scribe hotkey is bound.
-- Launch at startup (`launchAtStartup`) is on for new installs and off for Scribe Dev.
-  It writes a `Scribe` entry under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` that starts `Scribe.exe --minimized`, so Scribe opens to the tray.
+- Launch at startup (`launchAtStartup`) is on for new Windows installs, off for Scribe Dev, and off by default on macOS and Linux (unchanged there).
+  On Windows it writes a `Scribe` entry under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` that starts `Scribe.exe --minimized`, so Scribe opens to the tray.
   The same switch is in the tray menu, and Windows lists the entry in Settings > Apps > Startup and Task Manager's Startup tab.
-  Switching it off in Windows turns the setting off (when Scribe starts or its window is focused) and keeps the entry listed so it can be switched back on there; Scribe never switches it back on by itself.
-  An entry left by an older install that points at a missing program is rewritten at launch (see `src-tauri/src/autostart.rs`).
+  Scribe writes or switches on the entry only at launch of the installed copy and when the user flips the switch in Scribe; development builds never write it.
+  Windows' own switch is mirrored into the setting at launch, when the window is focused and when the tray menu is about to open; switching it off in Windows keeps the entry listed so it can be switched back on there.
+  One exception: an entry that points at a missing program (left by releases before v0.8.0 renamed `app.exe` to `Scribe.exe`) is rewritten at launch when the setting is on, even if Windows has it off, because such an entry is not in Windows' list and the user cannot have switched it there.
+  At launch the installed copy also records its folder under `HKCU\Software\n8builds.dev\Scribe`, so the release that changes the publisher to n8builds.dev updates in place (see `src-tauri/src/autostart.rs`).
 
 ### Automatically check for updates (`autoUpdateCheckEnabled`) and Install updates automatically (`autoInstallUpdates`)
 

@@ -289,19 +289,22 @@ pub(crate) fn patch_settings_now(
     )
 }
 
-/// Brings "Launch at startup" in step with the sign-in entry, which the user
-/// may have switched in Windows' Startup apps list while Scribe was running.
+/// Shows the switch the user may have flipped in Windows' Startup apps list
+/// while Scribe was running: copies it into "Launch at startup". Never writes
+/// the startup entry. Holds the settings write lock from read to save, so it
+/// cannot undo a flip the user is making in Scribe at the same moment.
 /// Blocks; call it off the main thread.
 pub(crate) fn sync_launch_at_startup(app: &tauri::AppHandle) -> Result<AppSettings, CommandError> {
     let state = app.state::<BackendState>().inner();
-    let current = state.db()?.get_settings()?;
-    match crate::autostart::reconcile(app, current.launch_at_startup) {
-        Some(value) => {
-            log::info!("Launch at startup follows Windows' Startup apps switch: {value}");
-            set_launch_at_startup(app, value)
-        }
-        None => Ok(current),
+    let _guard = settings_store::lock(state.settings_writes());
+    let mut settings = state.db()?.get_settings()?;
+    if let Some(value) = crate::autostart::follow_windows_switch(app, settings.launch_at_startup) {
+        log::info!("Launch at startup follows Windows' Startup apps switch: {value}");
+        settings.launch_at_startup = value;
+        state.db()?.save_settings(&settings)?;
+        settings_store::emit_changed(app, &settings);
     }
+    Ok(settings)
 }
 
 /// Turns "Launch at startup" on or off, as the settings toggle does.

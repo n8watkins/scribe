@@ -455,8 +455,10 @@ pub fn run() {
             // Bring the sign-in entry and "Launch at startup" into step: repair
             // an entry an older install left pointing at a missing program,
             // write a missing one, and follow the switch in Windows' Startup
-            // apps list when the user changed it there.
-            if let Some(value) = autostart::reconcile(app.handle(), settings.launch_at_startup) {
+            // apps list when the user changed it there (see autostart.rs).
+            if let Some(value) =
+                autostart::reconcile_at_launch(app.handle(), settings.launch_at_startup)
+            {
                 settings.launch_at_startup = value;
                 db.save_settings(&settings)?;
             }
@@ -608,7 +610,7 @@ pub fn run() {
             // apps list shows the new value in Settings and the tray.
             if let tauri::WindowEvent::Focused(true) = event {
                 let app = window.app_handle().clone();
-                if app.try_state::<BackendState>().is_some() {
+                if cfg!(windows) && app.try_state::<BackendState>().is_some() {
                     let _ = std::thread::Builder::new()
                         .name("launch-at-startup".into())
                         .spawn(move || {
@@ -782,16 +784,15 @@ fn style_native_titlebar(window: &tauri::WebviewWindow) {
 mod install_identity_tests {
     /// An existing install updates in place only while the app identifier
     /// (data folder), product name (install folder, uninstall entry, MSI
-    /// upgrade code) and binary name stay the same. The publisher is only
-    /// shown to people: the exe's CompanyName and the installed-apps entry.
+    /// upgrade code) and binary name stay the same. The sign-in entry is
+    /// named after the product too.
     #[test]
-    fn the_install_identity_is_stable_and_the_publisher_is_n8builds() {
+    fn the_install_identity_is_stable() {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         assert_eq!(config["identifier"], "com.natkins.scribe");
         assert_eq!(config["productName"], "Scribe");
         assert_eq!(config["mainBinaryName"], "Scribe");
-        assert_eq!(config["bundle"]["publisher"], "n8builds.dev");
     }
 }
 

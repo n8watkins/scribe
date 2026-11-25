@@ -294,7 +294,7 @@ export function AppBehaviorSettings({ actions, settings }: GroupProps) {
         description={
           currentPlatform() === "windows"
             ? "Start Scribe in the tray when you sign in to Windows. Also in the tray menu and in Windows Settings > Apps > Startup."
-            : "Start Scribe in the tray when you log in. Also in the tray menu."
+            : "Start Scribe when you log in. Also in the tray menu."
         }
         label="Launch at startup"
       >
