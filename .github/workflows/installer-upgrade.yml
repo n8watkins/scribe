@@ -1,0 +1,91 @@
+name: Installer upgrade
+
+# Builds the NSIS installer from this branch and runs it the way the updater
+# does (`/S /UPDATE`) over the published v0.16.1 and v0.16.2 installers, so the
+# publisher change (installer-hooks.nsh, bundle.publisher) is proven on a real
+# Windows install: the update lands in the same folder, no second copy appears
+# in the default folder, Windows shows n8builds.dev as the publisher, and the
+# old and new registry keys are cleaned up on uninstall. The build skips
+# whisper.cpp (the installer logic does not depend on it) and never signs or
+# publishes anything.
+on:
+  pull_request:
+    paths:
+      - "app/src-tauri/installer-hooks.nsh"
+      - "app/src-tauri/tauri.conf.json"
+      - "app/src-tauri/tauri.dev-flavor.conf.json"
+      - ".github/workflows/installer-upgrade.yml"
+      - ".github/scripts/installer-upgrade.ps1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installer-upgrade-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Higher than any published version, so the installer is an upgrade.
+  TEST_VERSION: 0.99.0
+
+jobs:
+  upgrade:
+    name: Installer upgrade
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        with:
+          workspaces: app/src-tauri
+          cache-on-failure: true
+
+      - name: Install application dependencies
+        working-directory: app
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild esbuild
+
+      # Same command as the release build, with the version raised and no
+      # updater artifacts (so no signing key is needed).
+      - name: Build the NSIS installer
+        working-directory: app
+        shell: pwsh
+        env:
+          SCRIBE_GITHUB_APP_CLIENT_ID: ${{ vars.SCRIBE_GITHUB_APP_CLIENT_ID }}
+        run: |
+          $version = Join-Path $env:RUNNER_TEMP "test-version.conf.json"
+          @{ version = $env:TEST_VERSION } | ConvertTo-Json | Set-Content $version -Encoding utf8
+          npm run tauri -- build --bundles nsis --config src-tauri/tauri.unsigned-build.conf.json --config $version
+          if ($LASTEXITCODE -ne 0) { throw "tauri build failed" }
+          $setup = @(Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe")
+          if ($setup.Count -ne 1) { throw "Expected one NSIS installer, found $($setup.Count)" }
+          Copy-Item $setup[0].FullName "$env:RUNNER_TEMP\candidate-setup.exe"
+
+      - name: Download the published installers
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          foreach ($tag in "v0.16.1", "v0.16.2") {
+            $dir = "$env:RUNNER_TEMP\old-$tag"
+            gh release download $tag --repo ${{ github.repository }} --pattern "*setup.exe" --dir $dir
+            if ($LASTEXITCODE -ne 0) { throw "Could not download the $tag installer" }
+            if (@(Get-ChildItem $dir -Filter "*setup.exe").Count -ne 1) { throw "Expected one installer for $tag" }
+          }
+
+      - name: Upgrade and uninstall scenarios
+        shell: pwsh
+        run: ./.github/scripts/installer-upgrade.ps1 -Candidate "$env:RUNNER_TEMP\candidate-setup.exe" -OldDir "$env:RUNNER_TEMP" -Version $env:TEST_VERSION

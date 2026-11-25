@@ -7,10 +7,12 @@
 ;   update from them lands in the same folder.
 ; - Older copies only have the old key (natkins). SCRIBE_ADOPT_OLD_INSTALL_DIR
 ;   reads it as a fallback when the new key is empty, so an update never makes
-;   a second copy in the default folder. A silent or passive run (the updater)
-;   adopts it in PREINSTALL; an interactive run adopts it in .onGUIInit, before
-;   the folder page shows, so the user sees (and may change) the right folder.
-;   A folder passed with /D= always wins.
+;   a second copy in the default folder. Only a silent or passive run (what the
+;   updater does) adopts it, in PREINSTALL: those runs skip the folder page,
+;   so nothing the user picked can be overridden. An interactive run keeps
+;   the folder page's default, so an interactive install over a version older
+;   than 0.16.2 in a custom folder shows the default folder (the user can
+;   browse to the old one). A folder passed with /D= always wins.
 ; - POSTINSTALL then removes the old key, and POSTUNINSTALL removes both keys
 ;   unless the run is an update.
 !define SCRIBE_OLD_MANUFACTURER "natkins"
@@ -32,15 +34,6 @@
     Pop $1
     Pop $0
   ${EndIf}
-!macroend
-
-; Interactive runs: adopt the old folder before the first page shows.
-; Defined inside the finish page hook because that is the only hook at file
-; scope placed after the variables it reads are declared.
-!macro NSIS_HOOK_PREFINISHPAGE
-  Function .onGUIInit
-    !insertmacro SCRIBE_ADOPT_OLD_INSTALL_DIR
-  FunctionEnd
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
@@ -71,8 +64,8 @@
 ; an unrelated whisper.cpp server owned by another application or the user.
 ; Failures are ignored because there is normally nothing to stop.
 !macro NSIS_HOOK_PREINSTALL
-  ; Only a silent or passive run skips the folder page; an interactive run
-  ; already adopted the old folder in .onGUIInit (see below).
+  ; Only a silent or passive run skips the folder page. PREINSTALL runs after
+  ; the page, so an interactive run must keep whatever the user chose.
   ${If} ${Silent}
   ${OrIf} $PassiveMode = 1
     !insertmacro SCRIBE_ADOPT_OLD_INSTALL_DIR
