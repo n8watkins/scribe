@@ -33,10 +33,11 @@ use crate::error::CommandError;
 pub const SIGN_IN_FLAG: &str = "--minimized";
 
 /// The publishers whose `Software\<publisher>\<product>` key may record the
-/// install folder: the one releases use today and the one the next release
-/// moves to (see [`reconcile_at_launch`]).
-pub const CURRENT_PUBLISHER: &str = "natkins";
-pub const NEXT_PUBLISHER: &str = "n8builds.dev";
+/// install folder: the one releases before the publisher change used (the
+/// installer hooks read it as a fallback, then remove it) and the current one
+/// (see [`reconcile_at_launch`]).
+pub const PREVIOUS_PUBLISHER: &str = "natkins";
+pub const PUBLISHER: &str = "n8builds.dev";
 
 /// The autostart plugin. On Windows the entry carries [`SIGN_IN_FLAG`].
 pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
@@ -306,7 +307,7 @@ mod windows_entry {
         }
         // NSIS keeps the folder as the key's default value, the MSI as
         // InstallDir.
-        for publisher in [CURRENT_PUBLISHER, NEXT_PUBLISHER] {
+        for publisher in [PREVIOUS_PUBLISHER, PUBLISHER] {
             if let Ok(key) = CURRENT_USER.open(format!(r"Software\{publisher}\{product}")) {
                 for value in ["", "InstallDir"] {
                     if let Ok(folder) = key.get_string(value) {
@@ -318,11 +319,11 @@ mod windows_entry {
         folders
     }
 
-    /// Records `folder` where the installer of the next release, published
-    /// as [`NEXT_PUBLISHER`], looks for the previous install, so an update
+    /// Records `folder` where the installer (publisher
+    /// [`PUBLISHER`]) looks for the previous install, so an update
     /// lands in the same folder.
     pub fn remember_install_folder(product: &str, folder: &str) -> windows_registry::Result<()> {
-        let path = format!(r"Software\{NEXT_PUBLISHER}\{product}");
+        let path = format!(r"Software\{PUBLISHER}\{product}");
         let recorded = CURRENT_USER
             .open(&path)
             .and_then(|key| key.get_string(""))
