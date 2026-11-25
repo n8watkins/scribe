@@ -270,16 +270,48 @@ pub async fn patch_settings(
     app: tauri::AppHandle,
     patch: serde_json::Map<String, serde_json::Value>,
 ) -> Result<AppSettings, CommandError> {
-    off_main(app, move |app| {
-        let state = app.state::<BackendState>().inner();
-        settings_store::patch_locked(
-            state.settings_writes(),
-            &patch,
-            || state.db()?.get_settings(),
-            |previous, next| apply_settings_change(app, state, previous, next),
-        )
-    })
-    .await
+    off_main(app, move |app| patch_settings_now(app, &patch)).await
+}
+
+/// Applies a settings patch from the backend (the tray, Windows' Startup apps
+/// switch) exactly as a window's patch is applied. Blocks; call it off the
+/// main thread.
+pub(crate) fn patch_settings_now(
+    app: &tauri::AppHandle,
+    patch: &serde_json::Map<String, serde_json::Value>,
+) -> Result<AppSettings, CommandError> {
+    let state = app.state::<BackendState>().inner();
+    settings_store::patch_locked(
+        state.settings_writes(),
+        patch,
+        || state.db()?.get_settings(),
+        |previous, next| apply_settings_change(app, state, previous, next),
+    )
+}
+
+/// Brings "Launch at startup" in step with the sign-in entry, which the user
+/// may have switched in Windows' Startup apps list while Scribe was running.
+/// Blocks; call it off the main thread.
+pub(crate) fn sync_launch_at_startup(app: &tauri::AppHandle) -> Result<AppSettings, CommandError> {
+    let state = app.state::<BackendState>().inner();
+    let current = state.db()?.get_settings()?;
+    match crate::autostart::reconcile(app, current.launch_at_startup) {
+        Some(value) => {
+            log::info!("Launch at startup follows Windows' Startup apps switch: {value}");
+            set_launch_at_startup(app, value)
+        }
+        None => Ok(current),
+    }
+}
+
+/// Turns "Launch at startup" on or off, as the settings toggle does.
+pub(crate) fn set_launch_at_startup(
+    app: &tauri::AppHandle,
+    enabled: bool,
+) -> Result<AppSettings, CommandError> {
+    let mut patch = serde_json::Map::new();
+    patch.insert("launchAtStartup".into(), serde_json::Value::Bool(enabled));
+    patch_settings_now(app, &patch)
 }
 
 /// Stores `settings` over `previous` and applies what changed: launch at
@@ -299,7 +331,7 @@ fn apply_settings_change(
     // Apply launch-at-startup first: when the OS registration fails the new
     // value is never saved, so the UI toggle reverts.
     if previous.launch_at_startup != settings.launch_at_startup {
-        apply_autostart(app, settings.launch_at_startup)?;
+        crate::autostart::apply(app, settings.launch_at_startup)?;
     }
 
     // Transform Selection is only bound while Local AI is on, so turning it on
@@ -332,7 +364,7 @@ fn apply_settings_change(
             let _ = hotkeys::replace_hotkeys(app, &settings.hotkeys, &previous.hotkeys);
         }
         if previous.launch_at_startup != settings.launch_at_startup {
-            let _ = apply_autostart(app, previous.launch_at_startup);
+            let _ = crate::autostart::apply(app, previous.launch_at_startup);
         }
 
         return Err(error);
@@ -362,30 +394,6 @@ fn apply_settings_change(
     }
 
     Ok(settings)
-}
-
-/// Enables or disables the OS launch-at-startup registration. Shared by the
-/// settings command and the setup-time reconciliation in `lib.rs`.
-pub(crate) fn apply_autostart(app: &tauri::AppHandle, enabled: bool) -> Result<(), CommandError> {
-    use tauri_plugin_autostart::ManagerExt;
-
-    let autolaunch = app.autolaunch();
-    let result = if enabled {
-        autolaunch.enable()
-    } else {
-        autolaunch.disable()
-    };
-
-    result.map_err(|error| {
-        CommandError::new(
-            "autostart_failed",
-            format!(
-                "Could not {} launch at startup. {}",
-                if enabled { "enable" } else { "disable" },
-                error
-            ),
-        )
-    })
 }
 
 #[tauri::command]

@@ -63,6 +63,10 @@ tiny_http = "0.12"
 # ships for Windows); the picker command errors elsewhere. xdg-portal feature
 # disabled so no GTK/portal system libs are pulled in.
 rfd = { version = "0.15", default-features = false }
+# Reads the sign-in entry and Windows' Startup apps switch for it
+# (src/autostart.rs); the autostart plugin, which writes the entry, already
+# uses it.
+windows-registry = "0.6"
 windows = { version = "0.58", features = [
     "Win32_Devices_FunctionDiscovery",
     "Win32_Foundation",

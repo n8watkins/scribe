@@ -212,6 +212,11 @@ Field names are the ones in `AppSettings` (`app/src/backend.ts`, `app/src-tauri/
 
 - Connects to: the operating system and the window.
 - Implications: Open Scribe hotkey hides it only matters when the Open Scribe hotkey is bound.
+- Launch at startup (`launchAtStartup`) is on for new installs and off for Scribe Dev.
+  It writes a `Scribe` entry under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` that starts `Scribe.exe --minimized`, so Scribe opens to the tray.
+  The same switch is in the tray menu, and Windows lists the entry in Settings > Apps > Startup and Task Manager's Startup tab.
+  Switching it off in Windows turns the setting off (when Scribe starts or its window is focused) and keeps the entry listed so it can be switched back on there; Scribe never switches it back on by itself.
+  An entry left by an older install that points at a missing program is rewritten at launch (see `src-tauri/src/autostart.rs`).
 
 ### Automatically check for updates (`autoUpdateCheckEnabled`) and Install updates automatically (`autoInstallUpdates`)
 
