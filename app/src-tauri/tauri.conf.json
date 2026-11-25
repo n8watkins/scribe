@@ -74,6 +74,7 @@
     "shortDescription": "Private local dictation for Windows.",
     "longDescription": "Scribe is a Windows tray utility for recording speech, transcribing locally with Whisper, and inserting the Last Transcript Buffer without permanently overwriting the clipboard.",
     "category": "Productivity",
+    "publisher": "n8builds.dev",
     "windows": {
       "allowDowngrades": false,
       "webviewInstallMode": {

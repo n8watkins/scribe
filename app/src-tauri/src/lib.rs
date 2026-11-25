@@ -794,6 +794,28 @@ mod install_identity_tests {
         assert_eq!(config["productName"], "Scribe");
         assert_eq!(config["mainBinaryName"], "Scribe");
     }
+
+    /// The installer records the install folder under
+    /// `HKCU\Software\<publisher>\Scribe`, and Windows shows the publisher as
+    /// the exe's company and the installer's publisher. The running app writes
+    /// the same key (`autostart::PUBLISHER`) and the installer hooks read
+    /// and clear the old one, so all three must agree.
+    #[test]
+    fn the_publisher_matches_the_install_folder_key() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(config["bundle"]["publisher"], "n8builds.dev");
+        assert_eq!(config["bundle"]["publisher"], crate::autostart::PUBLISHER);
+        let hooks = include_str!("../installer-hooks.nsh");
+        let old = format!(
+            "!define SCRIBE_OLD_MANUFACTURER \"{}\"",
+            crate::autostart::PREVIOUS_PUBLISHER
+        );
+        assert!(
+            hooks.contains(&old),
+            "installer hook must clear the old publisher key"
+        );
+    }
 }
 
 #[cfg(test)]
