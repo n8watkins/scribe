@@ -1,0 +1,18 @@
+# A stand-in for the native (Slint, no Tauri runtime) Scribe build. It is a
+# plain Rust binary with the same file name and version resource as the real
+# app, so the installer bridge can be tested without the real rewrite.
+[package]
+name = "scribe-native-stub"
+version = "0.99.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "Scribe"
+path = "src/main.rs"
+
+[build-dependencies]
+winresource = "0.1.34"
+
+# Keep this crate out of any parent workspace.
+[workspace]
