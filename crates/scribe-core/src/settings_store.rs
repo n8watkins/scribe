@@ -177,7 +177,7 @@ fn sync_launch_at_startup_in(
     })
 }
 
-/// The body of [`sync_launch_at_startup_with`]: `follow` gets the stored
+/// The body of [`sync_launch_at_startup_in`]: `follow` gets the stored
 /// "Launch at startup" and answers the value to store instead, or None to
 /// leave it.
 fn follow_launch_switch(
@@ -449,7 +449,8 @@ mod tests {
         );
     }
 
-    /// A thread with the main thread's name, as the shell's event loop has.
+    /// Runs `work` on a new thread called `name` and waits for it; "main"
+    /// stands in for the thread the shell's event loop runs on.
     fn on_a_thread_named<T: Send + 'static>(
         name: &str,
         work: impl FnOnce() -> T + Send + 'static,
