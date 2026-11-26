@@ -288,17 +288,13 @@ pub fn copy_last_transcript(app: &AppHandle) -> Result<OutputResult, CommandErro
 
 /// Copies the Last Transcript Buffer to the clipboard.
 pub fn copy_last_transcript_with(core: &Core) -> Result<OutputResult, CommandError> {
-    let transcript = core
-        .backend()
-        .last_transcript()?
-        .ok_or_else(no_last_transcript)?;
+    copy_last(core.backend(), core.host().as_ref())
+}
 
-    copy_transcript_text(
-        core.host().as_ref(),
-        &transcript,
-        OutputMode::CopyClipboard,
-        true,
-    )
+fn copy_last(state: &BackendState, host: &dyn Host) -> Result<OutputResult, CommandError> {
+    let transcript = state.last_transcript()?.ok_or_else(no_last_transcript)?;
+
+    copy_transcript_text(host, &transcript, OutputMode::CopyClipboard, true)
 }
 
 pub fn paste_transcript(app: &AppHandle, id: &str) -> Result<OutputResult, CommandError> {
@@ -341,18 +337,20 @@ pub fn copy_transcript(app: &AppHandle, id: &str) -> Result<OutputResult, Comman
 
 /// Copies a saved transcript to the clipboard.
 pub fn copy_transcript_with(core: &Core, id: &str) -> Result<OutputResult, CommandError> {
-    let transcript = core
-        .backend()
+    copy_saved(core.backend(), core.host().as_ref(), id)
+}
+
+fn copy_saved(
+    state: &BackendState,
+    host: &dyn Host,
+    id: &str,
+) -> Result<OutputResult, CommandError> {
+    let transcript = state
         .db()?
         .get_transcript_by_id(id)?
         .ok_or_else(|| transcript_not_found(id))?;
 
-    copy_transcript_text(
-        core.host().as_ref(),
-        &transcript,
-        OutputMode::CopyClipboard,
-        true,
-    )
+    copy_transcript_text(host, &transcript, OutputMode::CopyClipboard, true)
 }
 
 fn paste_transcript_text(
@@ -1228,6 +1226,23 @@ mod tests {
         }
         assert_eq!(status(&state), AppStatus::Idle);
         assert!(published.into_inner().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    // The copies' success path writes the real clipboard, so only the paths
+    // that stop before it are tested here.
+    #[test]
+    fn copying_with_nothing_to_copy_fails_before_any_event() {
+        let (state, root) = backend();
+        let host = recording_host();
+
+        let error = copy_last(&state, &host).unwrap_err();
+        assert_eq!(error.code, "last_transcript_missing");
+        let error = copy_saved(&state, &host, "no-such-id").unwrap_err();
+        assert_eq!(error.code, "transcript_not_found");
+        assert!(error.message.contains("no-such-id"));
+
+        assert!(host.events().is_empty());
         let _ = std::fs::remove_dir_all(root);
     }
 
