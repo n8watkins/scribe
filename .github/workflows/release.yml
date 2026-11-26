@@ -49,8 +49,9 @@ jobs:
           $packageVersion = (Get-Content app/package.json -Raw | ConvertFrom-Json).version
           $tauriVersion = (Get-Content app/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
           $cargoVersion = (Select-String -Path app/src-tauri/Cargo.toml -Pattern '^version = "([^"]+)"$' | Select-Object -First 1).Matches.Groups[1].Value
-          if (-not $packageVersion -or $packageVersion -ne $tauriVersion -or $packageVersion -ne $cargoVersion) {
-            throw "Version mismatch: package=$packageVersion tauri=$tauriVersion cargo=$cargoVersion"
+          $coreVersion = (Select-String -Path crates/scribe-core/Cargo.toml -Pattern '^version = "([^"]+)"$' | Select-Object -First 1).Matches.Groups[1].Value
+          if (-not $packageVersion -or $packageVersion -ne $tauriVersion -or $packageVersion -ne $cargoVersion -or $packageVersion -ne $coreVersion) {
+            throw "Version mismatch: package=$packageVersion tauri=$tauriVersion cargo=$cargoVersion core=$coreVersion"
           }
           if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne "v$packageVersion") {
             throw "Tag ${{ github.ref_name }} does not match configured version v$packageVersion"
@@ -132,7 +133,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
-          workspaces: app/src-tauri
+          workspaces: ". -> target"
 
       - name: Install Vulkan SDK
         uses: jakoch/install-vulkan-sdk-action@7fe84289ddbf750f7eff9f8e4588e600e1dd06c8 # v1.8.1
@@ -169,11 +170,10 @@ jobs:
           npm run build
 
       - name: Validate Rust backend
-        working-directory: app/src-tauri
         run: |
-          cargo fmt --check
-          cargo clippy --locked --all-targets -- -D warnings
-          cargo test --locked
+          cargo fmt --all --check
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked --workspace
 
       - name: Build reviewed whisper.cpp source with Vulkan
         shell: pwsh
@@ -232,7 +232,7 @@ jobs:
       - name: Check the build has no test input
         shell: pwsh
         run: |
-          $exes = @(Get-ChildItem app/src-tauri/target/release -Filter *.exe -File)
+          $exes = @(Get-ChildItem target/release -Filter *.exe -File)
           if ($exes.Count -eq 0) { throw "No executable was built" }
           foreach ($exe in $exes) {
             $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($exe.FullName))
@@ -251,7 +251,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          $setup = @(Get-ChildItem -Path "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe")
+          $setup = @(Get-ChildItem -Path "../target/release/bundle/nsis" -Filter "*-setup.exe")
           if ($setup.Count -ne 1) { throw "Expected one NSIS installer to sign, found $($setup.Count)" }
           npx --no-install tauri signer sign $setup[0].FullName
           if ($LASTEXITCODE -ne 0) { throw "Signing the updater artifact failed" }
@@ -261,8 +261,8 @@ jobs:
         shell: pwsh
         run: |
           $stage = "$env:RUNNER_TEMP\scribe-release"
-          $nsisDir = "app/src-tauri/target/release/bundle/nsis"
-          $msiDir = "app/src-tauri/target/release/bundle/msi"
+          $nsisDir = "target/release/bundle/nsis"
+          $msiDir = "target/release/bundle/msi"
           $setup = @(Get-ChildItem -Path $nsisDir -Filter "*-setup.exe")
           $msi = @(Get-ChildItem -Path $msiDir -Filter "*.msi")
           if ($setup.Count -ne 1) { throw "Expected one NSIS installer, found $($setup.Count)" }

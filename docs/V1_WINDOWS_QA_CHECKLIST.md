@@ -12,7 +12,7 @@ CI (`.github/workflows/ci.yml`) on every pull request:
 Windows end-to-end (`.github/workflows/e2e-windows.yml`) on pull requests and pushes to main that change the app, nightly, and on demand:
 
 Hosted runners have an interactive desktop but no audio devices.
-The job builds Scribe Dev with the `e2e-audio` feature, which records a WAV file in place of the microphone (`app/src-tauri/src/test_audio.rs`), so hotkeys, recording, Whisper and output all run for real.
+The job builds Scribe Dev with the `e2e-audio` feature, which records a WAV file in place of the microphone (`crates/scribe-core/src/test_audio.rs`), so hotkeys, recording, Whisper and output all run for real.
 It uses a CPU-only build of the pinned whisper.cpp source and the default model, downloaded through the app's verified download path.
 `app/e2e/windows/run.py` drives it with injected hotkeys (Ctrl+Alt+F7 to F12) against stand-in app windows in their own processes, and checks the window text, the clipboard, `status.json`, the database and the app log.
 Screenshots (dashboard, the floating pill while recording, any failure), app logs and results are uploaded on every run.

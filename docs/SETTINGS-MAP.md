@@ -1,13 +1,13 @@
 # Settings map
 
 Every Scribe setting: what it connects to, which speech engine it applies to, what happens when it is off or can't apply, and how it affects other settings.
-Field names are the ones in `AppSettings` (`app/src/backend.ts`, `app/src-tauri/src/settings.rs`).
+Field names are the ones in `AppSettings` (`app/src/backend.ts`, `crates/scribe-core/src/settings.rs`).
 "UI label" says how the app explains a setting that another one turns off or makes pointless; the tests for those labels are in `app/src/components/settingsLabels.test.tsx`.
 
 ## How a dictation flows
 
 1. A hotkey, the tray or Start begins a recording from the microphone (`selectedMicId`).
-2. The dictation pins the speech model selected at that moment (`selectedModelId`, see `src-tauri/src/session_model.rs`), and keeps it for every live segment and the final text.
+2. The dictation pins the speech model selected at that moment (`selectedModelId`, see `crates/scribe-core/src/session_model.rs`), and keeps it for every live segment and the final text.
 3. With live transcription on, phrases are transcribed while you talk; otherwise the whole recording is transcribed when you stop.
 4. Whisper gets custom words as its prompt; Parakeet gets none.
 5. Filler removal runs on the engine's timed words.
@@ -66,7 +66,7 @@ Field names are the ones in `AppSettings` (`app/src/backend.ts`, `app/src-tauri/
 
 ### Custom words (`vocabularyPrompt`)
 
-- Connects to: Whisper's prompt (`--prompt` on the command line, `prompt` on the server), through `src-tauri/src/prompt_budget.rs`.
+- Connects to: Whisper's prompt (`--prompt` on the command line, `prompt` on the server), through `crates/scribe-core/src/prompt_budget.rs`.
 - Engine: Whisper only. Parakeet has no prompt or hotword support.
 - Off or unavailable:
   - Empty, there is no prompt.
@@ -84,7 +84,7 @@ Field names are the ones in `AppSettings` (`app/src/backend.ts`, `app/src-tauri/
 
 - Connects to:
   - the finished text of every dictation, after filler removal;
-  - the file `replacements.txt` in the data folder, which is the source of truth (`src-tauri/src/replacements_file.rs`).
+  - the file `replacements.txt` in the data folder, which is the source of truth (`crates/scribe-core/src/replacements_file.rs`).
 - Engine: both. They are the only lever for your words with Parakeet.
 - Off or unavailable:
   - An empty file changes nothing.
@@ -144,7 +144,7 @@ Field names are the ones in `AppSettings` (`app/src/backend.ts`, `app/src-tauri/
 
 ### Live transcription (`incrementalTranscriptionEnabled`), Split on pause (`segmentPauseEnabled`), Pause before splitting (`segmentPauseMs`), Longest phrase (`segmentMaxMs`)
 
-- Connects to: phrase-by-phrase transcription while you talk (`src-tauri/src/incremental.rs`).
+- Connects to: phrase-by-phrase transcription while you talk (`crates/scribe-core/src/incremental.rs`).
 - Engine:
   - Both.
   - Whisper also gets the last 200 characters already said as context, inside the custom words budget.
@@ -218,7 +218,7 @@ Field names are the ones in `AppSettings` (`app/src/backend.ts`, `app/src-tauri/
   Scribe writes or switches on the entry only at launch of the installed copy and when the user flips the switch in Scribe; development builds never write it.
   Windows' own switch is mirrored into the setting at launch, when the window is focused and when the tray menu is about to open; switching it off in Windows keeps the entry listed so it can be switched back on there.
   One exception: an entry that points at a missing program (left by releases before v0.8.0 renamed `app.exe` to `Scribe.exe`) is rewritten at launch when the setting is on, even if Windows has it off, because such an entry is not in Windows' list and the user cannot have switched it there.
-  At launch the installed copy also records its folder under `HKCU\Software\n8builds.dev\Scribe`, so the release that changes the publisher to n8builds.dev updates in place (see `src-tauri/src/autostart.rs`).
+  At launch the installed copy also records its folder under `HKCU\Software\n8builds.dev\Scribe`, so the release that changes the publisher to n8builds.dev updates in place (see `crates/scribe-core/src/autostart.rs`).
 
 ### Automatically check for updates (`autoUpdateCheckEnabled`) and Install updates automatically (`autoInstallUpdates`)
 

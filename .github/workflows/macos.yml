@@ -24,6 +24,9 @@ on:
       - ".github/workflows/macos.yml"
       - ".github/scripts/smoke-macos.sh"
       - "app/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
 
 permissions:
   contents: read
@@ -61,24 +64,21 @@ jobs:
 
       - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
-          workspaces: app/src-tauri
+          workspaces: ". -> target"
           key: backend
 
       - name: Run clippy
-        working-directory: app/src-tauri
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Run backend tests
-        working-directory: app/src-tauri
-        run: cargo test --locked
+        run: cargo test --locked --workspace
 
       # The platform tests that need the logged-in session's window server,
       # pasteboard and Accessibility permission, which the runner has: the
       # app in front, a clipboard snapshot and restore round trip, and real
       # paste, typing and selection copy in TextEdit.
       - name: Run macOS system tests
-        working-directory: app/src-tauri
-        run: cargo test --locked --lib platform::macos -- --ignored --test-threads=1 --nocapture
+        run: cargo test --locked --workspace --lib platform::macos -- --ignored --test-threads=1 --nocapture
 
   build-macos:
     name: Build macOS bundle
@@ -109,7 +109,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
-          workspaces: app/src-tauri
+          workspaces: ". -> target"
 
       - name: Restore whisper.cpp build
         id: whisper-cache
@@ -240,7 +240,7 @@ jobs:
         id: bundle
         run: |
           set -euo pipefail
-          bundle=app/src-tauri/target/universal-apple-darwin/release/bundle
+          bundle=target/universal-apple-darwin/release/bundle
           apps=("$bundle"/macos/*.app)
           dmgs=("$bundle"/dmg/*.dmg)
           if [ "${#apps[@]}" -ne 1 ] || [ ! -d "${apps[0]}" ]; then
@@ -287,7 +287,7 @@ jobs:
       - name: Check the build has no test input
         run: |
           set -euo pipefail
-          main="$(find app/src-tauri/target/universal-apple-darwin/release/bundle/macos -path '*/Contents/MacOS/Scribe')"
+          main="$(find target/universal-apple-darwin/release/bundle/macos -path '*/Contents/MacOS/Scribe')"
           if grep -q SCRIBE_E2E_AUDIO_WAV "$main"; then
             echo "$main contains the end-to-end test input" >&2
             exit 1

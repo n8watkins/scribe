@@ -5,16 +5,22 @@ name: Windows end-to-end
 # switches and Transform Selection (app/e2e/windows/run.py). Runners have an
 # interactive desktop but no microphone, so this build is made with the
 # test-only `e2e-audio` feature and records WAV clips instead
-# (app/src-tauri/src/test_audio.rs); everything after capture runs for real.
+# (crates/scribe-core/src/test_audio.rs); everything after capture runs for real.
 on:
   pull_request:
     paths:
       - "app/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/e2e-windows.yml"
   push:
     branches: [main]
     paths:
       - "app/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/e2e-windows.yml"
   schedule:
     - cron: "23 6 * * *"
@@ -56,7 +62,7 @@ jobs:
       # Kept when a scenario fails, so the next run doesn't rebuild everything.
       - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
-          workspaces: app/src-tauri
+          workspaces: ". -> target"
           cache-on-failure: true
 
       - name: Restore whisper.cpp build
@@ -166,12 +172,12 @@ jobs:
             --config src-tauri/tauri.dev-flavor.conf.json `
             --config src-tauri/tauri.e2e.conf.json
           if ($LASTEXITCODE -ne 0) { throw "The test build failed" }
-          $exe = Get-Item "src-tauri/target/release/Scribe Dev.exe"
+          $exe = Get-Item "../target/release/Scribe Dev.exe"
           # The release workflow proves shipped builds lack the test input by
           # looking for this name; here it must be found, or that check is blind.
           $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($exe.FullName))
           if (-not $text.Contains("SCRIBE_E2E_AUDIO_WAV")) { throw "The test build lacks the test audio input" }
-          if (-not (Test-Path "src-tauri/target/release/bin/windows/whisper-server.exe")) {
+          if (-not (Test-Path "../target/release/bin/windows/whisper-server.exe")) {
             throw "whisper.cpp was not copied next to the build"
           }
           "SCRIBE_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8

@@ -2,7 +2,15 @@
   "versionFiles": [
     "app/src-tauri/tauri.conf.json",
     "app/src-tauri/Cargo.toml",
-    "app/src-tauri/Cargo.lock",
+    "crates/scribe-core/Cargo.toml",
+    {
+      "path": "Cargo.lock",
+      "pattern": "^name = \"app\"\\r?\\nversion = \"([^\"]+)\""
+    },
+    {
+      "path": "Cargo.lock",
+      "pattern": "^name = \"scribe-core\"\\r?\\nversion = \"([^\"]+)\""
+    },
     "app/package.json",
     "app/package-lock.json"
   ],

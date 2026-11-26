@@ -4,7 +4,7 @@ Drives a Scribe Dev build made with the `e2e-audio` feature the way a person
 would: global hotkeys pressed with injected keystrokes, dictation into stand-in
 app windows (target.ps1), the clipboard, and app switches. Hosted runners have
 no microphone, so the app records a WAV file in place of one (see
-app/src-tauri/src/test_audio.rs); hotkeys, recording, Whisper and output all
+crates/scribe-core/src/test_audio.rs); hotkeys, recording, Whisper and output all
 run for real.
 
 Every check reads real state: the target window's text, the clipboard,

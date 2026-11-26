@@ -76,8 +76,9 @@ updates:
       - dependency-name: "*"
         update-types: [version-update:semver-major]
 
+  # The Cargo workspace (app/src-tauri and crates/*) and its one lock file.
   - package-ecosystem: cargo
-    directory: /app/src-tauri
+    directory: /
     schedule:
       interval: weekly
       day: monday

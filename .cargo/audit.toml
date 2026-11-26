@@ -1,4 +1,4 @@
-# cargo audit settings for app/src-tauri/Cargo.lock (CI: Rust dependency audit).
+# cargo audit settings for the workspace Cargo.lock (CI: Rust dependency audit).
 [advisories]
 ignore = [
   # zip 4.x symlink and permission handling in ZipArchive::extract. The only user
