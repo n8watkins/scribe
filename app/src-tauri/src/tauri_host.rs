@@ -113,82 +113,12 @@ pub fn paths_mismatches<R: Runtime, M: Manager<R>>(app: &M, paths: &Paths) -> Ve
         .collect()
 }
 
+// The tests that build a Tauri mock app (the folders against Tauri's
+// resolver, the emitted payloads) are in tests/tauri_host.rs: on Windows a
+// test executable that builds an app needs the Common Controls manifest,
+// which build.rs embeds into integration tests only.
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use tauri::test::{mock_builder, mock_context, noop_assets};
-
-    fn config(source: &str) -> serde_json::Value {
-        serde_json::from_str(source).unwrap()
-    }
-
-    /// A mock app carrying a flavour's identifier and product name.
-    fn app_for(identifier: &str, product_name: &str) -> tauri::App<tauri::test::MockRuntime> {
-        let mut context = mock_context(noop_assets());
-        context.config_mut().identifier = identifier.to_string();
-        context.config_mut().product_name = Some(product_name.to_string());
-        context.package_info_mut().name = product_name.to_string();
-        mock_builder().build(context).unwrap()
-    }
-
-    /// The identifier and product name of stable Scribe and of Scribe Dev,
-    /// read from the configs the installers are built from.
-    fn flavours() -> Vec<(String, String)> {
-        let stable = config(include_str!("../tauri.conf.json"));
-        let dev = config(include_str!("../tauri.dev-flavor.conf.json"));
-        [stable, dev]
-            .iter()
-            .map(|config| {
-                (
-                    config["identifier"].as_str().unwrap().to_string(),
-                    config["productName"].as_str().unwrap().to_string(),
-                )
-            })
-            .collect()
-    }
-
-    /// `TauriHost::emit` sends `(event.name(), &event)`; Tauri must deliver
-    /// that exactly as the engine's `app.emit(name, payload)` calls do.
-    #[test]
-    fn emitting_a_core_event_sends_what_the_engine_sends_today() {
-        use std::sync::{Arc, Mutex};
-        use tauri::Listener;
-
-        let app = app_for("com.natkins.scribe", "Scribe");
-        let received = Arc::new(Mutex::new(Vec::<String>::new()));
-        let sink = received.clone();
-        app.listen_any("scribe:dictation-empty", move |event| {
-            sink.lock().unwrap().push(event.payload().to_string());
-        });
-        let payload = scribe_core::dictation::DictationEmptyPayload {
-            message: "Nothing heard.".into(),
-        };
-        app.emit("scribe:dictation-empty", &payload).unwrap();
-        let event = CoreEvent::DictationEmpty(payload);
-        app.emit(event.name(), &event).unwrap();
-        let received = received.lock().unwrap();
-        assert_eq!(received.len(), 2);
-        assert_eq!(received[0], received[1]);
-        assert_eq!(received[0], r#"{"message":"Nothing heard."}"#);
-    }
-
-    #[test]
-    fn the_engine_resolves_every_folder_tauri_does() {
-        let flavours = flavours();
-        assert_eq!(flavours.len(), 2);
-        assert_ne!(flavours[0].0, flavours[1].0);
-        for (identifier, product_name) in flavours {
-            let app = app_for(&identifier, &product_name);
-            let paths = resolve_paths(&app).unwrap();
-            assert_eq!(
-                paths_mismatches(&app, &paths),
-                Vec::<String>::new(),
-                "{identifier}"
-            );
-            assert!(paths.data_dir().ends_with(&identifier));
-        }
-    }
-
     /// Tauri can move the app folders through `app > appDirectoriesOverride`;
     /// the engine's `Paths` does not follow it, so no config may set it.
     #[test]
