@@ -37,3 +37,25 @@ $out = Join-Path $PSScriptRoot "../native/tauri.conf.json"
 $config | ConvertTo-Json -Depth 20 | Set-Content $out -Encoding utf8
 Write-Host "Wrote $out"
 Get-Content $out
+
+# A second variant: the real hooks plus a POSTINSTALL step that removes the
+# Tauri build's sidecars (resources "resources/" -> "" put them in
+# $INSTDIR\bin\windows). The native uninstaller does not know those files,
+# so without this they stay behind after an uninstall. Used with
+# `tauri bundle --config native/tauri.cleanup.json`.
+$hooks = Get-Content $nsis.installerHooks -Raw
+$pattern = '(!macro NSIS_HOOK_POSTINSTALL\r?\n)'
+if ($hooks -notmatch $pattern) { throw "NSIS_HOOK_POSTINSTALL not found in the hooks file" }
+$cleanup = @'
+  ; Bridge from the Tauri build: its sidecars are not files of this build.
+  RMDir /r "$INSTDIR\bin\windows"
+  RMDir "$INSTDIR\bin"
+
+'@
+$variant = [regex]::Replace($hooks, $pattern, { param($m) $m.Value + $cleanup }, 1)
+$variantPath = Join-Path $PSScriptRoot "../native/installer-hooks.cleanup.nsh"
+Set-Content $variantPath $variant -Encoding utf8 -NoNewline
+$override = @{ bundle = @{ windows = @{ nsis = @{ installerHooks = (Resolve-Path $variantPath).Path } } } }
+$override | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $PSScriptRoot "../native/tauri.cleanup.json") -Encoding utf8
+Write-Host "Wrote the cleanup hooks variant:"
+Get-Content $variantPath

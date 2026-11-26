@@ -78,7 +78,8 @@ jobs:
         working-directory: spikes/bundle-bridge/native
         shell: pwsh
         run: |
-          node "$env:GITHUB_WORKSPACE/app/node_modules/@tauri-apps/cli/tauri.js" bundle --bundles nsis,msi --no-sign --verbose
+          $tauri = "$env:GITHUB_WORKSPACE/app/node_modules/@tauri-apps/cli/tauri.js"
+          node $tauri bundle --bundles nsis,msi --no-sign
           if ($LASTEXITCODE -ne 0) { throw "tauri bundle failed" }
           $setup = @(Get-ChildItem target/release/bundle/nsis -Filter "*-setup.exe")
           $msi = @(Get-ChildItem target/release/bundle/msi -Filter "*.msi")
@@ -87,6 +88,12 @@ jobs:
           Copy-Item $setup[0].FullName "$env:RUNNER_TEMP\candidate\native-setup.exe"
           Copy-Item $msi[0].FullName "$env:RUNNER_TEMP\candidate\native.msi"
           Write-Host "Packaged $($setup[0].Name) and $($msi[0].Name) with tauri bundle"
+          # The same, with the cleanup variant of the hooks (NSIS only).
+          node $tauri bundle --bundles nsis --no-sign --config tauri.cleanup.json
+          if ($LASTEXITCODE -ne 0) { throw "tauri bundle (cleanup hooks) failed" }
+          $setup = @(Get-ChildItem target/release/bundle/nsis -Filter "*-setup.exe")
+          if ($setup.Count -ne 1) { throw "Expected one setup.exe, found $($setup.Count)" }
+          Copy-Item $setup[0].FullName "$env:RUNNER_TEMP\candidate\native-cleanup-setup.exe"
 
       - name: Download the published installers
         shell: pwsh
@@ -103,7 +110,7 @@ jobs:
       - name: NSIS bridge scenarios
         if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
         shell: pwsh
-        run: ./spikes/bundle-bridge/scripts/nsis-bridge.ps1 -Candidate "$env:RUNNER_TEMP\candidate\native-setup.exe" -OldDir $env:RUNNER_TEMP -Version $env:TEST_VERSION -ResultsPath "$env:RUNNER_TEMP\results-nsis.md"
+        run: ./spikes/bundle-bridge/scripts/nsis-bridge.ps1 -Candidate "$env:RUNNER_TEMP\candidate\native-setup.exe" -OldDir $env:RUNNER_TEMP -Version $env:TEST_VERSION -ResultsPath "$env:RUNNER_TEMP\results-nsis.md" -CleanupCandidate "$env:RUNNER_TEMP\candidate\native-cleanup-setup.exe"
 
       - name: Updater signature
         if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
@@ -129,5 +136,7 @@ jobs:
             ${{ runner.temp }}/msi-*.log
             ${{ runner.temp }}/candidate/*
             spikes/bundle-bridge/native/tauri.conf.json
+            spikes/bundle-bridge/native/tauri.cleanup.json
+            spikes/bundle-bridge/native/installer-hooks.cleanup.nsh
           if-no-files-found: warn
           retention-days: 14

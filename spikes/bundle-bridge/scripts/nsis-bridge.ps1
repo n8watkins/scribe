@@ -11,7 +11,9 @@ param(
   [Parameter(Mandatory)] [string] $Candidate,
   [Parameter(Mandatory)] [string] $OldDir,
   [Parameter(Mandatory)] [string] $Version,
-  [Parameter(Mandatory)] [string] $ResultsPath
+  [Parameter(Mandatory)] [string] $ResultsPath,
+  # Optional: the same build packaged with the cleanup hooks variant.
+  [string] $CleanupCandidate = ""
 )
 
 . (Join-Path $PSScriptRoot "common.ps1")
@@ -26,9 +28,9 @@ function Old-Installer([string] $tag) {
   return (Get-ChildItem (Join-Path $OldDir "old-$tag") -Filter "*setup.exe" | Select-Object -First 1).FullName
 }
 
-function Bridge([string] $tag, [string] $formName, [string] $folder) {
+function Bridge([string] $tag, [string] $formName, [string] $folder, [string] $setup = $Candidate, [string] $label = "real hooks") {
   $form = $forms[$formName]
-  Scenario "NSIS $tag -> native $Version, $formName ($($form.Args)), folder $folder"
+  Scenario "NSIS $tag -> native $Version ($label), $formName ($($form.Args)), folder $folder"
   Reset-Machine
   $exe = Join-Path $folder "Scribe.exe"
   $isDefault = Same-Path $folder $defaultDir
@@ -54,7 +56,7 @@ function Bridge([string] $tag, [string] $formName, [string] $folder) {
   $dataBefore = Data-Fingerprint
   $markersBefore = (Marker-Lines).Count
 
-  $code = Run-Wait $Candidate $form.Args
+  $code = Run-Wait $setup $form.Args
   Check "native setup exit code is 0" ($code -eq 0) "(was $code)"
 
   # Same folder, old exe replaced.
@@ -153,6 +155,15 @@ foreach ($tag in "v0.16.1", "v0.16.2", "v0.16.3") {
 # A pre-0.16.2 copy in a custom folder: the hooks must adopt it.
 Bridge "v0.16.1" "relaunch-minimized" "C:\ScribeCustom\Scribe"
 Bridge "v0.16.3" "relaunch-minimized" "C:\ScribeCustom\Scribe"
+
+# The same bridge with the cleanup variant of the hooks (make-config.ps1),
+# which removes the Tauri build's sidecars after the update.
+if ($CleanupCandidate) {
+  foreach ($tag in "v0.16.1", "v0.16.2", "v0.16.3") {
+    Bridge $tag "relaunch-minimized" $defaultDir $CleanupCandidate "hooks + sidecar cleanup"
+  }
+  Bridge "v0.16.1" "relaunch" "C:\ScribeCustom\Scribe" $CleanupCandidate "hooks + sidecar cleanup"
+}
 
 Scenario "Runner clean after the last NSIS uninstall"
 Check "no Scribe entry in Installed apps" ((Installed-Entries).Count -eq 0)

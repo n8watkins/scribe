@@ -104,7 +104,8 @@ if (Test-Path $msiExe) {
     Check "Installed apps version is $Version" ($entries[0].DisplayVersion -eq $Version) "(was '$($entries[0].DisplayVersion)')"
     Check "Installed apps publisher is n8builds.dev" ($entries[0].Publisher -eq "n8builds.dev") "(was '$($entries[0].Publisher)')"
   }
-  $leftovers = @(Get-ChildItem $programDir -Recurse -File | ForEach-Object { $_.FullName.Substring($programDir.Length + 1) } | Where-Object { $_ -ne "Scribe.exe" })
+  # Both MSIs install Scribe.exe and the WiX template's "Uninstall Scribe.lnk".
+  $leftovers = @(Get-ChildItem $programDir -Recurse -File | ForEach-Object { $_.FullName.Substring($programDir.Length + 1) } | Where-Object { $_ -notin @("Scribe.exe", "Uninstall Scribe.lnk") })
   Check "the major upgrade removed the old Tauri files" ($leftovers.Count -eq 0) "(left: $($leftovers -join ', '))"
   $runExe = Run-Value-Exe (Run-Value)
   Check "the Run value is unchanged" ((Run-Value) -eq $runBefore)

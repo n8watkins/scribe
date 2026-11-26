@@ -1,3 +1,5 @@
 target/
 # Generated in CI from app/src-tauri/tauri.conf.json by scripts/make-config.ps1.
 native/tauri.conf.json
+native/tauri.cleanup.json
+native/installer-hooks.cleanup.nsh

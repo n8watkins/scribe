@@ -137,16 +137,18 @@ function Run-Value-Exe($value) {
   return ($value -split ' ')[0]
 }
 
+# The leading comma keeps a one-line log an array (PowerShell would unroll
+# it to a string, and indexing a string gives its first character).
 function Marker-Lines {
-  if (-not (Test-Path $markerLog)) { return @() }
-  return @(Get-Content $markerLog)
+  if (-not (Test-Path $markerLog)) { return ,@() }
+  return ,@(Get-Content $markerLog)
 }
 
 # Waits for a new marker line (a launch of the stub) after $before lines.
 function Wait-Launch([int] $before, [int] $TimeoutSec = 30) {
   $deadline = (Get-Date).AddSeconds($TimeoutSec)
   while ((Get-Date) -lt $deadline) {
-    $lines = Marker-Lines
+    $lines = @(Marker-Lines)
     if ($lines.Count -gt $before) { return $lines[$before] }
     Start-Sleep -Milliseconds 500
   }
