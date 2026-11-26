@@ -24,7 +24,6 @@ use std::{
 
 use crossbeam_channel::{bounded, unbounded, Receiver, RecvTimeoutError, Sender};
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
 
 use crate::{
     audio::{self, AUTO_STOP_SPEECH_RMS, SILENCE_RMS_THRESHOLD},
@@ -38,7 +37,7 @@ use crate::{
 
 // The pause threshold and length cap are now per-recording settings
 // (`segment_pause_*` / `segment_max_ms`), passed into `Segmenter::new` from
-// `start_session`. Why they are the dominant lever on "too much punctuation
+// `start_session_with`. Why they are the dominant lever on "too much punctuation
 // when I pause": each finalized segment is transcribed as a standalone clip, so
 // Whisper closes it with sentence-final punctuation, and `join_segments` then
 // concatenates them — planting a period/comma exactly where the cut happened. A
@@ -76,28 +75,6 @@ pub struct PartialTranscriptEvent {
 /// Emits a `scribe:partial-transcript` event. The dictation stop path
 /// uses this for the final `finalized: true` event; the coordinator emits the
 /// in-progress ones.
-///
-/// Needs only the host, which is installed before anything else, so it uses
-/// that rather than the `Core` (like `status_file::publish`).
-pub fn emit_partial_transcript(
-    _app: &AppHandle,
-    session_id: &str,
-    text: &str,
-    segments: u32,
-    finalized: bool,
-) {
-    match crate::shell::host() {
-        Some(host) => {
-            emit_partial_transcript_with(host.as_ref(), session_id, text, segments, finalized)
-        }
-        None => log::warn!(
-            "Could not send the partial transcript of session {}: no host yet",
-            session_id
-        ),
-    }
-}
-
-/// [`emit_partial_transcript`] on the host.
 pub fn emit_partial_transcript_with(
     host: &dyn Host,
     session_id: &str,
@@ -369,32 +346,6 @@ impl WorkerLink {
 /// Starts the per-session coordinator thread and registers its handle.
 /// Returns the worker's link, or None when the coordinator could not start
 /// (the caller then behaves exactly as if incremental were disabled).
-pub fn start_session(
-    app: &AppHandle,
-    session_id: &str,
-    temp_dir: PathBuf,
-    source_sample_rate: u32,
-    pause_ms: Option<u64>,
-    max_ms: u64,
-) -> Option<WorkerLink> {
-    let Some(core) = app.try_state::<Core>() else {
-        log::warn!(
-            "Could not start incremental transcription for session {}: the engine is not ready yet",
-            session_id
-        );
-        return None;
-    };
-    start_session_with(
-        &core,
-        session_id,
-        temp_dir,
-        source_sample_rate,
-        pause_ms,
-        max_ms,
-    )
-}
-
-/// [`start_session`] on the engine.
 pub fn start_session_with(
     core: &Core,
     session_id: &str,

@@ -32,12 +32,6 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// confirm which app it reached.
 pub const APP_NAME: &str = "scribe";
 
-/// Scribe's semver, baked in at compile time from `Cargo.toml`. Used verbatim
-/// as the `appVersion` field across every transport.
-pub fn app_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
-}
-
 /// Narrow flag: the microphone is actively capturing the user's voice.
 ///
 /// True for `Recording`, and briefly for `Stopping` while the audio tail
@@ -71,7 +65,10 @@ pub fn is_busy(status: &AppStatus) -> bool {
 pub struct DictationSnapshot {
     pub schema_version: u32,
     pub app: &'static str,
-    pub app_version: &'static str,
+    /// The running app's version, as its host reports it
+    /// ([`Host::app_version`]). The same in every transport (this snapshot,
+    /// the status file, the discovery file).
+    pub app_version: String,
     /// Raw internal status, PascalCase, the consumer escape hatch.
     pub status: AppStatus,
     pub dictating: bool,
@@ -87,12 +84,17 @@ pub struct DictationSnapshot {
 impl DictationSnapshot {
     /// Project a state-machine snapshot onto the wire shape. `now` is this
     /// snapshot's production time (`updatedAt`); the state's own `updated_at`
-    /// becomes `since`.
-    pub fn from_state(state: &AppStateSnapshot, now: DateTime<Utc>, pid: u32) -> Self {
+    /// becomes `since`. `app_version` is the host's [`Host::app_version`].
+    pub fn from_state(
+        state: &AppStateSnapshot,
+        now: DateTime<Utc>,
+        pid: u32,
+        app_version: &str,
+    ) -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
             app: APP_NAME,
-            app_version: app_version(),
+            app_version: app_version.to_string(),
             status: state.status.clone(),
             dictating: is_dictating(&state.status),
             busy: is_busy(&state.status),
@@ -383,12 +385,12 @@ mod tests {
             updated_at: Utc::now(),
         };
         let now = Utc::now();
-        let snap = DictationSnapshot::from_state(&state, now, 4242);
+        let snap = DictationSnapshot::from_state(&state, now, 4242, "0.16.4-57");
         let value = serde_json::to_value(&snap).unwrap();
 
         assert_eq!(value["schemaVersion"], 1);
         assert_eq!(value["app"], "scribe");
-        assert_eq!(value["appVersion"], app_version());
+        assert_eq!(value["appVersion"], "0.16.4-57");
         assert_eq!(value["status"], "Recording");
         assert_eq!(value["dictating"], true);
         assert_eq!(value["busy"], true);
@@ -413,7 +415,7 @@ mod tests {
             error: None,
             updated_at: Utc::now(),
         };
-        let snap = DictationSnapshot::from_state(&state, Utc::now(), 1);
+        let snap = DictationSnapshot::from_state(&state, Utc::now(), 1, "0.16.3");
         assert!(!snap.dictating);
         assert!(!snap.busy);
     }
@@ -438,7 +440,8 @@ mod tests {
                 None,
             ),
             Flavor::Stable,
-        );
+        )
+        .with_app_version("0.16.4-57");
         let state = AppStateSnapshot {
             status: AppStatus::Recording,
             error: None,
@@ -456,6 +459,11 @@ mod tests {
         );
         let status = std::fs::read_to_string(cache.join("status.json")).unwrap();
         assert!(status.contains("\"Recording\""), "{status}");
+        // The status file carries the host's version; reading it is a query,
+        // so the host records no call.
+        let status: serde_json::Value = serde_json::from_str(&status).unwrap();
+        assert_eq!(status["appVersion"], "0.16.4-57");
+        assert!(host.calls().is_empty());
 
         std::fs::remove_dir_all(&root).unwrap();
     }

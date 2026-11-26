@@ -73,10 +73,13 @@ struct Hub {
     active_connections: AtomicUsize,
     pid: u32,
     read_token: String,
+    /// The running app's version ([`Host::app_version`]), read once when the
+    /// server starts: every snapshot's `appVersion`.
+    app_version: String,
 }
 
 impl Hub {
-    fn new(pid: u32, read_token: String) -> Self {
+    fn new(pid: u32, read_token: String, app_version: String) -> Self {
         Self {
             latest: Mutex::new(AppStateSnapshot {
                 status: AppStatus::Idle,
@@ -88,13 +91,14 @@ impl Hub {
             active_connections: AtomicUsize::new(0),
             pid,
             read_token,
+            app_version,
         }
     }
 
     /// Build the wire snapshot from the current cached state, stamping
     /// `updatedAt` with the caller's clock.
     fn build(&self, state: &AppStateSnapshot) -> DictationSnapshot {
-        DictationSnapshot::from_state(state, Utc::now(), self.pid)
+        DictationSnapshot::from_state(state, Utc::now(), self.pid, &self.app_version)
     }
 
     /// Record a new snapshot and broadcast it to every live SSE connection.
@@ -433,7 +437,7 @@ fn header(name: &str, value: &str) -> Header {
 struct ControlFile {
     schema_version: u32,
     app: &'static str,
-    app_version: &'static str,
+    app_version: String,
     pid: u32,
     transport: &'static str,
     base_url: String,
@@ -470,17 +474,19 @@ fn control_file_path(host: &dyn Host) -> Result<PathBuf, String> {
 }
 
 /// Atomically write the discovery file (temp + rename), then best-effort lock it
-/// down to the owner on Unix.
+/// down to the owner on Unix. `app_version` is the host's
+/// [`Host::app_version`].
 fn write_control_file(
     path: &Path,
     base_url: &str,
     read_token: &str,
     pid: u32,
+    app_version: &str,
 ) -> Result<(), String> {
     let payload = ControlFile {
         schema_version: CONTROL_SCHEMA_VERSION,
         app: dictation_state::APP_NAME,
-        app_version: dictation_state::app_version(),
+        app_version: app_version.to_string(),
         pid,
         transport: "http-sse",
         base_url: base_url.to_string(),
@@ -617,14 +623,15 @@ fn sleep_until_due(shutdown: &AtomicBool, total: Duration) {
 pub fn start_with(host: Arc<dyn Host>) -> Result<DictationServer, String> {
     let pid = std::process::id();
     let read_token = uuid::Uuid::new_v4().to_string();
-    let hub = Arc::new(Hub::new(pid, read_token.clone()));
+    let app_version = host.app_version();
+    let hub = Arc::new(Hub::new(pid, read_token.clone(), app_version.clone()));
     let shutdown = Arc::new(AtomicBool::new(false));
 
     let port = spawn_http(hub.clone(), shutdown.clone())?;
     let base_url = format!("http://{SERVER_HOST}:{port}");
 
     let control_path = control_file_path(host.as_ref())?;
-    write_control_file(&control_path, &base_url, &read_token, pid)?;
+    write_control_file(&control_path, &base_url, &read_token, pid, &app_version)?;
 
     spawn_status_heartbeat(host, hub.clone(), shutdown.clone());
 
@@ -652,6 +659,9 @@ mod tests {
     use super::*;
     use std::io::Read;
 
+    /// A Dev build's version: not the engine crate's `CARGO_PKG_VERSION`.
+    const DEV_VERSION: &str = "0.16.4-57";
+
     fn recording(now: DateTime<Utc>) -> AppStateSnapshot {
         AppStateSnapshot {
             status: AppStatus::Recording,
@@ -672,7 +682,7 @@ mod tests {
     /// shutdown) for a test to drive.
     fn test_server() -> (String, String, Arc<Hub>, Arc<AtomicBool>) {
         let token = "test-token-1234".to_string();
-        let hub = Arc::new(Hub::new(4242, token.clone()));
+        let hub = Arc::new(Hub::new(4242, token.clone(), DEV_VERSION.to_string()));
         let shutdown = Arc::new(AtomicBool::new(false));
         let port = spawn_http(hub.clone(), shutdown.clone()).expect("bind test server");
         (format!("http://{SERVER_HOST}:{port}"), token, hub, shutdown)
@@ -719,6 +729,7 @@ mod tests {
 
         assert_eq!(body["schemaVersion"], 1);
         assert_eq!(body["app"], "scribe");
+        assert_eq!(body["appVersion"], DEV_VERSION);
         assert_eq!(body["status"], "Recording");
         assert_eq!(body["dictating"], true);
         assert_eq!(body["busy"], true);
@@ -767,6 +778,10 @@ mod tests {
         let initial = read_available(&mut stream);
         assert!(initial.contains("event: state"), "got: {initial}");
         assert!(initial.contains("\"status\":\"Idle\""), "got: {initial}");
+        assert!(
+            initial.contains(&format!("\"appVersion\":\"{DEV_VERSION}\"")),
+            "got: {initial}"
+        );
 
         // A live transition into Recording must push `state` then the
         // `dictation.started` edge event, in that order.
@@ -775,6 +790,13 @@ mod tests {
         assert!(update.contains("event: state"), "got: {update}");
         assert!(update.contains("event: dictation.started"), "got: {update}");
         assert!(update.contains("\"dictating\":true"), "got: {update}");
+        assert_eq!(
+            update
+                .matches(&format!("\"appVersion\":\"{DEV_VERSION}\""))
+                .count(),
+            2,
+            "both events carry the app's version: {update}"
+        );
         let state_at = update.find("event: state").unwrap();
         let edge_at = update.find("event: dictation.started").unwrap();
         assert!(state_at < edge_at, "state must precede the edge event");
@@ -819,7 +841,7 @@ mod tests {
 
     #[test]
     fn slow_sse_subscribers_are_bounded_and_disconnected() {
-        let hub = Hub::new(4242, "token".to_string());
+        let hub = Hub::new(4242, "token".to_string(), DEV_VERSION.to_string());
         let (_id, receiver, _initial) = hub.subscribe();
 
         for _ in 0..=SSE_QUEUE_CAPACITY {
@@ -832,7 +854,7 @@ mod tests {
 
     #[test]
     fn connection_slots_enforce_the_limit_and_can_be_reused() {
-        let hub = Hub::new(4242, "token".to_string());
+        let hub = Hub::new(4242, "token".to_string(), DEV_VERSION.to_string());
         for _ in 0..MAX_CONNECTIONS {
             assert!(hub.try_acquire_connection());
         }
@@ -870,16 +892,19 @@ mod tests {
         flavor: crate::host::Flavor,
         home: Option<PathBuf>,
     ) -> Arc<crate::host::RecordingHost> {
-        Arc::new(crate::host::RecordingHost::new(
-            crate::paths::Paths::from_parts(
-                root.join("data"),
-                root.join("cache"),
-                root.join("logs"),
-                None,
-                home,
-            ),
-            flavor,
-        ))
+        Arc::new(
+            crate::host::RecordingHost::new(
+                crate::paths::Paths::from_parts(
+                    root.join("data"),
+                    root.join("cache"),
+                    root.join("logs"),
+                    None,
+                    home,
+                ),
+                flavor,
+            )
+            .with_app_version(DEV_VERSION),
+        )
     }
 
     /// The discovery file's name follows the host's flavour and its folder is
@@ -899,6 +924,16 @@ mod tests {
                 serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
             assert_eq!(value["baseUrl"], server.base_url());
             assert_eq!(value["pid"], std::process::id());
+            // The host's version, which a Dev build overrides, not the
+            // engine crate's.
+            assert_eq!(value["appVersion"], DEV_VERSION);
+            // The server's own snapshots carry the same version.
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&server.hub.status_json()).unwrap()
+                    ["appVersion"],
+                DEV_VERSION
+            );
+            assert!(host.calls().is_empty());
             server.shutdown();
             assert!(!file.exists(), "shutdown removes the discovery file");
             assert!(host.events().is_empty());
