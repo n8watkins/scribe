@@ -6,13 +6,14 @@ use std::{
 };
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use uuid::Uuid;
 
 use crate::{
-    commands::BackendState,
+    core::Core,
     error::CommandError,
     model_manager,
+    output::core_for,
     whisper::{self, WhisperRequest},
 };
 
@@ -34,6 +35,18 @@ pub struct TranscribeFileResult {
 /// (never the warm server, which is tuned for short dictation segments).
 /// Long files are expected; the caller runs this on a worker thread.
 pub fn transcribe_file(app: &AppHandle, path: &str) -> Result<TranscribeFileResult, CommandError> {
+    let core = core_for(app, "transcribe the file")?;
+    transcribe_file_with(app, &core, path)
+}
+
+/// [`transcribe_file`] on the engine. Still takes the app for
+/// `model_manager::selected_model_path` and
+/// `whisper::transcribe_with_output_prefix` (models).
+pub fn transcribe_file_with(
+    app: &AppHandle,
+    core: &Core,
+    path: &str,
+) -> Result<TranscribeFileResult, CommandError> {
     let source = PathBuf::from(path.trim());
     if !source.is_file() {
         return Err(CommandError::new(
@@ -45,7 +58,7 @@ pub fn transcribe_file(app: &AppHandle, path: &str) -> Result<TranscribeFileResu
         ));
     }
 
-    let state = app.state::<BackendState>();
+    let state = core.backend();
     let (settings, model_id, model_path) = {
         let db = state.db()?;
         let settings = db.get_settings()?;
@@ -53,7 +66,7 @@ pub fn transcribe_file(app: &AppHandle, path: &str) -> Result<TranscribeFileResu
         (settings, model_id, model_path)
     };
 
-    let work_dir = work_dir(app)?;
+    let work_dir = work_dir(core.paths().cache_dir())?;
     let started = Instant::now();
 
     // Owns the converted temp WAV (when one exists) for the whole
@@ -73,8 +86,8 @@ pub fn transcribe_file(app: &AppHandle, path: &str) -> Result<TranscribeFileResu
     let output_prefix = work_dir.join(format!("file-{}", Uuid::new_v4().simple()));
     // A one-off whisper-cli run loads its own copy of the model, so the
     // resident one is unloaded first: never two models in memory.
-    let transcription = app
-        .state::<crate::whisper_server::WarmTranscriber>()
+    let transcription = core
+        .warm_transcriber()
         .run_exclusive(|| whisper::transcribe_with_output_prefix(app, &request, &output_prefix))?;
     drop(converted);
 
@@ -187,17 +200,10 @@ impl Drop for TempFile {
     }
 }
 
-fn work_dir(app: &AppHandle) -> Result<PathBuf, CommandError> {
-    let dir = app
-        .path()
-        .app_cache_dir()
-        .map_err(|error| {
-            CommandError::new(
-                "app_data_dir_unavailable",
-                format!("Could not locate Scribe cache directory. {}", error),
-            )
-        })?
-        .join("file-transcribe");
+/// `<cache_dir>/file-transcribe`, created when missing. `cache_dir` is the
+/// app cache folder.
+fn work_dir(cache_dir: &Path) -> Result<PathBuf, CommandError> {
+    let dir = cache_dir.join("file-transcribe");
     fs::create_dir_all(&dir).map_err(|error| {
         CommandError::new(
             "app_data_dir_unavailable",

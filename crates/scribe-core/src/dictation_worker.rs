@@ -23,13 +23,15 @@
 //! meant for.
 
 use std::{
+    collections::VecDeque,
     panic::{catch_unwind, AssertUnwindSafe},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        mpsc::{channel, Sender},
+        mpsc::{channel, Receiver, RecvTimeoutError, Sender},
         Arc,
     },
     thread,
+    time::Duration,
 };
 
 use tauri::{AppHandle, Manager};
@@ -37,11 +39,11 @@ use tauri::{AppHandle, Manager};
 use crate::{
     app_state::AppStatus,
     audio::{self, RecordingResultStatus, RecordingSessionInfo, StartRecordingRequest},
-    commands::BackendState,
+    core::Core,
     dictation,
     error::CommandError,
+    host,
     output::{self, OutputResult},
-    shell,
 };
 
 /// What a hotkey, tray item, or button asks for, before it is checked against
@@ -234,27 +236,38 @@ fn is_start(command: &DictationCommand) -> bool {
 
 impl DictationWorker {
     /// Starts the worker for the running app.
+    ///
+    /// The worker starts before the `Core` exists (the `Core` holds the
+    /// worker), so its thread finds the `Core` through the app when the
+    /// first job arrives, waiting for it rather than dropping the job.
     pub fn spawn(app: AppHandle) -> std::io::Result<Self> {
-        Self::spawn_with(AppExecutor { app })
+        Self::spawn_finding(move || {
+            app.try_state::<Core>().map(|core| AppExecutor {
+                app: app.clone(),
+                core: core.inner().clone(),
+            })
+        })
     }
 
+    /// Starts the worker with an executor that is ready now.
+    #[cfg(test)]
     pub(crate) fn spawn_with<E: Executor>(executor: E) -> std::io::Result<Self> {
+        let mut executor = Some(executor);
+        Self::spawn_finding(move || executor.take())
+    }
+
+    /// Starts the worker thread. `find_executor` is asked for the executor
+    /// when the first job arrives, and again every [`EXECUTOR_POLL`] until it
+    /// answers; once it has, it is not asked again.
+    fn spawn_finding<E: Executor>(
+        find_executor: impl FnMut() -> Option<E> + Send + 'static,
+    ) -> std::io::Result<Self> {
         let (sender, receiver) = channel::<Job>();
         let pending_starts = Arc::new(AtomicUsize::new(0));
         let pending = Arc::clone(&pending_starts);
         thread::Builder::new()
             .name("scribe-dictation".to_string())
-            .spawn(move || {
-                // Ends when every sender is gone, which is app shutdown.
-                for job in receiver {
-                    let start = is_start(&job.command);
-                    run_job(&executor, job, || {
-                        if start {
-                            pending.fetch_sub(1, Ordering::SeqCst);
-                        }
-                    });
-                }
-            })?;
+            .spawn(move || worker_loop(find_executor, &receiver, &pending))?;
         Ok(Self {
             sender,
             pending_starts,
@@ -322,6 +335,65 @@ fn worker_gone() -> CommandError {
     )
 }
 
+/// How often the worker looks for its executor (the engine) while the shell
+/// has not built it yet.
+const EXECUTOR_POLL: Duration = Duration::from_millis(50);
+
+/// The worker thread: runs every job in arrival order. Ends when every sender
+/// is gone, which is app shutdown.
+fn worker_loop<E: Executor>(
+    mut find_executor: impl FnMut() -> Option<E>,
+    receiver: &Receiver<Job>,
+    pending_starts: &AtomicUsize,
+) {
+    let mut executor: Option<E> = None;
+    // Jobs that arrived while the worker waited for its executor, in order.
+    let mut backlog = VecDeque::new();
+    loop {
+        let job = match backlog.pop_front() {
+            Some(job) => job,
+            None => match receiver.recv() {
+                Ok(job) => job,
+                Err(_) => return,
+            },
+        };
+        if executor.is_none() {
+            executor = wait_for_executor(&mut find_executor, receiver, &mut backlog);
+        }
+        let Some(executor) = executor.as_ref() else {
+            // The channel closed while waiting: the app is shutting down.
+            return;
+        };
+        let start = is_start(&job.command);
+        run_job(executor, job, || {
+            if start {
+                pending_starts.fetch_sub(1, Ordering::SeqCst);
+            }
+        });
+    }
+}
+
+/// Waits for the executor, which the shell builds after it starts this
+/// worker. Jobs that arrive meanwhile join `backlog`, in order, so none is
+/// dropped whatever the startup timing. Returns `None` only when the channel
+/// closes (the app is shutting down).
+fn wait_for_executor<E>(
+    find_executor: &mut impl FnMut() -> Option<E>,
+    receiver: &Receiver<Job>,
+    backlog: &mut VecDeque<Job>,
+) -> Option<E> {
+    loop {
+        if let Some(executor) = find_executor() {
+            return Some(executor);
+        }
+        match receiver.recv_timeout(EXECUTOR_POLL) {
+            Ok(job) => backlog.push_back(job),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return None,
+        }
+    }
+}
+
 /// Runs one job. `finished` runs once the command is done (or skipped), before
 /// a waiting caller hears back.
 fn run_job<E: Executor>(executor: &E, job: Job, finished: impl FnOnce()) {
@@ -362,140 +434,171 @@ fn run_job<E: Executor>(executor: &E, job: Job, finished: impl FnOnce()) {
 /// command. Safe to call from any thread, including the main thread and the
 /// audio callback thread: it never waits for the command to run.
 pub fn submit(app: &AppHandle, intent: Intent) {
-    let Some(worker) = app.try_state::<DictationWorker>() else {
-        log::error!("Dictation worker is not running; dropped {:?}", intent);
-        return;
-    };
-    let status = || Ok(app.state::<BackendState>().app_state()?.status().clone());
-    if let Err(error) = worker.submit_intent(intent, status) {
-        audio::emit_recording_error(app, error);
+    match app.try_state::<Core>() {
+        Some(core) => submit_with(&core, intent),
+        None => log::error!(
+            "Dictation worker is not reachable yet: the engine is not ready; dropped {:?}",
+            intent
+        ),
     }
 }
 
-/// Queues a concrete command without waiting for it.
+/// [`submit`] on the engine.
+pub fn submit_with(core: &Core, intent: Intent) {
+    let status = || Ok(core.backend().app_state()?.status().clone());
+    if let Err(error) = core.dictation_worker().submit_intent(intent, status) {
+        audio::emit_recording_error_with(core.host().as_ref(), error);
+    }
+}
+
+/// Queues a concrete command without waiting for it. On the engine this is
+/// `core.dictation_worker().send(command)`.
 pub fn dispatch(app: &AppHandle, command: DictationCommand) {
-    match app.try_state::<DictationWorker>() {
-        Some(worker) => worker.send(command),
-        None => log::error!("Dictation worker is not running; dropped {:?}", command),
+    match app.try_state::<Core>() {
+        Some(core) => core.dictation_worker().send(command),
+        None => log::error!(
+            "Dictation worker is not reachable yet: the engine is not ready; dropped {:?}",
+            command
+        ),
     }
 }
 
 /// Runs `command` on the worker and waits for it without holding the calling
 /// async task's thread.
 pub async fn request(app: AppHandle, command: DictationCommand) -> Result<Outcome, CommandError> {
-    tauri::async_runtime::spawn_blocking(move || match app.try_state::<DictationWorker>() {
-        Some(worker) => worker.call(command),
-        None => Err(worker_gone()),
-    })
-    .await
-    .map_err(|_| worker_gone())?
+    let Some(core) = app.try_state::<Core>().map(|core| core.inner().clone()) else {
+        log::warn!("Could not run {:?}: the engine is not ready yet", command);
+        return Err(host::no_main_window());
+    };
+    request_with(core, command).await
+}
+
+/// [`request`] on the engine.
+pub async fn request_with(core: Core, command: DictationCommand) -> Result<Outcome, CommandError> {
+    tauri::async_runtime::spawn_blocking(move || core.dictation_worker().call(command))
+        .await
+        .map_err(|_| worker_gone())?
 }
 
 /// Production side effects: the real audio, transcription, and output paths.
+/// Still holds the app for the calls into other lanes that take it (see
+/// [`execute_with`]).
 struct AppExecutor {
     app: AppHandle,
+    core: Core,
 }
 
 impl Executor for AppExecutor {
     fn status(&self) -> Result<AppStatus, CommandError> {
-        Ok(self
-            .app
-            .state::<BackendState>()
-            .app_state()?
-            .status()
-            .clone())
+        Ok(self.core.backend().app_state()?.status().clone())
     }
 
     fn execute(&self, command: DictationCommand) -> Result<Outcome, CommandError> {
-        let app = &self.app;
-        let outcome = match command {
-            DictationCommand::Start {
-                request,
-                allow_auto_stop,
-            } => Outcome::Started(audio::start_recording_for_app(
-                app,
-                request,
-                allow_auto_stop,
-            )?),
-            DictationCommand::StartNote => {
-                let request = StartRecordingRequest {
-                    is_note: true,
-                    ..Default::default()
-                };
-                Outcome::Started(audio::start_recording_for_app(app, Some(request), true)?)
-            }
-            DictationCommand::StartTransform => {
-                start_transform(app)?;
-                Outcome::Done
-            }
-            DictationCommand::Stop => {
-                stop_and_transcribe(app)?;
-                Outcome::Done
-            }
-            DictationCommand::Cancel => {
-                audio::cancel_recording_for_app(app)?;
-                Outcome::Done
-            }
-            DictationCommand::PasteLast => Outcome::Output(output::paste_last_transcript(app)?),
-            DictationCommand::FinishTimedOut { session_id } => {
-                audio::finish_timed_out_recording(app, &session_id)?;
-                Outcome::Done
-            }
-            DictationCommand::FinishDisconnected { session_id } => {
-                // The disconnect already told the user what happened; a
-                // failure to salvage the audio is only logged.
-                if let Err(error) = audio::finish_disconnected_recording(app, &session_id) {
-                    log::warn!(
-                        "Could not recover from a mid-recording audio stream error: {}",
-                        error.message
-                    );
-                }
-                Outcome::Done
-            }
-        };
-        refresh_tray(app);
-        Ok(outcome)
+        execute_with(&self.app, &self.core, command)
     }
 
     fn report(&self, error: CommandError) {
-        refresh_tray(&self.app);
-        audio::emit_recording_error(&self.app, error);
+        refresh_tray(&self.core);
+        audio::emit_recording_error_with(self.core.host().as_ref(), error);
     }
 }
 
-fn refresh_tray(app: &AppHandle) {
-    if let Ok(machine) = app.state::<BackendState>().app_state() {
+/// Runs one admitted command. Still takes the app for the paste
+/// (`output::paste_last_transcript_with`), the transform start
+/// (`hotkeys::start_transform`) and the transcription
+/// (`dictation::transcribe_recording_with`).
+fn execute_with(
+    app: &AppHandle,
+    core: &Core,
+    command: DictationCommand,
+) -> Result<Outcome, CommandError> {
+    let outcome = match command {
+        DictationCommand::Start {
+            request,
+            allow_auto_stop,
+        } => Outcome::Started(audio::start_recording_with(
+            app,
+            core,
+            request,
+            allow_auto_stop,
+        )?),
+        DictationCommand::StartNote => {
+            let request = StartRecordingRequest {
+                is_note: true,
+                ..Default::default()
+            };
+            Outcome::Started(audio::start_recording_with(app, core, Some(request), true)?)
+        }
+        DictationCommand::StartTransform => {
+            start_transform(app, core)?;
+            Outcome::Done
+        }
+        DictationCommand::Stop => {
+            stop_and_transcribe(app, core)?;
+            Outcome::Done
+        }
+        DictationCommand::Cancel => {
+            audio::cancel_recording_with(core)?;
+            Outcome::Done
+        }
+        DictationCommand::PasteLast => {
+            Outcome::Output(output::paste_last_transcript_with(app, core)?)
+        }
+        DictationCommand::FinishTimedOut { session_id } => {
+            audio::finish_timed_out_recording_with(app, core, &session_id)?;
+            Outcome::Done
+        }
+        DictationCommand::FinishDisconnected { session_id } => {
+            // The disconnect already told the user what happened; a
+            // failure to salvage the audio is only logged.
+            if let Err(error) = audio::finish_disconnected_recording_with(app, core, &session_id) {
+                log::warn!(
+                    "Could not recover from a mid-recording audio stream error: {}",
+                    error.message
+                );
+            }
+            Outcome::Done
+        }
+    };
+    refresh_tray(core);
+    Ok(outcome)
+}
+
+fn refresh_tray(core: &Core) {
+    if let Ok(machine) = core.backend().app_state() {
         let status = machine.status().clone();
         drop(machine);
-        shell::update_tray_status(app, status);
+        core.host().update_tray_status(status);
     }
 }
 
 /// Stops the active recording and finishes it: a too-short tap is reported as
-/// "nothing heard"; anything else is transcribed and output.
-fn stop_and_transcribe(app: &AppHandle) -> Result<(), CommandError> {
-    let result = audio::stop_recording_for_app(app)?;
-    refresh_tray(app);
+/// "nothing heard"; anything else is transcribed and output. Still takes the
+/// app for the transcription.
+fn stop_and_transcribe(app: &AppHandle, core: &Core) -> Result<(), CommandError> {
+    let result = audio::stop_recording_with(core)?;
+    refresh_tray(core);
 
     if result.status == RecordingResultStatus::TooShort {
         // A quick tap of the toggle hotkey is benign, not an error: the state
         // machine already returned to Idle (AudioTooShort), so just tell the
         // frontend nothing was heard.
-        dictation::emit_dictation_empty(app);
+        dictation::emit_dictation_empty_with(core.host().as_ref());
         return Ok(());
     }
 
-    dictation::transcribe_recording_for_app(app, result)?;
+    dictation::transcribe_recording_with(app, core, result)?;
     Ok(())
 }
 
 /// Where the system can't copy the selection out of another app, the
-/// typed-instruction panel on the dashboard stands in for it.
-fn start_transform(app: &AppHandle) -> Result<(), CommandError> {
+/// typed-instruction panel on the dashboard stands in for it. Still takes the
+/// app for `hotkeys::start_transform` (hotkeys).
+fn start_transform(app: &AppHandle, core: &Core) -> Result<(), CommandError> {
     if crate::platform::can_capture_selection() {
         crate::hotkeys::start_transform(app)
     } else {
-        shell::open_dashboard(app, Some("dashboard"))
+        core.host().open_dashboard(Some("dashboard"))
     }
 }
 
@@ -863,6 +966,71 @@ mod tests {
             .count();
         assert_eq!(done, 1, "exactly one stop transcribes");
         assert_eq!(fake.ran(), vec!["start", "stop"]);
+    }
+
+    fn wait_until(what: &str, done: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !done() {
+            assert!(std::time::Instant::now() < deadline, "timed out: {what}");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn jobs_sent_before_the_engine_exists_wait_for_it_and_run_in_order() {
+        use std::sync::atomic::AtomicBool;
+
+        let fake = Fake::default();
+        let ready = Arc::new(AtomicBool::new(false));
+        let asked = Arc::new(AtomicUsize::new(0));
+        let worker = {
+            let (fake, ready, asked) = (fake.clone(), ready.clone(), asked.clone());
+            DictationWorker::spawn_finding(move || {
+                asked.fetch_add(1, Ordering::SeqCst);
+                ready.load(Ordering::SeqCst).then(|| fake.clone())
+            })
+            .unwrap()
+        };
+
+        // A hotkey start and stop land before the shell has built the engine.
+        worker.send(start());
+        worker.send(DictationCommand::Stop);
+        // The worker keeps looking for the engine without running or
+        // dropping anything.
+        wait_until("the worker looks for the engine again", || {
+            asked.load(Ordering::SeqCst) >= 3
+        });
+        assert!(fake.ran().is_empty());
+
+        ready.store(true, Ordering::SeqCst);
+        // Queued last, so it returns once both earlier jobs have run.
+        let outcome = worker.call(DictationCommand::Stop).unwrap();
+        assert!(matches!(outcome, Outcome::Skipped));
+        assert_eq!(fake.ran(), vec!["start", "stop"]);
+        assert_eq!(worker.pending_starts.load(Ordering::SeqCst), 0);
+
+        // Once found, the engine is kept: the worker stops looking.
+        let asked_once_found = asked.load(Ordering::SeqCst);
+        worker.call(start()).unwrap();
+        assert_eq!(asked.load(Ordering::SeqCst), asked_once_found);
+        assert_eq!(fake.ran(), vec!["start", "stop", "start"]);
+    }
+
+    #[test]
+    fn an_idle_worker_does_not_look_for_the_engine() {
+        let asked = Arc::new(AtomicUsize::new(0));
+        let worker = {
+            let asked = asked.clone();
+            DictationWorker::spawn_finding(move || {
+                asked.fetch_add(1, Ordering::SeqCst);
+                Some(Fake::default())
+            })
+            .unwrap()
+        };
+        thread::sleep(Duration::from_millis(120));
+        assert_eq!(asked.load(Ordering::SeqCst), 0);
+        worker.call(DictationCommand::Cancel).unwrap();
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
     }
 
     #[test]
