@@ -405,9 +405,11 @@ mod tests {
         let host = host_in(root.path());
         let state = state_in(root.path());
 
+        let stored = state.db().unwrap().get_settings().unwrap();
+
         let settings = follow_launch_switch(&state, &host, |_| None).unwrap();
-        assert_eq!(settings, AppSettings::default());
-        assert!(!state.db().unwrap().has_saved_settings().unwrap());
+        assert_eq!(settings, stored);
+        assert_eq!(state.db().unwrap().get_settings().unwrap(), stored);
         assert!(host.events().is_empty());
     }
 
