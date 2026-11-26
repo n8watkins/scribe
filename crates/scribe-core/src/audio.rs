@@ -417,11 +417,6 @@ impl AudioService {
     }
 }
 
-pub fn list_microphones_for_app(app: &AppHandle) -> Result<Vec<MicrophoneInfo>, CommandError> {
-    let core = core_for(app, "list the microphones")?;
-    list_microphones_with(&core)
-}
-
 /// The input devices, with the one chosen in Settings marked.
 pub fn list_microphones_with(core: &Core) -> Result<Vec<MicrophoneInfo>, CommandError> {
     let state = core.backend();
@@ -506,19 +501,9 @@ pub fn start_recording_with(
     }
 }
 
-pub fn stop_recording_for_app(app: &AppHandle) -> Result<RecordingResult, CommandError> {
-    let core = core_for(app, "stop recording")?;
-    stop_recording_with(&core)
-}
-
 /// Stops the active recording the way a toggle press does.
 pub fn stop_recording_with(core: &Core) -> Result<RecordingResult, CommandError> {
     stop_recording_with_reason(Parts::of(core), StopReason::Completed, None)
-}
-
-pub fn cancel_recording_for_app(app: &AppHandle) -> Result<(), CommandError> {
-    let core = core_for(app, "cancel the recording")?;
-    cancel_recording_with(&core)
 }
 
 /// Drops the active recording without transcribing it.
@@ -552,14 +537,6 @@ fn cancel_recording(parts: Parts) -> Result<(), CommandError> {
     }
 
     Ok(())
-}
-
-pub fn record_test_clip_for_app(
-    app: &AppHandle,
-    duration_ms: Option<u64>,
-) -> Result<RecordingResult, CommandError> {
-    let core = core_for(app, "record a test clip")?;
-    record_test_clip_with(&core, duration_ms)
 }
 
 /// Records a test clip of a fixed length.
@@ -642,12 +619,6 @@ fn emit_recording_stopped(parts: Parts, result: &RecordingResult) {
 
 /// Returns the most recent test clip WAV as a base64 string for in-app
 /// playback. Errors with code "no_test_clip" when no clip is available.
-pub fn get_test_clip_audio_for_app(app: &AppHandle) -> Result<String, CommandError> {
-    let core = core_for(app, "play the test clip")?;
-    get_test_clip_audio_with(&core)
-}
-
-/// [`get_test_clip_audio_for_app`] on the engine.
 pub fn get_test_clip_audio_with(core: &Core) -> Result<String, CommandError> {
     test_clip_audio(core.backend())
 }
