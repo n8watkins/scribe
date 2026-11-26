@@ -9,8 +9,10 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use tauri::{AppHandle, Manager};
 
 use crate::commands::BackendState;
+use crate::core::Core;
 use crate::error::CommandError;
 use crate::github_backup::{GitHubBackup, SyncReport};
+use crate::replacements_file::ReplacementStore;
 use crate::sync_history::{GitHubSyncActivity, SyncSource};
 
 /// Quiet period after the last note save before a sync fires, so rapid notes
@@ -21,8 +23,33 @@ const DEBOUNCE: Duration = Duration::from_secs(3);
 /// `github_sync_now` command and the auto-sync worker. Blocking (DB + network),
 /// so callers run it off the main thread. The DB lock is dropped before any
 /// network call.
-pub fn collect_and_sync(app: &AppHandle, service: &str) -> Result<SyncReport, CommandError> {
-    let state = app.state::<BackendState>();
+///
+/// The `AppHandle` wrapper of [`collect_and_sync_with`]; the sign-in is
+/// looked up under the Core's flavour, which is the app's identifier.
+pub fn collect_and_sync(app: &AppHandle, _service: &str) -> Result<SyncReport, CommandError> {
+    match app.try_state::<Core>() {
+        Some(core) => collect_and_sync_with(core.inner()),
+        None => {
+            log::warn!("Could not sync notes to GitHub: the engine is not ready yet");
+            Err(crate::host::no_main_window())
+        }
+    }
+}
+
+/// [`collect_and_sync`] on the engine handle.
+pub fn collect_and_sync_with(core: &Core) -> Result<SyncReport, CommandError> {
+    collect_notes(
+        core.backend(),
+        core.replacements(),
+        core.flavor().identifier(),
+    )
+}
+
+fn collect_notes(
+    state: &BackendState,
+    replacements_store: &ReplacementStore,
+    service: &str,
+) -> Result<SyncReport, CommandError> {
     let (repo, notes) = {
         let db = state.db()?;
         let settings = db.get_settings()?;
@@ -64,7 +91,7 @@ pub fn collect_and_sync(app: &AppHandle, service: &str) -> Result<SyncReport, Co
 
     // replacements.txt goes along with the notes, when it changed since the
     // last upload in this session.
-    let replacements = pending_replacements(app);
+    let replacements = pending_replacements(replacements_store);
     if notes.is_empty() && replacements.is_none() {
         return Ok(SyncReport {
             synced_notes: 0,
@@ -113,9 +140,8 @@ fn lock_uploaded() -> std::sync::MutexGuard<'static, Option<u64>> {
 
 /// replacements.txt and its hash, when it has content that this session
 /// hasn't uploaded yet.
-fn pending_replacements(app: &AppHandle) -> Option<(String, u64)> {
+fn pending_replacements(store: &ReplacementStore) -> Option<(String, u64)> {
     use std::hash::{Hash, Hasher};
-    let store = app.try_state::<std::sync::Arc<crate::replacements_file::ReplacementStore>>()?;
     let text = std::fs::read_to_string(store.path()).ok()?;
     if text.trim().is_empty() {
         return None;
@@ -152,12 +178,28 @@ fn clear_token_if_unauthorized(
 /// so callers run it off the main thread; the DB lock is dropped before the
 /// network call. A no-op (empty report) when the setting is off or there are no
 /// dictation transcripts.
+///
+/// The `AppHandle` wrapper of [`collect_and_sync_all_transcripts_with`].
 pub fn collect_and_sync_all_transcripts(
     app: &AppHandle,
-    service: &str,
+    _service: &str,
 ) -> Result<SyncReport, CommandError> {
+    match app.try_state::<Core>() {
+        Some(core) => collect_and_sync_all_transcripts_with(core.inner()),
+        None => {
+            log::warn!("Could not back up transcripts to GitHub: the engine is not ready yet");
+            Err(crate::host::no_main_window())
+        }
+    }
+}
+
+/// [`collect_and_sync_all_transcripts`] on the engine handle.
+pub fn collect_and_sync_all_transcripts_with(core: &Core) -> Result<SyncReport, CommandError> {
+    collect_transcripts(core.backend(), core.flavor().identifier())
+}
+
+fn collect_transcripts(state: &BackendState, service: &str) -> Result<SyncReport, CommandError> {
     let (repo, dictations) = {
-        let state = app.state::<BackendState>();
         let db = state.db()?;
         let settings = db.get_settings()?;
         if !settings.github_sync_all_transcripts {
@@ -213,22 +255,56 @@ impl SyncAttempt {
 /// Runs both configured backup paths so one destination can still succeed when
 /// the other fails. The first failure is returned while successful progress is
 /// retained for persisted health reporting.
-pub fn collect_sync_attempt(app: &AppHandle, service: &str) -> SyncAttempt {
-    let repo = app
-        .state::<BackendState>()
+///
+/// The `AppHandle` wrapper of [`collect_sync_attempt_with`]. With no engine
+/// yet the attempt carries the no-engine error and no progress.
+pub fn collect_sync_attempt(app: &AppHandle, _service: &str) -> SyncAttempt {
+    match app.try_state::<Core>() {
+        Some(core) => collect_sync_attempt_with(core.inner()),
+        None => {
+            log::warn!("Could not back up to GitHub: the engine is not ready yet");
+            SyncAttempt {
+                repo: String::new(),
+                report: SyncReport {
+                    synced_notes: 0,
+                    files_written: 0,
+                },
+                error: Some(crate::host::no_main_window()),
+            }
+        }
+    }
+}
+
+/// [`collect_sync_attempt`] on the engine handle.
+pub fn collect_sync_attempt_with(core: &Core) -> SyncAttempt {
+    let repo = core
+        .backend()
         .db()
         .and_then(|db| db.get_settings())
         .map(|settings| settings.github_repo)
         .unwrap_or_default();
     combine_sync_results(
         repo,
-        collect_and_sync(app, service),
-        collect_and_sync_all_transcripts(app, service),
+        collect_and_sync_with(core),
+        collect_and_sync_all_transcripts_with(core),
     )
 }
 
+/// The `AppHandle` wrapper of [`record_sync_attempt_with`]; with no engine
+/// yet it only logs.
 pub fn record_sync_attempt(app: &AppHandle, source: SyncSource, attempt: &SyncAttempt) {
-    let state = app.state::<BackendState>();
+    match app.try_state::<Core>() {
+        Some(core) => record_sync_attempt_with(core.inner(), source, attempt),
+        None => log::warn!("Could not save GitHub backup status: the engine is not ready yet"),
+    }
+}
+
+/// [`record_sync_attempt`] on the engine handle.
+pub fn record_sync_attempt_with(core: &Core, source: SyncSource, attempt: &SyncAttempt) {
+    record_attempt(core.backend(), source, attempt);
+}
+
+fn record_attempt(state: &BackendState, source: SyncSource, attempt: &SyncAttempt) {
     let save = (|| -> Result<(), CommandError> {
         let db = state.db()?;
         let activity = GitHubSyncActivity::from_attempt(
@@ -285,10 +361,11 @@ impl NoteSyncWorker {
     /// Spawns the background debounce-and-sync thread.
     pub fn spawn(app: AppHandle) -> Self {
         let (tx, rx) = crossbeam_channel::unbounded::<()>();
-        let service = app.config().identifier.clone();
+        // The worker starts before the Core exists (the Core holds the
+        // worker), so it finds the Core through the app each time it syncs.
         let _ = thread::Builder::new()
             .name("scribe-note-sync".into())
-            .spawn(move || worker_loop(app, service, rx));
+            .spawn(move || worker_loop(|| app.try_state::<Core>().map(|c| c.inner().clone()), rx));
         Self { tx }
     }
 
@@ -299,7 +376,7 @@ impl NoteSyncWorker {
     }
 }
 
-fn worker_loop(app: AppHandle, service: String, rx: Receiver<()>) {
+fn worker_loop(find_core: impl Fn() -> Option<Core>, rx: Receiver<()>) {
     loop {
         // Block until at least one note-saved signal arrives.
         if rx.recv().is_err() {
@@ -317,14 +394,17 @@ fn worker_loop(app: AppHandle, service: String, rx: Receiver<()>) {
         // daily file is never PUT concurrently. Acquired once here (not inside
         // the collect_* helpers) to stay re-entrancy-/deadlock-free, and held
         // across both collect calls below. Dropped at the end of the iteration.
-        let state = app.state::<BackendState>();
-        let _guard = state.github_sync_lock();
+        let Some(core) = find_core() else {
+            log::warn!("Skipped an automatic GitHub backup: the engine is not ready yet");
+            continue;
+        };
+        let _guard = core.backend().github_sync_lock();
 
         // A github_unauthorized error has already cleared the dead token inside
         // collect_*, so by the time we record this attempt connection state is
         // clean. Both configured paths run even if one fails.
-        let attempt = collect_sync_attempt(&app, &service);
-        record_sync_attempt(&app, SyncSource::Automatic, &attempt);
+        let attempt = collect_sync_attempt_with(&core);
+        record_sync_attempt_with(&core, SyncSource::Automatic, &attempt);
         if let Some(error) = &attempt.error {
             log::warn!(
                 "Automatic GitHub backup failed after syncing {} item(s) into {} file(s): {}",
@@ -351,6 +431,58 @@ mod tests {
             synced_notes: items,
             files_written: files,
         })
+    }
+
+    fn state(root: &std::path::Path) -> BackendState {
+        BackendState::new(
+            crate::db::Database::in_memory().unwrap(),
+            root.join("cache").join("recordings"),
+            crate::data_hygiene::DataDirs {
+                data_dir: root.join("data"),
+                cache_dir: root.join("cache"),
+            },
+        )
+    }
+
+    #[test]
+    fn both_backups_are_no_ops_while_their_settings_are_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path());
+        let store = ReplacementStore::open(dir.path().join("replacements.txt"), &[]);
+        // Off by default: neither path reaches the keychain or the network.
+        let notes = collect_notes(&state, &store, "test.scribe.sync").unwrap();
+        assert_eq!((notes.synced_notes, notes.files_written), (0, 0));
+        let all = collect_transcripts(&state, "test.scribe.sync").unwrap();
+        assert_eq!((all.synced_notes, all.files_written), (0, 0));
+    }
+
+    #[test]
+    fn a_recorded_attempt_reads_back_as_the_sync_activity() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path());
+        let attempt = SyncAttempt {
+            repo: "alice/notes".into(),
+            report: SyncReport {
+                synced_notes: 2,
+                files_written: 1,
+            },
+            error: Some(CommandError::new("github_unauthorized", "revoked")),
+        };
+        record_attempt(&state, SyncSource::Manual, &attempt);
+        let activity = state.db().unwrap().get_github_sync_activity().unwrap();
+        let activity = activity.expect("the attempt was saved");
+        assert_eq!(activity.repo, "alice/notes");
+        assert_eq!(activity.source, SyncSource::Manual);
+        assert_eq!(activity.synced_items, 2);
+        assert_eq!(activity.error_code.as_deref(), Some("github_unauthorized"));
+    }
+
+    #[test]
+    fn a_blank_replacements_file_is_not_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = ReplacementStore::open(dir.path().join("replacements.txt"), &[]);
+        std::fs::write(empty.path(), "  \n").unwrap();
+        assert!(pending_replacements(&empty).is_none());
     }
 
     #[test]
