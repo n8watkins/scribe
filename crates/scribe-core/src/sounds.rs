@@ -7,7 +7,7 @@
 //!
 //! How playback works:
 //!
-//! - [`play`] never waits on audio. It hands the cue to a player thread
+//! - [`play_with`] never waits on audio. It hands the cue to a player thread
 //!   through a small bounded queue; when the queue is full the cue is dropped.
 //! - The player keeps one output stream open and mixes each new cue into it
 //!   the moment it arrives, so cues overlap the way the Web Audio ones did.
@@ -47,14 +47,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::backend::BackendState;
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     Device, FromSample, SampleFormat, SizedSample, StreamConfig,
 };
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender, TrySendError};
-use tauri::{AppHandle, Manager};
-
-use crate::{backend::BackendState, core::Core};
 
 /// Which cue to play.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,7 +170,7 @@ struct Request {
 // Handing cues to the player
 // ---------------------------------------------------------------------------
 
-/// The running player thread, as seen from [`play`].
+/// The running player thread, as seen from [`play_with`].
 struct PlayerHandle {
     sender: Sender<Request>,
     /// When the player entered its current device call, in [`clock_ms`]
@@ -287,16 +285,8 @@ impl Dispatcher {
 }
 
 /// Queues `cue` for playback if the Sounds setting is on. Never blocks on
-/// audio: the only wait is a short lock around handing the cue over.
-pub fn play(app: &AppHandle, cue: Cue) {
-    match app.try_state::<Core>() {
-        Some(core) => play_with(core.backend(), cue),
-        None => log::warn!("Skipping the {:?} sound: the engine is not ready yet", cue),
-    }
-}
-
-/// [`play`] on the engine. `state` is where the player reads the Sounds
-/// setting from.
+/// audio: the only wait is a short lock around handing the cue over. `state`
+/// is where the player reads the Sounds setting from.
 pub fn play_with(state: &BackendState, cue: Cue) {
     let request = Request {
         event: Event::Cue(cue),
