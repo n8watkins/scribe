@@ -355,7 +355,7 @@ pub fn run() {
                 })
                 .build(),
         )
-        .plugin(autostart::plugin())
+        .plugin(tauri_host::autostart_plugin())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())

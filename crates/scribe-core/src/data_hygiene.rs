@@ -461,12 +461,20 @@ pub fn failed_recordings_dir(app: &tauri::AppHandle) -> Result<std::path::PathBu
     }
 }
 
-/// Creates `dir` when missing and opens it in the system file manager.
-///
-/// Still takes the `AppHandle` for the opener plugin.
-pub fn open_folder(app: &tauri::AppHandle, dir: std::path::PathBuf) -> Result<(), CommandError> {
-    use tauri_plugin_opener::OpenerExt;
+/// [`open_folder_with`] on the installed host, which exists before any
+/// command runs. The old signature, kept for its callers until P1-4.
+pub fn open_folder(_app: &tauri::AppHandle, dir: PathBuf) -> Result<(), CommandError> {
+    match crate::shell::host() {
+        Some(host) => open_folder_with(host.as_ref(), dir),
+        None => {
+            log::warn!("Could not open folder {}: no host yet", dir.display());
+            Err(no_main_window())
+        }
+    }
+}
 
+/// Creates `dir` when missing and opens it in the system file manager.
+pub fn open_folder_with(host: &dyn Host, dir: PathBuf) -> Result<(), CommandError> {
     std::fs::create_dir_all(&dir).map_err(|error| {
         CommandError::new(
             "open_folder_failed",
@@ -474,14 +482,12 @@ pub fn open_folder(app: &tauri::AppHandle, dir: std::path::PathBuf) -> Result<()
         )
     })?;
 
-    app.opener()
-        .open_path(dir.to_string_lossy(), None::<&str>)
-        .map_err(|error| {
-            CommandError::new(
-                "open_folder_failed",
-                format!("Could not open folder {}. {}", dir.display(), error),
-            )
-        })
+    host.open_path(&dir).map_err(|error| {
+        CommandError::new(
+            "open_folder_failed",
+            format!("Could not open folder {}. {}", dir.display(), error),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -861,5 +867,38 @@ mod tests {
         for file in &files {
             assert!(file.exists(), "{} was removed", file.display());
         }
+    }
+
+    #[test]
+    fn open_folder_creates_the_folder_then_opens_it_through_the_host() {
+        use crate::host::{Failing, HostCall};
+
+        let root = tempfile::tempdir().unwrap();
+        let host = host_in(root.path());
+        let dir = root.path().join("logs").join("nested");
+        open_folder_with(&host, dir.clone()).unwrap();
+        assert!(dir.is_dir());
+        assert_eq!(host.calls(), [HostCall::OpenPath(dir.clone())]);
+        assert!(host.events().is_empty());
+
+        host.fail(Failing::OpenPath);
+        let error = open_folder_with(&host, dir.clone()).unwrap_err();
+        assert_eq!(error.code, "open_folder_failed");
+        assert_eq!(
+            error.message,
+            format!(
+                "Could not open folder {}. {}",
+                dir.display(),
+                Failing::OpenPath.message()
+            )
+        );
+
+        // A folder that cannot be created is never handed to the host.
+        let blocker = root.path().join("a-file");
+        fs::write(&blocker, b"x").unwrap();
+        let error = open_folder_with(&host, blocker.join("below")).unwrap_err();
+        assert_eq!(error.code, "open_folder_failed");
+        assert!(error.message.starts_with("Could not create folder"));
+        assert_eq!(host.calls().len(), 2);
     }
 }

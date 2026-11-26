@@ -60,22 +60,19 @@ where
         })?
 }
 
-/// Like [`off_main`], for commands that open a native file dialog. Each dialog
-/// gets a fresh thread, so the dialog's COM apartment can never clash with
-/// whatever an earlier task on a reused pool thread set up.
-pub(crate) async fn on_dialog_thread<T, F>(
-    app: tauri::AppHandle,
-    work: F,
-) -> Result<T, CommandError>
+/// Like [`off_main_core`], for commands that open a native file dialog (`rfd`).
+/// Each dialog gets a fresh thread, so the dialog's COM apartment can never
+/// clash with whatever an earlier task on a reused pool thread set up.
+pub(crate) async fn on_dialog_thread<T, F>(core: Core, work: F) -> Result<T, CommandError>
 where
     T: Send + 'static,
-    F: FnOnce(&tauri::AppHandle) -> Result<T, CommandError> + Send + 'static,
+    F: FnOnce(&Core) -> Result<T, CommandError> + Send + 'static,
 {
-    off_main(app, move |app| {
-        let app = app.clone();
+    off_main_core(core, move |core| {
+        let core = core.clone();
         std::thread::Builder::new()
             .name("scribe-file-dialog".to_string())
-            .spawn(move || work(&app))
+            .spawn(move || work(&core))
             .map_err(|error| {
                 CommandError::new(
                     "command_failed",

@@ -9,7 +9,7 @@
 
 use app_lib::{
     events::CoreEvent,
-    tauri_host::{paths_mismatches, resolve_paths},
+    tauri_host::{app_version, autostart_plugin, paths_mismatches, resolve_paths},
 };
 use tauri::{
     test::{mock_builder, mock_context, noop_assets, MockRuntime},
@@ -84,4 +84,39 @@ fn emitting_a_core_event_sends_what_the_engine_sends_today() {
     assert_eq!(received.len(), 2);
     assert_eq!(received[0], received[1]);
     assert_eq!(received[0], r#"{"message":"Nothing heard."}"#);
+}
+
+/// `TauriHost::app_version` answers the app's own version, including the one
+/// a Dev or installer-upgrade build sets with `--config`, never the engine
+/// crate's; and it answers the same from a worker thread (the self-test asks
+/// from its own).
+#[test]
+fn the_hosts_version_is_the_apps_from_any_thread() {
+    let mut context = mock_context(noop_assets());
+    context.package_info_mut().version = "0.16.4-57".parse().unwrap();
+    let app = mock_builder().build(context).unwrap();
+    assert_eq!(app_version(&app), "0.16.4-57");
+    assert_ne!(app_version(&app), env!("CARGO_PKG_VERSION"));
+
+    let handle = app.handle().clone();
+    let answered = std::thread::spawn(move || app_version(&handle))
+        .join()
+        .unwrap();
+    assert_eq!(answered, "0.16.4-57");
+}
+
+/// The shell builds the autostart plugin itself, and registering it gives
+/// `TauriHost`'s launch-at-login calls their manager. Neither writes nor
+/// removes a startup entry.
+#[test]
+fn the_shell_builds_the_autostart_plugin() {
+    use tauri::Manager;
+    use tauri_plugin_autostart::{AutoLaunchManager, ManagerExt};
+
+    let app = mock_builder()
+        .plugin(autostart_plugin())
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    assert!(app.try_state::<AutoLaunchManager>().is_some());
+    let _ = app.autolaunch();
 }

@@ -2,6 +2,8 @@
 //! [`Host`] on top of Tauri, and the folders Tauri resolves, checked against
 //! the engine's own [`Paths`].
 
+use std::path::Path;
+
 use scribe_core::{
     app_state::AppStatus,
     error::CommandError,
@@ -10,7 +12,11 @@ use scribe_core::{
     paths::Paths,
     settings::AppSettings,
 };
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{plugin::TauriPlugin, AppHandle, Emitter, Manager, Runtime};
+use tauri_plugin_autostart::ManagerExt as _;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt as _, Shortcut};
+use tauri_plugin_notification::NotificationExt as _;
+use tauri_plugin_opener::OpenerExt as _;
 
 /// The engine's host in the Tauri shell: events go to every webview through
 /// `app.emit`, the tray and the main window are the shell's own.
@@ -23,6 +29,19 @@ pub struct TauriHost {
 impl TauriHost {
     pub fn new(app: AppHandle, paths: Paths) -> Self {
         let flavor = Flavor::from_identifier(&app.config().identifier);
+        // The startup entry is written under the product name (the autostart
+        // plugin uses `package_info().name`) but read under the flavour's
+        // (`autostart::read_registration`, from the identifier); they must
+        // be the same name. Checked in every build, like the folders.
+        let product_name = &app.package_info().name;
+        if product_name != flavor.product_name() {
+            log::error!(
+                "The app's product name {:?} differs from its flavour's {:?}",
+                product_name,
+                flavor.product_name()
+            );
+        }
+        debug_assert_eq!(product_name, flavor.product_name());
         Self { app, paths, flavor }
     }
 }
@@ -65,6 +84,91 @@ impl Host for TauriHost {
     fn main_window_logical_size(&self) -> Option<(u32, u32)> {
         crate::window_size::current_logical(&self.app)
     }
+
+    fn app_version(&self) -> String {
+        app_version(&self.app)
+    }
+
+    /// `AppHandle::exit` only asks the event loop to exit, so it is safe from
+    /// any thread; the exit path in `lib.rs` then stops the engine.
+    fn exit(&self, code: i32) {
+        self.app.exit(code);
+    }
+
+    fn open_path(&self, path: &Path) -> Result<(), String> {
+        self.app
+            .opener()
+            .open_path(path.to_string_lossy(), None::<&str>)
+            .map_err(|error| error.to_string())
+    }
+
+    fn open_url(&self, url: &str) -> Result<(), String> {
+        self.app
+            .opener()
+            .open_url(url, None::<&str>)
+            .map_err(|error| error.to_string())
+    }
+
+    fn notify(&self, title: &str, body: &str) -> Result<(), String> {
+        self.app
+            .notification()
+            .builder()
+            .title(title)
+            .body(body)
+            .show()
+            .map_err(|error| error.to_string())
+    }
+
+    fn register_shortcut(&self, shortcut: Shortcut) -> Result<(), String> {
+        self.app
+            .global_shortcut()
+            .register(shortcut)
+            .map_err(|error| error.to_string())
+    }
+
+    fn unregister_shortcut(&self, shortcut: Shortcut) -> Result<(), String> {
+        self.app
+            .global_shortcut()
+            .unregister(shortcut)
+            .map_err(|error| error.to_string())
+    }
+
+    fn is_shortcut_registered(&self, shortcut: Shortcut) -> bool {
+        self.app.global_shortcut().is_registered(shortcut)
+    }
+
+    fn launch_at_login(&self) -> Result<bool, String> {
+        self.app
+            .autolaunch()
+            .is_enabled()
+            .map_err(|error| error.to_string())
+    }
+
+    fn set_launch_at_login(&self, enabled: bool) -> Result<(), String> {
+        let autolaunch = self.app.autolaunch();
+        let result = if enabled {
+            autolaunch.enable()
+        } else {
+            autolaunch.disable()
+        };
+        result.map_err(|error| error.to_string())
+    }
+}
+
+/// The running app's version (`package_info().version`): the configs' version,
+/// or the one a Dev or installer-upgrade build overrides it with.
+pub fn app_version<R: Runtime, M: Manager<R>>(app: &M) -> String {
+    app.package_info().version.to_string()
+}
+
+/// The autostart plugin behind [`TauriHost`]'s launch-at-login calls. It names
+/// the entry after the product ("Scribe", "Scribe Dev"); on Windows the entry
+/// starts Scribe with [`scribe_core::autostart::SIGN_IN_FLAG`].
+pub fn autostart_plugin<R: Runtime>() -> TauriPlugin<R> {
+    let builder = tauri_plugin_autostart::Builder::new();
+    #[cfg(windows)]
+    let builder = builder.arg(scribe_core::autostart::SIGN_IN_FLAG);
+    builder.build()
 }
 
 /// Resolves the engine's folders for this app (its identifier and product
@@ -136,5 +240,35 @@ mod tests {
                 "a Tauri config overrides the app folders"
             );
         }
+    }
+
+    /// Only the two base configs name the product and the identifier, so
+    /// every build's product name is its flavour's (`TauriHost::new` checks
+    /// it at run time). Reads the folder, so a new overlay is checked too.
+    #[test]
+    fn only_the_base_configs_set_the_product_name_and_identifier() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut overlays = 0;
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if !(name.starts_with("tauri") && name.ends_with(".json")) {
+                continue;
+            }
+            let config: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            if name == "tauri.conf.json" || name == "tauri.dev-flavor.conf.json" {
+                assert!(config["productName"].is_string(), "{name}");
+                assert!(config["identifier"].is_string(), "{name}");
+                continue;
+            }
+            overlays += 1;
+            assert!(
+                config.get("productName").is_none(),
+                "{name} sets productName"
+            );
+            assert!(config.get("identifier").is_none(), "{name} sets identifier");
+        }
+        assert!(overlays >= 4, "found only {overlays} config overlays");
     }
 }

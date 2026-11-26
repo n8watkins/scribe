@@ -218,12 +218,11 @@ Each row says why the app is still there:
 | `settings_store.rs` `patch_settings_now_with`, `set_launch_at_startup_with` | Pass-through to `apply_settings_change_with` |
 | `settings_store.rs` `sync_launch_at_startup_with` | Pass-through to `autostart::follow_windows_switch` (no lane) |
 | `settings_store.rs` `core_of` | Wrapper helper: finds the `Core` through the app |
-| `data_hygiene.rs` `open_folder` | Tauri API: the opener plugin |
+| `data_hygiene.rs` `open_folder` | Wrapper of `open_folder_with(host, dir)` since P1-4 step 1 |
 | `data_hygiene.rs` `run_startup_maintenance` | Before the Core: finds the managed `BackendState` through the app (`run_startup_maintenance_with(&BackendState, ..)` is the engine version) |
 | `commands/data.rs` `open_transcript_externally`, `open_replacements_file` | Tauri API: the opener plugin |
 | `commands/data.rs` `open_data_folder`, `open_logs_folder`, `open_failed_recordings_folder` | Pass-through to `data_hygiene::open_folder` |
 | `commands/data.rs` `patch_settings` | Pass-through to `patch_settings_now_with` |
-| `commands/data.rs` `pick_data_dir`, `export_transcripts`, `preview_transcript_import` | Pass-through to `on_dialog_thread` (`commands/mod.rs`), which uses the app only to get off the main thread; the dialog itself is `rfd` |
 | `commands/data.rs` `whats_new_pending`, `collect_diagnostics` | Tauri API: `app.package_info().version` |
 
 ### sync
@@ -242,11 +241,10 @@ None apart from the wrappers (`state_server::start`, `status_file::publish`, `st
 
 | Function | Why |
 |----------|-----|
-| `autostart.rs` `apply`, `write_entry`, `reconcile_at_launch`, `follow_windows_switch`, `read_registration`, `installed_folder`, `remember_install_folder` | Tauri API: the autostart plugin, and `app.package_info().name` for the Windows registry entries |
-| `autostart.rs` `plugin()` | Builds the Tauri autostart plugin the shell registers |
+| `autostart.rs` `apply`, `reconcile_at_launch`, `follow_windows_switch` | Since P1-4 step 1, wrappers of their host-only `_with` versions (through `shell::host()`), kept for their callers: `settings_store.rs` (data) and `lib.rs` setup |
 | `lib.rs` (scribe-core) `is_dev_flavor`, `display_name` | Tauri API: `app.config().identifier`; `Flavor` covers both |
 | `shell.rs` `update_tray_status`, `update_engine_summary`, `sync_settings`, `open_dashboard`, `toggle_dashboard`, `main_window_logical_size` | The old free functions; they ignore the app and forward to the installed host |
-| `commands/mod.rs` `off_main`, `on_dialog_thread` | Run a closure that receives the app |
+| `commands/mod.rs` `off_main` | Runs a closure that receives the app (`on_dialog_thread` takes the `Core` since P1-4 step 1) |
 | `commands/shell.rs` `open_dashboard`, `save_window_size`, `open_release_page` | The shell's own commands (the opener plugin, the window); they stay in the shell |
 
 The Tauri shell's own files (`app/src-tauri/src/lib.rs`, `tray.rs`, `window_size.rs`, `tauri_host.rs`) keep using the `AppHandle`: they are the shell.
@@ -355,6 +353,34 @@ If main has moved further when you start, check the references you rely on befor
 
 Heavy commands (builds, clippy, tests) run through `devguard slot -- <command>`, which waits for a free slot of the machine's shared build and test budget before running the command.
 
+### What step 1 built
+
+Step 1 (`seams`) added these, and step 2 lanes build on these names:
+
+- `Host` (`host.rs`) gained `app_version()`, `exit(code)`, `open_path(&Path)`, `open_url(&str)`, `notify(title, body)`, `register_shortcut(HotKey)`, `unregister_shortcut(HotKey)`, `is_shortcut_registered(HotKey)`, `launch_at_login()` and `set_launch_at_login(bool)`.
+  The fallible ones return `Result<_, String>`, the plugin's error text, so the engine keeps building today's `CommandError` codes and messages around it.
+  The global-shortcut plugin re-exports its types from the `global-hotkey` crate (now an engine dependency), so the `hotkeys` lane names them from there:
+
+  | Plugin (`tauri_plugin_global_shortcut`) | `global-hotkey` |
+  |------|------|
+  | `Shortcut` | `global_hotkey::hotkey::HotKey` |
+  | `ShortcutEvent` | `global_hotkey::GlobalHotKeyEvent` |
+  | `ShortcutState` | `global_hotkey::HotKeyState` |
+  | `Code`, `Modifiers` | `global_hotkey::hotkey::{Code, Modifiers}` |
+
+- `Host::register_shortcut` and `unregister_shortcut` keep the engine's rule: once the shell's event loop runs, the engine calls them only from its own threads, never the shell's main thread (Tauri's plugin waits for the main thread); only the shell's setup registers the first hotkeys on the main thread, before the event loop starts.
+- The engine no longer depends on `tauri-plugin-autostart`.
+- `TauriHost` (`tauri_host.rs`) answers them with the same plugin calls the engine makes today; `tauri_host::app_version(app)` is its version, and `tauri_host::autostart_plugin()` is the plugin the shell registers (`lib.rs:358`).
+- `RecordingHost` records every call that acts (`calls()`, a list of `HostCall`), answers `RECORDING_HOST_VERSION` (or `with_app_version(..)`), holds shortcuts and the startup entry the way the plugins do (a second registration of a held shortcut fails), and `fail(Failing::..)` makes one kind of call fail with `Failing::message()`.
+  Queries (`app_version`, `is_shortcut_registered`, `launch_at_login`) are not recorded.
+  `RecordingHost::unregister_shortcut` answers `Ok` for a shortcut it does not hold, where the real plugin may answer an error, so `hotkeys` tests must not rely on releasing an unheld shortcut succeeding (make it fail with `fail(Failing::UnregisterShortcut)` to test the error path).
+- `CoreCell` (`core.rs`): `CoreCell::new()`, `cell.fill(&core)` right after `Core::new` (whose signature did not change), and `cell.get()`.
+- `data_hygiene::open_folder_with(host, dir)`; `open_folder` is its host-only wrapper.
+- `autostart::apply_with`, `reconcile_at_launch_with` and `follow_windows_switch_with` take `&dyn Host`; `apply`, `reconcile_at_launch` and `follow_windows_switch` are their host-only wrappers.
+  The Windows registry entries are named after `Flavor::product_name()`.
+- `commands/mod.rs` `on_dialog_thread(core, |core| ..)`; `pick_data_dir`, `export_transcripts` and `preview_transcript_import` no longer take the app.
+- Every `impl Host` must implement the new methods: besides the two hosts above, the test hosts `MainThreadHost` and `PanicsOnceHost` in `whisper_server.rs` do.
+
 ### What the Host must gain
 
 Add these to `trait Host` (`crates/scribe-core/src/host.rs`), to `TauriHost` (`app/src-tauri/src/tauri_host.rs`, using the same plugin calls the engine makes today) and to `RecordingHost` (which records each call, so tests can assert it):
@@ -374,7 +400,7 @@ Add these to `trait Host` (`crates/scribe-core/src/host.rs`), to `TauriHost` (`a
   The plugin's handler in `lib.rs` (`:346`) stays in the shell and calls the engine.
 - **The startup entry**: what `autostart::apply`, `reconcile_at_launch` and `follow_windows_switch` do (`autostart.rs:168`, `:204`/`:241`, `:263`).
   They use the autostart plugin and `app.package_info().name` for the Windows registry entries (`autostart.rs:343`, `:371`, `:379`); the product name is `Flavor::product_name()`.
-  `autostart::plugin()` (`autostart.rs:44`) moves to the shell; the app crate does not depend on `tauri-plugin-autostart` today (only `crates/scribe-core/Cargo.toml:25` does), so step 1 adds it there.
+  `autostart::plugin()` (`autostart.rs:44`) moved to the shell in step 1 (`tauri_host::autostart_plugin()`), which added `tauri-plugin-autostart` to `app/src-tauri/Cargo.toml` and removed it from `crates/scribe-core/Cargo.toml`.
 
 Not a `Host` method: `on_dialog_thread` (`commands/mod.rs:66`) uses the app only to get off the main thread (the dialogs are `rfd`), so it takes the `Core` (or nothing), like `off_main_core`.
 
@@ -454,8 +480,10 @@ These wrappers still have callers; switch each caller to the engine version, the
 - One caller in another lane: `hotkeys::start_transform` (`dictation_worker.rs:596`), `whisper::transcribe_with_output_prefix` (`file_transcribe.rs:94`), `audio::start_recording_for_app` (`hotkeys.rs:1413`), `audio::emit_recording_error` (`hotkeys.rs:1310`), `dictation_state::emit_state_snapshot` (`output.rs:375`, `:498`).
 - `dictation_worker::submit`: `hotkeys.rs` (`:717`, `:730`, `:1230`, `:1244`, `:1268`, `:1272`, `:1291`, `:1303`, `:1367`) and `tray.rs` (`:118`-`:120`).
 - `settings_store::emit_changed`: `commands/models.rs:96`, `:116`; `commands/hotkeys.rs:125`, `:167`, `:203`, `:237`; `commands/sync.rs:187`, `:229`; `commands/shell.rs:32`.
-- `data_hygiene::open_folder` (also a Tauri API user): `commands/models.rs:23`; `commands/data.rs:320`, `:378`, `:401`.
+- `data_hygiene::open_folder` (a host-only wrapper since step 1): `commands/models.rs:23`; `commands/data.rs:320`, `:373`, `:396` (lines after step 1).
 - `settings_store::set_launch_at_startup`, `sync_launch_at_startup` (through the `commands.rs` re-export): `tray.rs:162`, `:187`; `lib.rs:631`.
+- `autostart::apply` and `follow_windows_switch` (step 1 made them wrappers): `settings_store.rs:247`, `:156` (the `data` lane switches them to the `_with` versions); `autostart::reconcile_at_launch`: `lib.rs:444` (step 3).
+  Step 4 deletes the three wrappers.
 - Setup and the shell's handlers in `lib.rs`: `RemoteCommand::run` (`:304`), `hotkeys::handle_shortcut` (`:354`), `is_dev_flavor` (`:417`, `:576`), `data_hygiene::run_startup_maintenance` (`:467`), `WarmTranscriber::new` (`:484`), `state_server::start` (`:492`), `NoteSyncWorker::spawn` (`:504`), `DictationWorker::spawn` (`:508`), `hotkeys::setup` (`:560`), `test_audio::activate` (`:589`), `status_file::publish_idle` (`:594`, `:763`), `self_test::spawn` (`:601`).
 - `display_name` (`tray.rs:92`, `:256`), and `shell::open_dashboard` and `shell::main_window_logical_size` (`commands/shell.rs:12`, `:22`).
 
@@ -475,7 +503,7 @@ Each lane follows the rulebook above (unit tests with `RecordingHost` for every 
 
 | Step | Lane | Owns | Work |
 |------|------|------|------|
-| 1 | `seams` | `host.rs`, `tauri_host.rs`, `core.rs`, `autostart.rs`, `commands/mod.rs` and the three `on_dialog_thread` calls in `commands/data.rs` (`:346`, `:429`, `:534`), `data_hygiene::open_folder` only, `app/src-tauri/src/lib.rs:358` only (the autostart plugin), both `Cargo.toml` files and `Cargo.lock` | The `Host` methods above in all three hosts, with tests; `CoreCell` with tests; `open_folder_with(host, dir)` beside `open_folder`; `on_dialog_thread` changed in place to take the `Core`, with its three call sites updated; the autostart plugin calls behind the `Host` and `autostart::plugin()` built in the shell; add `global-hotkey` 0.8 to `crates/scribe-core/Cargo.toml` and `tauri-plugin-autostart` to `app/src-tauri/Cargo.toml`. |
+| 1 | `seams` | `host.rs`, `tauri_host.rs`, `core.rs`, `autostart.rs`, `commands/mod.rs` and the three `on_dialog_thread` calls in `commands/data.rs` (`:346`, `:429`, `:534`), `data_hygiene::open_folder` only, `app/src-tauri/src/lib.rs:358` only (the autostart plugin), both `Cargo.toml` files and `Cargo.lock`, and every `impl Host`, test hosts included (the new methods have no defaults, so `MainThreadHost` and `PanicsOnceHost` in `whisper_server.rs`'s tests change too) | The `Host` methods above in all three hosts, with tests; `CoreCell` with tests; `open_folder_with(host, dir)` beside `open_folder`; `on_dialog_thread` changed in place to take the `Core`, with its three call sites updated; the autostart plugin calls behind the `Host` and `autostart::plugin()` built in the shell; add `global-hotkey` 0.8 to `crates/scribe-core/Cargo.toml` and `tauri-plugin-autostart` to `app/src-tauri/Cargo.toml`. |
 | 1 | `e2e-log-check` | `.github/workflows/e2e-windows.yml`, `app/e2e/windows/run.py` | Fail the Windows end-to-end job when the app's log contains "The engine's folder differs from Tauri's" (`lib.rs:372`). |
 | 2 | `sync` | the P1-3 `sync` files | `github_device_start` opens through the host; `github_device_poll` and `github_disconnect` call `emit_changed_with`; delete the four dead `note_sync` wrappers; a `NoteSyncWorker` constructor that takes a `CoreCell` (which tests can also use). |
 | 2 | `models` | the P1-3 `models` files | Delete the `models` wrappers listed above, including `whisper::transcribe` but not `transcribe_with_output_prefix` or `whisper::host_of`; `open_models_folder` uses `open_folder_with`; `delete_model` and `select_model` call `emit_changed_with`. |
@@ -483,7 +511,7 @@ Each lane follows the rulebook above (unit tests with `RecordingHost` for every 
 | 2 | `hotkeys` | the P1-3 `hotkeys` files | Global shortcuts through the host, with the shortcut types from `global-hotkey`; call `dictation_worker::submit_with`, `audio::start_recording_with` and `audio::emit_recording_error_with`; the four `emit_changed` calls in `commands/hotkeys.rs` (`:125`, `:167`, `:203`, `:237`) become `emit_changed_with`; delete the dead `hotkeys` wrappers; drop `app` from every function whose callers are all in the lane. |
 | 2 | `output` | the P1-3 `output` files | `notify` through the host; the paste guards call `dictation_state::emit_state_snapshot_with`; delete the dead `output` wrappers; drop `app` from every function whose callers are all in the lane. |
 | 2 | `audio` | the P1-3 `audio` files, plus the `app_version()` uses in `status_file.rs:64` and `state_server.rs:483` | The self-test exits and reads the version through the host; `dictation_state::app_version()` replaced by the host's version in all three `appVersion` fields (the visible change above); `file_transcribe` calls `whisper::transcribe_with_output_prefix_with`; `request_with` off `tauri::async_runtime`; a `DictationWorker` constructor that takes a `CoreCell`, keeping its no-drop, in-order tests; delete the dead `audio` wrappers. |
-| 3 | `wiring` | `app/src-tauri/src/lib.rs`, `tray.rs`, `commands/shell.rs`, `core.rs`, `shell.rs` | Build the `CoreCell`, give it to both workers and fill it after `Core::new`; `WarmTranscriber::new_with`; `run_startup_maintenance_with` with a backend clone; the replacements watcher through the host; `state_server::start_with`, `status_file::publish_idle_with`, `test_audio::activate_with`, `self_test::spawn_with`, `hotkeys::setup_with`, `handle_shortcut_with`, `RemoteCommand::run_with`, `settings_store::set_launch_at_startup_with` and `sync_launch_at_startup_with`; every `is_dev_flavor` and `display_name` caller on `Flavor` (the re-exports at app `lib.rs:12`-`:16`, `lib.rs:417`, `:576`, `tray.rs:92`, `:256`); the exit path, the window handlers, `save_window_size`, `missing_command_state` and the tray on the `Core`; manage only `Core` (and update the startup-order test and its `app.manage(` count); a test builder for `Core`; delete the `shell.rs` free functions. |
+| 3 | `wiring` | `app/src-tauri/src/lib.rs`, `tray.rs`, `commands/shell.rs`, `core.rs`, `shell.rs` | Build the `CoreCell`, give it to both workers and fill it after `Core::new`; `WarmTranscriber::new_with`; `run_startup_maintenance_with` with a backend clone; the replacements watcher through the host; `state_server::start_with`, `status_file::publish_idle_with`, `test_audio::activate_with`, `self_test::spawn_with`, `hotkeys::setup_with`, `handle_shortcut_with`, `RemoteCommand::run_with`, `settings_store::set_launch_at_startup_with` and `sync_launch_at_startup_with`; every `is_dev_flavor` and `display_name` caller on `Flavor` (the re-exports at app `lib.rs:12`-`:16`, `lib.rs:417`, `:576`, `tray.rs:92`, `:256`); the exit path, the window handlers, `save_window_size`, `missing_command_state` and the tray on the `Core`; manage only `Core` (and update the startup-order test and its `app.manage(` count); a test builder for `Core`, and with it a `CoreCell` test on a real `Core` (step 1 could test only the private `WeakCell` under it); delete the `shell.rs` free functions. |
 | 4 | `sweep` | every file in `crates/scribe-core/src` and `app/src-tauri/src` that still names `AppHandle` or imports through `crate::commands` | Remove the remaining `app` parameters (callers and callees together); delete the remaining wrappers, `output::core_for` and `settings_store::core_of`; delete `crates/scribe-core/src/commands.rs` and update its importers (`data_hygiene.rs:25`, `model_manager.rs:19`, `note_sync.rs:11`, `diagnostics.rs:22`, `whisper_server.rs:46`, core `lib.rs:15`, app `commands/mod.rs:21`, `lib.rs:24`, `commands/shell.rs:8`, `tray.rs:165`, `:180`); give the "engine not ready" answer a clear message. |
 | 5 | `drop-tauri` | `crates/scribe-core/Cargo.toml`, `Cargo.lock`, `crates/scribe-core/src/lib.rs` | Delete `is_dev_flavor` and `display_name` (step 3 left them without callers); remove every `tauri` and `tauri-plugin-*` dependency from `scribe-core`. |
 | 6 | `rename` | every engine file | Drop the `_with` suffix (see "Renaming" below). |

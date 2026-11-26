@@ -4,7 +4,7 @@
 //! Converted to the engine handle: commands take the managed [`Core`]. The
 //! ones that still take the `AppHandle` need it for the opener plugin, for
 //! the settings side effects of other domains (see
-//! `settings_store::patch_settings_now_with`), or for `on_dialog_thread`.
+//! `settings_store::patch_settings_now_with`), or for the app's version.
 
 use tauri::State;
 use tauri_plugin_opener::OpenerExt;
@@ -335,18 +335,13 @@ pub async fn get_data_dir(core: State<'_, Core>) -> Result<String, CommandError>
 /// Opens a native folder picker so the user can choose a new data directory.
 /// Returns the chosen absolute path, or None when the user cancels. Saving the
 /// choice is the frontend's job (it writes `dataDir` via update_settings),
-/// matching how the pill persists its position. Takes the `AppHandle` for
-/// `on_dialog_thread`.
+/// matching how the pill persists its position.
 #[tauri::command]
-pub async fn pick_data_dir(
-    app: tauri::AppHandle,
-    core: State<'_, Core>,
-) -> Result<Option<String>, CommandError> {
-    let core = core.inner().clone();
-    on_dialog_thread(app, move |_app| {
+pub async fn pick_data_dir(core: State<'_, Core>) -> Result<Option<String>, CommandError> {
+    on_dialog_thread(core.inner().clone(), move |core| {
         #[cfg(windows)]
         {
-            let start = effective_data_dir_with(&core);
+            let start = effective_data_dir_with(core);
             let picked = rfd::FileDialog::new()
                 .set_title("Choose Scribe data folder")
                 .set_directory(&start)
@@ -416,17 +411,14 @@ pub fn get_failed_recordings_dir(core: State<'_, Core>) -> Result<String, Comman
 /// `scope` selects which rows ("all" | "notes" | "dictation"); `format` selects
 /// the renderer ("markdown" | "csv" | "json"). Returns the saved absolute path,
 /// or None when the user cancels the dialog. Unlike the GitHub backup this needs
-/// no connected account — it is a purely local save. Takes the `AppHandle` for
-/// `on_dialog_thread`.
+/// no connected account — it is a purely local save.
 #[tauri::command]
 pub async fn export_transcripts(
-    app: tauri::AppHandle,
     core: State<'_, Core>,
     scope: String,
     format: String,
 ) -> Result<Option<String>, CommandError> {
-    let core = core.inner().clone();
-    on_dialog_thread(app, move |_app| {
+    on_dialog_thread(core.inner().clone(), move |core| {
         // Fetch the rows for the scope. A large cap so a normal history exports in
         // one pass; notes/dictation reuse the same filtered queries the rest of the
         // app uses.
@@ -492,7 +484,7 @@ pub async fn export_transcripts(
 
         #[cfg(windows)]
         {
-            let start = effective_data_dir_with(&core);
+            let start = effective_data_dir_with(core);
             let picked = rfd::FileDialog::new()
                 .set_title("Export transcripts")
                 .set_directory(&start)
@@ -524,17 +516,14 @@ pub async fn export_transcripts(
 
 /// Opens a native picker and validates a Scribe JSON export without changing
 /// the database. The returned counts drive the explicit confirmation UI.
-/// Takes the `AppHandle` for `on_dialog_thread`.
 #[tauri::command]
 pub async fn preview_transcript_import(
-    app: tauri::AppHandle,
     core: State<'_, Core>,
 ) -> Result<Option<TranscriptImportPreview>, CommandError> {
-    let core = core.inner().clone();
-    on_dialog_thread(app, move |_app| {
+    on_dialog_thread(core.inner().clone(), move |core| {
         #[cfg(windows)]
         {
-            let start = effective_data_dir_with(&core);
+            let start = effective_data_dir_with(core);
             let picked = rfd::FileDialog::new()
                 .set_title("Restore Scribe backup")
                 .set_directory(&start)

@@ -23,10 +23,19 @@
 //!
 //! macOS and Linux keep the behaviour they had before: no start flag, and the
 //! stored setting is applied at launch.
+//!
+//! The entry is written, removed and read through the [`Host`]
+//! (`launch_at_login`, `set_launch_at_login`); the shell registers the plugin
+//! (`tauri_host::autostart_plugin` in app/src-tauri). The functions that take
+//! an `AppHandle` are the old signatures, kept for their callers until P1-4
+//! moves them to the `_with` versions (docs/CORE-SPLIT.md).
 
-use tauri::{plugin::TauriPlugin, AppHandle, Runtime};
+use tauri::AppHandle;
 
-use crate::error::CommandError;
+use crate::{
+    error::CommandError,
+    host::{no_main_window, Host},
+};
 
 /// The argument the Windows sign-in entry starts Scribe with. A launch
 /// carrying it keeps the main window hidden; Scribe waits in the tray.
@@ -38,14 +47,6 @@ pub const SIGN_IN_FLAG: &str = "--minimized";
 /// (see [`reconcile_at_launch`]).
 pub const PREVIOUS_PUBLISHER: &str = "natkins";
 pub const PUBLISHER: &str = "n8builds.dev";
-
-/// The autostart plugin. On Windows the entry carries [`SIGN_IN_FLAG`].
-pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
-    let builder = tauri_plugin_autostart::Builder::new();
-    #[cfg(windows)]
-    let builder = builder.arg(SIGN_IN_FLAG);
-    builder.build()
-}
 
 /// Whether this launch came from the sign-in entry (`args` with the program
 /// name first, as `std::env::args` gives them).
@@ -162,30 +163,34 @@ fn dev_build_error() -> CommandError {
     )
 }
 
+/// [`apply_with`] on the installed host. The old signature, kept for its
+/// callers until P1-4.
+pub fn apply(_app: &AppHandle, enabled: bool) -> Result<(), CommandError> {
+    match crate::shell::host() {
+        Some(host) => apply_with(host.as_ref(), enabled),
+        None => {
+            log::warn!("Could not change launch at startup: no host yet");
+            Err(no_main_window())
+        }
+    }
+}
+
 /// Writes or removes the entry for the setting the user just chose in Scribe
 /// (the settings switch or the tray menu). Development builds refuse, so they
 /// never point the entry at a build folder.
-pub fn apply(app: &AppHandle, enabled: bool) -> Result<(), CommandError> {
+pub fn apply_with(host: &dyn Host, enabled: bool) -> Result<(), CommandError> {
     if cfg!(debug_assertions) {
         return Err(dev_build_error());
     }
-    let registration = read_registration(app).ok();
+    let registration = read_registration(host).ok();
     match entry_for_toggle(enabled, registration) {
-        Some(on) => write_entry(app, on),
+        Some(on) => write_entry(host, on),
         None => Ok(()),
     }
 }
 
-fn write_entry(app: &AppHandle, enabled: bool) -> Result<(), CommandError> {
-    use tauri_plugin_autostart::ManagerExt;
-
-    let autolaunch = app.autolaunch();
-    let result = if enabled {
-        autolaunch.enable()
-    } else {
-        autolaunch.disable()
-    };
-    result.map_err(|error| {
+fn write_entry(host: &dyn Host, enabled: bool) -> Result<(), CommandError> {
+    host.set_launch_at_login(enabled).map_err(|error| {
         CommandError::new(
             "autostart_failed",
             format!(
@@ -197,19 +202,31 @@ fn write_entry(app: &AppHandle, enabled: bool) -> Result<(), CommandError> {
     })
 }
 
+/// [`reconcile_at_launch_with`] on the installed host. The old signature,
+/// kept for its caller (the shell's setup) until P1-4.
+pub fn reconcile_at_launch(_app: &AppHandle, wanted: bool) -> Option<bool> {
+    match crate::shell::host() {
+        Some(host) => reconcile_at_launch_with(host.as_ref(), wanted),
+        None => {
+            log::warn!("Could not check the launch-at-startup entry: no host yet");
+            None
+        }
+    }
+}
+
 /// At launch: repairs or writes the entry when this is the installed copy,
 /// and returns the value "Launch at startup" should take when Windows'
 /// switch differs from `wanted`. Development builds do nothing.
 #[cfg(windows)]
-pub fn reconcile_at_launch(app: &AppHandle, wanted: bool) -> Option<bool> {
+pub fn reconcile_at_launch_with(host: &dyn Host, wanted: bool) -> Option<bool> {
     if cfg!(debug_assertions) {
         return None;
     }
-    let installed = installed_folder(app);
+    let installed = installed_folder(host);
     if let Some(folder) = &installed {
-        remember_install_folder(app, folder);
+        remember_install_folder(host, folder);
     }
-    let registration = match read_registration(app) {
+    let registration = match read_registration(host) {
         Ok(registration) => registration,
         Err(error) => {
             log::warn!("Could not read the launch-at-startup entry. {}", error);
@@ -227,7 +244,7 @@ pub fn reconcile_at_launch(app: &AppHandle, wanted: bool) -> Option<bool> {
         );
     }
     if let Some(enabled) = plan.entry {
-        if let Err(error) = write_entry(app, enabled) {
+        if let Err(error) = write_entry(host, enabled) {
             log::warn!("{}", error.message);
             return None;
         }
@@ -238,16 +255,14 @@ pub fn reconcile_at_launch(app: &AppHandle, wanted: bool) -> Option<bool> {
 /// At launch on macOS and Linux, as before this change: the stored setting is
 /// applied to the login entry.
 #[cfg(not(windows))]
-pub fn reconcile_at_launch(app: &AppHandle, wanted: bool) -> Option<bool> {
-    use tauri_plugin_autostart::ManagerExt;
-
+pub fn reconcile_at_launch_with(host: &dyn Host, wanted: bool) -> Option<bool> {
     if cfg!(debug_assertions) {
         return None;
     }
-    match app.autolaunch().is_enabled() {
+    match host.launch_at_login() {
         Ok(enabled) if enabled != wanted => {
             log::info!("Applying launch at startup ({wanted}) to the login entry");
-            if let Err(error) = write_entry(app, wanted) {
+            if let Err(error) = write_entry(host, wanted) {
                 log::warn!("{}", error.message);
             }
         }
@@ -257,14 +272,21 @@ pub fn reconcile_at_launch(app: &AppHandle, wanted: bool) -> Option<bool> {
     None
 }
 
+/// [`follow_windows_switch_with`] on the installed host. The old signature,
+/// kept for its callers until P1-4.
+pub fn follow_windows_switch(_app: &AppHandle, wanted: bool) -> Option<bool> {
+    let host = crate::shell::host()?;
+    follow_windows_switch_with(host.as_ref(), wanted)
+}
+
 /// The value "Launch at startup" should take to follow Windows' switch, when
 /// it differs from `wanted`. Never writes the entry. Always `None` on macOS
 /// and Linux and in development builds.
-pub fn follow_windows_switch(app: &AppHandle, wanted: bool) -> Option<bool> {
+pub fn follow_windows_switch_with(host: &dyn Host, wanted: bool) -> Option<bool> {
     if cfg!(debug_assertions) || !cfg!(windows) {
         return None;
     }
-    let registration = read_registration(app).ok()?;
+    let registration = read_registration(host).ok()?;
     plan(wanted, registration, false).setting
 }
 
@@ -336,20 +358,18 @@ mod windows_entry {
 }
 
 #[cfg(windows)]
-fn read_registration(app: &AppHandle) -> Result<Registration, String> {
+fn read_registration(host: &dyn Host) -> Result<Registration, String> {
     // The plugin names the entry after the product ("Scribe", "Scribe Dev").
     let exe = std::env::current_exe().map_err(|error| error.to_string())?;
     Ok(windows_entry::read(
-        &app.package_info().name,
+        host.flavor().product_name(),
         &exe.display().to_string(),
     ))
 }
 
 #[cfg(not(windows))]
-fn read_registration(app: &AppHandle) -> Result<Registration, String> {
-    use tauri_plugin_autostart::ManagerExt;
-
-    match app.autolaunch().is_enabled() {
+fn read_registration(host: &dyn Host) -> Result<Registration, String> {
+    match host.launch_at_login() {
         Ok(true) => Ok(Registration {
             kind: Kind::Current,
             on: true,
@@ -365,18 +385,19 @@ fn read_registration(app: &AppHandle) -> Result<Registration, String> {
 /// This copy's folder, when an installer recorded it (not a build folder or
 /// a copied exe).
 #[cfg(windows)]
-fn installed_folder(app: &AppHandle) -> Option<String> {
+fn installed_folder(host: &dyn Host) -> Option<String> {
     let exe = std::env::current_exe().ok()?;
     let folder = exe.parent()?.display().to_string();
-    windows_entry::recorded_install_folders(&app.package_info().name)
+    windows_entry::recorded_install_folders(host.flavor().product_name())
         .iter()
         .any(|recorded| same_folder(recorded, &folder))
         .then_some(folder)
 }
 
 #[cfg(windows)]
-fn remember_install_folder(app: &AppHandle, folder: &str) {
-    if let Err(error) = windows_entry::remember_install_folder(&app.package_info().name, folder) {
+fn remember_install_folder(host: &dyn Host, folder: &str) {
+    let product = host.flavor().product_name();
+    if let Err(error) = windows_entry::remember_install_folder(product, folder) {
         log::warn!("Could not record the install folder for updates. {}", error);
     }
 }
@@ -659,6 +680,80 @@ mod tests {
             r"C:\Users\me\AppData\Local\Scribe Dev",
             folder
         ));
+    }
+
+    fn recording_host() -> crate::host::RecordingHost {
+        crate::host::RecordingHost::new(
+            crate::paths::Paths::from_parts("/d".into(), "/c".into(), "/l".into(), None, None),
+            crate::host::Flavor::Stable,
+        )
+    }
+
+    #[test]
+    fn the_entry_is_written_and_removed_through_the_host() {
+        use crate::host::{Failing, HostCall};
+
+        let host = recording_host();
+        assert!(write_entry(&host, true).is_ok());
+        assert_eq!(host.launch_at_login(), Ok(true));
+        assert!(write_entry(&host, false).is_ok());
+        assert_eq!(host.launch_at_login(), Ok(false));
+        assert_eq!(
+            host.calls(),
+            [
+                HostCall::SetLaunchAtLogin(true),
+                HostCall::SetLaunchAtLogin(false)
+            ]
+        );
+
+        host.fail(Failing::LaunchAtLogin);
+        let error = write_entry(&host, true).unwrap_err();
+        assert_eq!(error.code, "autostart_failed");
+        assert_eq!(
+            error.message,
+            format!(
+                "Could not enable launch at startup. {}",
+                Failing::LaunchAtLogin.message()
+            )
+        );
+        let error = write_entry(&host, false).unwrap_err();
+        assert_eq!(
+            error.message,
+            format!(
+                "Could not disable launch at startup. {}",
+                Failing::LaunchAtLogin.message()
+            )
+        );
+    }
+
+    /// Outside Windows the host's answer is the whole registration: an entry
+    /// is this copy's, and there is no switch to be off.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_registration_is_read_from_the_host() {
+        let host = recording_host();
+        assert_eq!(read_registration(&host), Ok(reg(Kind::Missing, true)));
+        host.set_launch_at_login_state(true);
+        assert_eq!(read_registration(&host), Ok(reg(Kind::Current, true)));
+        host.fail(crate::host::Failing::LaunchAtLogin);
+        assert_eq!(
+            read_registration(&host),
+            Err(crate::host::Failing::LaunchAtLogin.message())
+        );
+        assert!(host.calls().is_empty());
+    }
+
+    /// Development builds never touch the entry: the toggle refuses, launch
+    /// and focus change nothing, and the host is never asked to write.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_development_build_leaves_the_entry_alone() {
+        let host = recording_host();
+        let error = apply_with(&host, true).unwrap_err();
+        assert_eq!(error.code, "autostart_dev_build");
+        assert_eq!(reconcile_at_launch_with(&host, true), None);
+        assert_eq!(follow_windows_switch_with(&host, false), None);
+        assert!(host.calls().is_empty());
     }
 
     /// Writes a throwaway entry and switch under a test name, reads them back
