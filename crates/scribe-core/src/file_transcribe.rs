@@ -6,14 +6,12 @@ use std::{
 };
 
 use serde::Serialize;
-use tauri::AppHandle;
 use uuid::Uuid;
 
 use crate::{
     core::Core,
     error::CommandError,
     model_manager,
-    output::core_for,
     whisper::{self, WhisperRequest},
 };
 
@@ -34,21 +32,7 @@ pub struct TranscribeFileResult {
 /// Transcribes a user-provided audio/video file with whisper-cli directly
 /// (never the warm server, which is tuned for short dictation segments).
 /// Long files are expected; the caller runs this on a worker thread.
-pub fn transcribe_file(app: &AppHandle, path: &str) -> Result<TranscribeFileResult, CommandError> {
-    let core = core_for(app, "transcribe the file")?;
-    transcribe_file_with(app, &core, path)
-}
-
-/// [`transcribe_file`] on the engine. Still takes the app for
-/// `whisper::transcribe_with_output_prefix` (models): that lane offers
-/// `transcribe_with_output_prefix_with`, but its `pub(crate)` wrapper has no
-/// other caller, so switching here would leave the wrapper unused in a file
-/// this lane may not change.
-pub fn transcribe_file_with(
-    app: &AppHandle,
-    core: &Core,
-    path: &str,
-) -> Result<TranscribeFileResult, CommandError> {
+pub fn transcribe_file_with(core: &Core, path: &str) -> Result<TranscribeFileResult, CommandError> {
     let source = PathBuf::from(path.trim());
     if !source.is_file() {
         return Err(CommandError::new(
@@ -89,9 +73,10 @@ pub fn transcribe_file_with(
     let output_prefix = work_dir.join(format!("file-{}", Uuid::new_v4().simple()));
     // A one-off whisper-cli run loads its own copy of the model, so the
     // resident one is unloaded first: never two models in memory.
-    let transcription = core
-        .warm_transcriber()
-        .run_exclusive(|| whisper::transcribe_with_output_prefix(app, &request, &output_prefix))?;
+    let host = core.host().as_ref();
+    let transcription = core.warm_transcriber().run_exclusive(|| {
+        whisper::transcribe_with_output_prefix_with(host, &request, &output_prefix)
+    })?;
     drop(converted);
 
     Ok(TranscribeFileResult {
