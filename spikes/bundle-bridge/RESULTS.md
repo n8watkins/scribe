@@ -1,7 +1,7 @@
 # Bundle bridge spike: results
 
 Workflow: `.github/workflows/bundle-bridge-spike.yml`, run on GitHub's `windows-latest` runners from pull request #140.
-Results below are from run https://github.com/n8watkins/scribe/actions/runs/45753456488 (commit 08e6f63).
+Results below are from run https://github.com/n8watkins/scribe/actions/runs/45756842666 (commit f2b5bbc), which is green: 810 checks passed, none failed (NSIS 767, MSI 32, signature 11).
 The per-check log of every run is in the job summary and in the `bundle-bridge-results` artifact.
 
 ## Verdict
@@ -37,7 +37,8 @@ Argument forms, from tauri-plugin-updater 2.14.1 with `installMode` quiet:
 
 Scenarios, run once with each setup: each of 0.16.1, 0.16.2 and 0.16.3 with each form in the default folder (nine), plus 0.16.1 and 0.16.3 in a custom folder `C:\ScribeCustom\Scribe` (eleven per setup).
 
-NSIS_COUNTS
+767 checks passed and none failed.
+In each of the 11 unchanged-hooks scenarios the pinned check found exactly the ten known `bin\windows` files left after uninstall.
 
 | Assertion | Unchanged hooks (11 scenarios) | Hooks + sidecar cleanup, the tested configuration (11 scenarios) |
 | --- | --- | --- |
