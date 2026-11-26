@@ -43,7 +43,7 @@ fn collect_notes(
         let db = state.db()?;
         let settings = db.get_settings()?;
         // Gate on the notes-sync setting, mirroring the all-transcripts gate in
-        // collect_and_sync_all_transcripts: the worker (and Sync now) must not
+        // collect_and_sync_all_transcripts_with: the worker (and Sync now) must not
         // push notes when only "Back up all transcripts" is on.
         if !settings.github_sync_enabled {
             return Ok(SyncReport {
@@ -161,7 +161,7 @@ fn clear_token_if_unauthorized(
 /// Backs up every DICTATION transcript to the repo's distinct `transcripts/`
 /// folder when `github_sync_all_transcripts` is on. Notes are deliberately
 /// excluded here: they already sync as the curated daily log via
-/// `collect_and_sync`/`sync_notes`, so this covers only the ordinary dictation
+/// `collect_and_sync_with`/`sync_notes`, so this covers only the ordinary dictation
 /// transcripts that the notes path skips — together the two give a full backup
 /// without writing any transcript into both folders. Blocking (DB + network),
 /// so callers run it off the main thread; the DB lock is dropped before the
@@ -318,7 +318,9 @@ impl NoteSyncWorker {
     /// [`NoteSyncWorker::spawn`] without the app: the worker finds the `Core`
     /// through `cell` once per sync and drops it when the sync ends. It never
     /// stores a strong `Core`, so dropping the last `Core` closes the channel
-    /// and ends the thread. Until the cell is filled it polls every 50 ms and
+    /// and ends the thread, when the `Core` holds the last sender. If another
+    /// sender outlives the `Core`, the thread keeps waking every 50 ms until
+    /// that sender drops. Until the cell is filled it polls every 50 ms and
     /// drops no note-saved signal.
     pub fn spawn_with(cell: CoreCell) -> Self {
         Self::start(move || cell.get(), sync_automatically, DEBOUNCE).0
@@ -594,14 +596,27 @@ mod tests {
     }
 
     #[test]
-    fn a_worker_on_an_empty_core_cell_keeps_the_signal_and_ends_with_its_handle() {
+    fn a_worker_on_a_never_filled_core_cell_syncs_nothing_and_ends_with_its_handle() {
         // A cell that is never filled is the shell before it has built the
-        // engine: the signal is not dropped, and nothing panics.
+        // engine: the worker waits for it, and ends once its handle drops.
         let cell = CoreCell::new();
-        let worker = NoteSyncWorker::spawn_with(cell.clone());
+        let synced = Arc::new(AtomicUsize::new(0));
+        let seen_synced = synced.clone();
+        let find = cell.clone();
+        let (worker, thread) = NoteSyncWorker::start(
+            move || find.get(),
+            move |_core| {
+                seen_synced.fetch_add(1, Ordering::SeqCst);
+            },
+            Duration::from_millis(5),
+        );
         worker.notify();
-        assert!(cell.get().is_none());
+        // Let it get past the debounce and into waiting for the engine.
+        thread::sleep(Duration::from_millis(120));
         drop(worker);
+        thread.expect("the thread started").join().unwrap();
+        assert!(cell.get().is_none());
+        assert_eq!(synced.load(Ordering::SeqCst), 0);
     }
 
     #[test]

@@ -785,8 +785,35 @@ mod tests {
         before.github_sync_all_transcripts = true;
         before.github_repo = "alice/notes".into();
         state.db().unwrap().save_settings(&before).unwrap();
+        let activity = crate::sync_history::GitHubSyncActivity::from_attempt(
+            crate::sync_history::SyncSource::Manual,
+            "alice/notes".into(),
+            &crate::github_backup::SyncReport {
+                synced_notes: 2,
+                files_written: 1,
+            },
+            None,
+        );
+        state
+            .db()
+            .unwrap()
+            .save_github_sync_activity(&activity)
+            .unwrap();
+        assert!(state
+            .db()
+            .unwrap()
+            .get_github_sync_activity()
+            .unwrap()
+            .is_some());
 
         let settings = reset_backup_settings(&state, &host).unwrap();
+        // The recorded backup activity goes with the reset.
+        assert!(state
+            .db()
+            .unwrap()
+            .get_github_sync_activity()
+            .unwrap()
+            .is_none());
 
         assert_eq!(settings.github_account_login, "");
         assert!(!settings.github_sync_enabled);
@@ -797,7 +824,7 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_announced_when_the_save_fails() {
+    fn nothing_is_announced_when_the_settings_cannot_be_read() {
         let root = tempfile::tempdir().unwrap();
         let host = host_in(root.path());
         let state = state_in(root.path());
