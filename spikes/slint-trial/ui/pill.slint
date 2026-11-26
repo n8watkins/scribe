@@ -1,0 +1,311 @@
+// The floating pill: a copy of app/src/PillApp.tsx and app/src/pill.css.
+// Window sizes (set from Rust): dot 58x56, bar 158x56, text 320x80 growing to 150.
+// Every number below names the CSS rule it copies.
+
+export enum PillLayout { dot, bar, text }
+
+// pillTone(): the status class on .pill-shell.
+export enum PillTone { idle, recording, pending, ready, error }
+
+// lucide-react <Check size={14}/>: stroke 2 in a 24 unit box, round caps and joins.
+component CheckIcon inherits Path {
+    in property <color> tint: #22c55e;
+    width: 14px;
+    height: 14px;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    commands: "M 20 6 L 9 17 L 4 12";
+    fill: transparent;
+    stroke: tint;
+    stroke-width: 14px * 2 / 24;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+}
+
+// .pill-pulse: a 7 px dot (11 px in dot layout). Recording: the 1.1 s
+// pill-pulse keyframes (scale 1 to 1.35, opacity 1 to 0.72, ease-in-out).
+component PulseDot inherits Rectangle {
+    in property <length> size: 7px;
+    in property <color> tint: #22d3ee;
+    in property <bool> pulsing;
+    in property <bool> glow;
+    // 0..1..0 over 1100 ms; each half eased with a smoothstep (close to CSS ease-in-out).
+    property <float> cycle: pulsing ? mod(animation-tick() / 1100ms, 1) : 0;
+    property <float> half: cycle < 0.5 ? cycle * 2 : (1 - cycle) * 2;
+    property <float> eased: half * half * (3 - 2 * half);
+    property <float> scale: 1 + 0.35 * eased;
+    width: size;
+    height: size;
+    dot := Rectangle {
+        width: root.size * root.scale;
+        height: self.width;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        border-radius: self.width / 2;
+        background: root.tint;
+        opacity: 1 - 0.28 * root.eased;
+        // .note-session .pill-pulse { box-shadow: 0 0 8px rgba(56, 189, 248, 0.7) }
+        drop-shadow-blur: root.glow ? 8px : 0;
+        drop-shadow-color: root.glow ? rgba(56, 189, 248, 0.7) : transparent;
+    }
+}
+
+// .pill-bars: 15 bars of 3 px, spread with space-between over the full
+// content width, 28 px tall, each scaled about its centre.
+component Bars inherits Rectangle {
+    in property <[float]> scales;
+    in property <color> tint;
+    height: 28px;
+    property <length> gap: (self.width - 3px * scales.length) / max(1, scales.length - 1);
+    for s[i] in scales: Rectangle {
+        x: i * (3px + root.gap);
+        width: 3px;
+        height: 28px * s;
+        y: (28px - self.height) / 2;
+        border-radius: min(2px, self.height / 2);
+        background: root.tint;
+    }
+}
+
+// .pill-text: 12 px, line-height 1.45, #e2e8f0, the latest line pinned to the
+// bottom edge and older lines clipped off the top.
+component ClipText inherits Rectangle {
+    in property <string> text;
+    in property <float> line-factor;
+    in property <string> family;
+    out property <length> natural-height: t.preferred-height;
+    clip: true;
+    t := Text {
+        width: parent.width;
+        height: self.preferred-height;
+        y: parent.height - self.height;
+        text: root.text;
+        font-family: root.family;
+        font-size: 12px;
+        line-height-factor: root.line-factor;
+        color: #e2e8f0;
+        wrap: word-wrap;
+        horizontal-alignment: start;
+    }
+}
+
+export component PillWindow inherits Window {
+    title: "Scribe Pill (trial)";
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    // The Rust side sizes the window; these are only the first size.
+    preferred-width: 158px;
+    preferred-height: 56px;
+
+    in property <PillLayout> layout: PillLayout.bar;
+    in property <PillTone> tone: PillTone.recording;
+    // What the pill shows (the branches of PillApp's JSX).
+    in property <bool> confirming;
+    in property <bool> copied;
+    in property <bool> recording;
+    in property <bool> dot-mode;
+    in property <bool> with-text;
+    in property <bool> note-tone;
+    in property <string> label;
+    in property <string> live-text: "Listening...";
+    in property <string> confirm-text;
+    in property <[float]> bars: [0.14, 0.14, 0.14, 0.14, 0.14, 0.14, 0.14, 0.14, 0.14, 0.14, 0.14, 0.14, 0.14, 0.14, 0.14];
+    // Settings colours (defaults from PillApp.tsx).
+    in property <color> bar-color: #fbbf24;
+    in property <color> bar-note-color: #38bdf8;
+    in property <color> bg: #0f1e38;
+    in property <bool> animate: true;
+    in property <string> family: "Segoe UI Variable";
+    // CSS line-height 1.45 over the font's natural line height (1.33 for Segoe UI).
+    in property <float> text-line-factor: 1.09;
+    in property <float> label-line-factor: 1.0;
+
+    // Natural heights of the two text areas; Rust adds the fixed chrome and
+    // clamps the window to 80..150 (the React code measures the same way).
+    out property <length> live-natural: live-clip.natural-height;
+    out property <length> confirm-natural: confirm-clip.natural-height;
+
+    callback press();
+    callback drag-moved();
+    callback release();
+    callback copy();
+
+    property <bool> is-text: layout == PillLayout.text;
+    property <bool> is-dot: layout == PillLayout.dot;
+    property <color> bars-tint: note-tone ? bar-note-color : bar-color;
+    // Pulse dot colour: .recording uses --pill-bar, .error red, .note-session blue, else cyan.
+    property <color> dot-tint: note-tone ? bar-note-color : tone == PillTone.recording ? bar-color : tone == PillTone.error ? #ef4444 : #22d3ee;
+
+    default-font-family: root.family;
+    default-font-size: 12px;
+    accessible-role: none;
+
+    shell := Rectangle {
+        x: 5px;
+        y: 4px;
+        width: root.width - 10px;
+        height: root.height - 8px;
+        border-width: 1px;
+        border-radius: root.is-text ? 16px : self.height / 2;
+        border-color: area.has-hover && root.tone == PillTone.recording && root.note-tone ? rgba(56, 189, 248, 0.6)
+            : area.has-hover && root.tone == PillTone.recording ? rgba(245, 158, 11, 0.4)
+            : root.note-tone ? rgba(56, 189, 248, 0.35)
+            : area.has-hover ? rgba(56, 189, 248, 0.38)
+            : rgba(56, 189, 248, 0.2);
+        background: area.has-hover ? root.bg.with-alpha(0.94) : root.bg.with-alpha(0.84);
+        animate background, border-color { duration: 140ms; easing: ease; }
+
+        // Content box: padding 0 7px (row layouts) or 10px 14px (text layout), inside the 1 px border.
+        property <length> pad-x: root.is-text ? 15px : 8px;
+        property <length> pad-y: root.is-text ? 11px : 1px;
+        property <length> cw: self.width - 2 * self.pad-x;
+        property <length> ch: self.height - 2 * self.pad-y;
+
+        area := TouchArea {
+            mouse-cursor: root.tone == PillTone.recording ? MouseCursor.pointer : self.pressed ? MouseCursor.grabbing : MouseCursor.grab;
+            pointer-event(e) => {
+                if e.button == PointerEventButton.left && e.kind == PointerEventKind.down {
+                    root.press();
+                } else if e.button == PointerEventButton.left && e.kind == PointerEventKind.up {
+                    root.release();
+                }
+            }
+            moved => {
+                root.drag-moved();
+            }
+        }
+
+        // 1. Confirmation: check + "Transcribed" + Copy, then the text in text layout.
+        if root.confirming: Rectangle {
+            x: shell.pad-x;
+            width: shell.cw;
+            y: root.is-text ? shell.pad-y : (shell.height - head.height) / 2;
+            height: root.is-text ? shell.ch : head.height;
+            head := Rectangle {
+                y: 0;
+                height: copy-btn.height;
+                CheckIcon {
+                    x: 0;
+                    y: (parent.height - self.height) / 2;
+                }
+                Text {
+                    x: 14px + 8px;
+                    width: copy-btn.x - 8px - self.x;
+                    height: parent.height;
+                    vertical-alignment: center;
+                    text: "Transcribed";
+                    font-size: 11.5px;
+                    font-weight: 600;
+                    color: #e2e8f0;
+                    overflow: elide;
+                }
+                copy-btn := Rectangle {
+                    width: copy-label.preferred-width + 20px + 2px;
+                    height: 11px * 1.3 + 6px + 2px;
+                    x: parent.width - self.width;
+                    border-width: 1px;
+                    border-radius: 8px;
+                    border-color: root.copied ? rgba(74, 222, 128, 0.45) : copy-area.has-hover ? rgba(148, 163, 184, 0.45) : rgba(148, 163, 184, 0.25);
+                    background: copy-area.has-hover ? rgba(51, 65, 85, 0.7) : rgba(30, 41, 59, 0.6);
+                    animate background, border-color { duration: 120ms; easing: ease; }
+                    accessible-role: button;
+                    accessible-label: root.copied ? "Copied" : "Copy";
+                    accessible-action-default => { root.copy(); }
+                    copy-label := Text {
+                        text: root.copied ? "Copied" : "Copy";
+                        font-size: 11px;
+                        font-weight: 600;
+                        color: root.copied ? #4ade80 : #e2e8f0;
+                        animate color { duration: 120ms; easing: ease; }
+                    }
+                    copy-area := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.copy(); }
+                    }
+                }
+            }
+        }
+
+        // 2. Recording, dot display mode: just the pulsing dot.
+        if !root.confirming && root.recording && root.dot-mode: PulseDot {
+            x: (shell.width - self.width) / 2;
+            y: (shell.height - self.height) / 2;
+            size: root.is-dot ? 11px : 7px;
+            tint: root.dot-tint;
+            pulsing: root.animate;
+            glow: root.note-tone;
+        }
+
+        // 3. Recording with the waveform (and the live text in text layout).
+        if !root.confirming && root.recording && !root.dot-mode: Rectangle {
+            x: shell.pad-x;
+            width: shell.cw;
+            y: root.is-text ? shell.pad-y : (shell.height - 28px) / 2;
+            height: root.is-text ? shell.ch : 28px;
+            Bars {
+                y: 0;
+                width: parent.width;
+                scales: root.bars;
+                tint: root.bars-tint;
+            }
+        }
+
+        // 4. Not recording: dot or check, then the label (none in dot layout).
+        if !root.confirming && !root.recording: Rectangle {
+            x: root.is-dot ? 0 : shell.pad-x;
+            width: root.is-dot ? shell.width : shell.cw;
+            y: root.is-text ? shell.pad-y : 0;
+            height: root.is-text ? shell.ch : shell.height;
+            property <length> mark-w: root.tone == PillTone.ready ? 14px : root.is-dot ? 11px : 7px;
+            if root.tone == PillTone.ready: CheckIcon {
+                x: root.is-dot ? (parent.width - self.width) / 2 : 0;
+                y: root.is-text ? 0 : (parent.height - self.height) / 2;
+            }
+            if root.tone != PillTone.ready: PulseDot {
+                x: root.is-dot ? (parent.width - self.width) / 2 : 0;
+                y: root.is-text ? 0 : (parent.height - self.height) / 2;
+                size: root.is-dot ? 11px : 7px;
+                tint: root.dot-tint;
+                pulsing: root.animate && root.tone == PillTone.recording;
+                glow: root.note-tone;
+            }
+            if !root.is-dot: Text {
+                x: root.is-text ? 0 : parent.mark-w + 8px;
+                y: root.is-text ? parent.mark-w + 6px : 0;
+                width: parent.width - self.x;
+                height: root.is-text ? self.preferred-height : parent.height;
+                vertical-alignment: center;
+                text: root.label;
+                font-size: 11.5px;
+                font-weight: 600;
+                color: #e2e8f0;
+                overflow: elide;
+                line-height-factor: root.label-line-factor;
+            }
+        }
+    }
+
+    // The two text areas live outside the conditional branches so their natural
+    // heights are always readable (`wanted-height`). Only one is visible.
+    live-clip := ClipText {
+        x: shell.x + shell.pad-x;
+        width: shell.cw;
+        y: shell.y + shell.pad-y + 28px + 6px;
+        height: max(0, shell.ch - 28px - 6px);
+        text: root.live-text;
+        family: root.family;
+        line-factor: root.text-line-factor;
+        visible: root.is-text && root.recording && !root.confirming && root.with-text;
+    }
+    confirm-clip := ClipText {
+        x: shell.x + shell.pad-x;
+        width: shell.cw;
+        y: shell.y + shell.pad-y + 11px * 1.3 + 8px + 6px;
+        height: max(0, shell.ch - (11px * 1.3 + 8px) - 6px);
+        text: root.confirm-text;
+        family: root.family;
+        line-factor: root.text-line-factor;
+        visible: root.is-text && root.confirming;
+    }
+}
