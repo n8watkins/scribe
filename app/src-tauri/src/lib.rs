@@ -18,22 +18,11 @@ pub use scribe_core::{
     status_file, sync_history, text_replace, transcript, update_check, whisper, whisper_server,
 };
 
+pub use scribe_core::{core::Core, events, host, paths};
+
 use commands::BackendState;
 use db::Database;
 use tauri::Manager;
-
-/// The tray and main-window functions the engine calls (see
-/// `scribe_core::shell`).
-fn shell_hooks() -> shell::ShellHooks {
-    shell::ShellHooks {
-        update_tray_status: tray::update_tray_status,
-        update_engine_summary: tray::update_engine_summary,
-        sync_settings: tray::sync_settings,
-        open_dashboard: tray::open_dashboard,
-        toggle_dashboard: tray::toggle_dashboard,
-        main_window_logical_size: window_size::current_logical,
-    }
-}
 
 /// Carry forward a pre-rebrand install's data after the LocalDictate->Scribe
 /// rename.
@@ -254,6 +243,9 @@ fn missing_command_state(app: &tauri::App) -> Vec<&'static str> {
     if app.try_state::<note_sync::NoteSyncWorker>().is_none() {
         missing.push("NoteSyncWorker");
     }
+    if app.try_state::<Core>().is_none() {
+        missing.push("Core");
+    }
     missing
 }
 
@@ -292,8 +284,6 @@ fn create_config_windows(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     install_panic_logger();
-    // Before anything can run engine code that touches the tray or a window.
-    shell::install(shell_hooks());
     tauri::Builder::default()
         // The single-instance plugin must be the first plugin registered so
         // it can take over before anything else initializes.
@@ -373,6 +363,11 @@ pub fn run() {
                 Vec::<String>::new(),
                 "the engine's folders differ from Tauri's"
             );
+            // Before anything can run engine code that touches the tray or a
+            // window, an event or a folder.
+            let host: std::sync::Arc<dyn host::Host> =
+                std::sync::Arc::new(tauri_host::TauriHost::new(app.handle().clone(), paths));
+            shell::install(host.clone());
             let app_data_dir = app.path().app_data_dir()?;
             let audio_temp_dir = app.path().app_cache_dir()?.join("recordings");
             std::fs::create_dir_all(&app_data_dir)?;
@@ -442,7 +437,11 @@ pub fn run() {
                 data_dir: app_data_dir.clone(),
                 cache_dir: app.path().app_cache_dir()?,
             };
-            app.manage(BackendState::new(db, audio_temp_dir, dirs));
+            // Each part of the engine is managed on its own (the commands
+            // and the engine still look them up by type) and handed to the
+            // Core below, which holds the very same instance.
+            let backend = BackendState::new(db, audio_temp_dir, dirs);
+            app.manage(backend.clone());
             // Folder cleanup (pre-rename paths, orphaned clips, stale temp
             // files) touches the disk, so it runs off the startup path.
             {
@@ -469,29 +468,32 @@ pub fn run() {
                     stale
                 );
             }
-            app.manage(whisper_server::WarmTranscriber::new(
+            let warm_transcriber = whisper_server::WarmTranscriber::new(
                 app.handle().clone(),
                 speech_engine::measurements_path(&app_data_dir),
-            ));
+            );
+            app.manage(warm_transcriber.clone());
             // Offer Scribe's live dictation state to external tools over an
             // in-process loopback HTTP+SSE server. Additive and best-effort: a
             // bind failure must never block the app, so log and carry on.
-            match state_server::start(app.handle()) {
+            let dictation_server = match state_server::start(app.handle()) {
                 Ok(server) => {
                     log::info!("Dictation-state interface on {}", server.base_url());
-                    app.manage(server);
+                    app.manage(server.clone());
+                    Some(server)
                 }
                 Err(error) => {
                     log::warn!("Could not start dictation-state server: {}", error);
+                    None
                 }
-            }
+            };
             // Background worker that debounces note saves into GitHub auto-syncs.
-            app.manage(note_sync::NoteSyncWorker::spawn(app.handle().clone()));
+            let note_sync = note_sync::NoteSyncWorker::spawn(app.handle().clone());
+            app.manage(note_sync.clone());
             // Every dictation action (hotkeys, tray, pill, dashboard) runs on
             // this one worker thread, so it must exist before any of them.
-            app.manage(dictation_worker::DictationWorker::spawn(
-                app.handle().clone(),
-            )?);
+            let dictation_worker = dictation_worker::DictationWorker::spawn(app.handle().clone())?;
+            app.manage(dictation_worker.clone());
             // The Wayland portals need Scribe's app id and a place to keep
             // the permission they grant, before the hotkeys start.
             #[cfg(target_os = "linux")]
@@ -501,11 +503,13 @@ pub fn run() {
                 &settings.hotkeys,
                 settings.notes_analysis_enabled,
             )?;
+            // hotkeys::setup manages the hotkey runtime itself.
+            let hotkey_runtime = app.state::<hotkeys::HotkeyRuntimeState>().inner().clone();
             tray::setup(app.handle(), &settings)?;
             // Replacements live in replacements.txt in the data folder; the
             // first run moves the list kept in settings there. A watcher picks
             // up edits made in any editor.
-            {
+            let replacements = {
                 use tauri::Emitter;
                 let store = std::sync::Arc::new(replacements_file::ReplacementStore::open(
                     app_data_dir.join(replacements_file::FILE_NAME),
@@ -524,8 +528,23 @@ pub fn run() {
                         worker.notify();
                     }
                 });
-                app.manage(store);
-            }
+                app.manage(store.clone());
+                store
+            };
+            // The engine as one handle, holding the parts managed above.
+            let core = Core::new(
+                host,
+                scribe_core::core::CoreParts {
+                    backend,
+                    warm_transcriber,
+                    dictation_server,
+                    note_sync,
+                    dictation_worker,
+                    hotkey_runtime,
+                    replacements,
+                },
+            );
+            app.manage(core);
             // Only now, with every piece of state managed, may a webview
             // exist and invoke commands (see create_config_windows).
             create_config_windows(app)?;
@@ -849,5 +868,46 @@ mod startup_order_tests {
             create > last_manage,
             "setup creates the windows before it manages all of its state"
         );
+    }
+
+    /// The engine starts in a fixed order: the host first (the engine's
+    /// tray, window and event calls go through it), then each part in the
+    /// order it was started before the Core existed, then the Core, which
+    /// holds them all, and only then the windows. A later part may rely on an
+    /// earlier one (the dictation worker before the hotkeys that queue onto
+    /// it, the backend before everything that reads it).
+    #[test]
+    fn setup_starts_the_engine_in_order() {
+        let source = include_str!("lib.rs");
+        let start = source.find(".setup(|app| {").unwrap();
+        let end = start + source[start..].find(".on_window_event(").unwrap();
+        let setup = &source[start..end];
+        let steps = [
+            "shell::install(host.clone())",
+            "Database::open(",
+            "app.manage(backend.clone())",
+            "child_guard::init(",
+            "app.manage(warm_transcriber.clone())",
+            "app.manage(server.clone())",
+            "app.manage(note_sync.clone())",
+            "app.manage(dictation_worker.clone())",
+            "hotkeys::setup(",
+            "tray::setup(",
+            "app.manage(store.clone())",
+            "app.manage(core)",
+            "create_config_windows(app)",
+        ];
+        let mut previous = 0;
+        for step in steps {
+            let at = setup
+                .find(step)
+                .unwrap_or_else(|| panic!("setup no longer has `{step}`"));
+            assert_eq!(setup.matches(step).count(), 1, "`{step}` appears twice");
+            assert!(at > previous, "`{step}` runs out of order");
+            previous = at;
+        }
+        // Every part the Core holds is managed on its own too, so the
+        // existing `app.state::<X>()` lookups keep finding it.
+        assert_eq!(setup.matches("app.manage(").count(), 7);
     }
 }

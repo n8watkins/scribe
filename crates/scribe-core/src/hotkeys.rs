@@ -301,9 +301,23 @@ struct ChordWatcherHandle {
     thread: std::thread::JoinHandle<()>,
 }
 
+/// The registered hotkeys and their live state, kept in Tauri's managed
+/// state. A cheap handle: clones share one [`HotkeyRuntime`] (Tauri state
+/// and `core::Core` hold the same one).
+#[derive(Clone, Default)]
+pub struct HotkeyRuntimeState(Arc<HotkeyRuntime>);
+
+impl std::ops::Deref for HotkeyRuntimeState {
+    type Target = HotkeyRuntime;
+
+    fn deref(&self) -> &HotkeyRuntime {
+        &self.0
+    }
+}
+
 #[derive(Default)]
 #[cfg_attr(not(windows), allow(dead_code))]
-pub struct HotkeyRuntimeState {
+pub struct HotkeyRuntime {
     actions_by_id: Mutex<HashMap<u32, HotkeyAction>>,
     pressed_actions: Mutex<HashSet<HotkeyAction>>,
     /// Per-action trigger edge, cached from settings at registration time so
@@ -340,7 +354,7 @@ pub struct HotkeyRuntimeState {
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
-impl HotkeyRuntimeState {
+impl HotkeyRuntime {
     fn replace_bindings(&self, actions_by_id: HashMap<u32, HotkeyAction>) {
         if let Ok(mut bindings) = self.actions_by_id.lock() {
             *bindings = actions_by_id;

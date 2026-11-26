@@ -214,7 +214,9 @@ struct Job {
     reply: Option<Reply>,
 }
 
-/// Handle to the worker thread, kept in Tauri's managed state.
+/// Handle to the worker thread, kept in Tauri's managed state. Clones share
+/// the one worker (Tauri state and `core::Core` hold the same one).
+#[derive(Clone)]
 pub struct DictationWorker {
     sender: Sender<Job>,
     /// Start commands queued but not yet run (see [`resolve`]).

@@ -40,6 +40,9 @@ pub struct NavigatePayload {
 /// An event from the engine to the interface.
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
+// An event is built, sent once and dropped, so the size of its largest
+// payload (the settings) costs nothing worth boxing it for.
+#[allow(clippy::large_enum_variant)]
 pub enum CoreEvent {
     /// `scribe:app-state`: the dictation state machine moved.
     AppState(AppStateSnapshot),

@@ -215,7 +215,9 @@ impl Drop for ConnectionPermit {
 }
 
 /// The managed handle to the running server. Held in Tauri state; `publish`
-/// feeds it from the choke point and `shutdown` tears it down on exit.
+/// feeds it from the choke point and `shutdown` tears it down on exit. Clones
+/// share the one server (Tauri state and `core::Core` hold the same one).
+#[derive(Clone)]
 pub struct DictationServer {
     hub: Arc<Hub>,
     shutdown: Arc<AtomicBool>,

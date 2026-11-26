@@ -22,7 +22,21 @@ use crate::{
     transcript::{Transcript, TranscriptSearchResult, TranscriptSort},
 };
 
-pub struct BackendState {
+/// The state the commands share. A cheap handle: clones share one
+/// [`Backend`], so the instance in Tauri state and the one [`crate::core::Core`]
+/// holds are the same.
+#[derive(Clone)]
+pub struct BackendState(std::sync::Arc<Backend>);
+
+impl std::ops::Deref for BackendState {
+    type Target = Backend;
+
+    fn deref(&self) -> &Backend {
+        &self.0
+    }
+}
+
+pub struct Backend {
     app_state: Mutex<AppStateMachine>,
     audio: Mutex<audio::AudioService>,
     db: Mutex<Database>,
@@ -56,7 +70,7 @@ impl BackendState {
         audio_temp_dir: std::path::PathBuf,
         dirs: crate::data_hygiene::DataDirs,
     ) -> Self {
-        Self {
+        Self(std::sync::Arc::new(Backend {
             dirs,
             app_state: Mutex::new(AppStateMachine::default()),
             audio: Mutex::new(audio::AudioService::new(audio_temp_dir)),
@@ -69,9 +83,11 @@ impl BackendState {
             pending_transform: Mutex::new(None),
             paste_target: Mutex::new(None),
             unsaved_last_transcript: Mutex::new(None),
-        }
+        }))
     }
+}
 
+impl Backend {
     /// Records where the dictation that is starting should paste. `None`
     /// means "no window to hold it to" (Scribe itself had focus).
     pub fn set_paste_target(&self, target: Option<output::PasteTarget>) {

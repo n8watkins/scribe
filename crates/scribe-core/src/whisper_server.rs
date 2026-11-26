@@ -291,9 +291,31 @@ struct Shared {
 /// Tauri-managed warm transcription service. `Send + Sync`; the slot and its
 /// bookkeeping live behind one mutex, which also serializes transcriptions
 /// (an engine runs one inference at a time anyway).
+///
+/// A cheap handle: clones share the same engine (Tauri state and
+/// `core::Core` hold the same one), and the engine is stopped when the last
+/// clone goes.
+#[derive(Clone)]
 pub struct WarmTranscriber {
     inner: Arc<Mutex<Inner>>,
     shared: Arc<Shared>,
+    _stop_on_last_drop: Arc<StopOnDrop>,
+}
+
+/// Stops the speech engine when the last [`WarmTranscriber`] handle drops.
+struct StopOnDrop(Arc<Mutex<Inner>>);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        stop_engine(&self.0);
+    }
+}
+
+fn stop_engine(inner: &Mutex<Inner>) {
+    let mut inner = lock(inner);
+    if inner.slot.unload() {
+        log::info!("Stopped the speech engine");
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -304,15 +326,17 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl WarmTranscriber {
     pub fn new(app: AppHandle, measurements_path: PathBuf) -> Self {
+        let inner = Arc::new(Mutex::new(Inner {
+            slot: Slot::default(),
+            last_config: None,
+            failures: FailureTracker::default(),
+            last_used: None,
+            http: None,
+            measurements: Measurements::load(measurements_path),
+        }));
         let transcriber = Self {
-            inner: Arc::new(Mutex::new(Inner {
-                slot: Slot::default(),
-                last_config: None,
-                failures: FailureTracker::default(),
-                last_used: None,
-                http: None,
-                measurements: Measurements::load(measurements_path),
-            })),
+            _stop_on_last_drop: Arc::new(StopOnDrop(inner.clone())),
+            inner,
             shared: Arc::new(Shared {
                 app,
                 live: Mutex::new(Live::default()),
@@ -628,10 +652,7 @@ impl WarmTranscriber {
 
     /// Stops the resident engine. Called on app exit; double-stop is safe.
     pub fn shutdown(&self) {
-        let mut inner = lock(&self.inner);
-        if inner.slot.unload() {
-            log::info!("Stopped the speech engine");
-        }
+        stop_engine(&self.inner);
     }
 
     fn publish(&self, memory: Option<u64>) {
@@ -1065,12 +1086,6 @@ fn spawn_named(name: &str, work: impl FnOnce() + Send + 'static) -> bool {
             log::warn!("Could not start the {} thread. {}", name, error);
             false
         }
-    }
-}
-
-impl Drop for WarmTranscriber {
-    fn drop(&mut self) {
-        self.shutdown();
     }
 }
 

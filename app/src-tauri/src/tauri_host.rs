@@ -1,8 +1,71 @@
-//! The Tauri side of the engine's seams: the folders Tauri resolves, checked
-//! against the engine's own [`Paths`].
+//! The Tauri side of the engine's seams: [`TauriHost`], the engine's
+//! [`Host`] on top of Tauri, and the folders Tauri resolves, checked against
+//! the engine's own [`Paths`].
 
-use scribe_core::paths::Paths;
-use tauri::{Manager, Runtime};
+use scribe_core::{
+    app_state::AppStatus,
+    error::CommandError,
+    events::CoreEvent,
+    host::{Flavor, Host},
+    paths::Paths,
+    settings::AppSettings,
+};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
+
+/// The engine's host in the Tauri shell: events go to every webview through
+/// `app.emit`, the tray and the main window are the shell's own.
+pub struct TauriHost {
+    app: AppHandle,
+    paths: Paths,
+    flavor: Flavor,
+}
+
+impl TauriHost {
+    pub fn new(app: AppHandle, paths: Paths) -> Self {
+        let flavor = Flavor::from_identifier(&app.config().identifier);
+        Self { app, paths, flavor }
+    }
+}
+
+impl Host for TauriHost {
+    /// Exactly what the engine's `app.emit(name, payload)` calls send: the
+    /// event serializes as its bare payload.
+    fn emit(&self, event: CoreEvent) {
+        let _ = self.app.emit(event.name(), &event);
+    }
+
+    fn paths(&self) -> &Paths {
+        &self.paths
+    }
+
+    fn flavor(&self) -> Flavor {
+        self.flavor
+    }
+
+    fn update_tray_status(&self, status: AppStatus) {
+        crate::tray::update_tray_status(&self.app, status);
+    }
+
+    fn update_engine_summary(&self, summary: String) {
+        crate::tray::update_engine_summary(&self.app, summary);
+    }
+
+    fn sync_settings(&self, settings: &AppSettings) {
+        crate::tray::sync_settings(&self.app, settings);
+    }
+
+    fn open_dashboard(&self, route: Option<&str>) -> Result<(), CommandError> {
+        crate::tray::open_dashboard(&self.app, route)
+    }
+
+    fn toggle_dashboard(&self) -> Result<(), CommandError> {
+        crate::tray::toggle_dashboard(&self.app)
+    }
+
+    fn main_window_logical_size(&self) -> Option<(u32, u32)> {
+        crate::window_size::current_logical(&self.app)
+    }
+}
 
 /// Resolves the engine's folders for this app (its identifier and product
 /// name), the same folders `app.path()` gives.
@@ -82,6 +145,31 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    /// `TauriHost::emit` sends `(event.name(), &event)`; Tauri must deliver
+    /// that exactly as the engine's `app.emit(name, payload)` calls do.
+    #[test]
+    fn emitting_a_core_event_sends_what_the_engine_sends_today() {
+        use std::sync::{Arc, Mutex};
+        use tauri::Listener;
+
+        let app = app_for("com.natkins.scribe", "Scribe");
+        let received = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sink = received.clone();
+        app.listen_any("scribe:dictation-empty", move |event| {
+            sink.lock().unwrap().push(event.payload().to_string());
+        });
+        let payload = scribe_core::dictation::DictationEmptyPayload {
+            message: "Nothing heard.".into(),
+        };
+        app.emit("scribe:dictation-empty", &payload).unwrap();
+        let event = CoreEvent::DictationEmpty(payload);
+        app.emit(event.name(), &event).unwrap();
+        let received = received.lock().unwrap();
+        assert_eq!(received.len(), 2);
+        assert_eq!(received[0], received[1]);
+        assert_eq!(received[0], r#"{"message":"Nothing heard."}"#);
     }
 
     #[test]
