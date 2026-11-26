@@ -5,15 +5,16 @@ Phase 1 separates the engine (`crates/scribe-core`) from the interface inside to
 
 - P1-1 moved the engine into `crates/scribe-core`.
 - P1-2 added the seams: `Paths`, `CoreEvent`, `Host`, `Core`, and split the Tauri commands into one shell file per domain.
-- P1-3 ran seven lanes in parallel, one per domain, each converting its engine modules from `AppHandle` to `&Core` and `Host`.
-  All seven are merged: `status` (#145), `sync` (#146), `output` (#147), `models` (#148), `data` (#150), `hotkeys` (#151) and `audio` (#155), plus an engine fix found in review (#154) and an end-to-end test of the default Windows hotkeys (#153).
-- P1-4 (next) removes what the lanes left behind (the `AppHandle` wrappers and parameters, the individually managed state, the `shell` free functions) and makes the engine free of Tauri.
-  Its work list is the last section of this file, and it describes main as of 75614fc.
+- P1-3 converted the engine modules from `AppHandle` to `&Core` and `Host`, in seven parallel lanes (#145 to #155).
+- P1-4 removes what P1-3 left behind (the `AppHandle` wrappers and parameters, the individually managed state, the `shell` free functions) and makes the engine free of Tauri, in six steps.
+  Step 1 (`seams` #159, `e2e-log-check` #158) and step 2 (`output` #163, `data` #161, `audio` #165, `models` #162, `sync` #160, `hotkeys` #164) are merged.
+  Steps 3 to 6 remain; each has its own section under "For P1-4", written so that it can be handed to a fresh agent with this file as its only instructions.
+
+This file describes main as of aef18a0 (step 2 plus #166, which changed only tests in `whisper_server.rs` and `process_info.rs`), and file:line references are to that commit.
+If main has moved when you start, check the references you rely on before you change code.
 
 Behavior never changes along the way: same commands and names, same event names and payloads, same data folders, same installers.
-
-The sections from "The pattern for a lane" to "Definition of done for a lane" are the P1-3 rulebook, corrected where the lanes and their reviews showed it was wrong or silent.
-Where a rule changed, the text says what main does now.
+The one intended visible change so far is #165's: `appVersion` in `status.json`, `control.json` and the state stream is the app's own version, which in Dev and installer-upgrade builds is no longer the base version.
 
 ## The seams
 
@@ -21,12 +22,12 @@ Where a rule changed, the text says what main does now.
 |------|------------|
 | `crates/scribe-core/src/paths.rs` | `Paths`: every folder the engine uses (data, cache, log, resource, home), resolved exactly as Tauri resolves them, without Tauri. |
 | `crates/scribe-core/src/events.rs` | `CoreEvent`: one variant per event the engine sends (22), carrying today's payload. `name()` is today's event name and the event serializes as its bare payload. |
-| `crates/scribe-core/src/host.rs` | `trait Host`: what the engine needs from its shell (`emit`, `paths`, `flavor`, the tray and main-window calls). `Flavor` (Stable or Dev). `RecordingHost`, a host for tests. |
-| `crates/scribe-core/src/core.rs` | `Core`: a cheap, cloneable handle owning the engine's parts (`backend()`, `warm_transcriber()`, `dictation_server()`, `note_sync()`, `dictation_worker()`, `hotkey_runtime()`, `replacements()`) and its `host()`, with `emit()`, `paths()` and `flavor()` shortcuts, and `shutdown()`. |
+| `crates/scribe-core/src/host.rs` | `trait Host`: what the engine needs from its shell (`emit`, `paths`, `flavor`, the tray and main-window calls, the app's version, exiting, opening a path or URL, notifications, global shortcuts, the startup entry). `Flavor` (Stable or Dev). `RecordingHost`, a host for tests. |
+| `crates/scribe-core/src/core.rs` | `Core`: a cheap, cloneable handle owning the engine's parts (`backend()`, `warm_transcriber()`, `dictation_server()`, `note_sync()`, `dictation_worker()`, `hotkey_runtime()`, `replacements()`) and its `host()`, with `emit()`, `paths()` and `flavor()` shortcuts, and `shutdown()`. `CoreCell` hands the `Core` to the workers built before it. |
 | `crates/scribe-core/src/backend.rs` | `BackendState` (was in `commands.rs`): the database, the state machine, the audio service and the shared locks. |
-| `crates/scribe-core/src/shell.rs` | The installed `Host` (`shell::host()`), and the old tray and window free functions, which now forward to it. |
+| `crates/scribe-core/src/shell.rs` | The installed `Host` (`shell::install`, `shell::host()`), which the remaining host-only wrappers use, and the old tray and window free functions, which forward to it. |
 | `app/src-tauri/src/tauri_host.rs` | `TauriHost`: `Host` on Tauri. `emit` sends `app.emit(event.name(), &event)`. |
-| `app/src-tauri/src/commands/<domain>.rs` | The `#[tauri::command]` functions, one file per domain. `commands/mod.rs` has `off_main`, `off_main_core` and `on_dialog_thread`. |
+| `app/src-tauri/src/commands/<domain>.rs` | The `#[tauri::command]` functions, one file per domain. `commands/mod.rs` has `off_main` (takes the app), `off_main_core` and `on_dialog_thread` (take the `Core`). |
 
 `Paths::data_dir()` is the framework's app data folder (Tauri's `app_data_dir()`: the database, clips, models, replacements.txt).
 It is not the folder the user can choose in Settings (`dataDir`, resolved by `data_hygiene::effective_data_dir_with`), and the two must never be swapped for each other.
@@ -43,7 +44,7 @@ There are two values for the app's folders, and they are not interchangeable:
 New code that writes or deletes user data takes the folder from `core.backend().dirs()`, never from `core.paths()`.
 The `Paths` uses on main that stay legitimate are reads and opens: the logs folder (`data_hygiene::logs_dir_with`, `diagnostics.rs`; `DataDirs` has no log folder), the home folder that diagnostics masks, and the resource folder the engine binaries are found in (`whisper::resolve_bundled_executable_with`).
 Three merged writers also use `Paths`, and they are known exceptions rather than the model: the models folder (`model_manager::models_dir_with`, `<Paths::data_dir>/models`, where downloads land and deletes happen), the status file (`status_file::publish_with`, `Paths::cache_dir`), and the dictation-state discovery file (`state_server::control_file_path`, `~/.scribe` under `Paths::home_dir`).
-They are correct only while `Paths` agrees with Tauri, which is why the startup mismatch log matters (P1-4 adds a check for it).
+They are correct only while `Paths` agrees with Tauri, which is why the startup mismatch log matters: since #158 the Windows end-to-end job and the Linux and macOS install-and-launch scripts fail when the app's log contains it (`app/e2e/folder_mismatch.py`).
 
 ## Startup and shutdown
 
@@ -61,7 +62,8 @@ Each part is a cheap handle onto shared state, so `app.state::<BackendState>()` 
 Engine work can also start from outside setup's own code: a queued dictation job, a hotkey press, a tray click, a window's command, or a remote command from a second launch (`Scribe toggle`).
 All of these can start only once the `Core` is managed: the hotkeys, the tray and the windows come after it, and the single-instance handler and the global-shortcut handler both drop their event with a log line while `try_state::<Core>()` is `None`.
 The only engine code that runs before the `Core` exists is setup's own steps 1 to 4 (and the threads they start: the folder clean-up, the speech engine watchdog and its `speech-engine-status` thread, the note-sync and dictation workers, the replacements watcher, the dictation-state server).
-Three of those find what they need without the `Core`: the folder clean-up looks up the managed `BackendState`, `WarmTranscriber::new` takes the installed host and the managed `BackendState`, and the note-sync and dictation workers poll `try_state::<Core>()` until it is managed.
+Until step 3, three of those find what they need without the `Core`: the folder clean-up looks up the managed `BackendState`, `WarmTranscriber::new` takes the installed host and the managed `BackendState`, and the note-sync and dictation workers poll `try_state::<Core>()` until it is managed.
+Step 3 manages only the `Core`, hands those parts what they need directly, and gives the workers a `CoreCell` (see "Step 3").
 
 At exit the shell calls `Core::shutdown()`, which writes an idle status file, stops the dictation-state server and stops the speech engine, in that order.
 Stopping the speech engine (`WarmTranscriber::shutdown`, #154) first sets a `shutting_down` flag, then stops every speech helper process it started (whisper-server, scribe-parakeet) by its recorded identity, without taking the engine lock, and tidies the engine slot only if the lock is free.
@@ -71,483 +73,404 @@ Nothing in the app may rely on drop to stop anything: the handles are shared and
 (`WarmTranscriber` has a safety net that stops the engine when its last handle drops, for tests and for a shell that drops its `Core`; the app never reaches it.)
 The native shell must call `Core::shutdown()` on its way out too.
 
-Tests in `app/src-tauri/src/lib.rs` pin the startup order, the guards, the number of `app.manage(` calls (8) and the 79 command names; `app/src-tauri/tests/tauri_host.rs` checks `Paths` against Tauri's resolver for both flavors and the emitted payloads against the engine's own `app.emit` calls; `app/src-tauri/tests/models.rs` does the same for the models folder and the two models events.
+Tests in `app/src-tauri/src/lib.rs` pin the startup order, the guards, the number of `app.manage(` calls (8, `lib.rs:1118`) and the 79 command names (`:871`); `app/src-tauri/tests/tauri_host.rs` checks `Paths` against Tauri's resolver for both flavors and the emitted payloads against the engine's own `app.emit` calls; `app/src-tauri/tests/models.rs` does the same for the models folder and the two models events.
 
-## The pattern for a lane
+### How the engine knows the main thread
 
-A lane converts the engine modules it owns, one function at a time.
+The settings write lock must never be taken on the main thread (see the lock rules below), and since #161 `settings_store::lock` debug-asserts it (`settings_store.rs:43`-`:51`).
+The engine has no seam for "the main thread": `on_main_thread` (`:56`) asks whether the current thread is named "main", the name Rust's runtime gives the thread that runs `main`, and no Scribe thread takes that name.
+In the Tauri shell that is the event-loop thread, because `main` calls `app_lib::run()` (`app/src-tauri/src/main.rs`) and Tauri runs its event loop on the calling thread on Windows, macOS and Linux.
+A native shell must keep its event loop on the Rust main thread too: with the event loop on any other thread this assertion goes blind, and a settings change taken on the event-loop thread could deadlock against its own tray and hotkey calls unnoticed.
+The tests are `the_settings_lock_is_taken_off_the_main_thread` and `taking_the_settings_lock_on_the_main_thread_panics_in_debug_builds` (`settings_store.rs:476`, `:489`).
 
-1. Find what ties the function to Tauri: `app.state::<X>()`, `app.try_state::<X>()`, `app.emit(...)`, `app.path()`, `is_dev_flavor(app)`, `display_name(app)`, `app.config().identifier`, `app.package_info().version`, `app.exit(...)`, `crate::shell::...(app, ...)`.
-2. Write the engine version, named after the old function with `_with` added.
-   Replace `app.state::<BackendState>()` with `core.backend()`, the other parts with their `Core` accessors, `app.emit(name, payload)` with `core.emit(CoreEvent::Variant(payload))`, `is_dev_flavor(app)` with `core.flavor().is_dev()`, `display_name(app)` with `core.flavor().display_name()`, `app.config().identifier` with `core.flavor().identifier()`, and `crate::shell::open_dashboard(app, route)` with `core.host().open_dashboard(route)`.
-   A folder the function writes into or deletes from comes from `core.backend().dirs()` (`DataDirs`), not from `core.paths()`; only reads and opens of the logs, home and resource folders use `core.paths()` (see "Which folder value to use").
-   Never replace `app.package_info().version` with the engine crate's `env!("CARGO_PKG_VERSION")`.
-   Dev builds (`release.yml` gives each one a pre-release version such as `0.16.4-57`) and the installer-upgrade test build (`installer-upgrade.yml`, `--config` with a raised version) override the app's version, so the engine crate's version is wrong in exactly the builds that test upgrades.
-   The test `the_engine_carries_the_app_version` in `app/src-tauri/src/lib.rs` compares only the base `tauri.conf.json` with the crate versions and does not cover those builds.
-   Until the `Host` can answer the app's version (a P1-4 task), a function that needs it takes it as an argument from a caller that still has the app, as `diagnostics::collect_with`, `release_notes::pending_version_with` and `self_test::run` do.
-3. Pick the signature by what the body still needs:
-   - nothing from Tauri: `fn name_with(core: &Core, ...)`, or `fn name_with(host: &dyn Host, ...)` when it needs nothing but the host;
-     a function that starts a thread which outlives the call takes an owned handle instead (`Arc<dyn Host>`, or a `Core` clone), as `state_server::start_with` does;
-     a part the `Core` holds cannot be handed the `Core` it is part of, so a part that needs engine functions takes the host (and the other parts it reads) instead: `WarmTranscriber::new_with(host, backend, path)`, and the `models` functions it calls take `&dyn Host`;
-   - still an `AppHandle`, because it calls another lane's function that takes one, a function of a module no lane owns that takes one (`autostart`), or a Tauri plugin or window API: the transitional `fn name_with(app: &AppHandle, core: &Core, ...)`, with everything else converted to `core`.
-     A function that needs the app only to pass it on to such a function takes the transitional signature too.
-     Every such function is listed by name in the "still takes AppHandle" table of the lane's pull request, for P1-4.
-     The current list is in "Functions that still need an AppHandle" below.
-4. Keep the old function, with its old name and signature, as a thin wrapper that finds the `Core` and calls the engine version.
-   A wrapper uses `app.try_state::<Core>()`, never `app.state::<Core>()` (which panics, and a panic on the dictation worker kills the one thread every dictation runs on).
-   A wrapper whose engine version needs nothing but the host uses `crate::shell::host()` instead of the `Core`, because the host is installed first thing in setup and some of these wrappers run before the `Core` exists (`status_file::publish`, `settings_store::emit_changed`, `output::emit_output_failed`, `audio::emit_recording_error`, `incremental::emit_partial_transcript`, `hotkeys::emit_registration_failures`, `data_hygiene::logs_dir`, `test_audio::activate`, `state_server::start`).
-   When the `Core` (or the host) is missing, the wrapper logs a warning and returns what the function returns with no main window: the error `host::no_main_window()` for a function that returns a `Result<_, CommandError>`, `None` or nothing otherwise.
-   A function that returns a plain struct with an error field (for example `SyncAttempt`) returns that struct carrying `host::no_main_window()` in the field, with everything else empty.
-   A function that returns a plain struct with no error field returns its "nothing happened" value (`gpu::probe` returns a not-probed `GpuProbe`).
-   A `pub(crate)` function whose callers are all in your lane is replaced by its engine version, not wrapped (`audio::finish_timed_out_recording`, `audio::finish_disconnected_recording`, `dictation::emit_dictation_empty`, `whisper::resolve_bundled_executable`): a wrapper nobody calls is dead code.
-   A thread that starts before the `Core` is managed and looks it up later (the note-sync worker, the dictation worker) waits for it: it polls `try_state::<Core>()` every 50 ms and stops only when its channel closes.
-   It never drops the work it was woken for.
-   Callers in other lanes keep compiling against the wrapper, untouched.
-5. Switch the callers inside your own lane to the `_with` version.
-   A call into another lane may go straight to that lane's `_with` version once it is merged and takes no `AppHandle` (the `audio` lane calls `output::emit_output_failed_with`, `status_file::publish_with` and the `models` lane's `_with` functions; the `data` lane calls `hotkeys::set_transform_enabled_with`).
-   This leaves the other lane's wrapper with fewer callers, often none; list every wrapper you leave without a caller in your pull request, because P1-4 deletes them (the current list is under "Wrappers to delete" in the P1-4 section).
-6. Convert your commands in `app/src-tauri/src/commands/<domain>.rs` to take `core: tauri::State<'_, Core>` instead of `app: tauri::AppHandle` where they only needed the app for state.
-   An `async` command runs its blocking work with `off_main_core(core.inner().clone(), |core| ...)`.
-   A command that took the app only to run off the main thread (`off_main(app, ...)`) and reads no state takes the `Core` only for `off_main_core` and ignores it (`get_paste_permission`, `request_paste_permission`, `configure_portal_shortcuts`); a shell command that uses neither stays as it is (`check_for_update`).
-   A synchronous command stays synchronous: only its arguments change, never `fn` to `async fn`, because that moves it off the main thread.
-   The synchronous commands today are `get_logs_dir`, `get_failed_recordings_dir`, `whats_new_pending`, `dismiss_whats_new` and `collect_diagnostics` (`data`), `github_device_cancel` (`sync`), and `open_dashboard` and `open_release_page` (`shell`, no lane).
-   The windows pass no argument for `State`, so the command's interface does not change.
-7. Test the engine version.
-   A function that takes `&dyn Host` is tested with `RecordingHost` and `Paths::from_parts` on a temporary folder: it records every event sent, so a test can assert the event name and payload.
-   A function that takes `&Core` cannot be tested directly yet: no test builds a `Core`.
-   `WarmTranscriber::new_with` and the test-only `DictationWorker::spawn_with` need no app, so the one part still tied to the Tauri `AppHandle` is `NoteSyncWorker::spawn` (a mock app's handle has a different type).
-   So keep the `_with(core: &Core)` function a thin shell, move its body into a private function over the parts it really uses (`&BackendState`, `&dyn Host`, a store, plain values), and unit-test that function.
-   The models are the sync lane's `collect_notes`, `collect_transcripts` and `record_attempt` in `note_sync.rs`, the data lane's `apply_settings_change_in` with a recording `SettingsEffects`, and the audio lane's `dictation_state::Parts` with its `test_parts::Fixture`.
-   The integration test file `app/src-tauri/tests/<lane>.rs` is optional: add it only when it tests something a unit test cannot.
-   A way to build a `Core` in tests is on the P1-4 list.
+## Rules every remaining step keeps
 
-   The Windows end-to-end job is not proof of the event contract.
-   It drives real dictations, the default hotkeys and their watchers (#153) and the paste, and it fails when a dictation does not reach its target, but it does not check event names, payloads, their order, how many times an event is sent, or the error paths.
-   For example, after the `output` and `audio` lanes a failed paste after a dictation sent `scribe:output-failed` twice (once in `output.rs`, once more in `dictation::transcribe_recording_inner`), and every check passed; #156 fixed it (`dictation::settle_output`).
-   So the unit tests with `RecordingHost` must pin, for every function that sends events:
-   - the event name and the exact JSON payload (`CoreEvent::name()` and the serialized event, compared with what the old `app.emit(name, payload)` sent);
-   - the order of the events relative to each other and to the other side effects (for a new state: the `scribe:app-state` event, then the status file, then the dictation-state server; for the speech engine: the event, then the tray line; for settings: one `scribe:settings-changed`, after the save);
-   - how many times each event is sent, including "exactly once" on failure paths and "none" where nothing may be sent;
-   - the error paths: what the function returns and sends when the `Core` or the host is missing, when the database fails, and when a step in the middle fails (a rollback, a quarantined recording).
+P1-3 and P1-4 step 2 followed a longer rulebook for converting one function at a time; it is in this file's history (`git show 550f041:docs/CORE-SPLIT.md`).
+What still applies to steps 3 to 6:
 
-Rules that keep behavior the same and the lanes apart:
-
-- A lane never adds anything to `Host`, `Core`, `CoreEvent` or `Paths`, and never converts or changes another lane's function.
-  It calls the other lane's function: the merged `_with` version when that takes no `AppHandle`, otherwise the wrapper, and lists the call in its "still takes AppHandle" table.
-- Send the same event, with the `CoreEvent` variant whose `name()` is the name you replace; do not change a payload type (the `events.rs` tests pin every payload).
-- Calls that need a Tauri plugin or a window (the opener, notifications, the global-shortcut plugin, the autostart plugin, webview windows, exiting the app) keep their `AppHandle`; P1-4 adds what the `Host` needs for them.
+- Never replace `app.package_info().version` with the engine crate's `env!("CARGO_PKG_VERSION")`: Dev builds (`release.yml` gives each one a pre-release version such as `0.16.4-57`) and the installer-upgrade test build (`installer-upgrade.yml`, `--config` with a raised version) override the app's version.
+  The engine reads the app's version from `Host::app_version()`.
+- A folder the engine writes into or deletes from comes from `core.backend().dirs()`, not from `core.paths()` (see "Which folder value to use").
+- Send the same events: the `CoreEvent` variant whose `name()` is today's name, with today's payload type (the `events.rs` tests pin every payload).
+  Do not rename or move the payload types or the event-name constants `events.rs` names.
+- Code that finds the `Core` through the app uses `app.try_state::<Core>()`, never `app.state::<Core>()`, which panics (a panic on the dictation worker kills the one thread every dictation runs on).
+  When the `Core` is missing it logs a warning and answers as with no main window: `host::no_main_window()`, `None` or nothing.
+- A synchronous command stays synchronous: only its arguments change, never `fn` to `async fn`, because that moves it off the main thread.
+  The synchronous commands are `get_logs_dir`, `get_failed_recordings_dir`, `whats_new_pending`, `dismiss_whats_new` and `collect_diagnostics` (`commands/data.rs`), `github_device_cancel` (`commands/sync.rs`), and `open_dashboard` and `open_release_page` (`commands/shell.rs`).
+  An `async` command runs its blocking work with `off_main_core(core.inner().clone(), |core| ..)`.
+  The windows pass no argument for `State`, so a command that swaps `app: tauri::AppHandle` for `core: tauri::State<'_, Core>` keeps its interface.
 - Never call the host (an event, the tray, a window, a sound) while holding an engine lock (the speech engine's lock, the dictation state machine's lock, the database lock).
-  On Tauri the tray calls wait for the main thread, and at exit the main thread waits for the engine lock in `Core::shutdown`: that is the quit deadlock #148 found and fixed by sending the speech engine's status to the host from its own `speech-engine-status` thread, in order.
+  On Tauri the tray calls wait for the main thread, and at exit the main thread waits for the engine lock in `Core::shutdown`: that is the quit deadlock #148 fixed.
   Read what you need, drop the lock, then call the host (as `dictation_worker::refresh_tray` does).
-- The one lock held across host calls on purpose is the settings write lock (`BackendState::settings_writes`, taken through `settings_store::lock`): it is held from reading the settings to announcing them, so the events go out in the order the writes happened, and the announcement (`emit_changed_with`) updates the tray menu, and a settings change registers hotkeys through the global-shortcut plugin while holding it.
-  So that lock must never be taken on the main thread; every caller today runs off it (the async commands through `off_main` or `off_main_core`, the tray and window-focus handlers on their own `launch-at-startup` threads).
-  P1-4 adds a debug assertion for this.
+- The one lock held across host calls on purpose is the settings write lock (`BackendState::settings_writes`, taken through `settings_store::lock`): it is held from reading the settings to announcing them, so the events go out in the order the writes happened, and while it is held the announcement (`emit_changed_with`) updates the tray menu and a settings change registers hotkeys.
+  So it is never taken on the main thread (see "How the engine knows the main thread"); every caller runs off it (the async commands inside `off_main` or `off_main_core`, the tray and window-focus handlers on their own `launch-at-startup` threads).
+- Once the shell's event loop runs, the engine calls `Host::register_shortcut` and `unregister_shortcut` only from its own threads (Tauri's plugin waits for the main thread); only setup registers the first hotkeys on the main thread, before the event loop starts.
+- A test that builds a Tauri mock app lives in `app/src-tauri/tests/`: `build.rs` embeds the Windows app manifest into integration tests only, and a mock app in a unit test fails to start on Windows (`STATUS_ENTRYPOINT_NOT_FOUND`).
+
+### Testing the event contract
+
+The Windows end-to-end job is not proof of the event contract.
+It drives real dictations, the default hotkeys and their watchers (#153) and the paste, and it fails when a dictation does not reach its target, but it does not check event names, payloads, their order, how many times an event is sent, or the error paths.
+For example, after P1-3 a failed paste sent `scribe:output-failed` twice and every check passed; #156 fixed it.
+So every change to a function that sends events or calls the host keeps or adds unit tests with `RecordingHost` (on `Paths::from_parts` over a temporary folder) that pin:
+
+- the event name and the exact JSON payload;
+- the order of the events relative to each other and to the other side effects (for a new state: the `scribe:app-state` event, then the status file, then the dictation-state server; for the speech engine: the event, then the tray line; for settings: one `scribe:settings-changed`, after the save);
+- how many times each event is sent, including "exactly once" on failure paths and "none" where nothing may be sent;
+- the error paths: what the function returns and sends when the `Core` or the host is missing, when the database fails, and when a step in the middle fails (a rollback, a quarantined recording).
+
+Until step 3b adds a test builder, no test can build a `Core`, so the lanes tested the body of each `_with(core)` function through a private function over the parts it uses (`&BackendState`, `&dyn Host`, a store) or through a small trait (`hotkeys::ActionTarget`, `dictation_state::Parts`).
+
+### Definition of done for every step
+
+A step's pull request is ready when:
+
+- it changes only the files its section lists;
+- locally `cargo fmt --all --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings` (with and without `--features e2e-audio`) and `cargo test --locked --workspace` pass, each run through `devguard slot -- <command>` (which waits for a free slot of the machine's shared build and test budget);
+- it reports the test counts of every test binary against main's, and no test stopped running;
+- every check on GitHub is green (the three backends, the bundles, install-and-launch, Windows end-to-end, Release SBOM);
+- its description lists every wrapper or parameter it left for a later step and every function its change left without a caller.
 
 ## Functions that still need an AppHandle
 
-This is every function in `crates/scribe-core/src` and `app/src-tauri/src/commands` that still takes an `AppHandle` on main (75614fc), apart from the old-signature wrappers, which are listed in the P1-4 section.
-It was rebuilt from a scan of every function signature that names `AppHandle`, outside tests, and reconciled with the "still takes AppHandle" tables of #145, #146, #147, #148, #150, #151 and #155.
+This is every function in `crates/scribe-core/src` and `app/src-tauri/src/commands` that still takes an `AppHandle` on main (aef18a0), apart from the old-signature wrappers, which "Step 4" lists with their callers.
+It was rebuilt from a scan of every function signature that names `AppHandle` (multi-line signatures and `_app` parameters included) and of the two types that hold one (`AppExecutor`, `AppEffects`), and reconciled with the "left for a later step" tables of #159 to #165.
+Step 2 dropped the app from every function whose callers were all in one lane, so each row is one of:
 
-The P1-2 version of this list undercounted.
-It named only the functions that call across a lane boundary or use a plugin themselves, and missed every function that takes the app only to pass it on to one of those (the hotkeys lane alone found 11 of them), the `autostart` module, `self_test` (exiting the app, the app's version), the version-reading commands, the dialog commands (`on_dialog_thread` takes the app), and the setup-time constructors that find their parts through the app.
-Some of its entries also went away: `dictation_state::emit_state_snapshot` and the models calls of `audio` no longer need the app.
+- **Unused**: an `_app` parameter nothing reads, kept because a caller in another lane's file passes it.
+- **Pass-through**: the body only passes the app on, in the end to an unused parameter or to a wrapper.
+- **Tauri API**: the body itself uses the app.
 
-Each row says why the app is still there:
+The `models`, `sync` and `status` files have none apart from their wrappers.
+Step 3 changes `open_dashboard` and `save_window_size` in `commands/shell.rs` and every caller of `is_dev_flavor` and `display_name` (step 3c), step 4 removes the rest, those two included, with callers and callees changed together, and `open_release_page` keeps the app.
 
-- **Tauri API**: the body itself uses a plugin, a window or an app call; P1-4 gives the `Host` a method for it.
-- **Pass-through**: the body only passes the app on to another function in this list.
-- **Before the Core**: built during setup before the `Core` exists, so it finds what it needs through the app.
+| Function | Kind | Passes the app to, or uses |
+|---|---|---|
+| `output.rs:171` `handle_transcription_output_with(_app, ..)` | Unused | caller `dictation.rs:372` |
+| `output.rs:238` `paste_last_transcript_with(_app, ..)` | Unused | caller `dictation_worker.rs:664` |
+| `selection_transform.rs:246` `apply_result_with(_app, ..)` | Unused | caller `dictation.rs:499` |
+| `hotkeys.rs:825` `replace_hotkeys_with(_app, ..)` | Unused | callers `settings_store.rs:273` and `commands/hotkeys.rs:102`, `:109`, `:115`, `:153`, `:157`, `:188`, `:193`, `:222`, `:227` |
+| `dictation.rs:71` `transcribe_recording_with`, `:102` `transcribe_recording_checked`, `:227` `transcribe_recording_inner` | Pass-through | `handle_transcription_output_with`, `finish_selection_transform` |
+| `dictation.rs:492` `finish_selection_transform` | Pass-through | `apply_result_with` |
+| `audio.rs:650` `finish_timed_out_recording_with`, `:699` `finish_disconnected_recording_with` | Pass-through | `dictation::transcribe_recording_with` |
+| `dictation_worker.rs:610` `AppExecutor` (holds `app`), `:634` `execute_with`, `:697` `stop_and_transcribe`, `:718` `start_transform` | Pass-through | `paste_last_transcript_with`, `transcribe_recording_with`, `audio::finish_*_recording_with`, the wrapper `hotkeys::start_transform` |
+| `dictation_worker.rs:351` `DictationWorker::spawn_on(cell, app)` | Pass-through | `AppExecutor` |
+| `file_transcribe.rs:41` `transcribe_file_with` | Pass-through | the wrapper `whisper::transcribe_with_output_prefix` (`:88`) |
+| `self_test.rs:79` `spawn_with(app, core, request)`, `:118` `run` | Pass-through | `transcribe_file_with` |
+| `settings_store.rs:223` `apply_settings_change_with` and `:254` `AppEffects` (holds `app`) | Pass-through | `replace_hotkeys_with` (`:273`) |
+| `settings_store.rs:140` `patch_settings_now_with`, `:200` `set_launch_at_startup_with` | Pass-through | `apply_settings_change_with` |
+| `commands/audio.rs:80` `transcribe_file` | Pass-through | `transcribe_file_with` |
+| `commands/data.rs:41` `patch_settings` | Pass-through | `patch_settings_now_with` |
+| `commands/hotkeys.rs:76` `rebind_hotkey`, `:130` `set_hotkey_trigger`, `:169` `reset_hotkeys_to_defaults`, `:209` `load_production_hotkey_defaults` | Pass-through | `off_main` and `replace_hotkeys_with` |
+| `commands/mod.rs:29` `off_main` | Pass-through | the closure it runs; callers are those four commands and `commands/shell.rs:20` |
+| `lib.rs:70` (scribe-core) `is_dev_flavor`, `:75` `display_name` | Tauri API | `app.config().identifier`; `Flavor::is_dev()` and `Flavor::display_name()` replace them |
+| `commands/shell.rs:11` `open_dashboard` | Pass-through | the free function `shell::open_dashboard` |
+| `commands/shell.rs:19` `save_window_size` | Tauri API | `off_main`, `app.state::<BackendState>()` (`:21`), `shell::main_window_logical_size`, `settings_store::emit_changed` |
+| `commands/shell.rs:47` `open_release_page` | Tauri API | the opener plugin; the shell's own command, it keeps the app |
 
-### audio
-
-| Function | Why |
-|----------|-----|
-| `dictation.rs` `transcribe_recording_with`, `transcribe_recording_checked`, `transcribe_recording_inner` | Pass-through to `output::handle_transcription_output_with` (output) |
-| `dictation.rs` `finish_selection_transform` | Pass-through to `selection_transform::apply_result_with` (output) |
-| `dictation_worker.rs` `AppExecutor` (holds `app`), `execute_with` | Pass-through to `output::paste_last_transcript_with` (output), `stop_and_transcribe`, `start_transform`, `audio::finish_*_recording_with` |
-| `dictation_worker.rs` `stop_and_transcribe` | Pass-through to `dictation::transcribe_recording_with` |
-| `dictation_worker.rs` `start_transform` | Pass-through to the wrapper `hotkeys::start_transform` (hotkeys) |
-| `dictation_worker.rs` `DictationWorker::spawn` | Before the Core: its thread polls `app.try_state::<Core>()` for the `Core` |
-| `audio.rs` `finish_timed_out_recording_with`, `finish_disconnected_recording_with` | Pass-through to `dictation::transcribe_recording_with` |
-| `file_transcribe.rs` `transcribe_file_with` | Pass-through to the wrapper `whisper::transcribe_with_output_prefix` (models), which has a host-only `_with` version it could call today |
-| `self_test.rs` `spawn_with` | Tauri API: `app.exit` and `app.package_info().version` |
-| `self_test.rs` `run` | Pass-through to `file_transcribe::transcribe_file_with` |
-| `commands/audio.rs` `transcribe_file` | Pass-through to `file_transcribe::transcribe_file_with` |
-
-`dictation_worker::request_with` takes no app but runs on `tauri::async_runtime::spawn_blocking`, which ties the engine to Tauri too.
-
-### output
-
-| Function | Why |
-|----------|-----|
-| `output.rs` `notify` | Tauri API: the notification plugin |
-| `output.rs` `emit_output_completed` | Pass-through to `notify` |
-| `output.rs` `paste_transcript_text`, `copy_and_paste_transcript_text` | Pass-through to `emit_output_completed`, and the `PasteStateGuard` closures call the wrapper `dictation_state::emit_state_snapshot(app, ..)` (audio), whose `_with(core)` version they could call today |
-| `output.rs` `handle_transcription_output_with`, `paste_text_with`, `paste_last_transcript_with`, `paste_transcript_with` | Pass-through to the paste paths above |
-| `output.rs` `core_for` | Wrapper helper: finds the `Core` through the app |
-| `selection_transform.rs` `apply_result_with`, `transform_selection_blocking_with` | Pass-through to `output::paste_text_with` |
-| `commands/output.rs` `paste_transcript`, `transform_selection` | Pass-through to the `_with` functions above |
-
-### models
-
-| Function | Why |
-|----------|-----|
-| `whisper_server.rs` `WarmTranscriber::new` | Before the Core: finds the managed `BackendState` through the app (`new_with(host, backend, path)` is the engine version) |
-| `commands/models.rs` `open_models_folder` | Pass-through to `data_hygiene::open_folder` (data: the opener plugin) |
-| `commands/models.rs` `delete_model`, `select_model` | Pass-through to the wrapper `settings_store::emit_changed` (data), whose host-only `_with` version they could call today |
-
-### hotkeys
-
-| Function | Why |
-|----------|-----|
-| `hotkeys.rs` `register_hotkey_set_with`, `unregister_hotkey_set`, `unregister_shortcuts`, `status_with`, `arm_note_chord_with`, `disarm_note_chord_with` | Tauri API: the global-shortcut plugin |
-| `hotkeys.rs` `handle_press_edge_with`, `handle_release_edge_with`, `on_toggle_key_press_with`, `on_toggle_key_up_with`, `handle_note_chord_with` | Pass-through to the wrapper `dictation_worker::submit` (audio), whose `submit_with(core)` they could call today |
-| `hotkeys.rs` `run_action_with` | Pass-through to the wrappers `dictation_worker::submit` and `audio::emit_recording_error` (audio), both with core-only or host-only versions |
-| `hotkeys.rs` `start_transform_with` | Pass-through to the wrapper `audio::start_recording_for_app` (audio), whose `start_recording_with(core)` it could call today |
-| `hotkeys.rs` `setup_with`, `replace_hotkeys_with` | Pass-through to `register_hotkey_set_with` and `unregister_hotkey_set` (plugin) |
-| `hotkeys.rs` `handle_shortcut_with`, `on_toggle_key_down_with`, `configure_toggle_watcher_with`, `run_toggle_watcher`, `configure_chord_watcher_with`, `dispatch_chord_pressed_with`, `dispatch_chord_released_with`, `windows_chord::run_watcher`, `windows_chord::step`, `wayland::start_portal`, `wayland::on_portal_event` | Pass-through to the functions above; the two watcher threads own an `AppHandle` and a `Core` |
-| `remote_command.rs` `RemoteCommand::run_with` | Pass-through to the edge functions above |
-| `commands/hotkeys.rs` `get_hotkey_status`, `bind_portal_shortcuts` | Pass-through to `status_with` (plugin) |
-| `commands/hotkeys.rs` `rebind_hotkey`, `set_hotkey_trigger`, `reset_hotkeys_to_defaults`, `load_production_hotkey_defaults` | Pass-through to `replace_hotkeys_with` and `status_with` (plugin), and to the wrapper `settings_store::emit_changed` (data) |
-
-### data
-
-| Function | Why |
-|----------|-----|
-| `settings_store.rs` `apply_settings_change_with` and its `AppEffects` (holds `app`) | Pass-through to `hotkeys::replace_hotkeys_with` (hotkeys: plugin) and `autostart::apply` (no lane) |
-| `settings_store.rs` `patch_settings_now_with`, `set_launch_at_startup_with` | Pass-through to `apply_settings_change_with` |
-| `settings_store.rs` `sync_launch_at_startup_with` | Pass-through to `autostart::follow_windows_switch` (no lane) |
-| `settings_store.rs` `core_of` | Wrapper helper: finds the `Core` through the app |
-| `data_hygiene.rs` `open_folder` | Wrapper of `open_folder_with(host, dir)` since P1-4 step 1 |
-| `data_hygiene.rs` `run_startup_maintenance` | Before the Core: finds the managed `BackendState` through the app (`run_startup_maintenance_with(&BackendState, ..)` is the engine version) |
-| `commands/data.rs` `open_transcript_externally`, `open_replacements_file` | Tauri API: the opener plugin |
-| `commands/data.rs` `open_data_folder`, `open_logs_folder`, `open_failed_recordings_folder` | Pass-through to `data_hygiene::open_folder` |
-| `commands/data.rs` `patch_settings` | Pass-through to `patch_settings_now_with` |
-| `commands/data.rs` `whats_new_pending`, `collect_diagnostics` | Tauri API: `app.package_info().version` |
-
-### sync
-
-| Function | Why |
-|----------|-----|
-| `note_sync.rs` `NoteSyncWorker::spawn` | Before the Core: its thread polls `app.try_state::<Core>()` before each sync |
-| `commands/sync.rs` `github_device_start` | Tauri API: the opener plugin |
-| `commands/sync.rs` `github_device_poll`, `github_disconnect` | Pass-through to the wrapper `settings_store::emit_changed` (data), whose host-only `_with` version they could call today |
-
-### status
-
-None apart from the wrappers (`state_server::start`, `status_file::publish`, `status_file::publish_idle`).
-
-### No lane
-
-| Function | Why |
-|----------|-----|
-| `autostart.rs` `apply`, `reconcile_at_launch`, `follow_windows_switch` | Since P1-4 step 1, wrappers of their host-only `_with` versions (through `shell::host()`), kept for their callers: `settings_store.rs` (data) and `lib.rs` setup |
-| `lib.rs` (scribe-core) `is_dev_flavor`, `display_name` | Tauri API: `app.config().identifier`; `Flavor` covers both |
-| `shell.rs` `update_tray_status`, `update_engine_summary`, `sync_settings`, `open_dashboard`, `toggle_dashboard`, `main_window_logical_size` | The old free functions; they ignore the app and forward to the installed host |
-| `commands/mod.rs` `off_main` | Runs a closure that receives the app (`on_dialog_thread` takes the `Core` since P1-4 step 1) |
-| `commands/shell.rs` `open_dashboard`, `save_window_size`, `open_release_page` | The shell's own commands (the opener plugin, the window); they stay in the shell |
-
+Since step 2, no engine file imports a `tauri_plugin_*` crate, and `dictation_worker::request_with` no longer runs on `tauri::async_runtime` (#165).
 The Tauri shell's own files (`app/src-tauri/src/lib.rs`, `tray.rs`, `window_size.rs`, `tauri_host.rs`) keep using the `AppHandle`: they are the shell.
-
-## Worked example: the status domain
-
-`status_file.rs` needed the app only to find the cache folder.
-Its engine versions take the host:
-
-```rust
-pub fn publish_with(host: &dyn Host, snapshot: &AppStateSnapshot) {
-    let dir = host.paths().cache_dir();
-    // ... unchanged: create the folder, build the payload, write it atomically
-}
-
-pub fn publish_idle_with(host: &dyn Host) { /* builds an Idle snapshot, calls publish_with */ }
-```
-
-The old functions stay as wrappers, so `dictation_state::emit_state_snapshot` (the `audio` lane) and the shell's setup and exit code keep calling `status_file::publish(app, snapshot)` and `status_file::publish_idle(app)` unchanged.
-They need only the host, which is installed before anything else, so they use it rather than the `Core`:
-
-```rust
-pub fn publish(_app: &AppHandle, snapshot: &AppStateSnapshot) {
-    match crate::shell::host() {
-        Some(host) => publish_with(host.as_ref(), snapshot),
-        None => log::warn!("Could not resolve cache dir for status file: no host yet"),
-    }
-}
-```
-
-A new test (`publish_writes_into_the_hosts_cache_folder`) runs the engine versions with a `RecordingHost` on a temporary folder, with no Tauri app.
-
-The domain's command, `get_app_state`, takes the `Core`:
-
-```rust
-#[tauri::command]
-pub async fn get_app_state(core: tauri::State<'_, Core>) -> Result<AppStateSnapshot, CommandError> {
-    off_main_core(core.inner().clone(), move |core| {
-        Ok(core.backend().app_state()?.snapshot())
-    })
-    .await
-}
-```
-
-`state_server.rs` was left for the `status` lane, which converted it in #145 (`start_with` takes an `Arc<dyn Host>`; `start` is the host-only wrapper setup still calls).
-Since the `audio` lane (#155), `dictation_state` calls `status_file::publish_with` directly, so the `publish` wrapper above has no caller left; `publish_idle` is still called by the shell's setup and by its exit path for a setup that failed before the `Core` existed.
-
-## Who owns which files in P1-3
-
-Each lane changes only its own engine modules (in `crates/scribe-core/src`), its one command file (in `app/src-tauri/src/commands`) and its one new integration test file (`app/src-tauri/tests/<lane>.rs`, for tests that need a Tauri mock app; unit tests go in the lane's own modules).
-
-| Lane | Engine modules | Command file | Commands |
-|------|----------------|--------------|----------|
-| `audio` | `audio.rs`, `dictation.rs`, `dictation_state.rs`, `dictation_worker.rs`, `incremental.rs`, `sounds.rs`, `file_transcribe.rs`, `self_test.rs`, `test_audio.rs` | `commands/audio.rs` | 9 |
-| `output` | `output.rs`, `selection_transform.rs`, `text_replace.rs`, `platform/mod.rs`, `platform/windows.rs`, `platform/windows/`, `platform/macos.rs` | `commands/output.rs` | 6 |
-| `models` | `model_manager.rs`, `whisper.rs`, `whisper_server.rs`, `parakeet.rs`, `speech_engine.rs`, `gpu.rs`, `session_model.rs` | `commands/models.rs` | 9 |
-| `hotkeys` | `hotkeys.rs`, `remote_command.rs`, `platform/linux.rs`, `platform/linux/` | `commands/hotkeys.rs` | 7 |
-| `data` | `db.rs`, `settings_store.rs`, `data_hygiene.rs`, `export.rs`, `import.rs`, `stats.rs`, `release_notes.rs`, `diagnostics.rs`, `replacements_file.rs` | `commands/data.rs` | 34 |
-| `sync` | `note_sync.rs`, `github_backup.rs`, `github_oauth.rs`, `sync_history.rs`, `note_analysis.rs` | `commands/sync.rs` | 9 |
-| `status` | `state_server.rs`, `status_file.rs` | `commands/status.rs` | 1 |
-
-No lane edits these; anything a lane needs added to them goes on its list for P1-4:
-
-- the shared seams: `lib.rs` (both crates), `core.rs`, `host.rs`, `events.rs`, `paths.rs`, `backend.rs`, `shell.rs`, `commands.rs` (the re-exports), `commands/mod.rs`, `commands/shell.rs`, `tauri_host.rs`;
-- the shell: `tray.rs`, `window_size.rs`, `main.rs`, `build.rs`, the Tauri configs, the installer hooks;
-- `app/src-tauri/tests/tauri_host.rs`, `tests/windows-test-manifest.xml` and another lane's test file;
-- the engine modules no lane owns: `app_state.rs`, `autostart.rs`, `child_guard.rs`, `error.rs`, `filler.rs`, `models.rs`, `process_info.rs`, `prompt_budget.rs`, `settings.rs`, `transcript.rs`, `update_check.rs`;
-- every `Cargo.toml` and `Cargo.lock` (a lane needing a new dependency stops and lists it);
-- another lane's files.
-
-A test that builds a Tauri mock app must live in `app/src-tauri/tests/`: `build.rs` embeds the Windows app manifest into integration tests only, and a mock app in a unit test fails to start on Windows (`STATUS_ENTRYPOINT_NOT_FOUND`).
-
-## Where two lanes meet
-
-These are the places a careless change in one lane breaks another; keep the names, signatures and types below as they are.
-
-- `core.rs` names a type from five lanes: `DictationWorker` (`audio`), `WarmTranscriber` (`models`), `HotkeyRuntimeState` (`hotkeys`), `BackendState` and `ReplacementStore` (`data`, through `backend.rs` and `replacements_file.rs`), `NoteSyncWorker` (`sync`), `DictationServer` (`status`).
-  Each must keep its name and stay a cheap `Clone` handle; `DictationServer::shutdown`, `WarmTranscriber::shutdown` and `status_file::publish_idle_with` must keep their signatures (`Core::shutdown` calls them).
-- `lib.rs` calls `hotkeys::setup(app, &runtime, &hotkeys, transform_enabled)`; the `hotkeys` lane keeps that signature.
-- `events.rs` names the payload types, which live in lane files: `AudioLevelEvent`, `RecordingSessionInfo`, `RecordingResult`, `RecordingErrorEvent` (`audio.rs`); `DictationResult`, `DictationSaveFailedPayload`, `DictationEmptyPayload` (`dictation.rs`); `PartialTranscriptEvent` (`incremental.rs`); `OutputResult`, `OutputStartedPayload`, `OutputFailedPayload` (`output.rs`); `ModelDownloadProgress` (`model_manager.rs`); `EngineStatus` (`speech_engine.rs`); `HotkeyRegistrationFailure` and `RegistrationFailedEvent` (`hotkeys.rs`); `ReplacementsInfo` (`replacements_file.rs`); and the event-name constants in `settings_store.rs`, `whisper_server.rs`, `incremental.rs` and `replacements_file.rs`.
-  Do not rename, move or change them.
-- Every cross-lane call in the "still needs an AppHandle" tables above goes through the callee's wrapper or its transitional `_with(app, core, ..)` version, and the callee keeps that name and signature until P1-4 changes caller and callee together.
-- Pasting on Linux goes through the Wayland portal code in `platform/linux/` (`hotkeys`), which `output` calls through `platform/mod.rs`.
-  The `output` lane must not change `platform/linux/`; the `hotkeys` lane must keep the functions `platform/mod.rs` calls.
-
-The rule that keeps all of these working: a lane converts the inside of its functions and keeps every public name and signature, adding `_with` versions beside them.
-
-## Definition of done for a lane
-
-A lane's pull request is ready when:
-
-- it changes only the lane's files listed above;
-- locally `cargo fmt --all --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings` (with and without `--features e2e-audio`) and `cargo test --locked --workspace` pass, run through `devguard slot`;
-- it reports the test counts of every test binary against main's, and no test stopped running;
-- every check on GitHub is green (the three backends, the bundles, install-and-launch, Windows end-to-end, Release SBOM);
-- its unit tests pin what the "Test the engine version" step lists (event names, payloads, order, counts and error paths) for every function that sends events, since the end-to-end job does not;
-- its description has two tables: the functions converted (old name, `_with` version, what it now takes) and the functions that still take an `AppHandle` (name and why, from the lists above plus anything new it found), and it names every wrapper of another lane that it left without a caller.
 
 ## For P1-4
 
 P1-4 removes the `AppHandle` wrappers and parameters, manages only `Core`, and drops the `tauri` dependency from `crates/scribe-core`.
-It is done when no function in `crates/scribe-core/src` takes an `AppHandle`, `lib.rs` setup calls `app.manage(` exactly once (for the `Core`), `crates/scribe-core/Cargo.toml` names no `tauri` crate, behavior is unchanged (same commands and arguments, same events and payloads, same folders, same installers), and every check on GitHub is green.
-Everything in this section was checked against main at 75614fc; file:line references are to that commit.
-Since then #156 (main 8587a69) changed only `crates/scribe-core/src/dictation.rs`: it removed the second `scribe:output-failed` after a failed paste (new helper `settle_output`), and it did not change `dictation_state::app_version()`, which is still P1-4 work below.
-If main has moved further when you start, check the references you rely on before you change code.
+It is done when `lib.rs` setup calls `app.manage(` exactly once (for the `Core`, step 3c), no function in `crates/scribe-core/src` takes an `AppHandle` (step 4, which also deletes `is_dev_flavor` and `display_name`), `crates/scribe-core/Cargo.toml` names no `tauri` crate (step 5), behavior is unchanged (same commands and arguments, same events and payloads, same folders, same installers), and every check on GitHub is green.
 
-Heavy commands (builds, clippy, tests) run through `devguard slot -- <command>`, which waits for a free slot of the machine's shared build and test budget before running the command.
+| Step | Lane | State |
+|---|---|---|
+| 1 | `seams`, `e2e-log-check` | merged: #159, #158 |
+| 2 | `output`, `data`, `audio`, `models`, `sync`, `hotkeys` | merged: #163, #161, #165, #162, #160, #164 (main 550f041) |
+| 3a, 3b | `recording-host`, `core-cell` | next; in parallel |
+| 3c | `wiring` | after 3a and 3b |
+| 4 | `sweep` | after 3c; one lane, alone |
+| 4b | `test-seams` | after 4; in parallel with 5 |
+| 5 | `drop-tauri` | after 4 |
+| 6 | `rename` | after 4b and 5 |
 
-### What step 1 built
+A step starts when the steps before it are merged, and merges main into its branch before it merges.
+Each step follows "Rules every remaining step keeps" and "Definition of done for every step", and these names stay as they are until step 6: the types `Core` holds (`DictationWorker`, `WarmTranscriber`, `HotkeyRuntimeState`, `BackendState`, `ReplacementStore`, `NoteSyncWorker`, `DictationServer`), each a cheap `Clone` handle, and the signatures `Core::shutdown` calls (`DictationServer::shutdown`, `WarmTranscriber::shutdown`, `status_file::publish_idle_with`).
 
-Step 1 (`seams`) added these, and step 2 lanes build on these names:
+### What steps 1 and 2 built
 
-- `Host` (`host.rs`) gained `app_version()`, `exit(code)`, `open_path(&Path)`, `open_url(&str)`, `notify(title, body)`, `register_shortcut(HotKey)`, `unregister_shortcut(HotKey)`, `is_shortcut_registered(HotKey)`, `launch_at_login()` and `set_launch_at_login(bool)`.
-  The fallible ones return `Result<_, String>`, the plugin's error text, so the engine keeps building today's `CommandError` codes and messages around it.
-  The global-shortcut plugin re-exports its types from the `global-hotkey` crate (now an engine dependency), so the `hotkeys` lane names them from there:
+Steps 3 to 6 build on these names:
 
-  | Plugin (`tauri_plugin_global_shortcut`) | `global-hotkey` |
-  |------|------|
-  | `Shortcut` | `global_hotkey::hotkey::HotKey` |
-  | `ShortcutEvent` | `global_hotkey::GlobalHotKeyEvent` |
-  | `ShortcutState` | `global_hotkey::HotKeyState` |
-  | `Code`, `Modifiers` | `global_hotkey::hotkey::{Code, Modifiers}` |
+- `Host` (`host.rs`) has `app_version()` and `exit(code)` (both callable from any thread), `open_path(&Path)`, `open_url(&str)`, `notify(title, body)`, `register_shortcut`, `unregister_shortcut` and `is_shortcut_registered` (on `global_hotkey::hotkey::HotKey`), `launch_at_login()` and `set_launch_at_login(bool)`.
+  The fallible ones return `Result<_, String>`, the plugin's error text, and the engine builds today's `CommandError` codes and messages around it.
+  `TauriHost` answers them with the plugin calls the engine used to make; `tauri_host::autostart_plugin()` is the autostart plugin the shell registers (`lib.rs:358`).
+- The engine names the global-shortcut types from `global-hotkey`, which the plugin re-exports: `HotKey`, `GlobalHotKeyEvent`, `HotKeyState`, `Code`, `Modifiers` (#164).
+  The plugin's handler stays in the shell (`lib.rs:344`-`:357`) and calls the engine.
+- `RecordingHost` records every event (`events()`) and, in a separate list, every call that acts (`calls()`, a list of `HostCall`: `Exit`, `OpenPath`, `OpenUrl`, `Notify`, `RegisterShortcut`, `UnregisterShortcut`, `SetLaunchAtLogin`; `host.rs:160`-`:168`).
+  It answers `RECORDING_HOST_VERSION` (or `with_app_version(..)`), holds shortcuts and the startup entry the way the plugins do, and `fail(Failing::..)` makes one kind of call fail with `Failing::message()`.
+  It records neither the queries (`app_version`, `is_shortcut_registered`, `launch_at_login`) nor the tray and main-window calls (`update_tray_status`, `update_engine_summary`, `sync_settings`, `open_dashboard`, `toggle_dashboard`; `host.rs:287`-`:299`), so two lanes wrote test-only wrapper hosts: `SequencedHost` (`output.rs:1096`, events and notifications in one ordered list) and `DashboardHost` (`hotkeys.rs:1880`, the main-window calls).
+  `RecordingHost::unregister_shortcut` answers `Ok` for a shortcut it does not hold, where the real plugin may answer an error, so no test may rely on releasing an unheld shortcut succeeding.
+- `CoreCell` (`core.rs:145`-`:166`): `CoreCell::new()`, `cell.fill(&core)` right after `Core::new(host, parts)` (whose signature did not change), and `cell.get()`.
+  It holds `Arc<OnceLock<Weak<Inner>>>`; filling twice keeps the first and logs a warning; `get()` answers `None` both before the fill and after every `Core` handle is dropped.
+- Worker constructors on a `CoreCell`: `DictationWorker::spawn_on(cell, app)` (`dictation_worker.rs:351`; the app only passes through, until step 4) and `NoteSyncWorker::spawn_with(cell)` (`note_sync.rs:325`).
+  Both ask the cell once per job or sync and drop the `Core` after it; before the fill they poll every 50 ms, keep jobs in arrival order and drop none.
+  Once a job has found the `Core` and every `Core` is gone, the dictation worker answers later jobs `dictation_worker_unavailable`.
+  `DictationWorker::call_async` (`:421`) returns a runtime-free future, which `request_with` (`:601`) awaits instead of using `tauri::async_runtime`.
+- Engine versions the shell can call today without the app: `WarmTranscriber::new_with(host, backend, measurements_path)` (`whisper_server.rs:409`), `data_hygiene::run_startup_maintenance_with(&BackendState, ..)` (`data_hygiene.rs:210`), `state_server::start_with(Arc<dyn Host>)` (`state_server.rs:623`), `status_file::publish_idle_with(&dyn Host)` (`status_file.rs:123`), `test_audio::activate_with(&dyn Host)` (`test_audio.rs:57`), `autostart::reconcile_at_launch_with(&dyn Host, wanted)` (`autostart.rs:221`, `:258`), `hotkeys::setup_with(core, hotkeys, transform_enabled)` (`hotkeys.rs:513`), `hotkeys::handle_shortcut_with(core, shortcut, event)` (`:556`), `RemoteCommand::run_with(core)` (`remote_command.rs:57`), `dictation_worker::submit_with(core, intent)` (`dictation_worker.rs:591`), `settings_store::sync_launch_at_startup_with(&Core)` (`settings_store.rs:159`) and `settings_store::emit_changed_with(&dyn Host, ..)` (`:61`).
+  Two still take the app until step 4: `self_test::spawn_with(app, core, request)` (`self_test.rs:79`) and `settings_store::set_launch_at_startup_with(app, core, enabled)` (`settings_store.rs:200`).
+- The app's version: the self-test, `whats_new_pending`, `collect_diagnostics` and the three `appVersion` fields read `Host::app_version()`; `dictation_state::app_version()` is gone (#165), and `release_notes::pending_version_with(core)` and `diagnostics::collect_with(core)` take no version argument (#161).
+- `on_dialog_thread(core, |core| ..)` (`commands/mod.rs`) takes the `Core`.
+- No engine file imports a `tauri_plugin_*` crate, and `crates/scribe-core/Cargo.toml` no longer names `tauri-plugin-autostart` (#159).
 
-- `Host::register_shortcut` and `unregister_shortcut` keep the engine's rule: once the shell's event loop runs, the engine calls them only from its own threads, never the shell's main thread (Tauri's plugin waits for the main thread); only the shell's setup registers the first hotkeys on the main thread, before the event loop starts.
-- The engine no longer depends on `tauri-plugin-autostart`.
-- `TauriHost` (`tauri_host.rs`) answers them with the same plugin calls the engine makes today; `tauri_host::app_version(app)` is its version, and `tauri_host::autostart_plugin()` is the plugin the shell registers (`lib.rs:358`).
-- `RecordingHost` records every call that acts (`calls()`, a list of `HostCall`), answers `RECORDING_HOST_VERSION` (or `with_app_version(..)`), holds shortcuts and the startup entry the way the plugins do (a second registration of a held shortcut fails), and `fail(Failing::..)` makes one kind of call fail with `Failing::message()`.
-  Queries (`app_version`, `is_shortcut_registered`, `launch_at_login`) are not recorded.
-  `RecordingHost::unregister_shortcut` answers `Ok` for a shortcut it does not hold, where the real plugin may answer an error, so `hotkeys` tests must not rely on releasing an unheld shortcut succeeding (make it fail with `fail(Failing::UnregisterShortcut)` to test the error path).
-- `CoreCell` (`core.rs`): `CoreCell::new()`, `cell.fill(&core)` right after `Core::new` (whose signature did not change), and `cell.get()`.
-- `data_hygiene::open_folder_with(host, dir)`; `open_folder` is its host-only wrapper.
-- `autostart::apply_with`, `reconcile_at_launch_with` and `follow_windows_switch_with` take `&dyn Host`; `apply`, `reconcile_at_launch` and `follow_windows_switch` are their host-only wrappers.
-  The Windows registry entries are named after `Flavor::product_name()`.
-- `commands/mod.rs` `on_dialog_thread(core, |core| ..)`; `pick_data_dir`, `export_transcripts` and `preview_transcript_import` no longer take the app.
-- Every `impl Host` must implement the new methods: besides the two hosts above, the test hosts `MainThreadHost` and `PanicsOnceHost` in `whisper_server.rs` do.
+### Known issues after step 2
 
-### What the Host must gain
+None of these blocks a step.
 
-Add these to `trait Host` (`crates/scribe-core/src/host.rs`), to `TauriHost` (`app/src-tauri/src/tauri_host.rs`, using the same plugin calls the engine makes today) and to `RecordingHost` (which records each call, so tests can assert it):
-
-- **The app's version** (`app.package_info().version` in `TauriHost`), for `self_test::spawn_with` (`self_test.rs:77`), the `whats_new_pending` and `collect_diagnostics` commands (`commands/data.rs:670`, `:690`), and `dictation_state::app_version()` (`dictation_state.rs:37`, today the engine crate's `CARGO_PKG_VERSION`, as it was before the split; `docs/TODO.md` lists the Dev build's wrong `appVersion`).
-  `app_version()` feeds three `appVersion` fields: the stream snapshot (`DictationSnapshot::from_state`, `dictation_state.rs:95`), the status file (`status_file.rs:64`) and the dictation-state discovery file (`state_server.rs:483`).
-  Switching them to the host's answer is an intended fix and a visible change: in Dev and installer-upgrade-test builds, `appVersion` in `status.json`, the event stream and `control.json` changes from the base version to the real one; say so in the pull request.
-  Never answer with `env!("CARGO_PKG_VERSION")`: Dev builds and the installer-upgrade build override the app's version.
-  Both the version and exiting the app must be callable from any thread, not only the main thread: the self-test exits from its own thread (`self_test.rs:87`).
-  `update_check.rs` (no lane) also compares the engine crate's version with the release manifest, and the HTTP user agents use it; leave them alone in P1-4 and list them in the pull request as a known difference in Dev builds.
-- **Exiting the app with a code**, for the self-test (`self_test.rs:65`, `:87`, `:91`).
-- **Opening a path and a URL**, for `data_hygiene::open_folder` (`data_hygiene.rs:467`), `open_transcript_externally` and `open_replacements_file` (`commands/data.rs:252`, `:651`) and `github_device_start` (`commands/sync.rs:122`).
-  The shell's own `open_release_page` (`commands/shell.rs:47`) may keep the plugin.
-- **A system notification**, for `output::notify` (`output.rs:785`).
-- **Global shortcuts**: register, unregister and "is it registered", for `hotkeys.rs` (`register_hotkey_set_with`, `unregister_hotkey_set`, `unregister_shortcuts`, `status_with`, `arm_note_chord_with`, `disarm_note_chord_with`).
-  The engine names the plugin's `Shortcut`, `Code`, `ShortcutEvent` and `ShortcutState`, which the plugin re-exports from the `global-hotkey` crate (already in `Cargo.lock`), so the engine can name those types from `global-hotkey` and keep its runtime state without Tauri.
-  The plugin's handler in `lib.rs` (`:346`) stays in the shell and calls the engine.
-- **The startup entry**: what `autostart::apply`, `reconcile_at_launch` and `follow_windows_switch` do (`autostart.rs:168`, `:204`/`:241`, `:263`).
-  They use the autostart plugin and `app.package_info().name` for the Windows registry entries (`autostart.rs:343`, `:371`, `:379`); the product name is `Flavor::product_name()`.
-  `autostart::plugin()` (`autostart.rs:44`) moved to the shell in step 1 (`tauri_host::autostart_plugin()`), which added `tauri-plugin-autostart` to `app/src-tauri/Cargo.toml` and removed it from `crates/scribe-core/Cargo.toml`.
-
-Not a `Host` method: `on_dialog_thread` (`commands/mod.rs:66`) uses the app only to get off the main thread (the dialogs are `rfd`), so it takes the `Core` (or nothing), like `off_main_core`.
-
-### How the workers receive the Core
-
-`DictationWorker` and `NoteSyncWorker` are built before the `Core` and look it up through the app today (`dictation_worker.rs:243`-`:250`, `note_sync.rs:362`-`:377`).
-Both move to one mechanism, defined once in `core.rs` in step 1, so no lane invents its own:
-
-- `CoreCell`: a cheap `Clone` handle onto `Arc<OnceLock<Weak<Inner>>>`, where `Inner` is the `Core`'s private inner value.
-- `CoreCell::new()` makes an empty cell; `Core::new(host, parts, &cell)` (or `cell.fill(&core)` right after `Core::new`) stores a weak reference to the new `Core`; filling twice is a no-op with a warning.
-- `CoreCell::get() -> Option<Core>` upgrades the weak reference: `None` before the `Core` exists and again once every `Core` handle has been dropped.
-- A worker takes a `CoreCell` clone instead of the `AppHandle`, calls `get()` once per job (the dictation worker) or once per sync (the note-sync worker), and drops the `Core` it got when that job ends; it never stores a strong `Core`.
-  While `get()` answers `None` before the first fill, the worker keeps today's behavior: it polls every 50 ms, queues jobs in arrival order, and drops none.
-- Because the workers hold only weak references, dropping the last `Core` drops the worker senders it holds, the channels close, and both worker threads end; that breaks the cycle described under "Hazards".
-
-Step 1 adds `CoreCell` with unit tests (empty, filled, dropped); the `audio` and `sync` lanes give their worker a constructor that takes a `CoreCell` in step 2, leaving `spawn(app)` unchanged because the shell still calls it; step 3 builds the cell in `lib.rs`, passes it to both workers, and fills it after `Core::new`.
+- On Linux a speech helper is not stopped at quit if its program file was replaced while it ran (an update): `/proc/<pid>/exe` then names a deleted file, so the identity check no longer matches the recorded one (`process_info.rs:43`-`:47`, `:185`).
+- A GPU probe skipped because Scribe is quitting is logged and remembered as failed for the session: `whisper_server.rs:568`-`:569` turns the refused `run_unloaded` into `not_probed`, which `gpu.rs:240`-`:251` records as a failure.
+- `update_check.rs` (`:36`, `:59`) and the HTTP user agents (`note_analysis.rs:62`, `:151`, `github_oauth.rs:543`, `github_backup.rs:71`) use the engine crate's `CARGO_PKG_VERSION`, which differs from the app's in Dev and installer-upgrade builds; P1-4 leaves them alone on purpose.
+- A setup that fails after `app.manage(core)` (for example in `hotkeys::setup`, `tray::setup` or `create_config_windows`, `lib.rs:560`-`:569`) panics in Tauri (see "Hazards") without `Core::shutdown`, so the dictation-state server's discovery file `~/.scribe/control.json` (`control.dev.json` in Dev; written by `state_server::start_with`, `state_server.rs:634`) stays behind; this is unchanged from today, and P1-4 does not change it.
 
 ### Hazards
 
-- **The dictation worker finds the `Core` by polling.**
-  `DictationWorker::spawn(app)` runs in `lib.rs` setup (`:508`) before the `Core` exists, and its thread polls `app.try_state::<Core>()` every 50 ms when the first job arrives, queueing jobs in order meanwhile (`dictation_worker.rs:243`, `:338`-`:395`).
-  With only `Core` managed and no `AppHandle` in the engine, it receives the `Core` through the `CoreCell` above, and it must keep both promises its tests pin: no job is dropped, and jobs run in arrival order.
-  `NoteSyncWorker::spawn(app)` (`note_sync.rs:362`-`:374`) has the same problem: it looks the `Core` up before each sync, and it uses the same `CoreCell`.
-- **The `Core` and its workers keep each other alive.**
-  The `Core` holds the dictation worker's sender; the worker thread's `AppExecutor` holds a `Core` clone once it has found one (`dictation_worker.rs:486`); and the thread ends only when every sender is gone (`:342`).
-  The note-sync worker is the same shape: the `Core` holds its sender, and its thread ends only when every sender is gone (`note_sync.rs:413`); today it drops the `Core` after each sync, and it must keep doing so (the `CoreCell` rule: no stored strong `Core`).
-  Other long-lived owners: the sound player thread holds a `BackendState` clone for the life of the process (its handle sits in a process-wide static, `sounds.rs:325`-`:346`); the Windows toggle-key and chord watcher threads own a `Core` clone until their stop flag is set (`hotkeys.rs:665`, `:1550`); the recording timeout thread and the audio stream's error callback hold `DictationWorker` clones.
+These apply to every remaining step; each step's section adds its own.
+
+- **The `Core` and its threads keep each other alive.**
+  Since #165 the dictation worker no longer keeps the `Core` it found (the note-sync worker never did): both get it once per job or sync and drop it after.
+  Other long-lived owners remain: the sound player thread holds a `BackendState` clone for the life of the process (its handle sits in a process-wide static, `sounds.rs:315`-`:346`); the Windows toggle-key and chord watcher threads own a `Core` clone until their stop flag is set (`hotkeys.rs:614`, `:1011`), and their handles sit in the hotkey runtime the `Core` holds; the recording timeout thread and the audio stream's error callback hold `DictationWorker` clones; the replacements watcher thread never ends (`replacements_file.rs:316`-`:326`).
   Tauri never drops its state, so none of this matters in the Tauri shell.
-  A native shell that expects dropping the `Core` to stop these threads needs the `CoreCell` rule for the workers, and `Core::shutdown` setting the watchers' stop flags, and it must still call `Core::shutdown()`.
-- **The startup clean-up would be skipped silently.**
-  `lib.rs` (`:460`-`:473`) starts the `data-cleanup` thread with `data_hygiene::run_startup_maintenance(&handle, ..)`, which looks up the individually managed `BackendState` (`data_hygiene.rs:267`-`:276`).
-  Once only `Core` is managed, that lookup finds nothing and the clean-up of old temp recordings, editor copies, failed recordings past retention and orphaned clips does not run, with only a warning in the log.
-  Pass the thread a clone of the backend and call `run_startup_maintenance_with`, and make the startup-order test pin the clean-up thread after the backend is created (#150 describes this).
-- **The replacements watcher bypasses the host.**
-  The watcher set up in `lib.rs` (`:513`-`:531`) sends `scribe:replacements-changed` with `watch_app.emit(..)` and finds the note-sync worker with `try_state::<NoteSyncWorker>()`.
-  Send `CoreEvent::ReplacementsChanged` through the host and give the closure the `NoteSyncWorker` clone (created earlier, `:504`); the state lookup stops working once only `Core` is managed.
-- **`emit_state_snapshot` cannot become host-only.**
-  `dictation_state::emit_state_snapshot_with` needs the dictation-state server, which only the `Core` holds (`dictation_state.rs:127`, `:187`-`:197`), so its callers keep a `Core` (or `dictation_state::Parts`).
-  `output.rs` still calls the `AppHandle` wrapper from its paste guards (`:375`, `:498`).
-- **Other state lookups in the shell.**
-  The exit path (`lib.rs:754`-`:774`) falls back to `try_state::<DictationServer>()` and `try_state::<WarmTranscriber>()` when setup failed before the `Core` existed; the window-focus and close handlers (`lib.rs:627`, `:644`) and the tray (`tray.rs:165`, `:180`) look up `BackendState`.
-  Each must move to the `Core`, and the failed-setup exit path must still stop whatever parts did start.
-- **Runtime failures the compiler does not catch once only `Core` is managed.**
-  Each of these compiles and then fails at run time:
-  - `app.state::<whisper_server::WarmTranscriber>()` at the end of setup (`lib.rs:606`) panics on every launch;
-  - `save_window_size` reads `app.state::<BackendState>()` (`commands/shell.rs:21`) and panics when the user saves the window size;
-  - `missing_command_state` (`lib.rs:222`-`:250`) lists `BackendState`, `WarmTranscriber`, `ReplacementStore`, `DictationWorker` and `NoteSyncWorker` as missing, and `create_config_windows` (`lib.rs:262`-`:269`) then returns an error instead of creating the windows, so setup fails;
-  - `WarmTranscriber::new(app, ..)` (`whisper_server.rs:388`-`:403`) looks up the managed `BackendState`; without it a release build logs a warning and builds a speech engine with no backend (only debug builds assert), so step 3 must call `WarmTranscriber::new_with(host, backend, path)` instead.
-  So step 3 must also be proven by launching the app: the install-and-launch jobs and the Windows end-to-end job must pass on its pull request, and `grep -rn "state::<" app/src-tauri/src` must show no lookup of a part that is no longer managed.
+  A native shell that expects dropping the `Core` to stop these threads needs `Core::shutdown` to set the watchers' stop flags, and it must still call `Core::shutdown()`.
 - **Windows-only code.**
-  Large parts of the code this work changes compile only on Windows: the toggle-key watcher and its key handlers (`hotkeys.rs:664`-`:736`), the note chord (`:1316`-`:1367`), the chord watcher (`:1491`-`:1700`), the startup-entry registry code (`autostart.rs:204`, `:339`, and the rest of its `#[cfg(windows)]` items) and the title-bar styling in setup (`lib.rs:581`).
-  Local clippy and tests on Linux or WSL never compile them, so only the Windows CI jobs (and macOS CI for the macOS code) prove them.
-  See "Checking Windows code locally" below for what works on this machine.
+  Large parts of the code these steps change compile only on Windows: the toggle-key watcher and its key handlers (`hotkeys.rs:599`-`:736`), the note chord (`:1307`-`:1367`), the chord watcher (`:1487`-`:1734`), the startup-entry registry code (`autostart.rs:220`, `:293`, `:360` and the rest of its `#[cfg(windows)]` items) and the title-bar styling in setup (`lib.rs:581`).
+  Local clippy and tests on Linux or WSL never compile them, so only the Windows CI jobs (and macOS CI for the macOS code) prove them; see "Checking Windows code locally".
 - **Locks.**
-  Keep the lock rules of the rulebook: never call the host while holding an engine lock, and never take the settings write lock on the main thread.
-  `Core::shutdown()` must stay free of the engine lock, and no new code path may start a model load once `shutting_down` is set (#154).
-- **Tauri outside `AppHandle`.**
-  `dictation_worker::request_with` uses `tauri::async_runtime::spawn_blocking` (`dictation_worker.rs:478`), `output::core_for` returns a `tauri::State` (`output.rs:157`), and `hotkeys.rs` imports the plugin's types (`:13`-`:14`).
-- **The version test.**
-  `the_engine_carries_the_app_version` (`app/src-tauri/src/lib.rs:829`) explains the engine's own `CARGO_PKG_VERSION` uses; update its comment when the engine stops reporting that version as the app's.
+  `Core::shutdown()` must stay free of the engine lock, and no new code path may start a model load once `shutting_down` is set (#154); see the lock rules under "Rules every remaining step keeps".
+- **A setup that fails never reaches the exit handler.**
+  Tauri 2.12.7 (`Cargo.lock`) panics with "Failed to setup app" when the setup closure returns an error (`tauri-2.12.7/src/app.rs:1443`-`:1444`), so the run callback never sees `RunEvent::Exit` without a `Core`.
+  The exit path's fallback for a failed setup (`lib.rs:761`-`:773`) is therefore dead in the Tauri shell; step 3c removes it rather than port it.
+- **`-D warnings` and dead code.**
+  A `pub` function compiles without callers, but a `pub(crate)` or private one, an import, or a struct field that nothing reads fails clippy the moment its last use goes.
+  So a step deletes those in the same commit that removes their last use; step 4 names each case.
 
-### Wrappers to delete
+### Step 3: three pull requests
 
-These `AppHandle` wrappers have no caller outside tests on main; delete them (and the helpers only they use, such as `model_manager::host_of`):
+Step 3 gives the shell the engine as one `Core` built from its parts, managed alone, with the workers handed a `CoreCell`.
+It is three pull requests: 3a and 3b change test tools and the worker loops, with no effect on the running app, and run in parallel; 3c changes the launch and follows both.
+3a and 3b share no file: 3a owns `host.rs` and the test modules listed for it, 3b owns `core.rs`, `dictation_worker.rs` and `note_sync.rs`, tests included.
+The `Core` test builder lives in `core.rs` (3b); 3a needs no `Core`, because every test it changes runs on a `RecordingHost` or a test target.
 
-- `audio`: `audio::list_microphones_for_app`, `stop_recording_for_app`, `cancel_recording_for_app`, `record_test_clip_for_app`, `get_test_clip_audio_for_app`; `dictation::transcribe_recording_for_app`; `incremental::emit_partial_transcript`, `start_session`; `sounds::play`; `dictation_worker::dispatch`, `request`; `file_transcribe::transcribe_file`.
-- `output`: `output::handle_transcription_output`, `paste_text`, `paste_last_transcript`, `copy_last_transcript`, `paste_transcript`, `copy_transcript`, `emit_output_failed`; `selection_transform::apply_result`, `transform_selection_blocking`.
-- `models`: `model_manager::list_models`, `download_model`, `retry_model_download`, `delete_model`, `select_model`, `selected_model_path`, `model_path_for_id`, `session_model_path`, `models_dir`, `smallest_downloaded_model_path`; `whisper::transcribe`; `gpu::probe`; `ParakeetProcess::launch`; `WarmTranscriber::transcribe`.
-- `hotkeys`: `hotkeys::emit_registration_failures`, `set_transform_enabled`, `replace_hotkeys`, `status`.
-- `data`: `data_hygiene::effective_data_dir`, `logs_dir`, `failed_recordings_dir`; `diagnostics::collect`; `replacements_file::notify_backup`; `settings_store::patch_settings_now`.
-- `sync`: `note_sync::collect_and_sync`, `collect_and_sync_all_transcripts`, `collect_sync_attempt`, `record_sync_attempt`.
-- `status`: `status_file::publish`.
-- `shell.rs`: `update_tray_status`, `update_engine_summary`, `sync_settings`, `toggle_dashboard`.
+Two kinds of deferred test are not in step 3, because they need a seam over the real clipboard, keystrokes or the Windows watchers: they are step 4b (see "Step 4b").
+And `AppEffects`' autostart call cannot be tested until `AppEffects` stops holding the app (`settings_store.rs:254`-`:256`), so step 4 adds that test.
 
-These wrappers still have callers; switch each caller to the engine version, then delete the wrapper:
+#### Step 3a: `recording-host`
 
-- One caller in another lane: `hotkeys::start_transform` (`dictation_worker.rs:596`), `whisper::transcribe_with_output_prefix` (`file_transcribe.rs:94`), `audio::start_recording_for_app` (`hotkeys.rs:1413`), `audio::emit_recording_error` (`hotkeys.rs:1310`), `dictation_state::emit_state_snapshot` (`output.rs:375`, `:498`).
-- `dictation_worker::submit`: `hotkeys.rs` (`:717`, `:730`, `:1230`, `:1244`, `:1268`, `:1272`, `:1291`, `:1303`, `:1367`) and `tray.rs` (`:118`-`:120`).
-- `settings_store::emit_changed`: `commands/models.rs:96`, `:116`; `commands/hotkeys.rs:125`, `:167`, `:203`, `:237`; `commands/sync.rs:187`, `:229`; `commands/shell.rs:32`.
-- `data_hygiene::open_folder` (a host-only wrapper since step 1): `commands/models.rs:23`; `commands/data.rs:320`, `:373`, `:396` (lines after step 1).
-- `settings_store::set_launch_at_startup`, `sync_launch_at_startup` (through the `commands.rs` re-export): `tray.rs:162`, `:187`; `lib.rs:631`.
-- `autostart::apply` and `follow_windows_switch` (step 1 made them wrappers): `settings_store.rs:247`, `:156` (the `data` lane switches them to the `_with` versions); `autostart::reconcile_at_launch`: `lib.rs:444` (step 3).
-  Step 4 deletes the three wrappers.
-- Setup and the shell's handlers in `lib.rs`: `RemoteCommand::run` (`:304`), `hotkeys::handle_shortcut` (`:354`), `is_dev_flavor` (`:417`, `:576`), `data_hygiene::run_startup_maintenance` (`:467`), `WarmTranscriber::new` (`:484`), `state_server::start` (`:492`), `NoteSyncWorker::spawn` (`:504`), `DictationWorker::spawn` (`:508`), `hotkeys::setup` (`:560`), `test_audio::activate` (`:589`), `status_file::publish_idle` (`:594`, `:763`), `self_test::spawn` (`:601`).
-- `display_name` (`tray.rs:92`, `:256`), and `shell::open_dashboard` and `shell::main_window_logical_size` (`commands/shell.rs:12`, `:22`).
+**Owns:** `crates/scribe-core/src/host.rs`, and test code only in `output.rs`, `hotkeys.rs` (its `#[cfg(test)] pub(crate) mod test_target`, `hotkeys.rs:1853`-`:2000`, and its tests), `remote_command.rs`, `github_oauth.rs`, `model_manager.rs` and `settings_store.rs`.
 
-The transitional `_with(app, core, ..)` functions to strip of their `app` are the ones in "Functions that still need an AppHandle" above.
+**Must not touch:** non-test code anywhere but `host.rs`, and `core.rs`, `dictation_worker.rs`, `note_sync.rs` (3b).
+3a adds no `Host` method, so no `impl Host` other than `RecordingHost`'s changes.
 
-Who deletes what:
+**Work:**
 
-- A step-2 lane deletes only the wrappers listed for it under "Wrappers to delete" (in its own files), never a wrapper that went dead after main 75614fc, even when its own change is what left it without callers; it lists that wrapper in its pull request instead, for step 4.
-- Wrappers whose last caller sits in another lane's file stay until step 4, which deletes them: `whisper::transcribe_with_output_prefix` (`whisper.rs:128`) and its helper `whisper::host_of` (`:80`) once `audio` switches `file_transcribe.rs:94`; `audio::start_recording_for_app` (`audio.rs:437`) and `audio::emit_recording_error` once `hotkeys` switches its calls; `dictation_state::emit_state_snapshot` once `output` switches; `hotkeys::start_transform` (`hotkeys.rs:1375`), whose caller `dictation_worker.rs:596` keeps calling it until step 4 because `start_transform_with` still takes the app; `output::core_for` (`output.rs:157`), which the remaining `output` and `audio` wrappers use.
-- `whisper::transcribe` (`whisper.rs:90`) has no caller on main, so the `models` lane deletes it in step 2 (but keeps `host_of`, which `transcribe_with_output_prefix` still uses).
+1. `RecordingHost` records the tray and main-window calls as `HostCall::SyncSettings(AppSettings)`, `OpenDashboard(Option<String>)`, `ToggleDashboard`, `UpdateTrayStatus(AppStatus)` and `UpdateEngineSummary(String)` (all `Eq`; `host.rs:160`-`:168`, `:287`-`:299`).
+2. `RecordingHost` gains one ordered log of events and calls (for example `sequence()`), since `events()` and `calls()` are separate lists and cannot pin an event against a call.
+3. Retire `SequencedHost` and its `Sent` log (`output.rs:1088`-`:1183`) and rewrite its five tests on the ordered log (`output.rs:1208`-`:1315`); retire `DashboardHost` and `DashboardCall` (`hotkeys.rs:1870`-`:1984`) and rewrite their test (`hotkeys.rs:2497`-`:2501`) and the `remote_command.rs` tests that use them (`:131`, `:167`).
+4. Fix the four assertions that the new variants break, each `assert!(host.calls().is_empty())` after a call that now records `SyncSettings` or a dashboard call: `github_oauth.rs:774`, `model_manager.rs:1249`, `:1341`, `remote_command.rs:174`.
+5. Add the tray test no test has today: `emit_changed_with` sends `scribe:settings-changed`, then records `SyncSettings` with the same settings (`settings_store.rs:61`-`:65`).
 
-### Work list and lane split
+**Hazards:** an exact `calls()` list anywhere else that now gains an entry fails only when the suite runs; run all of `scribe_core`'s tests before pushing.
 
-The lanes below never edit the same file at the same time.
-Lanes in one step run in parallel; a step starts when the step before it is merged.
-Each lane follows the rulebook above (unit tests with `RecordingHost` for every event it touches, test counts against main, "Definition of done"), and each lists in its pull request every wrapper or parameter it left for a later step.
+**Done when:** `SequencedHost`, `DashboardHost` and `DashboardCall` are gone; `grep -rn "SyncSettings" crates/scribe-core/src` finds the new tray test; no test changed meaning (each rewritten test pins at least what it pinned before); "Definition of done for every step" holds.
 
-| Step | Lane | Owns | Work |
-|------|------|------|------|
-| 1 | `seams` | `host.rs`, `tauri_host.rs`, `core.rs`, `autostart.rs`, `commands/mod.rs` and the three `on_dialog_thread` calls in `commands/data.rs` (`:346`, `:429`, `:534`), `data_hygiene::open_folder` only, `app/src-tauri/src/lib.rs:358` only (the autostart plugin), both `Cargo.toml` files and `Cargo.lock`, and every `impl Host`, test hosts included (the new methods have no defaults, so `MainThreadHost` and `PanicsOnceHost` in `whisper_server.rs`'s tests change too) | The `Host` methods above in all three hosts, with tests; `CoreCell` with tests; `open_folder_with(host, dir)` beside `open_folder`; `on_dialog_thread` changed in place to take the `Core`, with its three call sites updated; the autostart plugin calls behind the `Host` and `autostart::plugin()` built in the shell; add `global-hotkey` 0.8 to `crates/scribe-core/Cargo.toml` and `tauri-plugin-autostart` to `app/src-tauri/Cargo.toml`. |
-| 1 | `e2e-log-check` | `.github/workflows/e2e-windows.yml`, `app/e2e/windows/run.py` | Fail the Windows end-to-end job when the app's log contains "The engine's folder differs from Tauri's" (`lib.rs:372`). |
-| 2 | `sync` | the P1-3 `sync` files | `github_device_start` opens through the host; `github_device_poll` and `github_disconnect` call `emit_changed_with`; delete the four dead `note_sync` wrappers; a `NoteSyncWorker` constructor that takes a `CoreCell` (which tests can also use). |
-| 2 | `models` | the P1-3 `models` files | Delete the `models` wrappers listed above, including `whisper::transcribe` but not `transcribe_with_output_prefix` or `whisper::host_of`; `open_models_folder` uses `open_folder_with`; `delete_model` and `select_model` call `emit_changed_with`. |
-| 2 | `data` | the P1-3 `data` files | Opener, version and autostart through the host; delete the dead `data` wrappers; add a debug assertion in `settings_store::lock` that it is not taken on the main thread (with a test). |
-| 2 | `hotkeys` | the P1-3 `hotkeys` files | Global shortcuts through the host, with the shortcut types from `global-hotkey`; call `dictation_worker::submit_with`, `audio::start_recording_with` and `audio::emit_recording_error_with`; the four `emit_changed` calls in `commands/hotkeys.rs` (`:125`, `:167`, `:203`, `:237`) become `emit_changed_with`; delete the dead `hotkeys` wrappers; drop `app` from every function whose callers are all in the lane. |
-| 2 | `output` | the P1-3 `output` files | `notify` through the host; the paste guards call `dictation_state::emit_state_snapshot_with`; delete the dead `output` wrappers; drop `app` from every function whose callers are all in the lane. |
-| 2 | `audio` | the P1-3 `audio` files, plus the `app_version()` uses in `status_file.rs:64` and `state_server.rs:483` | The self-test exits and reads the version through the host; `dictation_state::app_version()` replaced by the host's version in all three `appVersion` fields (the visible change above); `file_transcribe` calls `whisper::transcribe_with_output_prefix_with`; `request_with` off `tauri::async_runtime`; a `DictationWorker` constructor that takes a `CoreCell`, keeping its no-drop, in-order tests; delete the dead `audio` wrappers. |
-| 3 | `wiring` | `app/src-tauri/src/lib.rs`, `tray.rs`, `commands/shell.rs`, `core.rs`, `shell.rs` | Build the `CoreCell`, give it to both workers and fill it after `Core::new`; `WarmTranscriber::new_with`; `run_startup_maintenance_with` with a backend clone; the replacements watcher through the host; `state_server::start_with`, `status_file::publish_idle_with`, `test_audio::activate_with`, `self_test::spawn_with`, `hotkeys::setup_with`, `handle_shortcut_with`, `RemoteCommand::run_with`, `settings_store::set_launch_at_startup_with` and `sync_launch_at_startup_with`; every `is_dev_flavor` and `display_name` caller on `Flavor` (the re-exports at app `lib.rs:12`-`:16`, `lib.rs:417`, `:576`, `tray.rs:92`, `:256`); the exit path, the window handlers, `save_window_size`, `missing_command_state` and the tray on the `Core`; manage only `Core` (and update the startup-order test and its `app.manage(` count); a test builder for `Core`, and with it a `CoreCell` test on a real `Core` (step 1 could test only the private `WeakCell` under it); delete the `shell.rs` free functions. |
-| 4 | `sweep` | every file in `crates/scribe-core/src` and `app/src-tauri/src` that still names `AppHandle` or imports through `crate::commands` | Remove the remaining `app` parameters (callers and callees together); delete the remaining wrappers, `output::core_for` and `settings_store::core_of`; delete `crates/scribe-core/src/commands.rs` and update its importers (`data_hygiene.rs:25`, `model_manager.rs:19`, `note_sync.rs:11`, `diagnostics.rs:22`, `whisper_server.rs:46`, core `lib.rs:15`, app `commands/mod.rs:21`, `lib.rs:24`, `commands/shell.rs:8`, `tray.rs:165`, `:180`); give the "engine not ready" answer a clear message. |
-| 5 | `drop-tauri` | `crates/scribe-core/Cargo.toml`, `Cargo.lock`, `crates/scribe-core/src/lib.rs` | Delete `is_dev_flavor` and `display_name` (step 3 left them without callers); remove every `tauri` and `tauri-plugin-*` dependency from `scribe-core`. |
-| 6 | `rename` | every engine file | Drop the `_with` suffix (see "Renaming" below). |
+#### Step 3b: `core-cell`
 
-Step 4 deletes the `commands.rs` re-exports, not step 3, because five engine files import `BackendState` through it and step 4 already edits every engine file and runs alone; step 3 would have to take over those files from no one in particular.
-"Manage only `Core`" means the engine: the tray still manages its own `LaunchAtStartupItem` (`tray.rs:88`), which is shell state, so the startup-order test counts the `app.manage(` calls in setup only.
+**Owns:** `crates/scribe-core/src/core.rs`, `dictation_worker.rs`, `note_sync.rs` (code and tests).
 
-The answer for a missing engine (`host::no_main_window()`, `host.rs:97`) keeps its error code `window_not_found`, because commands return it and a caller may match on it (nothing in `app/src` or the CLI does today); step 4 may change only its message ("Could not find the main window.") to say the engine is not ready yet, and lists that as a visible text change.
+**Must not touch:** `host.rs` and the test modules 3a owns; the shell; `spawn(app)` on both workers stays (it is `pub`, so it raises no warning, and 3c deletes it with its caller).
 
-The merge order inside step 2 is free: with the deletion rules above, no step-2 lane depends on another.
-Every lane merges main into its branch before it merges.
-Step 2 lanes may stop using `app` inside a function that another lane calls, but must keep its parameter (renamed `_app`) until step 4, so no lane edits another lane's call sites.
+**Work:**
 
-#### Done when, per step
+1. `CoreCell` gets a three-state answer, for example `lookup() -> CoreLookup { NotFilled, Gone, Ready(Core) }`, keeping `get()` (`core.rs:145`-`:166`).
+   Prefer it over a bare `is_filled()`, whose caller must read it before `get()` or misread a fill that lands between the two.
+2. The finders change from `Option` to the three-state answer: `DictationWorker::spawn_finding` (`dictation_worker.rs:371`) and `wait_for_executor` (`:526`), and `NoteSyncWorker::start` (`note_sync.rs:332`) and `wait_for_core` (`:358`), all `FnMut`/`Fn() -> Option<_>` today.
+   `spawn(app)`'s finders answer only `NotFilled` or `Ready`.
+3. The dictation worker loop (`dictation_worker.rs:465`-`:505`) drops its local `found` flag: on `Gone` it answers the waiting job and every later one `dictation_worker_unavailable`.
+   Today a cell filled and emptied before any job ran looks unfilled, and the next job polls until the channel closes; a caller holding a worker handle keeps it open, so its `call_async` never resolves.
+4. The note-sync loop (`note_sync.rs:371`-`:395`) ends its thread on `Gone` instead of waking every 50 ms until the last sender drops.
+5. A `#[cfg(test)]` cell-driven constructor for the dictation worker (for example one that takes a `CoreCell` and builds a test executor from each `Core` it finds), because `spawn_with(executor)` (`:362`) bypasses the cell and `spawn_on` needs an `AppHandle`.
+   Alternatively test through `spawn_finding` with a fake three-state finder; either way, no `AppHandle`.
+6. The `Core` test builder, a `#[cfg(test)]` module in `core.rs`: `BackendState::new` on `Database::open` in a temporary folder, `WarmTranscriber::new_with`, no `DictationServer`, `NoteSyncWorker::spawn_with(cell)`, a `DictationWorker` on a test executor, `HotkeyRuntimeState::default()`, `ReplacementStore::open` in the folder; it fills the cell, and each test ends with `core.shutdown()`.
+7. Tests:
+   - `CoreCell` on a real `Core`: `NotFilled`, `Ready`, and `Gone` once every `Core` is dropped (step 1 could test only the private `WeakCell`);
+   - the dictation-worker regression: fill, drop every `Core` before any job, then `call_async` resolves `dictation_worker_unavailable`;
+   - the note-sync regression: fill, drop every `Core`, send a note-saved signal, and the thread ends;
+   - the settings-lock assertion on a real command path: `settings_store::sync_launch_at_startup_with(&core)` on a thread named "main" panics in debug builds (`settings_store.rs:159`, the lock at `:188`).
+   Every test that waits has a deadline, so a regression fails instead of hanging.
+8. Stale notes: "kept in Tauri's managed state" on both workers (`dictation_worker.rs:302`, `note_sync.rs:293`) and the "step 3 lets it tell them apart" note (`dictation_worker.rs:344`-`:347`).
 
-- Step 1: the new `Host` methods and `CoreCell` exist with tests; `RecordingHost` records the new calls; `on_dialog_thread` takes the `Core`; `autostart::plugin()` is built in the shell; no engine behavior changed (same test counts plus the new tests); every check is green.
-- `e2e-log-check`: the Windows end-to-end job fails on a run whose log contains the mismatch line (shown once by a deliberate test, then reverted) and passes on main.
-- Step 2, each lane: no function in your files takes an `AppHandle` except those this doc leaves for step 4 (the cross-lane ones, the wrappers the shell still calls, and the `_app` parameters other lanes pass); none of the wrappers listed for you under "Wrappers to delete" is left; your pull request lists every wrapper that your change left without callers; every check is green.
-- Step 3: setup calls `app.manage(` once (the `Core`); `grep -rn "state::<" app/src-tauri/src` finds no lookup of an engine part other than the `Core`; the install-and-launch jobs and the Windows end-to-end job pass.
-- Step 4: `grep -rn AppHandle crates/scribe-core/src` finds nothing; `crates/scribe-core/src/commands.rs` is gone; every check is green.
-- Step 5: `crates/scribe-core/Cargo.toml` names no `tauri` crate and `cargo tree -p scribe-core | grep tauri` prints nothing; every check is green.
-- Step 6: no engine version has a `_with` twin left; every check is green.
+**Hazards:** the no-drop and in-order promises of both workers (their existing tests) must still hold before the fill; a test that drops the `Core` while a worker thread holds a job's `Core` sees `Gone` only after that job ends.
 
-#### Renaming
+**Done when:** the tests above pass; no worker loop keeps a `found` flag; "Definition of done for every step" holds.
 
-Step 6 drops the suffix only from the P1-3 engine versions whose old wrapper is gone, one name at a time, never with a blanket search and replace of `_with`.
+#### Step 3c: `wiring`
+
+**Owns:** `app/src-tauri/src/lib.rs`, `tray.rs`, `commands/shell.rs`, `crates/scribe-core/src/shell.rs`, and in `dictation_worker.rs` and `note_sync.rs` only the two `spawn(app)` constructors and the imports they alone use.
+It starts when 3a and 3b are merged.
+
+**Must not touch:** any other engine file (the wrappers 3c leaves without callers stay for step 4), any `Cargo.toml` or `Cargo.lock`.
+
+**Work:**
+
+1. Setup in this order (today's lines in parentheses):
+   1. resolve and check `Paths`; build the host and `shell::install(host.clone())` (`lib.rs:369`-`:383`);
+   2. the folders, the pre-rebrand migration, the database and the settings migrations as today (`:384`-`:438`); `is_dev_flavor(app.handle())` becomes `host.flavor().is_dev()` (`:417`);
+   3. `autostart::reconcile_at_launch_with(host.as_ref(), settings.launch_at_startup)` (`:443`-`:448`);
+   4. `BackendState::new`, then the `data-cleanup` thread with a backend clone calling `run_startup_maintenance_with` (`:456`-`:473`), then `child_guard::init` (`:476`);
+   5. `WarmTranscriber::new_with(host.clone(), backend.clone(), ..)` (`:484`), `state_server::start_with(host.clone())` (`:492`);
+   6. `let cell = CoreCell::new()`, `NoteSyncWorker::spawn_with(cell.clone())`, `DictationWorker::spawn_on(cell.clone(), app.handle().clone())` (`:504`, `:508`);
+   7. `ReplacementStore::open` without its watch, and `HotkeyRuntimeState::default()` (`:513`-`:538`), both `CoreParts` fields;
+   8. `Core::new(host.clone(), parts)`, then `cell.fill(&core)`, then `store.watch(..)` with a closure holding a host clone and a cell clone: it sends `CoreEvent::ReplacementsChanged` through the host and reaches note sync through `cell` (`replacements_file::notify_backup_with`), never a `NoteSyncWorker` clone, because the watcher thread never ends (`replacements_file.rs:316`-`:326`) and a sender it held would keep the note-sync thread alive after the `Core`;
+   9. `app.manage(core.clone())`: `manage` moves its argument, so manage a clone and keep `core` for what follows (`:555`);
+   10. Linux `platform::init(..)` (`:558`-`:559`), `hotkeys::setup_with(&core, &settings.hotkeys, ..)` (`:560`), `tray::setup`, `create_config_windows`, the window size and title (`:576` on `Flavor`), the Windows title bar;
+   11. `test_audio::activate_with(host.as_ref())` (`:589`), `status_file::publish_idle_with(host.as_ref())` (`:594`), `self_test::spawn_with(app.handle(), &core, request)` (`:601`), and `core.warm_transcriber().sync_with_settings(..)` in place of `app.state::<WarmTranscriber>()` (`:606`).
+2. Manage only the `Core`: the other seven `app.manage(` calls go (`lib.rs:457`, `:488`, `:495`, `:505`, `:509`, `:532`, `:538`), `missing_command_state` checks only the `Core` (`:224`-`:251`), and the exit path's failed-setup fallback goes (`:761`-`:773`; see "Hazards").
+   The tray's own `LaunchAtStartupItem` (`tray.rs:88`) is shell state and stays.
+3. The handlers: the single-instance handler calls `run_with(&core)` (`lib.rs:300`-`:304`) and the shortcut handler `handle_shortcut_with(&core, ..)` (`:350`-`:354`) on the `Core` they already look up; the window-focus handler calls `sync_launch_at_startup_with(&core)` (`:627`-`:631`), and it and the close handler (`:644`) read the settings through the `Core`.
+4. The tray: `dictation_worker::submit_with(&core, ..)` (`tray.rs:118`-`:120`), `set_launch_at_startup_with(&app, &core, wanted)` (`:162`), `sync_launch_at_startup_with(&core)` (`:187`), the `BackendState` lookups on the `Core` (`:165`, `:180`), and `display_name` from the `Flavor` (`:92`, `:256`).
+   `is_dev_flavor` and `display_name` leave the app's re-exports (`lib.rs:14`-`:15`).
+5. `commands/shell.rs`: `open_dashboard` takes the `Core` and calls `core.host().open_dashboard(None)`, staying synchronous; `save_window_size` runs on `off_main_core` with `core.backend()`, `core.host().main_window_logical_size()` and `emit_changed_with` (`commands/shell.rs:11`-`:36`).
+6. Delete `DictationWorker::spawn(app)` (`dictation_worker.rs:326`), `NoteSyncWorker::spawn(app)` (`note_sync.rs:309`) and the six free functions in `shell.rs` (`:38`-`:72`); `shell::install` and `shell::host()` stay for the host-only wrappers until step 4.
+7. The imports that go dead, in the same commit as their last use: `use tauri::{AppHandle, Manager}` (`note_sync.rs:9`); `use tauri::Emitter` (`lib.rs:514`); `use super::off_main`, `use tauri::Manager` and the `commands::BackendState` import in `commands/shell.rs` (`:4`, `:7`, `:8`); in `shell.rs` `use tauri::AppHandle` and the imports only the free functions used (`:15`-`:22`).
+   `dictation_worker.rs:40` keeps its `tauri` import, which `submit` still uses until step 4.
+8. The startup-order test (`lib.rs:1068`-`:1119`) pins the new order with one `app.manage(` (now `app.manage(core.clone())`), the clean-up thread after the backend, the fill right after `Core::new`, and the watch after the fill; its guard checks follow the renamed calls (it looks for `command.run(app)` and `hotkeys::handle_shortcut` today).
+9. Stale notes: the comment on `the_engine_carries_the_app_version` (`lib.rs:826`-`:827`; the engine no longer reports its crate version as `appVersion`, #165); setup's "each part is managed on its own" (`:453`-`:455`) and the same claim in the startup-order test (`:1098`-`:1099`); `shell.rs`'s module comment.
+
+**Hazards:**
+
+- Runtime failures the compiler does not catch once only `Core` is managed: `app.state::<WarmTranscriber>()` at the end of setup (`lib.rs:606`) panics on every launch; `save_window_size` reads `app.state::<BackendState>()` (`commands/shell.rs:21`) and panics when the user saves the window size; `missing_command_state` (`lib.rs:224`-`:251`) reports the unmanaged parts and `create_config_windows` (`:261`-`:269`) then fails setup.
+- `WarmTranscriber::new(app, ..)` (`whisper_server.rs:388`-`:404`) looks up the managed `BackendState` (`:391`); without it a release build logs a warning and builds a speech engine with no backend (only debug builds assert).
+- The startup clean-up's wrapper looks up the managed `BackendState` too (`data_hygiene.rs:272`); without it the clean-up of old temp recordings, editor copies, failed recordings past retention and orphaned clips is skipped with only a warning.
+- The replacements watcher today sends with `watch_app.emit(..)` and finds the note-sync worker with `try_state::<NoteSyncWorker>()` (`lib.rs:526`-`:530`), which finds nothing once only `Core` is managed.
+- This is the pull request that can break launching: only launching the app proves it.
+
+**Done when:** setup calls `app.manage(` once; `grep -rn "state::<" app/src-tauri/src` finds only `Core` and the tray's `LaunchAtStartupItem`; `data_hygiene::run_startup_maintenance` and `WarmTranscriber::new`, the two engine lookups of a managed part (`data_hygiene.rs:272`, `whisper_server.rs:391`), have no caller; neither worker has a `spawn(app)`; the install-and-launch jobs on Linux and macOS and the Windows end-to-end job pass on the pull request; "Definition of done for every step" holds.
+
+### Step 4: `sweep`
+
+Every remaining `AppHandle` parameter and wrapper goes, and with them `output::core_for`, `settings_store::core_of`, `off_main`, `crates/scribe-core/src/commands.rs` and `shell.rs`.
+
+**Owns:** every file in `crates/scribe-core/src` and `app/src-tauri/src` that names `AppHandle`, imports through `crate::commands`, calls `shell::host()`, or holds a function listed below.
+It starts after step 3c is merged.
+
+**Must not touch:** any `Cargo.toml` or `Cargo.lock` (step 5), and no `_with` renaming (step 6).
+
+**Runs alone.**
+Its three parameter chains below meet in shared files (`hotkeys.rs` holds both `start_transform` and `replace_hotkeys_with`; app `lib.rs` calls both `spawn_on` and `self_test::spawn_with`), and removing `commands.rs` and `shell.rs` touches files of every chain, so parallel lanes would edit the same files.
+The work is mostly deletions, ordered so each commit keeps `-D warnings` green, and fits one reviewable pull request.
+
+**Work, in this order:**
+
+1. The dictation chain, one commit: drop the unused `_app` of `output::handle_transcription_output_with` (`output.rs:171`), `output::paste_last_transcript_with` (`:238`) and `selection_transform::apply_result_with` (`selection_transform.rs:246`); then the `app` of `dictation::transcribe_recording_with`, `transcribe_recording_checked`, `transcribe_recording_inner` and `finish_selection_transform` (`dictation.rs:71`, `:102`, `:227`, `:492`), `audio::finish_timed_out_recording_with` and `finish_disconnected_recording_with` (`audio.rs:650`, `:699`), and `execute_with`, `stop_and_transcribe`, `start_transform` and the `app` field of `AppExecutor` (`dictation_worker.rs:634`, `:697`, `:718`, `:610`; a field nothing reads fails clippy).
+   `dictation_worker.rs:720` switches to `hotkeys::start_transform_with(core)` and `hotkeys::start_transform` (`hotkeys.rs:1370`, `pub(crate)`) goes in the same commit.
+   `DictationWorker::spawn_on(cell)` loses its app, with its call in app `lib.rs`.
+2. The settings chain, one commit: drop the unused `_app` of `hotkeys::replace_hotkeys_with` (`hotkeys.rs:825`) and the `app` of `AppEffects`, `apply_settings_change_with`, `patch_settings_now_with` and `set_launch_at_startup_with` (`settings_store.rs:254`, `:223`, `:140`, `:200`), `patch_settings` (`commands/data.rs:41`), the four hotkeys commands (`commands/hotkeys.rs:76`, `:130`, `:169`, `:209`, which move to `off_main_core`) and the tray's call (`tray.rs:162` after step 3).
+   `off_main` (`commands/mod.rs:29`, `pub(crate)`) loses its last callers there and goes in the same commit.
+   Add the test step 3 could not write, on the `Core` test builder: `AppEffects::apply_autostart` (`settings_store.rs:259`-`:261`) calls `autostart::apply_with`, which in a debug build (every test build) refuses with `autostart_dev_build` before it calls the host (`autostart.rs:181`-`:184`).
+   So `set_launch_at_startup_with(&core, true)` returns that error, and the test asserts the rollback: the stored `launch_at_startup` is unchanged, no `scribe:settings-changed` is sent and no `HostCall::SetLaunchAtLogin` is recorded (the order is `settings_store.rs:299`-`:303`).
+3. The file-transcription chain, one commit: `file_transcribe.rs:88` calls `whisper::transcribe_with_output_prefix_with(core.host().as_ref(), ..)`, and `whisper::transcribe_with_output_prefix` (`whisper.rs:120`, `pub(crate)`) and its helper `whisper::host_of` (`:80`, private) go in the same commit.
+   This was planned for the `audio` lane in step 2 and deferred (#165): switching the caller alone leaves the `pub(crate)` wrapper dead and fails clippy.
+   Then the `app` of `transcribe_file_with` (`file_transcribe.rs:41`), `self_test::run` and `spawn_with` (`self_test.rs:118`, `:79`), the `transcribe_file` command (`commands/audio.rs:80`) and the self-test call in app `lib.rs`.
+4. The wrappers, each deleted with the imports it alone used (`use tauri::{AppHandle, Manager}` lines go when their last use does).
+   All are `pub` unless marked, so they compile without callers; once step 3c has switched the callers marked "(step 3)", none has a caller left.
+
+   | Wrapper | Where | Last caller on main aef18a0 |
+   |---|---|---|
+   | `autostart::apply`, `reconcile_at_launch`, `follow_windows_switch` | `autostart.rs:168`, `:207`, `:277` | none, `lib.rs:444` (step 3 switches it), none |
+   | `data_hygiene::run_startup_maintenance`, `open_folder` | `data_hygiene.rs:267`, `:430` | `lib.rs:467` (step 3), none |
+   | `dictation_state::emit_state_snapshot` | `dictation_state.rs:118` | none (#163 switched the paste guards) |
+   | `audio::start_recording_for_app`, with `output::core_for` (`pub(crate)`, `output.rs:157`) and its import (`audio.rs:31`) in the same commit | `audio.rs:432` | none (#164); it is `core_for`'s only caller (`audio.rs:437`) |
+   | `audio::emit_recording_error` | `audio.rs:1911` | none (#164) |
+   | `dictation_worker::submit` | `dictation_worker.rs:580` | `tray.rs:118`-`:120` (step 3) |
+   | `hotkeys::setup`, `handle_shortcut` | `hotkeys.rs:493`, `:547` | `lib.rs:560`, `:354` (step 3) |
+   | `RemoteCommand::run` | `remote_command.rs:47` | `lib.rs:304` (step 3) |
+   | `self_test::spawn` | `self_test.rs:65` | `lib.rs:601` (step 3) |
+   | `settings_store::emit_changed` | `settings_store.rs:69` | `commands/shell.rs:32` (step 3) |
+   | `settings_store::sync_launch_at_startup`, `set_launch_at_startup`, with `core_of` (private, `:77`) and their re-export (`commands.rs:11`) in the same commit | `settings_store.rs:165`, `:212` | `lib.rs:631`, `tray.rs:187`, `tray.rs:162` (step 3) |
+   | `state_server::start` | `state_server.rs:650` | `lib.rs:492` (step 3) |
+   | `status_file::publish`, `publish_idle` | `status_file.rs:134`, `:142` | none (#165), `lib.rs:594`, `:763` (step 3) |
+   | `test_audio::activate` | `test_audio.rs:49` | `lib.rs:589` (step 3) |
+   | `WarmTranscriber::new` | `whisper_server.rs:388` | `lib.rs:484` (step 3) |
+   | `model_manager::delete_model_with` (not an `AppHandle` wrapper; `delete_model_in` stays for `delete_model_announced_with`) | `model_manager.rs:194` | none (#162) |
+   | `model_manager::select_model_with`, `model_path_for_id_with` (not `AppHandle` wrappers; their bodies `select_model_in` and `model_path_for_id_in` stay, used at `:848` and `:391`) | `model_manager.rs:250`, `:349` | none (#162) |
+   | `is_dev_flavor`, `display_name` (core `lib.rs`, with their doc comments) | `lib.rs:68`-`:81` | `lib.rs:417`, `:576`, `tray.rs:92`, `:256` (step 3) |
+
+5. Delete `crates/scribe-core/src/commands.rs` and `pub mod commands` (core `lib.rs:15`), and point its importers at `crate::backend::BackendState`: `data_hygiene.rs:25`, `model_manager.rs:18`, `note_sync.rs:11`, `diagnostics.rs:21`, `whisper_server.rs:46`, app `commands/mod.rs:21` (`pub use scribe_core::commands::*`), app `lib.rs:24`, `commands/shell.rs:8`, and whatever step 3 left in `tray.rs` (`:165`, `:180` on main).
+   Step 4 does this rather than step 3 because five engine files import through it and step 4 edits every engine file anyway.
+6. Once no engine code calls `shell::host()` (after item 4 its callers are gone), delete `shell.rs` and its process-wide `HOST`, `pub mod shell` (core `lib.rs:53`, whose module comment links to it at `:8`), `shell::install` in setup and its step in the startup-order test, and `shell` from the app's re-exports (`lib.rs:18`).
+7. Stale comments that name the app or a later step in the files it edits (for example `hotkeys.rs:823`-`:824`, `file_transcribe.rs:36`-`:39`, `self_test.rs:76`-`:78`, `dictation_worker.rs:349`-`:350`, `:607`-`:609`, `:630`-`:633`, `:713`-`:717`).
+
+**Hazards:** the `-D warnings` cases above (each `pub(crate)` or private item, unused import or unread field goes in the commit that removes its last use); `host::no_main_window()` (`host.rs:152`) keeps its code and its message, because after step 4 its remaining users mean "no window" or "no host", not "engine not ready"; the Windows-only code in `hotkeys.rs` and `autostart.rs` (see "Hazards") is proven only by the Windows CI jobs.
+
+**Done when:** `grep -rn "AppHandle\|use tauri\|tauri::" crates/scribe-core/src` finds nothing but comments; `grep -rn "AppHandle\|off_main(" app/src-tauri/src/commands` finds only `open_release_page`; `crates/scribe-core/src/commands.rs` and `shell.rs` are gone; the `AppEffects` autostart test exists; "Definition of done for every step" holds.
+
+### Step 4b: `test-seams`
+
+Two tests deferred from step 3 cannot be written without a seam, and without one they would send keystrokes, overwrite the clipboard or start keyboard-polling threads on a CI runner or the owner's PC.
+They get a step of their own after step 4: step 4 changes the signatures in both files (it drops `_app` from `output.rs` and deletes `hotkeys::start_transform`), so the seams would conflict with it, and step 4 is deletions only while a seam is new design that deserves its own review.
+It runs in parallel with step 5, which owns no file of it.
+
+**Owns:** `crates/scribe-core/src/output.rs` and `hotkeys.rs` (code and tests), and `platform/mod.rs` only if the seam needs a type from it.
+
+**Must not touch:** `Cargo.toml`, `Cargo.lock` and core `lib.rs` (step 5); no `_with` renaming (step 6); no change to what the app does.
+
+**The rule:** no test may touch the real clipboard or send keystrokes.
+A tested function takes the seam as a parameter and has no path to the real platform from a test; the production implementation forwards to today's calls unchanged.
+
+**Work:**
+
+1. A seam over the output paths' platform calls: `platform::ensure_foreign_focus`, `platform::type_text`, the private clipboard write and the clipboard paste with its restore (`output.rs:307`-`:363`, and the copy and copy-and-paste paths up to `:483`), for example a small trait the three path bodies take, with the production implementation calling `platform::` as today.
+2. With it, the deferred output tests: each of the three paths calls `finish_output` with the `emit_events` its caller asked for and sends no second `scribe:output-failed` (`output.rs:363`, `:428`, `:483`), and the paste guards publish `Pasting` then `Ready` through `emit_state_snapshot_with` (`:325`, `:448`), on the `Core` test builder and the ordered log from step 3a.
+3. A seam over starting the two watchers in `register_hotkey_set_with` (`hotkeys.rs:849`-`:868`), for example a private body that takes what configures the chord watcher and the toggle watcher, with the production version calling `configure_chord_watcher_with` and `configure_toggle_watcher_with` as today.
+   The watchers start only on Windows (`:610`, `:1007`), so without the seam the order is not observable on Linux or macOS, and on Windows a test would start real keyboard-polling threads.
+4. With it, the deferred order test on every platform: the bindings are registered (`HostCall::RegisterShortcut`), then the chord watcher is configured, then the toggle watcher.
+
+**Hazards:** the paste and transform behavior must not change (the Windows end-to-end job proves the real paths); the seam must not add a lock held across a host call.
+
+**Done when:** both tests run on Linux, macOS and Windows CI; `grep -rn "platform::\(type_text\|ensure_foreign_focus\)" crates/scribe-core/src/output.rs` finds them only in the production implementation; the Windows end-to-end job passes; "Definition of done for every step" holds.
+
+### Step 5: `drop-tauri`
+
+**Owns:** `crates/scribe-core/Cargo.toml`, `Cargo.lock`, `crates/scribe-core/src/lib.rs`.
+It starts after step 4 and runs in parallel with step 4b.
+
+**Work:**
+
+- Rewrite the module comment (`lib.rs:6`-`:8` still says the engine takes an `AppHandle` and emits Tauri events); step 4 already deleted `is_dev_flavor` and `display_name`.
+- Remove every Tauri dependency from `crates/scribe-core/Cargo.toml`: `tauri` (with `tray-icon`), `tauri-plugin-global-shortcut`, `tauri-plugin-opener`, `tauri-plugin-single-instance`, `tauri-plugin-log`, `tauri-plugin-updater`, `tauri-plugin-process` and `tauri-plugin-notification`.
+  None of the plugins is used by any engine file even on main (no `tauri_plugin_` in `crates/scribe-core/src`): `tauri-plugin-notification` has been unused since #163 (`output::notify` goes through `Host::notify`), the opener since #159 (`data_hygiene::open_folder` opens through the host), the global-shortcut plugin since #164, and the single-instance, log, updater and process plugins are registered by the shell (`app/src-tauri/src/lib.rs:291`-`:361`), whose own `Cargo.toml` names them.
+  `tauri` itself is used only for `AppHandle`, `Manager` and `State`, which step 4 removes.
+- Keep `global-hotkey` (the engine's shortcut types) and rewrite its comment, which explains it through "the plugin above".
+- Fix the version comment (`Cargo.toml:3`-`:5`): the crate still carries the app's version, but since #165 the engine reports `CARGO_PKG_VERSION` only in the update check and the user agents, no longer in the dictation-state interface.
+  `release-kit` keeps bumping it with the app, and `the_engine_carries_the_app_version` keeps checking that.
+- Check the comments that explain a dependency by the Tauri tree (`objc2` "already in the tree through Tauri and arboard", `ashpd` "through the single-instance plugin"): they stay true for the workspace, because the app crate still depends on Tauri; reword them if they read as the engine's own.
+
+**Hazards:** `Cargo.lock` should change only in `scribe-core`'s dependency list, with no package added, removed or upgraded (the app crate still pulls in every Tauri crate).
+
+**Done when:** `crates/scribe-core/Cargo.toml` names no `tauri` crate, `cargo tree -p scribe-core -e normal | grep -i tauri` prints nothing, `cargo check --locked -p scribe-core` passes on its own (with and without `--features e2e-audio`), so no dependency reaches the engine only through the app crate's features, and "Definition of done for every step" holds.
+
+### Step 6: `rename`
+
+**Owns:** every engine file, and the shell files that call a renamed function.
+It starts when steps 4b and 5 are merged.
+
+**Work:** drop the `_with` suffix from every engine version whose old wrapper is gone, one name at a time, never with a blanket search and replace of `_with`; that includes the engine functions step 2 added with no wrapper twin (`model_manager::open_models_folder_with`, `delete_model_announced_with`, `select_model_announced_with`, `data_hygiene::open_transcript_externally_with`, `replacements_file::open_replacements_file_with`).
+
 Names that must not be renamed, or need care:
 
-- `DictationWorker::spawn_with` (`dictation_worker.rs:254`) is a test-only constructor that takes an executor, not an engine version; renaming it would clash with `spawn`, so leave it or call it `spawn_with_executor`.
-- `Dispatcher::start_with` in `sounds.rs:271` is a private helper of the sound player, not an engine version; leave it.
+- `DictationWorker::spawn_with` (`dictation_worker.rs:362`) is a test-only constructor that takes an executor, not an engine version; leave it or call it `spawn_with_executor`.
+  `DictationWorker::spawn_on` keeps its name; `NoteSyncWorker::spawn_with(cell)` becomes `spawn` (step 3c deleted `spawn(app)`), and the test-only cell-driven constructor from step 3b keeps a name that says it is for tests.
+- `Dispatcher::start_with` (`sounds.rs:269`) is a private helper of the sound player, not an engine version; leave it.
 - `whisper::transcribe_with_output_prefix_with` becomes `transcribe_with_output_prefix`; only the trailing `_with` goes.
-- `stop_recording_with_reason` (`audio.rs`), the test helper `restore_with` (`output.rs:1256`) and test names that end in `_with` (for example `a_dictation_keeps_the_model_it_started_with`) are not engine versions; leave them.
-- `gpu::probe_with` (`gpu.rs:209`) becomes `probe`, with a different signature from the old wrapper (`host, Option<&WarmTranscriber>`).
-- `status_with`, `run_with`, `publish_with`, `transcribe_with`, `start_with` (`state_server.rs:617`) and `new_with` share their new name with other functions in other types or modules (there are several other `status`, `publish`, `run`, `start` and `new` functions); that compiles, but check every `use` that imports by name.
+- `stop_recording_with_reason` (`audio.rs:738`), the test helper `restore_with` (`output.rs:1408`) and test names that contain or end in `_with` (for example `start_with_publishes_the_discovery_file_under_the_hosts_home`, `a_dictation_keeps_the_model_it_started_with`) are not engine versions; leave them.
+- The private bodies named `_in` (`sync_launch_at_startup_in`, `delete_model_in` and others) are not engine versions; leave them.
+- `gpu::probe_with` (`gpu.rs:193`) becomes `probe`; its signature (`host, Option<&WarmTranscriber>`) differs from the deleted wrapper's.
+- `status_with`, `run_with`, `publish_with`, `transcribe_with`, `start_with` (`state_server.rs:623`) and `new_with` share their new name with other functions in other types or modules (there are several other `status`, `publish`, `run`, `start` and `new` functions), and the five step-2 names above match command names in `app/src-tauri/src/commands`; that compiles, but check every `use` that imports by name.
 
-#### Checking Windows code locally
+**Done when:** no engine function has a `_with` suffix except the ones this list keeps, and "Definition of done for every step" holds.
+
+### Checking Windows code locally
 
 On this machine (WSL) a Windows-target clippy does not work yet: `cargo clippy --locked -p scribe-core --target x86_64-pc-windows-gnu --all-targets` (the `x86_64-pc-windows-gnu` Rust target is installed) stops in the build script of `ring`, which needs the MinGW C compiler `x86_64-w64-mingw32-gcc`, and that is not installed (checked on 2026-11-26).
 So until someone installs MinGW-w64 here and that command passes, the Windows-only code is proven only by the Windows CI jobs (the Windows desktop backend check and the Windows end-to-end job), and a lane that changes it must wait for them before it reports done.

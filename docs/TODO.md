@@ -95,7 +95,7 @@ What CI cannot answer (still needs a real Mac, see 3.1): Gatekeeper's first-laun
 ## 5. Windows follow-ups
 
 - [ ] Clipboard robustness ideas from the 2026-10-28 investigation (no bug found, optional hardening): own a hidden HWND as the clipboard owner instead of NULL, and skip synthesized and OLE formats when restoring.
-- [ ] Dev build `status.json` reports `appVersion` "0.10.0"/base version for Dev builds; minor, make it the real Dev version.
+- [x] Dev build `status.json` reported the base version as `appVersion`: since #165 `status.json`, `control.json` and the state stream report the app's own version (`Host::app_version()`).
 - [ ] CI Windows paste smoke test: a GitHub Actions Windows runner job that pastes into a test window (the hands-on harness proves the approach; see 7.1).
 - [ ] Defender ML flags the unsigned Dev NSIS installer (`Trojan:Win32/Bearfoos.A!ml`): owner said to ignore it. No action.
 - [ ] DECISIONS.md "Still open": whether a note's audio should expire after 30 days while its text stays.
