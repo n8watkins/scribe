@@ -12,7 +12,7 @@
 //!   2. `transform`: send (selection, instruction) to the local LLM via the
 //!      reused `note_analysis::analyze_text` client and return the rewritten
 //!      text.
-//!   3. `apply_result`: paste the rewritten text back over the still-selected
+//!   3. `apply_result_with`: paste the rewritten text back over the still-selected
 //!      original (Ctrl+V, via the proven `output` paste path), then restore the
 //!      pre-capture clipboard.
 //!
@@ -27,7 +27,7 @@ use tauri::AppHandle;
 
 use crate::core::Core;
 use crate::error::CommandError;
-use crate::output::{core_for, OutputResult};
+use crate::output::OutputResult;
 use crate::platform::{self, ClipboardSnapshot, WindowId};
 use crate::settings::AppSettings;
 
@@ -240,19 +240,20 @@ pub fn focus_previous_app() -> Result<(), CommandError> {
 /// When the user has moved to another app while the model was working, the
 /// text is left on the clipboard instead (the error says so), because pasting
 /// into whatever is in front now would drop it in the wrong place.
-pub fn apply_result(
-    app: &AppHandle,
+///
+/// The app is unused: the parameter stays until P1-4 step 4 changes this and
+/// its caller (`dictation`, the `audio` lane) together.
+pub fn apply_result_with(
+    _app: &AppHandle,
+    core: &Core,
     text: &str,
     captured: CapturedSelection,
 ) -> Result<OutputResult, CommandError> {
-    let core = core_for(app, "paste the transformed text")?;
-    apply_result_with(app, &core, text, captured)
+    apply_transformed(core, text, captured)
 }
 
-/// [`apply_result`] on the engine. Still takes the app because the paste
-/// (`output::paste_text_with`) does.
-pub fn apply_result_with(
-    app: &AppHandle,
+/// [`apply_result_with`] without the app, for this lane's own callers.
+fn apply_transformed(
     core: &Core,
     text: &str,
     mut captured: CapturedSelection,
@@ -281,7 +282,7 @@ pub fn apply_result_with(
     // sent a copy, so the selection is still active). `paste_text` handles the
     // focus guard and modifier release. On failure, dropping `captured`
     // restores the clipboard.
-    let result = crate::output::paste_text_with(app, core, text)?;
+    let result = crate::output::paste_text_with(core, text)?;
     if result.status == crate::output::OutputStatus::PasteSkipped {
         // Windows would have blocked the paste (an administrator window), so
         // the result was left on the clipboard. Keep it there and say so.
@@ -306,18 +307,7 @@ fn read_clipboard_text() -> Option<String> {
 /// The typed Transform Selection (the `transform_selection` command): hands
 /// focus back to the app the user was in, copies its selection, rewrites it
 /// with the local LLM and pastes the result over it. Blocks.
-pub fn transform_selection_blocking(
-    app: &AppHandle,
-    instruction: &str,
-) -> Result<OutputResult, CommandError> {
-    let core = core_for(app, "transform the selection")?;
-    transform_selection_blocking_with(app, &core, instruction)
-}
-
-/// [`transform_selection_blocking`] on the engine. Still takes the app
-/// because the paste (`apply_result_with`) does.
 pub fn transform_selection_blocking_with(
-    app: &AppHandle,
     core: &Core,
     instruction: &str,
 ) -> Result<OutputResult, CommandError> {
@@ -362,7 +352,7 @@ pub fn transform_selection_blocking_with(
 
     // 4. Paste the result back over the still-selected original, then restore
     //    the pre-capture clipboard.
-    selection_transform::apply_result_with(app, core, &transformed, captured)
+    apply_transformed(core, &transformed, captured)
 }
 
 #[cfg(test)]
