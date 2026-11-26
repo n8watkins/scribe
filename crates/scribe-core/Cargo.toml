@@ -26,7 +26,6 @@ global-hotkey = "0.8"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-log = "2"
-tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-notification = "2"
@@ -59,8 +58,8 @@ dirs = "7"
 
 [target.'cfg(windows)'.dependencies]
 # Reads the sign-in entry and Windows' Startup apps switch for it
-# (src/autostart.rs); the autostart plugin, which writes the entry, already
-# uses it.
+# (src/autostart.rs); the shell's autostart plugin, which writes the entry,
+# already uses it.
 windows-registry = "0.6"
 windows = { version = "0.58", features = [
     "Win32_Devices_FunctionDiscovery",
