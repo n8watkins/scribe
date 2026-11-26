@@ -198,3 +198,39 @@ Every state can be reached without a keyboard or mouse, with `--key=value` on th
 
 `scripts/measure.ps1 -Exe <exe> -Out <folder>` runs everything above that needs no input and never takes the focus, for both renderers, and writes `report.json`, pictures, module lists and UI Automation dumps.
 Add `-Probes` for frame timings only when nobody is using the PC: it puts the main window on screen.
+
+## Hands-on checks with real input (2026-11-25, 22:04 to 22:09)
+
+Run by `scripts/checks/checks.ps1` in a hands-off window the owner gave, with real synthesized mouse and keyboard input (SendInput), the `software` renderer unless stated, and the owner's clipboard saved first and restored at the end (confirmed equal).
+A watchdog would have killed everything and restored the clipboard; it did not need to fire.
+Alt was never pressed, none of the owner's windows was touched, and nothing was left running.
+Input-method checks and the right-to-left caret were out of scope (Scribe is unlikely to be used for Chinese).
+Two other builds were compiling on the PC: CPU use was 85% to 94% during F and G, so **their timings are not trustworthy**; the pass or fail results are.
+Instead of Notepad the checks typed into a small text window of their own, because Windows 11 Notepad can open as a tab in the owner's existing Notepad window.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| A. Pill shown and hidden while typing | **pass** | 4 shows and 4 hides in 10 s; the foreground stayed the text window after every chunk; every typed character arrived, in order |
+| A. Real drag of the pill | **pass** | pressed and moved 120 px left and 200 px up in 20 steps: the pill followed exactly (1120,1268 to 1000,1068), recording did not stop, focus did not move |
+| A. Real click stops recording | **pass** | Saving, Transcribing, Inserting, then the confirmation; focus did not move |
+| A. Copy button click | **pass** | focus did not move |
+| A. No taskbar button, not in Alt+Tab | **pass** | extended style `0x08000198` (tool window, no-activate, topmost, no app-window bit), the shell's Alt+Tab rule says no, and the taskbar's automation tree has no trial entry (its only "Scribe" entry, "Scribe - 1 running window", is the installed Scribe) |
+| B. Corners transparent, `software` | **pass** | over a light (240) and a dark (16) backdrop of our own, the corner pixels read the backdrop exactly |
+| B. Corners transparent, `skia-software` | **pass** | same |
+| C. Copy puts the transcript on the clipboard, paste works | **pass** | the clipboard held the live words so far ("So the plan for tomorrow ... look at the installer"); Ctrl+V put exactly that at the end of the text window |
+| D. Drag onto the second monitor and back | **pass** | dragged to -1121,496 on the 1920x1080 monitor and back to 1000,1060; size stayed 320x99 and recording continued; both monitors are at 96 DPI, so mixed scaling was not tested |
+| E. Tray icon and its check item | **not run** | the trial's icon sits in the hidden overflow area; it was not rearranged and not clicked |
+| F. Editor typing, select, copy, undo, key latency | **inconclusive** | the 60,000-character editor took real typing and 30 Ctrl+Z brought it back to exactly 60,000 characters, but the automation text did not show the typed run where expected, Shift+End then Ctrl+C copied 60 characters that did not start with it, and 97 of 220 keys showed no change in the watched strip within 500 ms (median 11.9 ms for the rest), at 94% CPU; the caret position after the click needs a person to check |
+| G. Real mouse-wheel scrolling of 2,000 rows | **pass** (timing under load) | 16 s of wheel steps every 16 ms: 3,082 frames, worst draw 4.8 ms, none over 50 ms, at 85% CPU |
+| H. Keyboard reach, controls page | **pass** | Tab order: the four sidebar tabs, "Show floating pill" (checkbox, on), "Play sounds" (toggle, on), "Launch at login" (toggle, off), "Cue volume" (slider, 70), "Show pill", "Copy transcript", then back to the tabs; Shift+Tab walks it backwards; the disabled "Delete history" is skipped as it should be |
+| H. Keyboard reach, history list | **fail** | Tab only cycles through the four sidebar tabs; the 2,000-row list can never take keyboard focus, so a keyboard or screen-reader user cannot reach the transcripts |
+| H. Keyboard reach, editor page | **pass** | tabs, "Copy all", then the editor ("Transcript editor", Edit) |
+| H. Names | **pass** | every focus stop had a name and a role |
+| H. Focus visible | **pass** for the tabs, checkbox and switches | a ring is drawn on each (`focus-rings.png`); the checkbox's ring spans the whole row, which looks off; the slider's ring was not confirmed |
+
+What this is and is not: H reads the UI Automation tree, which is what Narrator and NVDA read, after real Tab and Shift+Tab keys; it is not a listening test.
+
+Surprises:
+- The two switches report through UI Automation that they cannot take keyboard focus, yet real Tab reaches them and draws a ring: the automation property is wrong, the behaviour is right.
+- The history `ListView` is not in the Tab order at all.
+- The first attempts stopped on bugs in the check script itself (a hidden-start window, a taskbar lookup, reading the text window), each stopped safely with the clipboard restored; the fourth attempt ran to the end.
