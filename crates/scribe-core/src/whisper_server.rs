@@ -2179,23 +2179,90 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// A command that runs for half a minute and does nothing.
-    fn long_running_process() -> std::process::Child {
-        let mut command = if cfg!(windows) {
-            let mut command = std::process::Command::new("ping");
-            command.args(["-n", "30", "127.0.0.1"]);
-            command
-        } else {
-            let mut command = std::process::Command::new("sleep");
-            command.arg("30");
-            command
-        };
-        command
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap()
+    /// A child that runs for ten minutes and does nothing, so it cannot end
+    /// by itself during a test. A helper thread owns the `Child` and sends its
+    /// exit status as soon as it is gone; the test's deadline is on the
+    /// receiving side, so a busy machine cannot run a window out. Dropping
+    /// this tells the helper to kill and reap the child through that `Child`
+    /// handle (never through a raw pid, which could be reused after a reap),
+    /// so a failed assertion cannot leave the process behind.
+    struct LongRunningProcess {
+        pid: u32,
+        exit: std::sync::mpsc::Receiver<std::io::Result<std::process::ExitStatus>>,
+        /// Dropping this sender is the "kill now" signal for the helper.
+        kill: Option<std::sync::mpsc::Sender<()>>,
+        waiter: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl LongRunningProcess {
+        fn spawn() -> Self {
+            let mut command = if cfg!(windows) {
+                let mut command = std::process::Command::new("ping");
+                command.args(["-n", "600", "127.0.0.1"]);
+                command
+            } else {
+                let mut command = std::process::Command::new("sleep");
+                command.arg("600");
+                command
+            };
+            let mut child = command
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let pid = child.id();
+            let (tx, exit) = std::sync::mpsc::channel();
+            let (kill, kill_rx) = std::sync::mpsc::channel::<()>();
+            let waiter = std::thread::spawn(move || loop {
+                match child.try_wait() {
+                    Ok(None) => {}
+                    Ok(Some(status)) => {
+                        let _ = tx.send(Ok(status));
+                        return;
+                    }
+                    Err(error) => {
+                        let _ = tx.send(Err(error));
+                        return;
+                    }
+                }
+                // A timeout means keep waiting; a message or a dropped sender
+                // means the owner is gone or finished, so stop the child.
+                if !matches!(
+                    kill_rx.recv_timeout(Duration::from_millis(10)),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                ) {
+                    let _ = child.kill();
+                    let _ = tx.send(child.wait());
+                    return;
+                }
+            });
+            Self {
+                pid,
+                exit,
+                kill: Some(kill),
+                waiter: Some(waiter),
+            }
+        }
+
+        /// Blocks until the child is gone (up to `limit`) and returns how.
+        fn wait_for_exit(&mut self, limit: Duration) -> std::process::ExitStatus {
+            self.exit
+                .recv_timeout(limit)
+                .unwrap_or_else(|_| panic!("the engine process was not stopped within {limit:?}"))
+                .unwrap()
+        }
+    }
+
+    impl Drop for LongRunningProcess {
+        fn drop(&mut self) {
+            // The helper kills the child through its own `Child` handle, or has
+            // already reaped it and returned, in which case nothing is signaled.
+            drop(self.kill.take());
+            if let Some(waiter) = self.waiter.take() {
+                let _ = waiter.join();
+            }
+        }
     }
 
     /// Quitting stops every engine process at once, even while a load or a
@@ -2205,8 +2272,13 @@ mod tests {
         let root = std::env::temp_dir().join(format!("scribe-warm-kill-{}", std::process::id()));
         let host = recording_host(&root);
         let warm = parakeet_engine(&root, host.clone(), false);
-        let mut process = long_running_process();
-        assert!(warm.shared.started(process.id()));
+        let mut process = LongRunningProcess::spawn();
+        assert!(warm.shared.started(process.pid));
+        assert_eq!(
+            lock(&warm.shared.processes).len(),
+            1,
+            "the child was never registered for killing"
+        );
 
         // Something holds the engine lock for longer than quitting may take.
         let (held_tx, held_rx) = std::sync::mpsc::channel();
@@ -2225,20 +2297,21 @@ mod tests {
             "shutdown waited {:?} for the engine lock",
             quitting.elapsed()
         );
-        let stopped = Instant::now();
-        while process.try_wait().unwrap().is_none() {
-            assert!(
-                stopped.elapsed() < Duration::from_secs(5),
-                "the engine process is still running"
-            );
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        // The child sleeps for ten minutes, so only the shutdown can end it.
+        let status = process.wait_for_exit(Duration::from_secs(30));
+        #[cfg(unix)]
+        assert_eq!(
+            std::os::unix::process::ExitStatusExt::signal(&status),
+            Some(libc::SIGKILL),
+            "the engine process did not die from SIGKILL: {status:?}"
+        );
+        #[cfg(windows)]
+        assert!(!status.success(), "the engine process exited by itself");
 
-        // A process that starts now is refused, so its launcher stops it.
-        let mut late = long_running_process();
-        assert!(!warm.shared.started(late.id()));
-        let _ = late.kill();
-        let _ = late.wait();
+        // A process that starts now is refused, so its launcher stops it
+        // (here the guard does, when it drops).
+        let late = LongRunningProcess::spawn();
+        assert!(!warm.shared.started(late.pid));
 
         holder.join().unwrap();
         let _ = fs::remove_dir_all(&root);

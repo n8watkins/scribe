@@ -330,35 +330,99 @@ mod tests {
     /// Linux): a match stops it, a mismatch leaves it running.
     #[test]
     fn stops_only_the_recorded_process() {
+        // Ten minutes, so the child cannot end by itself during the test.
         let mut command = if cfg!(windows) {
             let mut command = std::process::Command::new("ping");
-            command.args(["-n", "30", "127.0.0.1"]);
+            command.args(["-n", "600", "127.0.0.1"]);
             command
         } else {
             let mut command = std::process::Command::new("sleep");
-            command.arg("30");
+            command.arg("600");
             command
         };
-        let mut child = command
+        let child = command
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
             .unwrap();
-        let recorded = identity(child.id()).expect("the child is readable");
+        let pid = child.id();
+        let recorded = identity(pid).expect("the child is readable");
+
+        // A helper thread owns the `Child` and sends its exit status as soon as
+        // it is gone; the 30 s deadline is on the receiving side, so a busy
+        // machine cannot run a window out.
+        let (tx, exit) = std::sync::mpsc::channel();
+        let (kill, kill_rx) = std::sync::mpsc::channel::<()>();
+        let waiter = std::thread::spawn(move || {
+            let mut child = child;
+            loop {
+                match child.try_wait() {
+                    Ok(None) => {}
+                    Ok(Some(status)) => {
+                        let _ = tx.send(Ok(status));
+                        return;
+                    }
+                    Err(error) => {
+                        let _ = tx.send(Err(error));
+                        return;
+                    }
+                }
+                // A timeout means keep waiting; a message or a dropped sender
+                // means the test is over, so stop the child.
+                if !matches!(
+                    kill_rx.recv_timeout(std::time::Duration::from_millis(10)),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                ) {
+                    let _ = child.kill();
+                    let _ = tx.send(child.wait());
+                    return;
+                }
+            }
+        });
+        // Stops and reaps the child on every exit path, a failed assertion
+        // included, so a failure cannot leave a ten minute process behind. The
+        // helper kills through its own `Child` handle (never a raw pid, which
+        // could be reused after a reap), or has already returned.
+        struct Guard {
+            kill: Option<std::sync::mpsc::Sender<()>>,
+            waiter: Option<std::thread::JoinHandle<()>>,
+        }
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                drop(self.kill.take());
+                if let Some(waiter) = self.waiter.take() {
+                    let _ = waiter.join();
+                }
+            }
+        }
+        let _guard = Guard {
+            kill: Some(kill),
+            waiter: Some(waiter),
+        };
 
         let started_later = ProcessIdentity {
             start_time: recorded.start_time + 1,
             ..recorded.clone()
         };
         assert!(!terminate_if_same(&started_later));
-        assert!(child.try_wait().unwrap().is_none(), "a mismatch stopped it");
+        assert!(
+            matches!(exit.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)),
+            "a mismatch stopped it"
+        );
 
         assert!(terminate_if_same(&recorded));
-        let stopped = std::time::Instant::now();
-        while child.try_wait().unwrap().is_none() {
-            assert!(stopped.elapsed() < std::time::Duration::from_secs(5));
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        let status = exit
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("the child was not stopped within 30 s")
+            .unwrap();
+        #[cfg(unix)]
+        assert_eq!(
+            std::os::unix::process::ExitStatusExt::signal(&status),
+            Some(libc::SIGKILL),
+            "the child did not die from SIGKILL: {status:?}"
+        );
+        #[cfg(windows)]
+        assert!(!status.success(), "the child exited by itself");
         // Gone (and reaped): nothing to stop any more.
         assert!(!terminate_if_same(&recorded));
     }
