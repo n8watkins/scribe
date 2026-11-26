@@ -43,7 +43,7 @@ const POLL_TIMEOUT: Duration = Duration::from_secs(900);
 const REFRESH_WINDOW: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) struct StoredCredential {
+pub struct StoredCredential {
     version: u8,
     access_token: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -200,7 +200,7 @@ pub fn request_device_code() -> Result<DeviceCode, CommandError> {
 ///
 /// CRITICAL: GitHub returns HTTP 200 even when authorization is still pending,
 /// so this branches on the JSON `error` field, not the status code.
-pub(crate) fn poll_for_token(
+pub fn poll_for_token(
     device_code: &str,
     interval_secs: u64,
     cancelled: &AtomicBool,
@@ -350,10 +350,7 @@ pub fn has_stored_token(service: &str) -> bool {
 }
 
 /// Stores a complete GitHub App credential in the keychain under `service`.
-pub(crate) fn store_credential(
-    service: &str,
-    credential: &StoredCredential,
-) -> Result<(), CommandError> {
+pub fn store_credential(service: &str, credential: &StoredCredential) -> Result<(), CommandError> {
     let encoded = serde_json::to_string(credential)
         .map_err(|error| failure(format!("Could not encode the GitHub credential. {error}")))?;
     keychain_entry(service)?
@@ -613,6 +610,32 @@ fn truncate(text: &str, max_chars: usize) -> String {
         let truncated: String = text.chars().take(max_chars).collect();
         format!("{truncated}…")
     }
+}
+
+/// Connection / configuration status for the GitHub backup page.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubStatus {
+    /// This build ships a valid GitHub App client id (device flow available).
+    pub configured: bool,
+    /// An access token is present in the keyring.
+    pub connected: bool,
+    /// The connected GitHub login (empty when not connected).
+    pub username: String,
+    /// The configured target repo ("owner/name", empty when unset).
+    pub repo: String,
+}
+
+/// The device-flow payload the UI shows the user to authorize. The frontend
+/// passes `deviceCode` + `intervalSecs` back into `github_device_poll`.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubDeviceStart {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_in_secs: u64,
+    pub interval_secs: u64,
 }
 
 #[cfg(test)]

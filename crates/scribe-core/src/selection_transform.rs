@@ -290,6 +290,58 @@ fn read_clipboard_text() -> Option<String> {
     clipboard.get_text().ok()
 }
 
+/// The typed Transform Selection (the `transform_selection` command): hands
+/// focus back to the app the user was in, copies its selection, rewrites it
+/// with the local LLM and pastes the result over it. Blocks.
+pub fn transform_selection_blocking(
+    app: &AppHandle,
+    instruction: &str,
+) -> Result<OutputResult, CommandError> {
+    use crate::selection_transform;
+    use tauri::Manager;
+
+    if instruction.trim().is_empty() {
+        return Err(CommandError::new(
+            "instruction_empty",
+            "No instruction was given. Type what to do with the selected text.",
+        ));
+    }
+
+    let (endpoint, model) = {
+        let state = app.state::<crate::backend::BackendState>().inner();
+        let settings = state.db()?.get_settings()?;
+        selection_transform::ensure_enabled(&settings)?;
+        (
+            settings.notes_analysis_endpoint,
+            settings.notes_analysis_model,
+        )
+    };
+
+    // 1. The button click left Scribe in front: hand focus back to the app the
+    //    user was in, so the copy reads their selection and not Scribe's.
+    selection_transform::focus_previous_app()?;
+
+    // 2. Copy the current selection out of that app, remembering the user's
+    //    prior clipboard so it can be restored.
+    let captured = selection_transform::capture_selection()?
+        .filter(|captured| !captured.selection.trim().is_empty())
+        .ok_or_else(|| {
+            CommandError::new(
+                "selection_empty",
+                "No text was selected. Highlight some text in the other app first, then transform it.",
+            )
+        })?;
+
+    // 3. Rewrite it with the local LLM. On failure, dropping `captured`
+    //    restores the clipboard.
+    let transformed =
+        selection_transform::transform(&captured.selection, instruction, &endpoint, &model)?;
+
+    // 4. Paste the result back over the still-selected original, then restore
+    //    the pre-capture clipboard.
+    selection_transform::apply_result(app, &transformed, captured)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

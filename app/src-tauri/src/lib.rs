@@ -2,6 +2,7 @@
 //! run loop) on Scribe's engine, crates/scribe-core. The engine's modules are
 //! re-exported here under their old `app_lib::` paths.
 
+pub mod commands;
 pub mod tauri_host;
 pub mod tray;
 pub mod window_size;
@@ -9,7 +10,7 @@ pub mod window_size;
 #[cfg(feature = "e2e-audio")]
 pub use scribe_core::test_audio;
 pub use scribe_core::{
-    app_state, audio, autostart, child_guard, commands, data_hygiene, db, diagnostics, dictation,
+    app_state, audio, autostart, backend, child_guard, data_hygiene, db, diagnostics, dictation,
     dictation_state, dictation_worker, display_name, error, export, file_transcribe, filler,
     github_backup, github_oauth, gpu, hotkeys, import, incremental, is_dev_flavor, model_manager,
     models, note_analysis, note_sync, output, parakeet, platform, process_info, prompt_budget,
@@ -639,85 +640,93 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            commands::get_app_state,
-            release_notes::whats_new_pending,
-            release_notes::dismiss_whats_new,
-            diagnostics::collect_diagnostics,
-            commands::get_settings,
-            commands::patch_settings,
-            commands::get_last_transcript,
-            commands::clear_last_transcript,
-            commands::list_recent_transcripts,
-            commands::search_transcripts,
-            commands::get_transcript,
-            commands::update_transcript,
-            commands::delete_transcript,
-            commands::clear_transcript_history,
-            commands::clear_notes,
-            commands::combine_transcripts,
-            commands::save_combined_transcript,
-            commands::open_transcript_externally,
-            commands::get_transcript_audio,
-            commands::get_basic_stats,
-            commands::refresh_basic_stats,
-            commands::get_hotkey_status,
-            commands::bind_portal_shortcuts,
-            commands::configure_portal_shortcuts,
-            commands::get_paste_permission,
-            commands::request_paste_permission,
-            commands::rebind_hotkey,
-            commands::set_hotkey_trigger,
-            commands::reset_hotkeys_to_defaults,
-            commands::load_production_hotkey_defaults,
-            commands::open_dashboard,
-            commands::list_microphones,
-            commands::start_recording,
-            commands::stop_dictation,
-            commands::cancel_recording,
-            commands::record_test_clip,
-            commands::get_test_clip_audio,
-            commands::open_data_folder,
-            commands::get_replacements,
-            commands::add_replacements,
-            commands::remove_replacement,
-            commands::open_replacements_file,
-            commands::open_models_folder,
-            commands::open_logs_folder,
-            commands::get_logs_dir,
-            commands::open_failed_recordings_folder,
-            commands::get_failed_recordings_dir,
-            commands::get_data_dir,
-            commands::pick_data_dir,
-            commands::save_window_size,
-            commands::transcribe_file,
-            commands::analyze_note,
-            commands::llm_status,
-            gpu::probe_gpu_devices,
-            commands::save_text_file,
-            commands::paste_last_transcript,
-            commands::copy_last_transcript,
-            commands::paste_transcript,
-            commands::copy_transcript,
-            commands::transform_selection,
-            commands::list_models,
-            commands::download_model,
-            commands::cancel_model_download,
-            commands::retry_model_download,
-            commands::delete_model,
-            commands::select_model,
-            commands::get_engine_status,
-            commands::check_for_update,
-            commands::open_release_page,
-            commands::github_status,
-            commands::github_device_start,
-            commands::github_device_poll,
-            commands::github_device_cancel,
-            commands::github_disconnect,
-            commands::github_sync_now,
-            commands::github_sync_activity,
-            commands::export_transcripts,
-            commands::preview_transcript_import,
-            commands::restore_transcript_import
+            // status
+            commands::status::get_app_state,
+            // audio
+            commands::audio::list_microphones,
+            commands::audio::start_recording,
+            commands::audio::stop_dictation,
+            commands::audio::cancel_recording,
+            commands::audio::record_test_clip,
+            commands::audio::get_test_clip_audio,
+            commands::audio::transcribe_file,
+            commands::audio::save_text_file,
+            commands::audio::paste_last_transcript,
+            // output
+            commands::output::get_paste_permission,
+            commands::output::request_paste_permission,
+            commands::output::copy_last_transcript,
+            commands::output::paste_transcript,
+            commands::output::copy_transcript,
+            commands::output::transform_selection,
+            // models
+            commands::models::open_models_folder,
+            commands::models::list_models,
+            commands::models::download_model,
+            commands::models::cancel_model_download,
+            commands::models::retry_model_download,
+            commands::models::delete_model,
+            commands::models::select_model,
+            commands::models::get_engine_status,
+            commands::models::probe_gpu_devices,
+            // hotkeys
+            commands::hotkeys::get_hotkey_status,
+            commands::hotkeys::bind_portal_shortcuts,
+            commands::hotkeys::configure_portal_shortcuts,
+            commands::hotkeys::rebind_hotkey,
+            commands::hotkeys::set_hotkey_trigger,
+            commands::hotkeys::reset_hotkeys_to_defaults,
+            commands::hotkeys::load_production_hotkey_defaults,
+            // data
+            commands::data::get_settings,
+            commands::data::patch_settings,
+            commands::data::get_last_transcript,
+            commands::data::clear_last_transcript,
+            commands::data::list_recent_transcripts,
+            commands::data::search_transcripts,
+            commands::data::get_transcript,
+            commands::data::update_transcript,
+            commands::data::delete_transcript,
+            commands::data::clear_transcript_history,
+            commands::data::clear_notes,
+            commands::data::combine_transcripts,
+            commands::data::save_combined_transcript,
+            commands::data::open_transcript_externally,
+            commands::data::get_transcript_audio,
+            commands::data::get_basic_stats,
+            commands::data::refresh_basic_stats,
+            commands::data::open_data_folder,
+            commands::data::get_data_dir,
+            commands::data::pick_data_dir,
+            commands::data::open_logs_folder,
+            commands::data::get_logs_dir,
+            commands::data::open_failed_recordings_folder,
+            commands::data::get_failed_recordings_dir,
+            commands::data::export_transcripts,
+            commands::data::preview_transcript_import,
+            commands::data::restore_transcript_import,
+            commands::data::get_replacements,
+            commands::data::add_replacements,
+            commands::data::remove_replacement,
+            commands::data::open_replacements_file,
+            commands::data::whats_new_pending,
+            commands::data::dismiss_whats_new,
+            commands::data::collect_diagnostics,
+            // sync
+            commands::sync::analyze_note,
+            commands::sync::llm_status,
+            commands::sync::github_status,
+            commands::sync::github_device_start,
+            commands::sync::github_device_poll,
+            commands::sync::github_device_cancel,
+            commands::sync::github_disconnect,
+            commands::sync::github_sync_now,
+            commands::sync::github_sync_activity,
+            // shell
+            commands::shell::open_dashboard,
+            commands::shell::save_window_size,
+            commands::shell::check_for_update,
+            commands::shell::open_release_page
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
@@ -826,6 +835,160 @@ mod install_identity_tests {
             hooks.contains(&old),
             "installer hook must clear the old publisher key"
         );
+    }
+}
+
+#[cfg(test)]
+mod command_list_tests {
+    /// Every command the windows invoke, by the name they invoke it with, as
+    /// registered on main before the commands moved into
+    /// src/commands/<domain>.rs. The windows call commands by name, so the
+    /// registered set must stay exactly this.
+    const COMMANDS: [&str; 79] = [
+        "add_replacements",
+        "analyze_note",
+        "bind_portal_shortcuts",
+        "cancel_model_download",
+        "cancel_recording",
+        "check_for_update",
+        "clear_last_transcript",
+        "clear_notes",
+        "clear_transcript_history",
+        "collect_diagnostics",
+        "combine_transcripts",
+        "configure_portal_shortcuts",
+        "copy_last_transcript",
+        "copy_transcript",
+        "delete_model",
+        "delete_transcript",
+        "dismiss_whats_new",
+        "download_model",
+        "export_transcripts",
+        "get_app_state",
+        "get_basic_stats",
+        "get_data_dir",
+        "get_engine_status",
+        "get_failed_recordings_dir",
+        "get_hotkey_status",
+        "get_last_transcript",
+        "get_logs_dir",
+        "get_paste_permission",
+        "get_replacements",
+        "get_settings",
+        "get_test_clip_audio",
+        "get_transcript",
+        "get_transcript_audio",
+        "github_device_cancel",
+        "github_device_poll",
+        "github_device_start",
+        "github_disconnect",
+        "github_status",
+        "github_sync_activity",
+        "github_sync_now",
+        "list_microphones",
+        "list_models",
+        "list_recent_transcripts",
+        "llm_status",
+        "load_production_hotkey_defaults",
+        "open_dashboard",
+        "open_data_folder",
+        "open_failed_recordings_folder",
+        "open_logs_folder",
+        "open_models_folder",
+        "open_release_page",
+        "open_replacements_file",
+        "open_transcript_externally",
+        "paste_last_transcript",
+        "paste_transcript",
+        "patch_settings",
+        "pick_data_dir",
+        "preview_transcript_import",
+        "probe_gpu_devices",
+        "rebind_hotkey",
+        "record_test_clip",
+        "refresh_basic_stats",
+        "remove_replacement",
+        "request_paste_permission",
+        "reset_hotkeys_to_defaults",
+        "restore_transcript_import",
+        "retry_model_download",
+        "save_combined_transcript",
+        "save_text_file",
+        "save_window_size",
+        "search_transcripts",
+        "select_model",
+        "set_hotkey_trigger",
+        "start_recording",
+        "stop_dictation",
+        "transcribe_file",
+        "transform_selection",
+        "update_transcript",
+        "whats_new_pending",
+    ];
+
+    /// The paths listed in `generate_handler!`, in order.
+    fn registered() -> Vec<String> {
+        let source = include_str!("lib.rs");
+        let start = source.find("generate_handler![").unwrap() + "generate_handler![".len();
+        let end = start + source[start..].find("])").unwrap();
+        source[start..end]
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with("//"))
+            .map(|line| line.trim_end_matches(',').to_string())
+            .collect()
+    }
+
+    #[test]
+    fn every_command_keeps_its_name() {
+        let registered = registered();
+        let mut names: Vec<&str> = registered
+            .iter()
+            .map(|path| path.rsplit("::").next().unwrap())
+            .collect();
+        names.sort_unstable();
+        let mut expected = COMMANDS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(names, expected);
+    }
+
+    /// Each command is registered from the file of its domain
+    /// (`commands::<domain>::<name>`), and each of those files exists.
+    #[test]
+    fn every_command_comes_from_a_domain_file() {
+        let domains = [
+            ("audio", include_str!("commands/audio.rs")),
+            ("output", include_str!("commands/output.rs")),
+            ("models", include_str!("commands/models.rs")),
+            ("hotkeys", include_str!("commands/hotkeys.rs")),
+            ("data", include_str!("commands/data.rs")),
+            ("sync", include_str!("commands/sync.rs")),
+            ("status", include_str!("commands/status.rs")),
+            ("shell", include_str!("commands/shell.rs")),
+        ];
+        let mut defined = 0;
+        for (_, source) in domains {
+            defined += source.matches("#[tauri::command]").count();
+        }
+        assert_eq!(
+            defined,
+            COMMANDS.len(),
+            "a command is defined twice or missing"
+        );
+        for path in registered() {
+            let parts: Vec<&str> = path.split("::").collect();
+            assert_eq!(parts.len(), 3, "{path} is not commands::<domain>::<name>");
+            assert_eq!(parts[0], "commands");
+            let (_, source) = domains
+                .iter()
+                .find(|(domain, _)| *domain == parts[1])
+                .unwrap_or_else(|| panic!("{path} names no domain file"));
+            assert!(
+                source.contains(&format!("fn {}(", parts[2])),
+                "{path} is not defined in commands/{}.rs",
+                parts[1]
+            );
+        }
     }
 }
 

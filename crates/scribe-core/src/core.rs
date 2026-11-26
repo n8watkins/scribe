@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use crate::{
-    commands::BackendState,
+    backend::BackendState,
     dictation_worker::DictationWorker,
     events::CoreEvent,
     host::{Flavor, Host},

@@ -39,6 +39,9 @@ tauri-plugin-notification = "2"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Used by the commands (src/commands): clip playback and the export file name.
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
 # tauri::test's mock app, to check the engine's folders against Tauri's
@@ -46,6 +49,11 @@ serde_json = "1"
 tauri = { version = "2", features = ["tray-icon", "test"] }
 
 [target.'cfg(windows)'.dependencies]
+# The native folder, save and open dialogs of the data commands
+# (src/commands/data.rs). Windows-only (the app ships for Windows); the
+# picker commands error elsewhere. xdg-portal feature disabled so no
+# GTK/portal system libs are pulled in.
+rfd = { version = "0.15", default-features = false }
 # Colors the native title bar (style_native_titlebar in src/lib.rs).
 windows = { version = "0.58", features = [
     "Win32_Foundation",

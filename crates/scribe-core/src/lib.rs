@@ -10,6 +10,7 @@
 pub mod app_state;
 pub mod audio;
 pub mod autostart;
+pub mod backend;
 pub mod child_guard;
 pub mod commands;
 pub mod core;

@@ -326,6 +326,26 @@ impl ReplacementStore {
     }
 }
 
+/// The store as Tauri manages it.
+pub type Replacements = Arc<ReplacementStore>;
+
+/// Lets GitHub backup pick up a changed replacements.txt.
+pub fn notify_backup(app: &tauri::AppHandle) {
+    use tauri::Manager;
+
+    if let Some(worker) = app.try_state::<crate::note_sync::NoteSyncWorker>() {
+        worker.notify();
+    }
+}
+
+/// The error for a replacements.txt that could not be written.
+pub fn replacements_error(error: std::io::Error) -> crate::error::CommandError {
+    crate::error::CommandError::new(
+        "replacements_write_failed",
+        format!("Could not save replacements.txt. {}", error),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

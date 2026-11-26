@@ -16,7 +16,7 @@ use std::{
 
 use chrono::Utc;
 use serde_json::Value;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager};
 
 use crate::{commands::BackendState, error::CommandError, settings::AppSettings};
 
@@ -72,12 +72,8 @@ const SETTINGS_ALLOW_LIST: &[&str] = &[
     "hotkeys",
 ];
 
-/// Builds the diagnostics report.
-#[tauri::command]
-pub fn collect_diagnostics(
-    app: AppHandle,
-    state: State<'_, BackendState>,
-) -> Result<String, CommandError> {
+/// Builds the diagnostics report (the `collect_diagnostics` command).
+pub fn collect(app: &AppHandle, state: &BackendState) -> Result<String, CommandError> {
     let (settings, models) = {
         let db = state.db()?;
         (db.get_settings()?, db.list_model_records()?)
@@ -102,7 +98,7 @@ pub fn collect_diagnostics(
     ));
     line(format!(
         "App: {} {} ({})",
-        crate::display_name(&app),
+        crate::display_name(app),
         app.package_info().version,
         app.config().identifier
     ));
@@ -136,7 +132,7 @@ pub fn collect_diagnostics(
         line(format!("  {key}: {value}"));
     }
 
-    let log = read_newest_log(&app);
+    let log = read_newest_log(app);
     let lines: Vec<String> = log
         .as_deref()
         .unwrap_or("")

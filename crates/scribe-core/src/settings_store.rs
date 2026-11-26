@@ -13,9 +13,9 @@
 use std::sync::{Mutex, MutexGuard};
 
 use serde_json::{Map, Value};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
-use crate::{error::CommandError, settings::AppSettings};
+use crate::{backend::BackendState, error::CommandError, hotkeys, settings::AppSettings};
 
 /// Emitted with the full stored settings after every settings write.
 pub const SETTINGS_CHANGED_EVENT: &str = "scribe:settings-changed";
@@ -82,6 +82,132 @@ where
         return Ok(previous);
     }
     commit(&previous, next)
+}
+
+/// Applies a settings patch from the backend (the tray, Windows' Startup apps
+/// switch) exactly as a window's patch is applied. Blocks; call it off the
+/// main thread.
+pub fn patch_settings_now(
+    app: &tauri::AppHandle,
+    patch: &serde_json::Map<String, serde_json::Value>,
+) -> Result<AppSettings, CommandError> {
+    let state = app.state::<BackendState>().inner();
+    patch_locked(
+        state.settings_writes(),
+        patch,
+        || state.db()?.get_settings(),
+        |previous, next| apply_settings_change(app, state, previous, next),
+    )
+}
+
+/// Shows the switch the user may have flipped in Windows' Startup apps list
+/// while Scribe was running: copies it into "Launch at startup". Never writes
+/// the startup entry. Holds the settings write lock from read to save, so it
+/// cannot undo a flip the user is making in Scribe at the same moment.
+/// Blocks; call it off the main thread.
+pub fn sync_launch_at_startup(app: &tauri::AppHandle) -> Result<AppSettings, CommandError> {
+    let state = app.state::<BackendState>().inner();
+    let _guard = lock(state.settings_writes());
+    let mut settings = state.db()?.get_settings()?;
+    if let Some(value) = crate::autostart::follow_windows_switch(app, settings.launch_at_startup) {
+        log::info!("Launch at startup follows Windows' Startup apps switch: {value}");
+        settings.launch_at_startup = value;
+        state.db()?.save_settings(&settings)?;
+        emit_changed(app, &settings);
+    }
+    Ok(settings)
+}
+
+/// Turns "Launch at startup" on or off, as the settings toggle does.
+pub fn set_launch_at_startup(
+    app: &tauri::AppHandle,
+    enabled: bool,
+) -> Result<AppSettings, CommandError> {
+    let mut patch = serde_json::Map::new();
+    patch.insert("launchAtStartup".into(), serde_json::Value::Bool(enabled));
+    patch_settings_now(app, &patch)
+}
+
+/// Stores `settings` over `previous` and applies what changed: launch at
+/// startup, hotkey registration, GitHub activity, and retention. Rolls the
+/// side effects back when the save fails. The caller holds the settings write
+/// lock.
+fn apply_settings_change(
+    app: &tauri::AppHandle,
+    state: &BackendState,
+    previous: &AppSettings,
+    settings: AppSettings,
+) -> Result<AppSettings, CommandError> {
+    settings
+        .validate()
+        .map_err(CommandError::invalid_settings)?;
+
+    // Apply launch-at-startup first: when the OS registration fails the new
+    // value is never saved, so the UI toggle reverts.
+    if previous.launch_at_startup != settings.launch_at_startup {
+        crate::autostart::apply(app, settings.launch_at_startup)?;
+    }
+
+    // Transform Selection is only bound while Local AI is on, so turning it on
+    // or off re-registers the hotkey set too.
+    let transform_toggled = previous.notes_analysis_enabled != settings.notes_analysis_enabled;
+    let rebind = previous.hotkeys != settings.hotkeys || transform_toggled;
+    let mut hotkey_failures = Vec::new();
+    if rebind {
+        hotkeys::set_transform_enabled(app, settings.notes_analysis_enabled);
+        hotkey_failures = match hotkeys::replace_hotkeys(app, &previous.hotkeys, &settings.hotkeys)
+        {
+            Ok(failures) => failures,
+            Err(error) => {
+                hotkeys::set_transform_enabled(app, previous.notes_analysis_enabled);
+                return Err(error);
+            }
+        };
+    }
+
+    let save_result = if previous.github_repo != settings.github_repo {
+        state
+            .db()?
+            .save_settings_and_clear_github_activity(&settings)
+    } else {
+        state.db()?.save_settings(&settings)
+    };
+    if let Err(error) = save_result {
+        if rebind {
+            hotkeys::set_transform_enabled(app, previous.notes_analysis_enabled);
+            let _ = hotkeys::replace_hotkeys(app, &settings.hotkeys, &previous.hotkeys);
+        }
+        if previous.launch_at_startup != settings.launch_at_startup {
+            let _ = crate::autostart::apply(app, previous.launch_at_startup);
+        }
+
+        return Err(error);
+    }
+
+    // Every window updates from this event, so it goes out as soon as the
+    // new settings are stored.
+    emit_changed(app, &settings);
+    // Load, reload or unload the speech model to match (model, language,
+    // GPU and "Keep the speech model loaded").
+    app.state::<crate::whisper_server::WarmTranscriber>()
+        .sync_with_settings(&settings);
+    hotkeys::emit_registration_failures(app, &hotkey_failures);
+
+    if previous.history_retention_days != settings.history_retention_days
+        || (!previous.history_enabled && settings.history_enabled)
+    {
+        state
+            .db()?
+            .enforce_history_retention(settings.history_retention_days)?;
+    }
+
+    if previous.notes_retention_days != settings.notes_retention_days {
+        state
+            .db()?
+            .enforce_notes_retention(settings.notes_retention_days)?;
+    }
+
+    Ok(settings)
 }
 
 #[cfg(test)]

@@ -54,10 +54,6 @@ tiny_http = "0.12"
 dirs = "7"
 
 [target.'cfg(windows)'.dependencies]
-# Native folder picker for choosing the data directory. Windows-only (the app
-# ships for Windows); the picker command errors elsewhere. xdg-portal feature
-# disabled so no GTK/portal system libs are pulled in.
-rfd = { version = "0.15", default-features = false }
 # Reads the sign-in entry and Windows' Startup apps switch for it
 # (src/autostart.rs); the autostart plugin, which writes the entry, already
 # uses it.

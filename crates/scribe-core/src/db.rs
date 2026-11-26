@@ -1358,6 +1358,14 @@ fn average_for(total: Option<i64>, count: u32) -> Option<f64> {
     }
 }
 
+/// The error for a transcript whose audio clip is gone or was never saved.
+pub fn transcript_audio_missing() -> CommandError {
+    CommandError::new(
+        "transcript_audio_missing",
+        "No audio clip is available for this transcript. It may have been deleted, or the dictation was recorded while clip saving was off.",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
