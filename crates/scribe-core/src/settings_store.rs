@@ -463,6 +463,7 @@ mod tests {
     }
 
     /// The panic message of a failed thread.
+    #[cfg(debug_assertions)]
     fn panic_text(panic: Box<dyn std::any::Any + Send>) -> String {
         panic
             .downcast_ref::<&str>()
@@ -518,12 +519,13 @@ mod tests {
         );
     }
 
-    /// Outside a Windows release build Windows' switch is never read, so
-    /// following it changes nothing, announces nothing and never touches the
-    /// startup entry.
+    /// Outside a Windows release build there is no Windows switch to follow
+    /// (`follow_windows_switch_with` answers `None` before it reads the
+    /// host), so syncing keeps the stored settings, announces nothing and
+    /// makes no host call, even when the startup entry differs from them.
     #[cfg(any(debug_assertions, not(windows)))]
     #[test]
-    fn syncing_launch_at_startup_asks_the_host_and_never_writes_the_entry() {
+    fn syncing_launch_at_startup_off_a_windows_release_build_changes_nothing() {
         let root = tempfile::tempdir().unwrap();
         let host = host_in(root.path());
         host.set_launch_at_login_state(true);

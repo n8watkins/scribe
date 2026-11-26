@@ -5,18 +5,24 @@
 //! used before this feature existed has no record yet, so it sees the card
 //! once; a brand-new install records its version silently and shows nothing.
 
-use crate::{core::Core, db::Database, error::CommandError, host::Host};
+use crate::{backend::BackendState, core::Core, db::Database, error::CommandError, host::Host};
 
 /// [`pending_version`] for the running app (the `whats_new_pending`
 /// command).
 pub fn pending_version_with(core: &Core) -> Result<Option<String>, CommandError> {
-    pending_version_on(&*core.backend().db()?, core.host().as_ref())
+    pending_version_on(core.backend(), core.host().as_ref())
 }
 
 /// [`pending_version`] for the version `host` runs: the app's own, which Dev
-/// and test builds override, so it can differ from this crate's.
-fn pending_version_on(db: &Database, host: &dyn Host) -> Result<Option<String>, CommandError> {
-    pending_version(db, &host.app_version())
+/// and test builds override, so it can differ from this crate's. The version
+/// is read before the database lock is taken, so the host is never called
+/// while that lock is held.
+fn pending_version_on(
+    state: &BackendState,
+    host: &dyn Host,
+) -> Result<Option<String>, CommandError> {
+    let version = host.app_version();
+    pending_version(&*state.db()?, &version)
 }
 
 /// The version whose card should show now, or `None`.
@@ -99,15 +105,30 @@ mod tests {
             Flavor::Dev,
         )
         .with_app_version("0.16.4-123");
-        let db = Database::in_memory().unwrap();
-        db.save_settings(&AppSettings::default()).unwrap();
+        let state = BackendState::new(
+            Database::in_memory().unwrap(),
+            root.path().join("cache").join("recordings"),
+            crate::data_hygiene::DataDirs {
+                data_dir: root.path().join("data"),
+                cache_dir: root.path().join("cache"),
+            },
+        );
+        state
+            .db()
+            .unwrap()
+            .save_settings(&AppSettings::default())
+            .unwrap();
 
         assert_eq!(
-            pending_version_on(&db, &host).unwrap().as_deref(),
+            pending_version_on(&state, &host).unwrap().as_deref(),
             Some("0.16.4-123")
         );
-        db.set_whats_new_seen_version("0.16.4-123").unwrap();
-        assert_eq!(pending_version_on(&db, &host).unwrap(), None);
+        state
+            .db()
+            .unwrap()
+            .set_whats_new_seen_version("0.16.4-123")
+            .unwrap();
+        assert_eq!(pending_version_on(&state, &host).unwrap(), None);
         assert!(host.calls().is_empty());
         assert!(host.events().is_empty());
     }

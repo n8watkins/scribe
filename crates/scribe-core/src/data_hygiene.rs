@@ -964,7 +964,18 @@ mod tests {
         assert_eq!(error.message, "Transcript was not found.");
 
         let transcript = insert_with_audio(&state.db().unwrap(), "hello", "clip.wav");
+        let copy = state.dirs().editor_copy(&transcript.id);
+        fs::create_dir_all(&copy).unwrap();
+        let error = open_editor_copy(&state, &host, &transcript.id).unwrap_err();
+        assert_eq!(error.code, "transcript_export_failed");
+        assert!(error.message.starts_with(&format!(
+            "Could not write transcript file {}.",
+            copy.display()
+        )));
+        fs::remove_dir(&copy).unwrap();
+
         let copies = state.dirs().editor_copies();
+        fs::remove_dir(&copies).unwrap();
         write(&copies, b"a file where the folder goes");
         let error = open_editor_copy(&state, &host, &transcript.id).unwrap_err();
         assert_eq!(error.code, "transcript_export_failed");
