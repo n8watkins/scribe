@@ -25,6 +25,7 @@
 
 use crate::app_state::{AppStateSnapshot, AppStatus};
 use crate::dictation_state::{self, DictationSnapshot};
+use crate::host::Host;
 use chrono::{DateTime, Utc};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use serde::Serialize;
@@ -34,7 +35,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
 /// Loopback host - never bind a routable interface.
@@ -451,16 +452,16 @@ struct Endpoints {
 /// Resolve the discovery-file path: `~/.scribe/control.json` for stable, and
 /// `control.dev.json` for the Dev flavor so the two can run side by side without
 /// clobbering each other. Creates `~/.scribe/` if needed.
-fn control_file_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let home = app
-        .path()
+fn control_file_path(host: &dyn Host) -> Result<PathBuf, String> {
+    let home = host
+        .paths()
         .home_dir()
-        .map_err(|error| format!("could not resolve home dir: {error}"))?;
+        .ok_or_else(|| "could not resolve home dir: no home folder".to_string())?;
     let dir = home.join(".scribe");
     std::fs::create_dir_all(&dir)
         .map_err(|error| format!("could not create ~/.scribe: {error}"))?;
     restrict_directory_permissions(&dir)?;
-    let name = if crate::is_dev_flavor(app) {
+    let name = if host.flavor().is_dev() {
         "control.dev.json"
     } else {
         "control.json"
@@ -583,7 +584,7 @@ fn restrict_directory_permissions(_path: &Path) -> Result<(), String> {
 /// Periodically re-write the status-file fallback so its `updatedAt` stays fresh
 /// during a long recording (transitions alone can be minutes apart). Exits when
 /// the server shuts down.
-fn spawn_status_heartbeat(app: AppHandle, hub: Arc<Hub>, shutdown: Arc<AtomicBool>) {
+fn spawn_status_heartbeat(host: Arc<dyn Host>, hub: Arc<Hub>, shutdown: Arc<AtomicBool>) {
     let _ = thread::Builder::new()
         .name("dictation-status-heartbeat".to_string())
         .spawn(move || {
@@ -592,7 +593,7 @@ fn spawn_status_heartbeat(app: AppHandle, hub: Arc<Hub>, shutdown: Arc<AtomicBoo
                 if shutdown.load(Ordering::Relaxed) {
                     break;
                 }
-                crate::status_file::publish(&app, &hub.latest_state());
+                crate::status_file::publish_with(host.as_ref(), &hub.latest_state());
             }
         });
 }
@@ -612,8 +613,8 @@ fn sleep_until_due(shutdown: &AtomicBool, total: Duration) {
 
 /// Stand up the dictation-state server: bind the loopback port, start the accept
 /// and heartbeat threads, and publish the discovery file. Called once from the
-/// Tauri `setup`.
-pub fn start(app: &AppHandle) -> Result<DictationServer, String> {
+/// shell's setup. The heartbeat thread keeps the host, so it is shared.
+pub fn start_with(host: Arc<dyn Host>) -> Result<DictationServer, String> {
     let pid = std::process::id();
     let read_token = uuid::Uuid::new_v4().to_string();
     let hub = Arc::new(Hub::new(pid, read_token.clone()));
@@ -622,10 +623,10 @@ pub fn start(app: &AppHandle) -> Result<DictationServer, String> {
     let port = spawn_http(hub.clone(), shutdown.clone())?;
     let base_url = format!("http://{SERVER_HOST}:{port}");
 
-    let control_path = control_file_path(app)?;
+    let control_path = control_file_path(host.as_ref())?;
     write_control_file(&control_path, &base_url, &read_token, pid)?;
 
-    spawn_status_heartbeat(app.clone(), hub.clone(), shutdown.clone());
+    spawn_status_heartbeat(host, hub.clone(), shutdown.clone());
 
     log::info!("Dictation-state server listening on {base_url}");
     Ok(DictationServer {
@@ -634,6 +635,16 @@ pub fn start(app: &AppHandle) -> Result<DictationServer, String> {
         control_path,
         base_url,
     })
+}
+
+/// [`start_with`] for callers that still hold an `AppHandle`. Uses the host the
+/// shell installed first thing in its setup; without one the server cannot
+/// start, which the caller already treats as best-effort.
+pub fn start(_app: &AppHandle) -> Result<DictationServer, String> {
+    match crate::shell::host() {
+        Some(host) => start_with(host.clone()),
+        None => Err("no host yet".to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -852,6 +863,54 @@ mod tests {
             0o600
         );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn host_with_home(
+        root: &Path,
+        flavor: crate::host::Flavor,
+        home: Option<PathBuf>,
+    ) -> Arc<crate::host::RecordingHost> {
+        Arc::new(crate::host::RecordingHost::new(
+            crate::paths::Paths::from_parts(
+                root.join("data"),
+                root.join("cache"),
+                root.join("logs"),
+                None,
+                home,
+            ),
+            flavor,
+        ))
+    }
+
+    /// The discovery file's name follows the host's flavour and its folder is
+    /// the host's home, with no Tauri app.
+    #[test]
+    fn start_with_publishes_the_discovery_file_under_the_hosts_home() {
+        use crate::host::Flavor;
+        for (flavor, name) in [
+            (Flavor::Stable, "control.json"),
+            (Flavor::Dev, "control.dev.json"),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let host = host_with_home(root.path(), flavor, Some(root.path().join("home")));
+            let server = start_with(host.clone()).unwrap();
+            let file = root.path().join("home").join(".scribe").join(name);
+            let value: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+            assert_eq!(value["baseUrl"], server.base_url());
+            assert_eq!(value["pid"], std::process::id());
+            server.shutdown();
+            assert!(!file.exists(), "shutdown removes the discovery file");
+            assert!(host.events().is_empty());
+        }
+    }
+
+    #[test]
+    fn start_with_fails_without_a_home_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let host = host_with_home(root.path(), crate::host::Flavor::Stable, None);
+        let error = start_with(host).err().expect("no home folder, no server");
+        assert!(error.contains("could not resolve home dir"), "{error}");
     }
 
     #[cfg(windows)]
