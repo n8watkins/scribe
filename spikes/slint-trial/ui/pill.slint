@@ -120,6 +120,10 @@ export component PillWindow inherits Window {
     // CSS line-height 1.45 over the font's natural line height (1.33 for Segoe UI).
     in property <float> text-line-factor: 1.09;
     in property <float> label-line-factor: 1.0;
+    // Slint centres a line on the font's ascent and descent, Chromium on its
+    // line box: Slint's labels land 1 px lower than WebView2's at 100%
+    // (measured against headless Edge). This moves them back.
+    in property <length> label-dy: -1px;
 
     // Natural heights of the two text areas; Rust adds the fixed chrome and
     // clamps the window to 80..150 (the React code measures the same way).
@@ -191,6 +195,7 @@ export component PillWindow inherits Window {
                 }
                 Text {
                     x: 14px + 8px;
+                    y: root.label-dy;
                     width: copy-btn.x - 8px - self.x;
                     height: parent.height;
                     vertical-alignment: center;
@@ -213,6 +218,7 @@ export component PillWindow inherits Window {
                     accessible-label: root.copied ? "Copied" : "Copy";
                     accessible-action-default => { root.copy(); }
                     copy-label := Text {
+                        y: (parent.height - self.height) / 2 + root.label-dy;
                         text: root.copied ? "Copied" : "Copy";
                         font-size: 11px;
                         font-weight: 600;
@@ -272,7 +278,7 @@ export component PillWindow inherits Window {
             }
             if !root.is-dot: Text {
                 x: root.is-text ? 0 : parent.mark-w + 8px;
-                y: root.is-text ? parent.mark-w + 6px : 0;
+                y: (root.is-text ? parent.mark-w + 6px : 0) + root.label-dy;
                 width: parent.width - self.x;
                 height: root.is-text ? self.preferred-height : parent.height;
                 vertical-alignment: center;
