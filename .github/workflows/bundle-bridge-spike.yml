@@ -1,0 +1,133 @@
+name: Bundle bridge spike
+
+# Go or no-go test for moving installed Tauri copies of Scribe (0.16.x) onto
+# the native build through the normal updater, with no manual step. Builds a
+# stand-in native Scribe.exe (spikes/bundle-bridge/native), packages it as
+# NSIS and MSI with the real installer identity from app/src-tauri, installs
+# the published 0.16.1, 0.16.2 and 0.16.3 installers on this runner and
+# updates them with the exact argument forms tauri-plugin-updater uses. It
+# signs with a throwaway key made in the job; it never publishes anything,
+# never reads the real signing key and never touches the real update feed.
+# Results: spikes/bundle-bridge/RESULTS.md and the job summary.
+on:
+  pull_request:
+    paths:
+      - "spikes/bundle-bridge/**"
+      - ".github/workflows/bundle-bridge-spike.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bundle-bridge-spike-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Higher than any published version, so every installer is an upgrade.
+  TEST_VERSION: 0.99.0
+
+jobs:
+  bridge:
+    name: Bundle bridge
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        with:
+          workspaces: |
+            spikes/bundle-bridge/native
+            spikes/bundle-bridge/verify
+          cache-on-failure: true
+
+      # Only for the Tauri CLI the release uses (the version app/package-lock.json pins).
+      - name: Install the Tauri CLI
+        working-directory: app
+        run: npm ci --ignore-scripts
+
+      - name: Build the stand-in native Scribe.exe and the signature verifier
+        shell: pwsh
+        run: |
+          cargo build --release --manifest-path spikes/bundle-bridge/native/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw "native stub build failed" }
+          cargo build --release --manifest-path spikes/bundle-bridge/verify/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw "verifier build failed" }
+          $info = (Get-Item spikes/bundle-bridge/native/target/release/Scribe.exe).VersionInfo
+          Write-Host "Scribe.exe: ProductName=$($info.ProductName) CompanyName=$($info.CompanyName) ProductVersion=$($info.ProductVersion) FileVersion=$($info.FileVersion)"
+          if ($info.ProductName -ne "Scribe" -or $info.CompanyName -ne "n8builds.dev" -or $info.ProductVersion -notlike "$env:TEST_VERSION*") { throw "Scribe.exe version resource is wrong" }
+
+      - name: Derive the packaging config from app/src-tauri/tauri.conf.json
+        shell: pwsh
+        run: ./spikes/bundle-bridge/scripts/make-config.ps1 -Repo $env:GITHUB_WORKSPACE -Version $env:TEST_VERSION
+
+      # Route A: the CLI's packaging-only command, on an exe Tauri did not build.
+      - name: "Route A: tauri bundle"
+        id: bundle
+        working-directory: spikes/bundle-bridge/native
+        shell: pwsh
+        run: |
+          node "$env:GITHUB_WORKSPACE/app/node_modules/@tauri-apps/cli/tauri.js" bundle --bundles nsis,msi --no-sign --verbose
+          if ($LASTEXITCODE -ne 0) { throw "tauri bundle failed" }
+          $setup = @(Get-ChildItem target/release/bundle/nsis -Filter "*-setup.exe")
+          $msi = @(Get-ChildItem target/release/bundle/msi -Filter "*.msi")
+          if ($setup.Count -ne 1 -or $msi.Count -ne 1) { throw "Expected one setup.exe and one MSI, found $($setup.Count) and $($msi.Count)" }
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\candidate" | Out-Null
+          Copy-Item $setup[0].FullName "$env:RUNNER_TEMP\candidate\native-setup.exe"
+          Copy-Item $msi[0].FullName "$env:RUNNER_TEMP\candidate\native.msi"
+          Write-Host "Packaged $($setup[0].Name) and $($msi[0].Name) with tauri bundle"
+
+      - name: Download the published installers
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          foreach ($tag in "v0.16.1", "v0.16.2", "v0.16.3") {
+            $dir = "$env:RUNNER_TEMP\old-$tag"
+            gh release download $tag --repo ${{ github.repository }} --pattern "*setup.exe" --pattern "*setup.exe.sig" --pattern "*.msi" --dir $dir
+            if ($LASTEXITCODE -ne 0) { throw "Could not download the $tag installers" }
+            if (@(Get-ChildItem $dir -Filter "*setup.exe").Count -ne 1) { throw "Expected one setup.exe for $tag" }
+          }
+
+      - name: NSIS bridge scenarios
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
+        shell: pwsh
+        run: ./spikes/bundle-bridge/scripts/nsis-bridge.ps1 -Candidate "$env:RUNNER_TEMP\candidate\native-setup.exe" -OldDir $env:RUNNER_TEMP -Version $env:TEST_VERSION -ResultsPath "$env:RUNNER_TEMP\results-nsis.md"
+
+      - name: Updater signature
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $old = (Get-ChildItem "$env:RUNNER_TEMP\old-v0.16.3" -Filter "*setup.exe").FullName
+          ./spikes/bundle-bridge/scripts/signature.ps1 -Repo $env:GITHUB_WORKSPACE -Setup "$env:RUNNER_TEMP\candidate\native-setup.exe" -Version $env:TEST_VERSION -Verifier "$env:GITHUB_WORKSPACE\spikes\bundle-bridge\verify\target\release\bundle-bridge-verify.exe" -OldSetup $old -ResultsPath "$env:RUNNER_TEMP\results-signature.md"
+
+      - name: MSI bridge scenarios
+        if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $old = (Get-ChildItem "$env:RUNNER_TEMP\old-v0.16.3" -Filter "*.msi").FullName
+          ./spikes/bundle-bridge/scripts/msi-bridge.ps1 -Candidate "$env:RUNNER_TEMP\candidate\native.msi" -CandidateSetup "$env:RUNNER_TEMP\candidate\native-setup.exe" -OldMsi $old -Version $env:TEST_VERSION -ResultsPath "$env:RUNNER_TEMP\results-msi.md"
+
+      - name: Upload results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: bundle-bridge-results
+          path: |
+            ${{ runner.temp }}/results-*.md
+            ${{ runner.temp }}/msi-*.log
+            ${{ runner.temp }}/candidate/*
+            spikes/bundle-bridge/native/tauri.conf.json
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,16 @@
+# Checks an updater signature exactly the way tauri-plugin-updater 2.14.1
+# does (src/updater.rs, verify_signature and verify_signed_version).
+[package]
+name = "bundle-bridge-verify"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# The same crates and major versions the plugin uses.
+minisign-verify = "0.3"
+base64 = "0.22"
+semver = "1"
+
+# Keep this crate out of any parent workspace.
+[workspace]
