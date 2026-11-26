@@ -9,7 +9,10 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
-use crate::error::CommandError;
+use crate::{
+    error::CommandError,
+    host::{no_main_window, Host},
+};
 
 #[derive(Debug, Clone)]
 pub struct WhisperRequest {
@@ -72,8 +75,30 @@ pub struct WhisperTranscription {
     pub latency_ms: u32,
 }
 
+/// The engine's host, for the `AppHandle` wrappers below: found through the
+/// managed [`Core`](crate::core::Core). None (logged) before it is managed.
+fn host_of(app: &AppHandle, function: &str) -> Option<std::sync::Arc<dyn Host>> {
+    match app.try_state::<crate::core::Core>() {
+        Some(core) => Some(core.host().clone()),
+        None => {
+            log::warn!("whisper::{function} ran before the engine was ready");
+            None
+        }
+    }
+}
+
 pub fn transcribe(
     app: &AppHandle,
+    request: WhisperRequest,
+) -> Result<WhisperTranscription, CommandError> {
+    let host = host_of(app, "transcribe").ok_or_else(no_main_window)?;
+    transcribe_with(host.as_ref(), request)
+}
+
+/// Transcribes one WAV with the bundled whisper-cli from the resources of
+/// `host`.
+pub fn transcribe_with(
+    host: &dyn Host,
     request: WhisperRequest,
 ) -> Result<WhisperTranscription, CommandError> {
     if !request.model_path.is_file() {
@@ -97,18 +122,27 @@ pub fn transcribe(
     }
 
     let output_prefix = output_prefix_for_wav(&request.wav_path);
-    transcribe_with_output_prefix(app, &request, &output_prefix)
+    transcribe_with_output_prefix_with(host, &request, &output_prefix)
 }
 
-/// Direct whisper-cli invocation with a caller-chosen output prefix, so the
-/// transient .txt never has to live next to the input file (file
-/// transcription may read from directories the app should not write to).
 pub(crate) fn transcribe_with_output_prefix(
     app: &AppHandle,
     request: &WhisperRequest,
     output_prefix: &Path,
 ) -> Result<WhisperTranscription, CommandError> {
-    let executable = resolve_bundled_executable(app, "whisper-cli.exe")?;
+    let host = host_of(app, "transcribe_with_output_prefix").ok_or_else(no_main_window)?;
+    transcribe_with_output_prefix_with(host.as_ref(), request, output_prefix)
+}
+
+/// Direct whisper-cli invocation with a caller-chosen output prefix, so the
+/// transient .txt never has to live next to the input file (file
+/// transcription may read from directories the app should not write to).
+pub(crate) fn transcribe_with_output_prefix_with(
+    host: &dyn Host,
+    request: &WhisperRequest,
+    output_prefix: &Path,
+) -> Result<WhisperTranscription, CommandError> {
+    let executable = resolve_bundled_executable_with(host, "whisper-cli.exe")?;
     let output_txt_path = output_prefix.with_extension("txt");
     let mut args = whisper_args(
         &request.model_path,
@@ -192,15 +226,22 @@ fn platform_executable_name(file_name: &str) -> &str {
 /// `whisper-server.exe`) under `$RESOURCE/bin/windows/`, or the same binary
 /// without the `.exe` under `$RESOURCE/bin/linux/` or `$RESOURCE/bin/macos/`
 /// on the experimental Linux and macOS builds.
-pub(crate) fn resolve_bundled_executable(
-    app: &AppHandle,
+pub(crate) fn resolve_bundled_executable_with(
+    host: &dyn Host,
+    file_name: &str,
+) -> Result<PathBuf, CommandError> {
+    resolve_bundled_executable_in(host.paths().resource_dir(), file_name)
+}
+
+fn resolve_bundled_executable_in(
+    resource_dir: Option<&Path>,
     file_name: &str,
 ) -> Result<PathBuf, CommandError> {
     let file_name = platform_executable_name(file_name);
-    let resource_dir = app.path().resource_dir().map_err(|error| {
+    let resource_dir = resource_dir.ok_or_else(|| {
         CommandError::new(
             "missing_whisper_executable",
-            format!("Could not locate bundled app resources. {}", error),
+            "Could not locate bundled app resources.",
         )
     })?;
     let executable = resource_dir

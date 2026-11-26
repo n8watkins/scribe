@@ -13,17 +13,33 @@ use std::{
 use chrono::Utc;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::{
     commands::BackendState,
+    core::Core,
     db::Database,
     error::CommandError,
+    events::CoreEvent,
+    host::{no_main_window, Host},
     models::{
         self, CatalogModel, ModelInfo, ModelRecord, ModelSource, ModelStatus, DEFAULT_MODEL_ID,
     },
+    paths::Paths,
     settings::AppSettings,
 };
+
+/// The engine's host, for the `AppHandle` wrappers below: found through the
+/// managed [`Core`]. None (logged) before the `Core` is managed.
+fn host_of(app: &AppHandle, function: &str) -> Option<std::sync::Arc<dyn Host>> {
+    match app.try_state::<Core>() {
+        Some(core) => Some(core.host().clone()),
+        None => {
+            log::warn!("model_manager::{function} ran before the engine was ready");
+            None
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct DownloadRegistry {
@@ -110,6 +126,17 @@ pub fn list_models(
     db: &Database,
     downloads: &DownloadRegistry,
 ) -> Result<Vec<ModelInfo>, CommandError> {
+    let host = host_of(app, "list_models").ok_or_else(no_main_window)?;
+    list_models_with(host.as_ref(), db, downloads)
+}
+
+/// Every catalog model with its status, from the models folder of `host`.
+pub fn list_models_with(
+    host: &dyn Host,
+    db: &Database,
+    downloads: &DownloadRegistry,
+) -> Result<Vec<ModelInfo>, CommandError> {
+    let paths = host.paths();
     let settings = db.get_settings()?;
     let records = db
         .list_model_records()?
@@ -121,7 +148,7 @@ pub fn list_models(
         .iter()
         .map(|catalog_model| {
             model_info_for_catalog(
-                app,
+                paths,
                 *catalog_model,
                 records.get(catalog_model.id),
                 &settings,
@@ -131,17 +158,27 @@ pub fn list_models(
         .collect()
 }
 
-/// Downloads a model. Blocks for the whole download, so it takes the database
-/// lock only for each short read or write, never across the network transfer:
-/// dictation and every other command keep working meanwhile.
 pub fn download_model(
     app: &AppHandle,
     state: &BackendState,
     model_id: &str,
 ) -> Result<ModelInfo, CommandError> {
+    let host = host_of(app, "download_model").ok_or_else(no_main_window)?;
+    download_model_with(host.as_ref(), state, model_id)
+}
+
+/// Downloads a model into the models folder of `host`, sending its progress
+/// to `host`. Blocks for the whole download, so it takes the database lock
+/// only for each short read or write, never across the network transfer:
+/// dictation and every other command keep working meanwhile.
+pub fn download_model_with(
+    host: &dyn Host,
+    state: &BackendState,
+    model_id: &str,
+) -> Result<ModelInfo, CommandError> {
     let downloads = state.model_downloads();
     let cancel_flag = downloads.start(model_id)?;
-    let result = download_model_inner(app, state, cancel_flag, model_id);
+    let result = download_model_inner(host, state, cancel_flag, model_id);
     downloads.finish(model_id);
     result
 }
@@ -151,9 +188,19 @@ pub fn retry_model_download(
     state: &BackendState,
     model_id: &str,
 ) -> Result<ModelInfo, CommandError> {
+    let host = host_of(app, "retry_model_download").ok_or_else(no_main_window)?;
+    retry_model_download_with(host.as_ref(), state, model_id)
+}
+
+/// Throws away a partial download, then downloads the model again.
+pub fn retry_model_download_with(
+    host: &dyn Host,
+    state: &BackendState,
+    model_id: &str,
+) -> Result<ModelInfo, CommandError> {
     let catalog_model = catalog_model(model_id)?;
-    let _ = fs::remove_file(partial_path(app, catalog_model)?);
-    download_model(app, state, model_id)
+    let _ = fs::remove_file(partial_path(host.paths(), catalog_model));
+    download_model_with(host, state, model_id)
 }
 
 pub fn cancel_model_download(
@@ -180,9 +227,22 @@ pub fn delete_model(
     db: &Database,
     model_id: &str,
 ) -> Result<ModelInfo, CommandError> {
+    let host = host_of(app, "delete_model").ok_or_else(no_main_window)?;
+    delete_model_with(host.as_ref(), db, model_id)
+}
+
+/// Deletes a model (and any partial download of it) from the models folder of
+/// `host`. Deleting the selected model clears the selection unless another
+/// copy is still found.
+pub fn delete_model_with(
+    host: &dyn Host,
+    db: &Database,
+    model_id: &str,
+) -> Result<ModelInfo, CommandError> {
+    let paths = host.paths();
     let catalog_model = catalog_model(model_id)?;
-    let model_path = app_data_model_path(app, catalog_model)?;
-    let part_path = partial_path(app, catalog_model)?;
+    let model_path = app_data_model_path(paths, catalog_model);
+    let part_path = partial_path(paths, catalog_model);
 
     match fs::remove_file(&model_path) {
         Ok(()) => {}
@@ -199,7 +259,7 @@ pub fn delete_model(
 
     let mut settings = db.get_settings()?;
     let was_selected = settings.selected_model_id.as_deref() == Some(model_id);
-    if was_selected && resolve_model_file(app, catalog_model)?.is_none() {
+    if was_selected && resolve_model_file(paths, catalog_model).is_none() {
         settings.selected_model_id = None;
         db.save_settings(&settings)?;
     }
@@ -218,18 +278,28 @@ pub fn delete_model(
     db.upsert_model_record(&record)?;
 
     let registry = DownloadRegistry::default();
-    model_info_for_catalog(app, catalog_model, Some(&record), &settings, &registry)
+    model_info_for_catalog(paths, catalog_model, Some(&record), &settings, &registry)
 }
 
-/// Selects a downloaded model. The checksum of a large model takes seconds, so
-/// the database is locked only after it passes.
 pub fn select_model(
     app: &AppHandle,
     state: &BackendState,
     model_id: &str,
 ) -> Result<ModelInfo, CommandError> {
+    let host = host_of(app, "select_model").ok_or_else(no_main_window)?;
+    select_model_with(host.as_ref(), state, model_id)
+}
+
+/// Selects a downloaded model. The checksum of a large model takes seconds, so
+/// the database is locked only after it passes.
+pub fn select_model_with(
+    host: &dyn Host,
+    state: &BackendState,
+    model_id: &str,
+) -> Result<ModelInfo, CommandError> {
+    let paths = host.paths();
     let catalog_model = catalog_model(model_id)?;
-    let resolved = resolve_model_file(app, catalog_model)?;
+    let resolved = resolve_model_file(paths, catalog_model);
     let Some(resolved) = resolved else {
         return Err(CommandError::new(
             "whisper_model_missing",
@@ -275,11 +345,20 @@ pub fn select_model(
     db.mark_model_selected(model_id)?;
 
     let registry = DownloadRegistry::default();
-    model_info_for_catalog(app, catalog_model, Some(&record), &settings, &registry)
+    model_info_for_catalog(paths, catalog_model, Some(&record), &settings, &registry)
 }
 
 pub fn selected_model_path(
     app: &AppHandle,
+    db: &Database,
+) -> Result<(String, PathBuf), CommandError> {
+    let host = host_of(app, "selected_model_path").ok_or_else(no_main_window)?;
+    selected_model_path_with(host.as_ref(), db)
+}
+
+/// The selected model (the default one when none is selected) and its file.
+pub fn selected_model_path_with(
+    host: &dyn Host,
     db: &Database,
 ) -> Result<(String, PathBuf), CommandError> {
     let settings = db.get_settings()?;
@@ -288,7 +367,7 @@ pub fn selected_model_path(
         .as_deref()
         .unwrap_or(DEFAULT_MODEL_ID);
     let catalog_model = catalog_model(model_id)?;
-    let resolved = resolve_model_file(app, catalog_model)?;
+    let resolved = resolve_model_file(host.paths(), catalog_model);
 
     let Some(resolved) = resolved else {
         return Err(CommandError::new(
@@ -309,8 +388,17 @@ pub fn model_path_for_id(
     app: &AppHandle,
     model_id: &str,
 ) -> Result<(String, PathBuf), CommandError> {
+    let host = host_of(app, "model_path_for_id").ok_or_else(no_main_window)?;
+    model_path_for_id_with(host.as_ref(), model_id)
+}
+
+/// [`model_path_for_id`] in the models folder of `host`.
+pub fn model_path_for_id_with(
+    host: &dyn Host,
+    model_id: &str,
+) -> Result<(String, PathBuf), CommandError> {
     let catalog_model = catalog_model(model_id)?;
-    match resolve_model_file(app, catalog_model)? {
+    match resolve_model_file(host.paths(), catalog_model) {
         Some(resolved) => Ok((catalog_model.id.to_string(), resolved.path)),
         None => Err(CommandError::new(
             "whisper_model_missing",
@@ -328,23 +416,33 @@ pub fn session_model_path(
     db: &Database,
     session_id: &str,
 ) -> Result<(String, PathBuf), CommandError> {
+    let host = host_of(app, "session_model_path").ok_or_else(no_main_window)?;
+    session_model_path_with(host.as_ref(), db, session_id)
+}
+
+/// [`session_model_path`] in the models folder of `host`.
+pub fn session_model_path_with(
+    host: &dyn Host,
+    db: &Database,
+    session_id: &str,
+) -> Result<(String, PathBuf), CommandError> {
     let selected = db.get_settings()?.selected_model_id;
     match crate::session_model::global().model_for(session_id, selected.as_deref()) {
         Some(model_id) if Some(model_id.as_str()) != selected.as_deref() => {
-            model_path_for_id(app, &model_id).or_else(|_| selected_model_path(app, db))
+            model_path_for_id_with(host, &model_id).or_else(|_| selected_model_path_with(host, db))
         }
-        _ => selected_model_path(app, db),
+        _ => selected_model_path_with(host, db),
     }
 }
 
 fn download_model_inner(
-    app: &AppHandle,
+    host: &dyn Host,
     state: &BackendState,
     cancel_flag: Arc<AtomicBool>,
     model_id: &str,
 ) -> Result<ModelInfo, CommandError> {
     let catalog_model = catalog_model(model_id)?;
-    let model_dir = models_dir(app)?;
+    let model_dir = models_dir_in(host.paths());
     fs::create_dir_all(&model_dir).map_err(|error| {
         CommandError::new(
             "model_download_failed",
@@ -368,7 +466,7 @@ fn download_model_inner(
     };
     state.db()?.upsert_model_record(&record)?;
 
-    let download_result = stream_download(app, catalog_model, &part_path, cancel_flag);
+    let download_result = stream_download(host, catalog_model, &part_path, cancel_flag);
     match download_result {
         Ok(downloaded) => {
             fs::rename(&part_path, &final_path).map_err(|error| {
@@ -387,7 +485,7 @@ fn download_model_inner(
             record.downloaded_at = Some(Utc::now());
             state.db()?.upsert_model_record(&record)?;
             emit_progress(
-                app,
+                host,
                 catalog_model.id,
                 downloaded.bytes_downloaded,
                 downloaded.total_bytes,
@@ -410,7 +508,13 @@ fn download_model_inner(
 
     let settings = state.db()?.get_settings()?;
     let registry = DownloadRegistry::default();
-    model_info_for_catalog(app, catalog_model, Some(&record), &settings, &registry)
+    model_info_for_catalog(
+        host.paths(),
+        catalog_model,
+        Some(&record),
+        &settings,
+        &registry,
+    )
 }
 
 #[derive(Debug)]
@@ -420,7 +524,7 @@ struct DownloadedModel {
 }
 
 fn stream_download(
-    app: &AppHandle,
+    host: &dyn Host,
     catalog_model: CatalogModel,
     part_path: &PathBuf,
     cancel_flag: Arc<AtomicBool>,
@@ -475,7 +579,7 @@ fn stream_download(
     let mut buffer = [0_u8; 1024 * 128];
 
     emit_progress(
-        app,
+        host,
         catalog_model.id,
         bytes_downloaded,
         total_bytes,
@@ -522,7 +626,7 @@ fn stream_download(
             ));
         }
         emit_progress(
-            app,
+            host,
             catalog_model.id,
             bytes_downloaded,
             total_bytes,
@@ -634,36 +738,48 @@ fn verify_model_file_checksum(
     Ok(())
 }
 
+/// Sends `model://download-progress`.
 fn emit_progress(
-    app: &AppHandle,
+    host: &dyn Host,
     model_id: &str,
     bytes_downloaded: u64,
     total_bytes: Option<u64>,
     status: ModelStatus,
 ) {
+    host.emit(CoreEvent::ModelDownloadProgress(download_progress(
+        model_id,
+        bytes_downloaded,
+        total_bytes,
+        status,
+    )));
+}
+
+fn download_progress(
+    model_id: &str,
+    bytes_downloaded: u64,
+    total_bytes: Option<u64>,
+    status: ModelStatus,
+) -> ModelDownloadProgress {
     let percent = total_bytes
         .filter(|total| *total > 0)
         .map(|total| (bytes_downloaded as f64 / total as f64 * 100.0).min(100.0));
-    let _ = app.emit(
-        "model://download-progress",
-        ModelDownloadProgress {
-            model_id: model_id.to_string(),
-            bytes_downloaded,
-            total_bytes,
-            percent,
-            status,
-        },
-    );
+    ModelDownloadProgress {
+        model_id: model_id.to_string(),
+        bytes_downloaded,
+        total_bytes,
+        percent,
+        status,
+    }
 }
 
 fn model_info_for_catalog(
-    app: &AppHandle,
+    paths: &Paths,
     catalog_model: CatalogModel,
     record: Option<&ModelRecord>,
     settings: &AppSettings,
     downloads: &DownloadRegistry,
 ) -> Result<ModelInfo, CommandError> {
-    let resolved = resolve_model_file(app, catalog_model)?;
+    let resolved = resolve_model_file(paths, catalog_model);
     let selected = settings.selected_model_id.as_deref() == Some(catalog_model.id);
     let status = if downloads.is_downloading(catalog_model.id) {
         ModelStatus::Downloading
@@ -707,63 +823,62 @@ fn model_info_for_catalog(
 }
 
 pub fn models_dir(app: &AppHandle) -> Result<PathBuf, CommandError> {
-    Ok(app_data_dir(app)?.join("models"))
+    let host = host_of(app, "models_dir").ok_or_else(no_main_window)?;
+    Ok(models_dir_with(host.as_ref()))
 }
 
-fn app_data_model_path(
-    app: &AppHandle,
-    catalog_model: CatalogModel,
-) -> Result<PathBuf, CommandError> {
-    Ok(models_dir(app)?.join(catalog_model.filename))
+/// The folder Scribe downloads models into: `models` in the app data folder
+/// of `host` (Tauri's `app_data_dir()`, not the user-chosen data folder).
+pub fn models_dir_with(host: &dyn Host) -> PathBuf {
+    models_dir_in(host.paths())
 }
 
-fn partial_path(app: &AppHandle, catalog_model: CatalogModel) -> Result<PathBuf, CommandError> {
-    Ok(models_dir(app)?.join(format!("{}.part", catalog_model.filename)))
+fn models_dir_in(paths: &Paths) -> PathBuf {
+    paths.data_dir().join("models")
 }
 
-fn app_data_dir(app: &AppHandle) -> Result<PathBuf, CommandError> {
-    app.path().app_data_dir().map_err(|error| {
-        CommandError::new(
-            "app_data_dir_unavailable",
-            format!("Could not locate Scribe app data directory. {}", error),
-        )
-    })
+fn app_data_model_path(paths: &Paths, catalog_model: CatalogModel) -> PathBuf {
+    models_dir_in(paths).join(catalog_model.filename)
 }
 
-fn resolve_model_file(
-    app: &AppHandle,
-    catalog_model: CatalogModel,
-) -> Result<Option<ResolvedModelFile>, CommandError> {
-    for (path, source) in model_file_candidates(app, catalog_model)? {
+fn partial_path(paths: &Paths, catalog_model: CatalogModel) -> PathBuf {
+    models_dir_in(paths).join(format!("{}.part", catalog_model.filename))
+}
+
+fn resolve_model_file(paths: &Paths, catalog_model: CatalogModel) -> Option<ResolvedModelFile> {
+    for (path, source) in model_file_candidates(paths, catalog_model) {
         let metadata = fs::metadata(&path)
             .ok()
             .filter(|metadata| metadata.is_file());
 
         if let Some(metadata) = metadata {
-            return Ok(Some(ResolvedModelFile {
+            return Some(ResolvedModelFile {
                 path,
                 source,
                 size_bytes: metadata.len(),
-            }));
+            });
         }
     }
 
-    Ok(None)
+    None
+}
+
+pub fn smallest_downloaded_model_path(app: &AppHandle) -> Option<PathBuf> {
+    let host = host_of(app, "smallest_downloaded_model_path")?;
+    smallest_downloaded_model_path_with(host.as_ref())
 }
 
 /// Path of the smallest downloaded model, for cheap operations that only need
 /// *a* model loaded rather than the user's selected one — e.g. the GPU device
 /// probe, where device enumeration is model-independent so loading a multi-GB
 /// model would be pure waste. Returns `None` when nothing is downloaded.
-pub fn smallest_downloaded_model_path(app: &AppHandle) -> Option<PathBuf> {
+pub fn smallest_downloaded_model_path_with(host: &dyn Host) -> Option<PathBuf> {
     crate::models::catalog()
         .iter()
         // The probe runs whisper-cli, which only loads Whisper models.
         .filter(|model| model.engine == models::EngineKind::Whisper)
         .filter_map(|model| {
-            resolve_model_file(app, *model)
-                .ok()
-                .flatten()
+            resolve_model_file(host.paths(), *model)
                 .map(|resolved| (resolved.size_bytes, resolved.path))
         })
         .min_by_key(|(size, _)| *size)
@@ -771,11 +886,11 @@ pub fn smallest_downloaded_model_path(app: &AppHandle) -> Option<PathBuf> {
 }
 
 fn model_file_candidates(
-    app: &AppHandle,
+    paths: &Paths,
     catalog_model: CatalogModel,
-) -> Result<Vec<(PathBuf, ModelSource)>, CommandError> {
+) -> Vec<(PathBuf, ModelSource)> {
     let mut candidates = vec![(
-        app_data_model_path(app, catalog_model)?,
+        app_data_model_path(paths, catalog_model),
         ModelSource::AppData,
     )];
 
@@ -785,7 +900,7 @@ fn model_file_candidates(
             .map(|dir| (dir.join(catalog_model.filename), ModelSource::ExternalCache)),
     );
 
-    Ok(candidates)
+    candidates
 }
 
 fn external_model_dirs() -> Vec<PathBuf> {
