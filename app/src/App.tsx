@@ -40,7 +40,6 @@ import {
   type RecordingSessionInfo,
   type RecordingErrorEvent,
 } from "./backend";
-import { playStartCue, playStopCue } from "./sounds";
 import "./App.css";
 import type {
   LoadState,
@@ -256,7 +255,6 @@ function App() {
   }, []);
   const [liveTranscript, setLiveTranscript] =
     useState<PartialTranscriptEvent | null>(null);
-  const soundsEnabledRef = useRef(false);
   const notificationsEnabledRef = useRef(false);
 
   // The Developer page is opt-in (General -> Developer settings) and sits just
@@ -264,10 +262,6 @@ function App() {
   const developerEnabled =
     dashboardData?.settings.developerSettingsEnabled ?? false;
   const navGroups = visibleNavGroups(developerEnabled);
-
-  useEffect(() => {
-    soundsEnabledRef.current = dashboardData?.settings.soundsEnabled ?? false;
-  }, [dashboardData?.settings.soundsEnabled]);
 
   useEffect(() => {
     notificationsEnabledRef.current =
@@ -611,9 +605,8 @@ function App() {
           // A fresh recording ends any prior disconnect episode, so its own
           // notices are never suppressed by a stale flag.
           suppressRoutineNoticesUntilRef.current = 0;
-          if (soundsEnabledRef.current) {
-            playStartCue();
-          }
+          // The start and stop sounds play in the backend (sounds.rs), so they
+          // work with no window open.
           if (event.payload.microphoneFallback) {
             if (!micFallbackNoticeShownRef.current) {
               micFallbackNoticeShownRef.current = true;
@@ -636,9 +629,6 @@ function App() {
           },
         ),
         listen<RecordingResult>("audio://recording-stopped", (event) => {
-          if (soundsEnabledRef.current) {
-            playStopCue();
-          }
           if (event.payload.status === "too_short") {
             showNotice(
               event.payload.reason ??
@@ -677,10 +667,10 @@ function App() {
         listen<OutputResult>("scribe:output-completed", (event) => {
           setLastOutput(event.payload);
           if (event.payload.status === "paste_skipped") {
-            // The text didn't land where the user expected: always say so,
-            // and say it outside the app too, since they're in another window.
+            // The text didn't land where the user expected: always say so.
+            // The backend also shows a system notification (output.rs),
+            // since the user is in another window.
             pushToast({ tone: "info", message: event.payload.message });
-            void notifyOutsideApp("Scribe didn't paste", event.payload.message);
           } else if (Date.now() >= suppressRoutineNoticesUntilRef.current) {
             showNotice(event.payload.message, "success");
           }

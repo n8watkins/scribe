@@ -357,6 +357,9 @@ impl AudioService {
             limits
         );
         let _ = app.emit("audio://recording-started", &info);
+        // Only queued here: the cue plays on its own thread, after capture is
+        // already running, so it never delays the recording.
+        crate::sounds::play(app, crate::sounds::Cue::Start);
         Ok(StartOutcome {
             info,
             started: true,
@@ -503,7 +506,7 @@ pub fn cancel_recording_for_app(app: &AppHandle) -> Result<(), CommandError> {
         if result.is_transform {
             state.discard_pending_transform();
         }
-        let _ = app.emit("audio://recording-stopped", &result);
+        emit_recording_stopped(app, &result);
     }
 
     let snapshot = state.app_state()?.snapshot();
@@ -554,8 +557,16 @@ pub fn record_test_clip_for_app(
         state.audio()?.set_last_test_clip(PathBuf::from(wav_path));
     }
 
-    let _ = app.emit("audio://recording-stopped", &result);
+    emit_recording_stopped(app, &result);
     Ok(result)
+}
+
+/// Tells the UI a recording ended and plays the stop cue. Every way a
+/// recording ends (stop, cancel, too short, timeout, disconnect, test clip)
+/// goes through here, matching where the stop sound always played.
+fn emit_recording_stopped(app: &AppHandle, result: &RecordingResult) {
+    let _ = app.emit("audio://recording-stopped", result);
+    crate::sounds::play(app, crate::sounds::Cue::Stop);
 }
 
 /// Returns the most recent test clip WAV as a base64 string for in-app
@@ -726,7 +737,7 @@ fn stop_recording_with_reason(
             state.discard_pending_transform();
         }
     }
-    let _ = app.emit("audio://recording-stopped", &result);
+    emit_recording_stopped(app, &result);
 
     let snapshot = state.app_state()?.snapshot();
     if snapshot.status == AppStatus::Stopping {

@@ -657,6 +657,27 @@ fn emit_output_completed(app: &AppHandle, result: &OutputResult) {
         result.message
     );
     let _ = app.emit("scribe:output-completed", result);
+    if let Some((title, body)) = paste_skipped_notification(result) {
+        notify(app, title, body);
+    }
+}
+
+/// The system notification for a paste Scribe held back. The text did not
+/// land where the user expected and they are in another window, so this is
+/// always shown, whatever the in-app notifications setting says.
+fn paste_skipped_notification(result: &OutputResult) -> Option<(&'static str, &str)> {
+    (result.status == OutputStatus::PasteSkipped)
+        .then_some(("Scribe didn't paste", result.message.as_str()))
+}
+
+/// Best-effort system notification, shown from the backend so it works with
+/// no window open. Showing does not block; failures are only logged.
+fn notify(app: &AppHandle, title: &str, body: &str) {
+    use tauri_plugin_notification::NotificationExt;
+
+    if let Err(error) = app.notification().builder().title(title).body(body).show() {
+        log::warn!("Could not show the \"{}\" notification: {}", title, error);
+    }
 }
 
 pub fn emit_output_failed(app: &AppHandle, transcript_id: String, error: &CommandError) {
@@ -829,6 +850,28 @@ mod tests {
                 platform::PASTE_SHORTCUT
             )));
         }
+    }
+
+    #[test]
+    fn only_a_skipped_paste_raises_a_system_notification() {
+        let transcript = Transcript::new_last_buffer("hello", Some(100), None, None).unwrap();
+        let skipped = paste_skipped_result(
+            &transcript,
+            OutputMode::AutoPaste,
+            PasteMethod::ClipboardPaste,
+            PasteBlock::FocusChanged,
+        );
+        assert_eq!(
+            paste_skipped_notification(&skipped),
+            Some(("Scribe didn't paste", skipped.message.as_str()))
+        );
+
+        let pasted = OutputResult {
+            status: OutputStatus::Completed,
+            pasted: true,
+            ..skipped.clone()
+        };
+        assert_eq!(paste_skipped_notification(&pasted), None);
     }
 
     #[test]
