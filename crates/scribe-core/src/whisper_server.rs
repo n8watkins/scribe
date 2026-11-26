@@ -39,12 +39,14 @@ use std::{
 };
 
 use serde::Deserialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::{
     app_state::AppStatus,
     commands::BackendState,
     error::CommandError,
+    events::CoreEvent,
+    host::{no_main_window, Host},
     models::{self, EngineKind},
     parakeet::ParakeetProcess,
     settings::AppSettings,
@@ -283,9 +285,41 @@ struct Live {
 }
 
 struct Shared {
-    app: AppHandle,
+    /// Where the status goes (the event and the tray line) and where the
+    /// models and the engine binaries are. None only when the transcriber was
+    /// built before the shell installed its host (never in the app).
+    host: Option<Arc<dyn Host>>,
+    /// The settings, the selected model and the dictation state. None only
+    /// when the transcriber was built before the backend existed.
+    backend: Option<BackendState>,
+    /// Takes each new status to the host on the "speech-engine-status"
+    /// thread, in order. The engine publishes while it holds its own locks,
+    /// and must never wait on its host there: the tray waits for the shell's
+    /// main thread, and at exit that thread waits for the engine lock in
+    /// [`WarmTranscriber::shutdown`]. None only when that thread could not
+    /// start; the host is then told directly.
+    status_out: Option<crossbeam_channel::Sender<EngineStatus>>,
     live: Mutex<Live>,
     prewarm_pending: AtomicBool,
+}
+
+/// Starts the thread that tells `host` each new engine status: the event
+/// (`scribe:engine-status`), then the tray line. It ends when the last
+/// sender is gone.
+fn spawn_status_publisher(host: Arc<dyn Host>) -> Option<crossbeam_channel::Sender<EngineStatus>> {
+    let (sender, receiver) = crossbeam_channel::unbounded::<EngineStatus>();
+    let spawned = spawn_named("speech-engine-status", move || {
+        for status in receiver {
+            tell_host(host.as_ref(), status);
+        }
+    });
+    spawned.then_some(sender)
+}
+
+fn tell_host(host: &dyn Host, status: EngineStatus) {
+    let summary = status.summary();
+    host.emit(CoreEvent::EngineStatus(status));
+    host.update_engine_summary(summary);
 }
 
 /// Tauri-managed warm transcription service. `Send + Sync`; the slot and its
@@ -328,7 +362,43 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl WarmTranscriber {
+    /// The shell's setup builds the transcriber before the `Core` exists, so
+    /// this finds the installed host and the managed backend directly (both
+    /// come first at startup).
     pub fn new(app: AppHandle, measurements_path: PathBuf) -> Self {
+        let host = crate::shell::host().cloned();
+        let backend = app
+            .try_state::<BackendState>()
+            .map(|state| state.inner().clone());
+        if host.is_none() || backend.is_none() {
+            log::warn!("The speech engine was set up before the shell's host or backend");
+        }
+        debug_assert!(
+            host.is_some() && backend.is_some(),
+            "WarmTranscriber::new needs the shell's host installed and BackendState managed first \
+             (host: {}, backend: {})",
+            host.is_some(),
+            backend.is_some()
+        );
+        Self::build(host, backend, measurements_path)
+    }
+
+    /// The speech engine for `host`, reading the settings and the dictation
+    /// state from `backend`. Starts the watchdog; loads nothing until
+    /// [`Self::sync_with_settings`] or a transcription asks for a model.
+    pub fn new_with(
+        host: Arc<dyn Host>,
+        backend: BackendState,
+        measurements_path: PathBuf,
+    ) -> Self {
+        Self::build(Some(host), Some(backend), measurements_path)
+    }
+
+    fn build(
+        host: Option<Arc<dyn Host>>,
+        backend: Option<BackendState>,
+        measurements_path: PathBuf,
+    ) -> Self {
         let inner = Arc::new(Mutex::new(Inner {
             slot: Slot::default(),
             last_config: None,
@@ -341,7 +411,9 @@ impl WarmTranscriber {
             _stop_on_last_drop: Arc::new(StopOnDrop(inner.clone())),
             inner,
             shared: Arc::new(Shared {
-                app,
+                status_out: host.clone().and_then(spawn_status_publisher),
+                host,
+                backend,
                 live: Mutex::new(Live::default()),
                 prewarm_pending: AtomicBool::new(false),
             }),
@@ -354,7 +426,7 @@ impl WarmTranscriber {
     pub fn status(&self) -> EngineStatus {
         let mut live = lock(&self.shared.live);
         if live.selection.is_none() {
-            if let Some(settings) = current_settings(&self.shared.app) {
+            if let Some(settings) = current_settings(&self.shared) {
                 live.selection = Some(Selection::from_settings(&settings));
             }
         }
@@ -384,7 +456,7 @@ impl WarmTranscriber {
         let switched_off = !selection.keep_loaded
             && previous.is_some_and(|p| p.keep_loaded && p.engine == selection.engine);
 
-        let desired = desired_config(&self.shared.app, settings);
+        let desired = desired_config(&self.shared, settings);
         let keep = selection.keep_loaded && resident_supported(selection.engine);
         if keep {
             let loaded_config = self
@@ -393,7 +465,7 @@ impl WarmTranscriber {
                 .ok()
                 .and_then(|inner| inner.slot.resident().map(|r| r.config().clone()));
             if desired.is_some() && loaded_config != desired {
-                if dictation_in_progress(&self.shared.app) {
+                if dictation_in_progress(&self.shared) {
                     // A dictation keeps the model it started with (see
                     // session_model); the new one loads once it is done.
                     log::info!("Model changed during a dictation; it loads after this one.");
@@ -448,18 +520,23 @@ impl WarmTranscriber {
         }
         let shared = self.shared.clone();
         let inner = self.inner.clone();
+        // The probe below runs through this same engine.
+        let warm = self.clone();
         let spawned = spawn_named("speech-engine-load", move || {
             shared.prewarm_pending.store(false, Ordering::SeqCst);
             // The GPU probe loads a model of its own, so it runs (once per
             // session, then cached) before this load rather than later next
             // to the loaded model, when the Models page asks for it.
             if cfg!(windows) {
-                let _ = crate::gpu::probe(&shared.app);
+                if let Some(host) = shared.host.as_deref() {
+                    let _ = crate::gpu::probe_with(host, Some(&warm));
+                }
             }
-            let Some(settings) = current_settings(&shared.app) else {
+            drop(warm);
+            let Some(settings) = current_settings(&shared) else {
                 return;
             };
-            let Some(config) = desired_config(&shared.app, &settings) else {
+            let Some(config) = desired_config(&shared, &settings) else {
                 return;
             };
             if !resident_supported(config.engine) {
@@ -510,11 +587,20 @@ impl WarmTranscriber {
         result
     }
 
-    /// Transcribes one WAV. Tries the resident engine first and transparently
-    /// falls back to the `whisper-cli.exe` path on any server failure.
+    /// [`Self::transcribe_with`]; the transcriber already knows its host, so
+    /// `app` is not used.
     pub fn transcribe(
         &self,
-        app: &AppHandle,
+        _app: &AppHandle,
+        request: WhisperRequest,
+    ) -> Result<WhisperTranscription, CommandError> {
+        self.transcribe_with(request)
+    }
+
+    /// Transcribes one WAV. Tries the resident engine first and transparently
+    /// falls back to the `whisper-cli.exe` path on any server failure.
+    pub fn transcribe_with(
+        &self,
         request: WhisperRequest,
     ) -> Result<WhisperTranscription, CommandError> {
         // FILLER: the warm server serves filler requests too — it returns
@@ -545,17 +631,20 @@ impl WarmTranscriber {
             self.shared.after_unload();
             self.publish(None);
         }
-        let result = match whisper::transcribe(app, request.clone()) {
-            Ok(transcription) => Ok(transcription),
-            Err(error) => match cpu_retry_request(&request) {
-                Some(cpu_request) => {
-                    log::warn!(
-                        "GPU transcription failed ({}); retrying once on CPU (--no-gpu)",
-                        error.message
-                    );
-                    whisper::transcribe(app, cpu_request)
-                }
-                None => Err(error),
+        let result = match self.shared.host.as_deref() {
+            None => Err(no_main_window()),
+            Some(host) => match whisper::transcribe_with(host, request.clone()) {
+                Ok(transcription) => Ok(transcription),
+                Err(error) => match cpu_retry_request(&request) {
+                    Some(cpu_request) => {
+                        log::warn!(
+                            "GPU transcription failed ({}); retrying once on CPU (--no-gpu)",
+                            error.message
+                        );
+                        whisper::transcribe_with(host, cpu_request)
+                    }
+                    None => Err(error),
+                },
             },
         };
         inner.last_used = Some(Instant::now());
@@ -872,7 +961,7 @@ fn watchdog_tick(shared: &Shared, inner: &mut Inner) {
     let idle = inner
         .last_used
         .is_none_or(|used| used.elapsed() >= UNLOAD_AFTER_IDLE);
-    if !keep && idle && !dictation_in_progress(&shared.app) {
+    if !keep && idle && !dictation_in_progress(shared) {
         log::info!(
             "Unloading {} after {} s without dictation (Keep the speech model loaded is off)",
             model_id,
@@ -932,7 +1021,7 @@ impl Shared {
 
     fn publish_locked(&self, live: &mut Live, measured: Option<crate::speech_engine::Measurement>) {
         if live.selection.is_none() {
-            if let Some(settings) = current_settings(&self.app) {
+            if let Some(settings) = current_settings(self) {
                 live.selection = Some(Selection::from_settings(&settings));
             }
         }
@@ -941,8 +1030,17 @@ impl Shared {
             return;
         }
         live.published = Some(status.clone());
-        let _ = self.app.emit(ENGINE_STATUS_EVENT, &status);
-        crate::shell::update_engine_summary(&self.app, status.summary());
+        // `scribe:engine-status` (ENGINE_STATUS_EVENT), then the tray, from
+        // the status thread: the caller may hold the engine lock.
+        match (&self.status_out, &self.host) {
+            (Some(status_out), _) => {
+                if status_out.send(status).is_err() {
+                    log::warn!("The speech engine status thread has stopped");
+                }
+            }
+            (None, Some(host)) => tell_host(host.as_ref(), status),
+            (None, None) => {}
+        }
     }
 }
 
@@ -1003,12 +1101,18 @@ fn load(
         shared.publish(None);
     }
     let started = Instant::now();
-    let outcome = inner.slot.ensure(config, |config| match config.engine {
-        EngineKind::Whisper => {
-            launch_whisper_server(&shared.app, config, client).map(EngineProcess::Whisper)
-        }
-        EngineKind::Parakeet => {
-            ParakeetProcess::launch(&shared.app, config).map(EngineProcess::Parakeet)
+    let outcome = inner.slot.ensure(config, |config| {
+        let host = shared
+            .host
+            .as_deref()
+            .ok_or_else(|| no_main_window().message)?;
+        match config.engine {
+            EngineKind::Whisper => {
+                launch_whisper_server(host, config, client).map(EngineProcess::Whisper)
+            }
+            EngineKind::Parakeet => {
+                ParakeetProcess::launch_with(host, config).map(EngineProcess::Parakeet)
+            }
         }
     });
     lock(&shared.live).loading = None;
@@ -1047,26 +1151,27 @@ fn load(
 
 /// The engine configuration the current settings ask for, or None when no
 /// downloaded model is selected.
-fn desired_config(app: &AppHandle, settings: &AppSettings) -> Option<EngineConfig> {
-    let state = app.try_state::<BackendState>()?;
+fn desired_config(shared: &Shared, settings: &AppSettings) -> Option<EngineConfig> {
+    let host = shared.host.as_deref()?;
+    let state = shared.backend.as_ref()?;
     let (model_id, model_path) = {
         let db = state.db().ok()?;
-        crate::model_manager::selected_model_path(app, &db).ok()?
+        crate::model_manager::selected_model_path_with(host, &db).ok()?
     };
     let request = WhisperRequest::for_settings(&model_id, model_path, PathBuf::new(), settings);
     Some(EngineConfig::for_request(&request))
 }
 
-fn current_settings(app: &AppHandle) -> Option<AppSettings> {
-    let state = app.try_state::<BackendState>()?;
+fn current_settings(shared: &Shared) -> Option<AppSettings> {
+    let state = shared.backend.as_ref()?;
     let db = state.db().ok()?;
     db.get_settings().ok()
 }
 
 /// A recording, transcription or paste is under way: not the moment to
 /// unload the model.
-fn dictation_in_progress(app: &AppHandle) -> bool {
-    let Some(state) = app.try_state::<BackendState>() else {
+fn dictation_in_progress(shared: &Shared) -> bool {
+    let Some(state) = shared.backend.as_ref() else {
         return false;
     };
     let Ok(machine) = state.app_state() else {
@@ -1151,11 +1256,11 @@ fn http_client(inner: &mut Inner) -> Result<reqwest::blocking::Client, String> {
 /// Starts whisper-server for `config` and waits until the model is loaded.
 /// The caller ([`Slot::ensure`]) has already stopped any other engine.
 fn launch_whisper_server(
-    app: &AppHandle,
+    host: &dyn Host,
     config: &EngineConfig,
     client: &reqwest::blocking::Client,
 ) -> Result<ServerProcess, String> {
-    let executable = whisper::resolve_bundled_executable(app, SERVER_EXECUTABLE)
+    let executable = whisper::resolve_bundled_executable_with(host, SERVER_EXECUTABLE)
         .map_err(|error| error.message)?;
     let port = find_free_port()?;
     let request_path = new_request_path();
@@ -1341,6 +1446,199 @@ fn cpu_retry_request(request: &WhisperRequest) -> Option<WhisperRequest> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The engine status goes to the transcriber's host as
+    /// `scribe:engine-status`, once per change. "Keep the speech model
+    /// loaded" is off and no model file exists, so nothing is started.
+    #[test]
+    fn the_engine_status_goes_to_the_host() {
+        use crate::host::{Flavor, RecordingHost};
+        use crate::paths::Paths;
+
+        let root = std::env::temp_dir().join(format!("scribe-warm-status-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let host = Arc::new(RecordingHost::new(
+            Paths::from_parts(
+                root.join("data"),
+                root.join("cache"),
+                root.join("logs"),
+                None,
+                None,
+            ),
+            Flavor::Stable,
+        ));
+        let db = crate::db::Database::in_memory().unwrap();
+        let mut settings = db.get_settings().unwrap();
+        settings.selected_model_id = Some("tiny.en".into());
+        settings.keep_whisper_loaded = false;
+        db.save_settings(&settings).unwrap();
+        let backend = BackendState::new(
+            db,
+            root.join("cache").join("recordings"),
+            crate::data_hygiene::DataDirs {
+                data_dir: root.join("data"),
+                cache_dir: root.join("cache"),
+            },
+        );
+
+        let warm = WarmTranscriber::new_with(
+            host.clone(),
+            backend,
+            root.join("data").join("engine-measurements.json"),
+        );
+        warm.sync_with_settings(&settings);
+        // The same settings again change nothing, so nothing new is sent.
+        warm.sync_with_settings(&settings);
+
+        // The status thread tells the host; give it time to, and to send a
+        // second event if it (wrongly) would.
+        let started = Instant::now();
+        while host.events().is_empty() && started.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        let events = host.events();
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].name(), ENGINE_STATUS_EVENT);
+        let crate::events::CoreEvent::EngineStatus(status) = &events[0] else {
+            panic!("not an engine status: {:?}", events[0]);
+        };
+        assert_eq!(status.model_id.as_deref(), Some("tiny.en"));
+        assert!(!status.keep_loaded);
+        assert_ne!(status.state, LoadState::Loaded);
+        assert_eq!(&warm.status(), status);
+
+        warm.shutdown();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A host whose tray, like Tauri's, does its work on the shell's main
+    /// thread and waits for it. The test plays that main thread: it is busy
+    /// (the tray call waits) until [`Self::free_main_thread`].
+    struct MainThreadHost {
+        paths: crate::paths::Paths,
+        main_free: Mutex<bool>,
+        main_freed: std::sync::Condvar,
+        tray_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl MainThreadHost {
+        fn free_main_thread(&self) {
+            *lock(&self.main_free) = true;
+            self.main_freed.notify_all();
+        }
+    }
+
+    impl Host for MainThreadHost {
+        fn emit(&self, _event: CoreEvent) {}
+
+        fn paths(&self) -> &crate::paths::Paths {
+            &self.paths
+        }
+
+        fn flavor(&self) -> crate::host::Flavor {
+            crate::host::Flavor::Stable
+        }
+
+        fn update_tray_status(&self, _status: AppStatus) {}
+
+        fn update_engine_summary(&self, _summary: String) {
+            self.tray_calls.fetch_add(1, Ordering::SeqCst);
+            // Bounded, so a regression fails the test instead of hanging it.
+            let free = lock(&self.main_free);
+            let _ = self
+                .main_freed
+                .wait_timeout_while(free, Duration::from_secs(10), |free| !*free);
+        }
+
+        fn sync_settings(&self, _settings: &AppSettings) {}
+
+        fn open_dashboard(&self, _route: Option<&str>) -> Result<(), CommandError> {
+            Err(no_main_window())
+        }
+
+        fn toggle_dashboard(&self) -> Result<(), CommandError> {
+            Err(no_main_window())
+        }
+
+        fn main_window_logical_size(&self) -> Option<(u32, u32)> {
+            None
+        }
+    }
+
+    /// The Windows end-to-end hang: the app quit (the main thread waiting in
+    /// `shutdown` for the engine) while a background load held the engine and
+    /// told the tray its new status (which waits for the main thread). The
+    /// engine must never wait on its host while holding its own lock, so
+    /// `shutdown` finishes while the main thread is still busy.
+    #[test]
+    fn shutdown_finishes_while_the_shells_main_thread_is_busy() {
+        let root = std::env::temp_dir().join(format!("scribe-warm-exit-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let host = Arc::new(MainThreadHost {
+            paths: crate::paths::Paths::from_parts(
+                root.join("data"),
+                root.join("cache"),
+                root.join("logs"),
+                None,
+                None,
+            ),
+            main_free: Mutex::new(false),
+            main_freed: std::sync::Condvar::new(),
+            tray_calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        // A Parakeet model on disk, so a load starts (and announces itself);
+        // with no resources folder the sidecar then fails to start, so no
+        // process ever runs. "Keep loaded" is off, so nothing reloads.
+        let parakeet = models::catalog_model(models::PARAKEET_V3_ID).unwrap();
+        let model = root.join("data").join("models").join(parakeet.filename);
+        fs::create_dir_all(model.parent().unwrap()).unwrap();
+        fs::write(&model, b"not really a model").unwrap();
+        let db = crate::db::Database::in_memory().unwrap();
+        let mut settings = db.get_settings().unwrap();
+        settings.selected_model_id = Some(models::PARAKEET_V3_ID.into());
+        settings.keep_parakeet_loaded = false;
+        db.save_settings(&settings).unwrap();
+        let backend = BackendState::new(
+            db,
+            root.join("cache").join("recordings"),
+            crate::data_hygiene::DataDirs {
+                data_dir: root.join("data"),
+                cache_dir: root.join("cache"),
+            },
+        );
+        let warm = WarmTranscriber::new_with(
+            host.clone(),
+            backend,
+            root.join("data").join("engine-measurements.json"),
+        );
+
+        warm.prewarm();
+        let started = Instant::now();
+        while host.tray_calls.load(Ordering::SeqCst) == 0 {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the load never announced itself"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        // The app quits now, on the busy main thread.
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let quitting = warm.clone();
+        std::thread::spawn(move || {
+            quitting.shutdown();
+            let _ = done_tx.send(());
+        });
+        let finished = done_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+        host.free_main_thread();
+        assert!(
+            finished,
+            "shutdown waited for the engine while the engine waited for the main thread"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn allocates_a_usable_free_port() {

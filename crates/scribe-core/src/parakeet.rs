@@ -18,6 +18,7 @@ use tauri::AppHandle;
 
 use crate::{
     filler::TimedWord,
+    host::Host,
     speech_engine::{EngineConfig, Resident},
     whisper,
 };
@@ -75,7 +76,19 @@ pub struct ParakeetResult {
 impl ParakeetProcess {
     /// Starts the sidecar for `config` and waits until the model is loaded.
     pub fn launch(app: &AppHandle, config: &EngineConfig) -> Result<Self, String> {
-        let executable = whisper::resolve_bundled_executable(app, SIDECAR_EXECUTABLE)
+        match tauri::Manager::try_state::<crate::core::Core>(app) {
+            Some(core) => Self::launch_with(core.host().as_ref(), config),
+            None => {
+                log::warn!("ParakeetProcess::launch ran before the engine was ready");
+                Err(crate::host::no_main_window().message)
+            }
+        }
+    }
+
+    /// Starts the sidecar bundled in the resources of `host` for `config` and
+    /// waits until the model is loaded.
+    pub fn launch_with(host: &dyn Host, config: &EngineConfig) -> Result<Self, String> {
+        let executable = whisper::resolve_bundled_executable_with(host, SIDECAR_EXECUTABLE)
             .map_err(|error| error.message)?;
         Self::launch_executable(&executable, config, threads())
     }
