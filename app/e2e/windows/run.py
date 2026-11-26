@@ -883,6 +883,42 @@ class FakeLocalAi:
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
 
+# The arguments wry gives WebView2 when the app sets none (wry's webview2
+# module); the debugging port is added to them, not put in their place.
+WRY_DEFAULT_BROWSER_ARGS = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
+WEBVIEW2_ARGS_POLICY = r"Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments"
+
+
+def set_webview2_browser_args(exe_name: str, args: str) -> None:
+    """WebView2's loader override for one executable's browser arguments (the
+    per-user policy key, read before the app's own arguments). The
+    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS variable alone is not used when the
+    app passes arguments itself, which wry always does."""
+    import winreg
+
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, WEBVIEW2_ARGS_POLICY) as key:
+        winreg.SetValueEx(key, exe_name, 0, winreg.REG_SZ, args)
+
+
+def webview2_command_lines() -> str:
+    """The running WebView2 browser processes' command lines, for a failure."""
+    try:
+        return subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-Command",
+                "Get-CimInstance Win32_Process -Filter \"Name='msedgewebview2.exe'\" | "
+                "Where-Object { $_.CommandLine -notmatch '--type=' } | ForEach-Object { $_.CommandLine }",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as error:
+        return f"(could not list them: {error})"
+
+
 def free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -897,7 +933,10 @@ class AppCommands:
 
     def __init__(self, port: int) -> None:
         self.port = port
-        pages = wait_until("the dashboard's WebView2 debugging port", self._pages, 30, 0.25)
+        try:
+            pages = wait_until(f"the dashboard's WebView2 debugging port {port}", self._pages, 30, 0.25)
+        except CheckFailed as error:
+            raise CheckFailed(f"{error}. WebView2 browser processes: {webview2_command_lines()}") from None
         errors = []
         for page in pages:
             try:
@@ -1127,10 +1166,12 @@ class Scribe:
         # WebView2's remote debugging port, so the runner can call the app's
         # own commands (AppCommands) the way the dashboard does.
         self.debug_port = free_port()
+        browser_args = f"{WRY_DEFAULT_BROWSER_ARGS} --remote-debugging-port={self.debug_port}"
+        set_webview2_browser_args(self.exe.name, browser_args)
         env = dict(
             os.environ,
             SCRIBE_E2E_AUDIO_WAV=str(self.clip_path),
-            WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=f"--remote-debugging-port={self.debug_port}",
+            WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=browser_args,
         )
         self.process = subprocess.Popen([str(self.exe)], env=env)
         pid = self.process.pid
