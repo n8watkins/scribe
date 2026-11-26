@@ -14,7 +14,7 @@ Windows end-to-end (`.github/workflows/e2e-windows.yml`) on pull requests and pu
 Hosted runners have an interactive desktop but no audio devices.
 The job builds Scribe Dev with the `e2e-audio` feature, which records a WAV file in place of the microphone (`crates/scribe-core/src/test_audio.rs`), so hotkeys, recording, Whisper and output all run for real.
 It uses a CPU-only build of the pinned whisper.cpp source and the default model, downloaded through the app's verified download path.
-`app/e2e/windows/run.py` drives it with injected hotkeys (Ctrl+Alt+F7 to F12) against stand-in app windows in their own processes, and checks the window text, the clipboard, `status.json`, the database and the app log.
+`app/e2e/windows/run.py` drives it with injected hotkeys against stand-in app windows in their own processes, and checks the window text, the clipboard, `status.json`, the state server's event stream, the database and the app log.
 Screenshots (dashboard, the floating pill while recording, any failure), app logs and results are uploaded on every run.
 
 - `--self-test-transcribe` downloads the default model on a fresh profile and transcribes `tests/fixtures/jfk.wav`.
@@ -25,6 +25,23 @@ Screenshots (dashboard, the floating pill while recording, any failure), app log
 - Switching apps mid-dictation: the text is pasted into neither app and stays on the clipboard.
 - Paste the last transcript, and discard a dictation (nothing pasted, saved or copied).
 - Transform Selection against a stand-in OpenAI-compatible server on 127.0.0.1: the spoken instruction and the selection reach the server, the result replaces the selection, and the clipboard is restored.
+
+The scenarios above bind every action to Ctrl+Alt+F7 to F12, which the global-shortcut plugin handles.
+A second group drives the bindings Windows users get by default, which go through Scribe's own key watchers (`crates/scribe-core/src/hotkeys.rs`).
+It loads them through the app's own hotkey commands (`reset_hotkeys_to_defaults`, `load_production_hotkey_defaults`, `rebind_hotkey`, `set_hotkey_trigger`), called inside the dashboard's WebView2 through its remote debugging port, so nothing is hard-coded and stable and Dev defaults both come from the build under test.
+Keys are sent with `SendInput` and scan codes, which is what the watchers' `GetAsyncKeyState` polling and `RegisterHotKey` see from a real keyboard.
+Every state change is read from the state server's event stream, so a state that lasts a few milliseconds is still seen.
+Whether Scribe holds a key is checked by trying to register the same hotkey from the runner.
+
+- The build's own defaults (Scribe Dev: Ctrl+Shift+Win hold to talk, Ctrl+Shift+Backquote toggle): hold to talk through the chord watcher, the toggle on its trigger edge, discard.
+- The shipped defaults: Ctrl+Win hold to talk and a bare Backquote toggle on Release start the toggle-key watcher, and Backquote is held as a global hotkey.
+- Bare toggle key on Release: tap, speak, tap; the dictation is pasted, the key's own character never reaches the app, and Q is let go afterwards.
+- The note chord: hold the toggle key and tap Q; a note starts instead of a dictation, neither key types, the Q grab ends with the hold, the same chord ends the note, it is saved as a note and not pasted, and Q types normally again.
+- Modifier-only hold to talk: a tap shorter than the 150 ms arming delay starts nothing; held, it records until the keys are let go and the app keeps the focus.
+- The toggle on the Press trigger: the recording starts while the key is still down and Q is not grabbed.
+- Rebinding with the watchers running: to another bare key (the old one types and starts nothing, the new one toggles), then to a combination (no watcher, the bare key types again, the plugin toggles).
+- Open Dashboard opens and focuses the dashboard from the tray, and hides it again.
+- The watcher's log lines are saved as `hotkey-watcher-log.txt` in the uploaded results.
 
 Release (`.github/workflows/release.yml`) before anything is published:
 
