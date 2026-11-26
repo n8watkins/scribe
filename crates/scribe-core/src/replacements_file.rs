@@ -334,14 +334,26 @@ pub fn notify_backup_with(core: &crate::core::Core) {
     core.note_sync().notify();
 }
 
-/// [`notify_backup_with`] for callers that still hold an `AppHandle`.
-pub fn notify_backup(app: &tauri::AppHandle) {
-    use tauri::Manager;
+/// Opens replacements.txt in the default text editor (the
+/// `open_replacements_file` command).
+pub fn open_replacements_file_with(
+    core: &crate::core::Core,
+) -> Result<(), crate::error::CommandError> {
+    open_in_editor(core.host().as_ref(), core.replacements().path())
+}
 
-    match app.try_state::<crate::core::Core>() {
-        Some(core) => notify_backup_with(&core),
-        None => log::warn!("Could not tell GitHub backup about replacements.txt: no engine yet"),
-    }
+/// The body of [`open_replacements_file_with`]: opens `path` through the
+/// host.
+fn open_in_editor(
+    host: &dyn crate::host::Host,
+    path: &Path,
+) -> Result<(), crate::error::CommandError> {
+    host.open_path(path).map_err(|error| {
+        crate::error::CommandError::new(
+            "replacements_open_failed",
+            format!("Could not open replacements.txt. {}", error),
+        )
+    })
 }
 
 /// The error for a replacements.txt that could not be written.
@@ -441,5 +453,43 @@ mod tests {
         let again = ReplacementStore::open(path.clone(), &[row("other", "x")]);
         assert_eq!(again.current().rows.len(), 2);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn opening_the_file_goes_through_the_host_once() {
+        use crate::host::{Failing, Flavor, HostCall, RecordingHost};
+
+        let root = tempfile::tempdir().unwrap();
+        let host = RecordingHost::new(
+            crate::paths::Paths::from_parts(
+                root.path().join("data"),
+                root.path().join("cache"),
+                root.path().join("logs"),
+                None,
+                None,
+            ),
+            Flavor::Stable,
+        );
+        let store = ReplacementStore::open(root.path().join(FILE_NAME), &[]);
+
+        open_in_editor(&host, store.path()).unwrap();
+        assert_eq!(
+            host.calls(),
+            [HostCall::OpenPath(root.path().join(FILE_NAME))]
+        );
+        assert!(host.events().is_empty());
+
+        host.fail(Failing::OpenPath);
+        let error = open_in_editor(&host, store.path()).unwrap_err();
+        assert_eq!(error.code, "replacements_open_failed");
+        assert_eq!(
+            error.message,
+            format!(
+                "Could not open replacements.txt. {}",
+                Failing::OpenPath.message()
+            )
+        );
+        assert_eq!(host.calls().len(), 2);
+        assert!(host.events().is_empty());
     }
 }

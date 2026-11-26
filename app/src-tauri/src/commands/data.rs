@@ -1,23 +1,23 @@
 //! Commands of the `data` domain (db, settings_store, data_hygiene, export,
 //! import, stats, release_notes, diagnostics, replacements_file).
 //!
-//! Converted to the engine handle: commands take the managed [`Core`]. The
-//! ones that still take the `AppHandle` need it for the opener plugin, for
-//! the settings side effects of other domains (see
-//! `settings_store::patch_settings_now_with`), or for the app's version.
+//! Converted to the engine handle: commands take the managed [`Core`], and
+//! open files and folders and read the app's version through its host. Only
+//! `patch_settings` still takes the `AppHandle`, for the settings side
+//! effects of the hotkeys domain (see `settings_store::patch_settings_now_with`).
 
 use tauri::State;
-use tauri_plugin_opener::OpenerExt;
 
 use super::{off_main_core, on_dialog_thread};
 use crate::{
     data_hygiene::{
-        effective_data_dir_with, failed_recordings_dir_with, logs_dir_with, open_folder,
+        effective_data_dir_with, failed_recordings_dir_with, logs_dir_with, open_folder_with,
+        open_transcript_externally_with,
     },
     db::transcript_audio_missing,
     error::CommandError,
     import::{load_transcript_import, ImportReport, TranscriptImportPreview},
-    replacements_file::{notify_backup_with, replacements_error},
+    replacements_file::{notify_backup_with, open_replacements_file_with, replacements_error},
     settings::AppSettings,
     settings_store::patch_settings_now_with,
     stats::BasicStats,
@@ -211,56 +211,14 @@ pub async fn save_combined_transcript(
 }
 
 /// Writes a transcript's text to a temp `.txt` file under the app cache dir and
-/// opens it with the OS default text app. Takes the `AppHandle` for the
-/// opener plugin.
+/// opens it with the OS default text app.
 #[tauri::command]
 pub async fn open_transcript_externally(
-    app: tauri::AppHandle,
     core: State<'_, Core>,
     id: String,
 ) -> Result<(), CommandError> {
     off_main_core(core.inner().clone(), move |core| {
-        let state = core.backend();
-        let transcript = state.db()?.get_transcript_by_id(&id)?.ok_or_else(|| {
-            CommandError::new("transcript_not_found", "Transcript was not found.")
-        })?;
-
-        let export_dir = state.dirs().editor_copies();
-        std::fs::create_dir_all(&export_dir).map_err(|error| {
-            CommandError::new(
-                "transcript_export_failed",
-                format!(
-                    "Could not create export folder {}. {}",
-                    export_dir.display(),
-                    error
-                ),
-            )
-        })?;
-
-        let path = state.dirs().editor_copy(&id);
-        std::fs::write(&path, transcript.text.as_bytes()).map_err(|error| {
-            CommandError::new(
-                "transcript_export_failed",
-                format!(
-                    "Could not write transcript file {}. {}",
-                    path.display(),
-                    error
-                ),
-            )
-        })?;
-
-        app.opener()
-            .open_path(path.to_string_lossy(), None::<&str>)
-            .map_err(|error| {
-                CommandError::new(
-                    "transcript_open_failed",
-                    format!(
-                        "Could not open transcript file {}. {}",
-                        path.display(),
-                        error
-                    ),
-                )
-            })
+        open_transcript_externally_with(core, &id)
     })
     .await
 }
@@ -310,14 +268,10 @@ pub async fn refresh_basic_stats(core: State<'_, Core>) -> Result<BasicStats, Co
 }
 
 /// Opens the data folder (the one the user chose, else the app data folder).
-/// Takes the `AppHandle` for the opener plugin.
 #[tauri::command]
-pub async fn open_data_folder(
-    app: tauri::AppHandle,
-    core: State<'_, Core>,
-) -> Result<(), CommandError> {
+pub async fn open_data_folder(core: State<'_, Core>) -> Result<(), CommandError> {
     off_main_core(core.inner().clone(), move |core| {
-        open_folder(&app, effective_data_dir_with(core))
+        open_folder_with(core.host().as_ref(), effective_data_dir_with(core))
     })
     .await
 }
@@ -362,15 +316,12 @@ pub async fn pick_data_dir(core: State<'_, Core>) -> Result<Option<String>, Comm
 }
 
 /// Opens the folder that holds Scribe's rotating local log files, so a user can
-/// find and attach them to a bug report. Takes the `AppHandle` for the
-/// opener plugin.
+/// find and attach them to a bug report.
 #[tauri::command]
-pub async fn open_logs_folder(
-    app: tauri::AppHandle,
-    core: State<'_, Core>,
-) -> Result<(), CommandError> {
+pub async fn open_logs_folder(core: State<'_, Core>) -> Result<(), CommandError> {
     off_main_core(core.inner().clone(), move |core| {
-        open_folder(&app, logs_dir_with(core.host().as_ref()))
+        let host = core.host().as_ref();
+        open_folder_with(host, logs_dir_with(host))
     })
     .await
 }
@@ -386,14 +337,10 @@ pub fn get_logs_dir(core: State<'_, Core>) -> Result<String, CommandError> {
 
 /// Opens the folder that holds audio from dictations whose transcription failed,
 /// so a user can recover the recording from disk (risk R2 follow-up to Fix E).
-/// Takes the `AppHandle` for the opener plugin.
 #[tauri::command]
-pub async fn open_failed_recordings_folder(
-    app: tauri::AppHandle,
-    core: State<'_, Core>,
-) -> Result<(), CommandError> {
+pub async fn open_failed_recordings_folder(core: State<'_, Core>) -> Result<(), CommandError> {
     off_main_core(core.inner().clone(), move |core| {
-        open_folder(&app, failed_recordings_dir_with(core))
+        open_folder_with(core.host().as_ref(), failed_recordings_dir_with(core))
     })
     .await
 }
@@ -628,35 +575,20 @@ pub async fn remove_replacement(
     .await
 }
 
-/// Opens replacements.txt in the default text editor. Takes the `AppHandle`
-/// for the opener plugin.
+/// Opens replacements.txt in the default text editor.
 #[tauri::command]
-pub async fn open_replacements_file(
-    app: tauri::AppHandle,
-    core: State<'_, Core>,
-) -> Result<(), CommandError> {
+pub async fn open_replacements_file(core: State<'_, Core>) -> Result<(), CommandError> {
     off_main_core(core.inner().clone(), move |core| {
-        let path = core.replacements().path().to_path_buf();
-        app.opener()
-            .open_path(path.to_string_lossy(), None::<&str>)
-            .map_err(|error| {
-                CommandError::new(
-                    "replacements_open_failed",
-                    format!("Could not open replacements.txt. {}", error),
-                )
-            })
+        open_replacements_file_with(core)
     })
     .await
 }
 
 /// The running version when its "What's new" card has not been dismissed yet.
-/// Takes the `AppHandle` for the app's version, which Dev builds override.
+/// The version is the host's (the app's own, which Dev builds override).
 #[tauri::command]
-pub fn whats_new_pending(
-    app: tauri::AppHandle,
-    core: State<'_, Core>,
-) -> Result<Option<String>, CommandError> {
-    crate::release_notes::pending_version_with(&core, &app.package_info().version.to_string())
+pub fn whats_new_pending(core: State<'_, Core>) -> Result<Option<String>, CommandError> {
+    crate::release_notes::pending_version_with(&core)
 }
 
 /// Remembers that the card for `version` was dismissed.
@@ -669,12 +601,9 @@ pub fn dismiss_whats_new(core: State<'_, Core>, version: String) -> Result<(), C
     core.backend().db()?.set_whats_new_seen_version(version)
 }
 
-/// Builds the diagnostics report. Takes the `AppHandle` for the app's
-/// version, which Dev builds override.
+/// Builds the diagnostics report, with the host's version (the app's own,
+/// which Dev builds override).
 #[tauri::command]
-pub fn collect_diagnostics(
-    app: tauri::AppHandle,
-    core: State<'_, Core>,
-) -> Result<String, CommandError> {
-    crate::diagnostics::collect_with(&core, &app.package_info().version.to_string())
+pub fn collect_diagnostics(core: State<'_, Core>) -> Result<String, CommandError> {
+    crate::diagnostics::collect_with(&core)
 }
