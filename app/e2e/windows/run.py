@@ -83,14 +83,21 @@ CLIPS = {
 }
 # Log lines of the Windows toggle-key watcher and the note chord
 # (crates/scribe-core/src/hotkeys.rs); the chord watcher logs nothing.
-TOGGLE_WATCHER_LOG = "Toggle key watcher active (vk 0x{vk:X}, trigger {trigger})"
+TOGGLE_WATCHER_PREFIX = "Toggle key watcher active"
+TOGGLE_WATCHER_LOG = TOGGLE_WATCHER_PREFIX + " (vk 0x{vk:X}, trigger {trigger})"
+TOGGLE_PRESSED_LOG = "Toggle key pressed (trigger Press)"
 TOGGLE_RELEASED_LOG = "Toggle key released (note chord fired: {fired})"
 NOTE_CHORD_LOG = "Note chord (Q) pressed during toggle hold"
 NOTE_CHORD_UNAVAILABLE_LOG = "Note chord unavailable"
-WATCHER_LOG_MARKERS = ("Toggle key watcher", "Toggle key released", "Note chord", "Registered ", "hotkey")
 # The chord watcher's arming delay (windows_chord::ARMING_DELAY): a
 # modifier-only chord released sooner starts nothing.
 CHORD_ARMING_DELAY = 0.150
+# When the runner probes whether Scribe holds Q (wait_q_grabbed says why).
+Q_PROBE_FIRST_DELAY = 0.05
+Q_PROBE_INTERVAL = 0.1
+# How long a held toggle key on Release is watched for a recording that
+# must not start before the key comes up: a start takes well under this.
+RELEASE_HOLD_OBSERVATION = 0.5
 # How long the slow stand-in app is busy before it reads the clipboard on
 # Ctrl+V (target.ps1 -PasteDelayMs); well past Scribe's old fixed 180 ms wait.
 SLOW_APP_PASTE_DELAY_MS = 1000
@@ -415,13 +422,14 @@ class Keyboard:
         self.held: list[int] = []
 
     def send(self, vks: list[int], up: bool) -> None:
+        # A key counts as held before its down event is sent, so a SendInput
+        # that fails part-way still gets every key it may have pressed let go;
+        # it stops counting only once its up event went through.
+        if not up:
+            self.held += [vk for vk in vks if vk not in self.held]
         send_inputs([key_input(vk, up) for vk in vks])
-        for vk in vks:
-            if up:
-                if vk in self.held:
-                    self.held.remove(vk)
-            elif vk not in self.held:
-                self.held.append(vk)
+        if up:
+            self.held = [vk for vk in self.held if vk not in vks]
 
     def down(self, vk: int) -> None:
         self.send([vk], False)
@@ -1729,30 +1737,71 @@ class Run:
     def states_seen(self) -> list[str]:
         return self.states.since(self.state_mark) if self.states else []
 
-    def wait_toggle_watcher(self, toggle: Chord, trigger: str) -> None:
+    @staticmethod
+    def watcher_starts() -> int:
+        return log_text().count(TOGGLE_WATCHER_PREFIX)
+
+    def wait_toggle_watcher(self, before: int, toggle: Chord, trigger: str) -> None:
+        """Waits for the toggle-key watcher to (re)start after a hotkey command:
+        a new start line after the `before` count, the newest naming `toggle`
+        and `trigger`. A line left from an earlier start never counts."""
         line = TOGGLE_WATCHER_LOG.format(vk=toggle.key, trigger=trigger)
-        wait_until(f"the log line {line!r}", lambda: line in log_text(), 10, 0.1)
+        wait_until(f"a new toggle-key watcher start ({line!r})", lambda: self.watcher_starts() > before, 10, 0.1)
+        newest = log_lines(TOGGLE_WATCHER_PREFIX)[-1]
+        check(line in newest, f"The toggle-key watcher restarted as {newest!r}, expected {line!r}")
 
     def wait_q_grabbed(self) -> None:
         """Waits until Scribe holds Q, which the toggle-key watcher grabs for
         the note chord as soon as it sees the toggle key go down (Release
-        trigger). This is how the runner knows the 10 ms watcher saw the press."""
+        trigger). This is how the runner knows the 10 ms watcher saw the press.
+
+        The probe registers Q itself for a few microseconds when Q is free,
+        and Scribe's own registration would fail if it landed in that window
+        ("Note chord unavailable"). So the first probe waits until Scribe has
+        normally long finished (a few milliseconds after the key goes down),
+        and later ones are 100 ms apart: Scribe is then almost always already
+        holding Q, the probe fails to register and holds nothing. A collision
+        is still reported as one, not as a product failure."""
         unavailable = log_text().count(NOTE_CHORD_UNAVAILABLE_LOG)
+        free_probes = 0
+
+        def grabbed() -> bool:
+            nonlocal free_probes
+            if hotkey_grabbed(Q_KEY):
+                return True
+            free_probes += 1
+            return False
+
+        time.sleep(Q_PROBE_FIRST_DELAY)
         try:
-            wait_until("Scribe to grab Q while the toggle key is down", lambda: hotkey_grabbed(Q_KEY), 5, 0.02)
+            wait_until("Scribe to grab Q while the toggle key is down", grabbed, 5, Q_PROBE_INTERVAL)
         except CheckFailed as error:
-            lines = log_lines(NOTE_CHORD_UNAVAILABLE_LOG)
             if log_text().count(NOTE_CHORD_UNAVAILABLE_LOG) > unavailable:
-                raise CheckFailed(f"{error}. Scribe logged: {lines[-1]}") from None
+                cause = (
+                    f" The runner's own probe found Q free {free_probes} times and may have held it at the moment"
+                    " Scribe registered it."
+                    if free_probes
+                    else ""
+                )
+                raise CheckFailed(f"{error}. Scribe logged: {log_lines(NOTE_CHORD_UNAVAILABLE_LOG)[-1]}.{cause}") from None
             raise CheckFailed(f"{error}. The toggle-key watcher never armed the note chord") from None
 
-    def tap_watched_toggle(self, toggle: Chord) -> None:
+    def tap_watched_toggle(self, toggle: Chord, starts: bool = False) -> None:
         """Taps a bare toggle key bound on Release, as a person does: down,
-        held until the watcher has seen it, up (the release toggles)."""
+        held until the watcher has seen it, up (the release toggles). With
+        `starts`, also checks that nothing starts while the key is still down:
+        on Release the toggle must wait for the key to come up."""
         released = log_text().count("Toggle key released")
+        mark = self.states.mark()
         self.keys.down(toggle.key)
         try:
             self.wait_q_grabbed()
+            if starts:
+                stays(
+                    "no recording while the toggle key is still down (Release trigger)",
+                    lambda: "Recording" not in self.states.since(mark) and status() != "Recording",
+                    RELEASE_HOLD_OBSERVATION,
+                )
         finally:
             self.keys.up(toggle.key)
         wait_until(
@@ -1798,8 +1847,9 @@ class Run:
         150 ms arming delay starts nothing. The keys go down and up as one
         batch each, and the tap is measured: one the runner itself stretched
         past the delay is tried again instead of being judged."""
-        count = transcript_count()
         for attempt in range(1, 4):
+            # Read per attempt: a stretched tap may have dictated something.
+            count = transcript_count()
             self.state_mark = self.states.mark()
             self.keys.send(chord.modifiers, False)
             pressed = time.monotonic()
@@ -1874,13 +1924,14 @@ class Run:
         """Loads the shipped Windows defaults (Hotkeys page, Developer panel:
         "Load my production defaults"): a modifier-only hold to talk and a
         bare toggle key on Release, which starts the toggle-key watcher."""
+        starts = self.watcher_starts()
         self.use_bindings("load_production_hotkey_defaults")
         hold, toggle = self.chord("holdToTalk"), self.chord("toggleDictation")
         trigger = self.bindings["toggleDictation"]["trigger"]
         check(hold.modifier_only, f"The shipped hold to talk {hold} is not modifier-only")
         check(toggle.bare_key and trigger == "release", f"The shipped toggle is {toggle} on {trigger}, not a bare key on release")
         check(self.hotkey_status.get("noteChordActive"), "The note chord is not active with the shipped defaults")
-        self.wait_toggle_watcher(toggle, "Release")
+        self.wait_toggle_watcher(starts, toggle, "Release")
         check(hotkey_grabbed(toggle), f"Nothing holds {toggle} as a global hotkey, so it would type into apps")
         check(not hotkey_grabbed(Q_KEY), "Q is grabbed while the toggle key is up")
 
@@ -1894,7 +1945,7 @@ class Run:
         self.ready(target, sentinel)
         self.use_clip("bare_toggle")
         previous, played = last_transcript(), clips_finished()
-        self.tap_watched_toggle(toggle)
+        self.tap_watched_toggle(toggle, starts=True)
         wait_recording()
         check(target.text == "", f"The toggle key typed {target.text!r} into the app")
         wait_clip_played(played)
@@ -1951,28 +2002,45 @@ class Run:
     def press_trigger_toggle(self) -> None:
         """The toggle set to act on Press: the watcher restarts on the press
         edge, the recording starts while the key is still down, and no Q grab
-        is made (the note chord needs Release)."""
+        is made (the note chord needs Release). Each press must show up as the
+        watcher's own "Toggle key pressed" line, so the toggle is proven to come
+        from the watcher's press edge and not from some other path."""
+        starts = self.watcher_starts()
         self.use_bindings("set_hotkey_trigger", {"action": "toggleDictation", "trigger": "press"})
         try:
             toggle = self.chord("toggleDictation")
             check(toggle.bare_key, f"The toggle is {toggle}, not a bare key")
             check(not self.hotkey_status.get("noteChordActive"), "The note chord is still active on Press")
-            self.wait_toggle_watcher(toggle, "Press")
+            self.wait_toggle_watcher(starts, toggle, "Press")
             target = self.targets["A"]
             sentinel = "clipboard before the press trigger"
             self.ready(target, sentinel)
             self.use_clip("press_trigger")
             previous, played = last_transcript(), clips_finished()
+            presses = log_text().count(TOGGLE_PRESSED_LOG)
             self.keys.down(toggle.key)
             try:
+                wait_until(
+                    f"the watcher's {TOGGLE_PRESSED_LOG!r} line while the key is down",
+                    lambda: log_text().count(TOGGLE_PRESSED_LOG) > presses,
+                    5,
+                    0.05,
+                )
                 wait_recording()
                 check(not hotkey_grabbed(Q_KEY), "Q was grabbed with the toggle on Press")
             finally:
                 self.keys.up(toggle.key)
             check(target.text == "", f"The toggle key typed {target.text!r} into the app")
             wait_clip_played(played)
+            presses = log_text().count(TOGGLE_PRESSED_LOG)
             self.keys.down(toggle.key)
             try:
+                wait_until(
+                    f"the watcher's {TOGGLE_PRESSED_LOG!r} line for the second press",
+                    lambda: log_text().count(TOGGLE_PRESSED_LOG) > presses,
+                    5,
+                    0.05,
+                )
                 wait_until("the press to stop the recording", lambda: status() != "Recording", 10)
             finally:
                 self.keys.up(toggle.key)
@@ -1980,10 +2048,11 @@ class Run:
             check_words(transcript["text"], key_words(CLIPS["press_trigger"]), "The transcript")
             wait_until("the transcript in the focused box", lambda: target.text.strip() == transcript["text"].strip(), 5)
             wait_until("the clipboard to be restored", lambda: self.clipboard.read() == sentinel, 5)
-            print(f"Press trigger: states {self.states_seen()}")
+            print(f"Press trigger: states {self.states_seen()}; {log_lines(TOGGLE_PRESSED_LOG)[-2:]}")
         finally:
+            starts = self.watcher_starts()
             self.use_bindings("set_hotkey_trigger", {"action": "toggleDictation", "trigger": "release"})
-        self.wait_toggle_watcher(self.chord("toggleDictation"), "Release")
+        self.wait_toggle_watcher(starts, self.chord("toggleDictation"), "Release")
 
     def rebind_while_watching(self) -> None:
         """Rebinding the toggle while its watcher runs: to another bare key
@@ -1993,9 +2062,10 @@ class Run:
         old = self.chord("toggleDictation")
         check(old.bare_key, f"The toggle is {old}, not a bare key")
         new_text = "K" if old.key != KEY_NAMES["k"] else "J"
+        starts = self.watcher_starts()
         self.use_bindings("rebind_hotkey", {"action": "toggleDictation", "shortcut": new_text})
         new = self.chord("toggleDictation")
-        self.wait_toggle_watcher(new, "Release")
+        self.wait_toggle_watcher(starts, new, "Release")
         check(not hotkey_grabbed(old), f"{old} is still grabbed after rebinding the toggle to {new}")
         target = self.targets["A"]
         self.ready(target, "clipboard before rebinding")
@@ -2020,7 +2090,7 @@ class Run:
         self.wait_q_free()
 
         combo_text = f"Ctrl+Alt+Shift+{new_text}"
-        watchers = log_text().count("Toggle key watcher active")
+        watchers = self.watcher_starts()
         self.use_bindings("rebind_hotkey", {"action": "toggleDictation", "shortcut": combo_text})
         combo = self.chord("toggleDictation")
         check(not self.hotkey_status.get("noteChordActive"), f"The note chord is still active with {combo}")
@@ -2029,7 +2099,7 @@ class Run:
         check(not hotkey_grabbed(old), f"{old} is grabbed again after rebinding the toggle to {combo}")
         stays(
             "no toggle-key watcher started for a combination",
-            lambda: log_text().count("Toggle key watcher active") == watchers,
+            lambda: self.watcher_starts() == watchers,
             0.5,
         )
         self.ready(target, "clipboard before the combination")
@@ -2086,7 +2156,7 @@ class Run:
         for action, (chord, _) in HOTKEYS.items():
             check(self.bindings[action]["shortcut"] == chord, f"{action} is {self.bindings[action]['shortcut']}, not {chord}")
         check(not hotkey_grabbed(Q_KEY), "Q is still grabbed")
-        evidence = log_lines("Toggle key watcher", "Toggle key released", "Note chord")
+        evidence = log_lines("Toggle key watcher", "Toggle key pressed", "Toggle key released", "Note chord")
         (self.out / "hotkey-watcher-log.txt").write_text("\n".join(evidence) + "\n", encoding="utf-8")
         print(f"Watcher log lines ({len(evidence)}), also in hotkey-watcher-log.txt:")
         for line in evidence:
@@ -2212,7 +2282,22 @@ def main() -> int:
         default=9222,
         help="the WebView2 remote debugging port the test build opens (webview_debug_config.py)",
     )
-    return Run(parser.parse_args()).run()
+    parser.add_argument(
+        "--overwrite-scribe-dev-profile",
+        action="store_true",
+        help="run outside GitHub Actions, accepting that this machine's Scribe Dev settings, history and hotkeys are overwritten",
+    )
+    args = parser.parse_args()
+    if not os.environ.get("GITHUB_ACTIONS") and not args.overwrite_scribe_dev_profile:
+        print(
+            "Refusing to run: this test uses the real Scribe Dev profile on this machine "
+            f"({DATA_DIR} and {CACHE_DIR}). It rewrites its settings and hotkeys, adds dictations and notes "
+            "to its history, and kills Scribe Dev. It is meant for a disposable GitHub Actions runner. "
+            "Pass --overwrite-scribe-dev-profile to run it here anyway.",
+            file=sys.stderr,
+        )
+        return 2
+    return Run(args).run()
 
 
 if __name__ == "__main__":

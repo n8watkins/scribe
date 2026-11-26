@@ -175,7 +175,7 @@ jobs:
           # hotkey commands inside the dashboard (webview_debug_config.py says why
           # this has to be in the build).
           $debugConfig = "$env:RUNNER_TEMP\tauri.e2e-webview-debug.conf.json"
-          python e2e/windows/webview_debug_config.py --conf src-tauri/tauri.conf.json --port $env:E2E_WEBVIEW2_DEBUG_PORT --out $debugConfig
+          python e2e/windows/webview_debug_config.py --conf src-tauri/tauri.conf.json --cargo-lock ../Cargo.lock --port $env:E2E_WEBVIEW2_DEBUG_PORT --out $debugConfig
           if ($LASTEXITCODE -ne 0) { throw "Writing the WebView2 debugging config failed" }
           npm run tauri -- build --no-bundle --features e2e-audio `
             --config src-tauri/tauri.dev-flavor.conf.json `

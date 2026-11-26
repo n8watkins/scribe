@@ -27,21 +27,36 @@ Screenshots (dashboard, the floating pill while recording, any failure), app log
 - Transform Selection against a stand-in OpenAI-compatible server on 127.0.0.1: the spoken instruction and the selection reach the server, the result replaces the selection, and the clipboard is restored.
 
 The scenarios above bind every action to Ctrl+Alt+F7 to F12, which the global-shortcut plugin handles.
-A second group drives the bindings Windows users get by default, which go through Scribe's own key watchers (`crates/scribe-core/src/hotkeys.rs`).
-It loads them through the app's own hotkey commands (`reset_hotkeys_to_defaults`, `load_production_hotkey_defaults`, `rebind_hotkey`, `set_hotkey_trigger`), called inside the dashboard's WebView2 through its remote debugging port, so nothing is hard-coded and stable and Dev defaults both come from the build under test.
+A second group drives the bindings Windows users get by default.
+Two of Scribe's own watchers in `crates/scribe-core/src/hotkeys.rs` handle those bindings: the chord watcher for a hold to talk made of modifiers only, and the toggle-key watcher for a toggle bound to a single key.
+The group sets the bindings through the app's own hotkey commands (`reset_hotkeys_to_defaults`, `load_production_hotkey_defaults`, `rebind_hotkey`, `set_hotkey_trigger`), called inside the dashboard's WebView2.
+The test build opens WebView2's remote debugging port for this (`app/e2e/windows/webview_debug_config.py`).
+So the Dev and shipped defaults both come from the build under test, and rebinding happens while the watchers run.
 Keys are sent with `SendInput` and scan codes, which is what the watchers' `GetAsyncKeyState` polling and `RegisterHotKey` see from a real keyboard.
-Every state change is read from the state server's event stream, so a state that lasts a few milliseconds is still seen.
+Waiting for a recording to start or for Scribe to go idle polls `status.json`, as the other scenarios do.
+The checks that nothing started (a short tap, an old or former toggle key, typing Q, a toggle key held down on Release) also read the state server's event stream, so a recording that lasts a moment is still seen.
 Whether Scribe holds a key is checked by trying to register the same hotkey from the runner.
+The runner refuses to run outside GitHub Actions without `--overwrite-scribe-dev-profile`, because it rewrites the Scribe Dev profile of the machine it runs on.
 
-- The build's own defaults (Scribe Dev: Ctrl+Shift+Win hold to talk, Ctrl+Shift+Backquote toggle): hold to talk through the chord watcher, the toggle on its trigger edge, discard.
-- The shipped defaults: Ctrl+Win hold to talk and a bare Backquote toggle on Release start the toggle-key watcher, and Backquote is held as a global hotkey.
-- Bare toggle key on Release: tap, speak, tap; the dictation is pasted, the key's own character never reaches the app, and Q is let go afterwards.
-- The note chord: hold the toggle key and tap Q; a note starts instead of a dictation, neither key types, the Q grab ends with the hold, the same chord ends the note, it is saved as a note and not pasted, and Q types normally again.
-- Modifier-only hold to talk: a tap shorter than the 150 ms arming delay starts nothing; held, it records until the keys are let go and the app keeps the focus.
-- The toggle on the Press trigger: the recording starts while the key is still down and Q is not grabbed.
-- Rebinding with the watchers running: to another bare key (the old one types and starts nothing, the new one toggles), then to a combination (no watcher, the bare key types again, the plugin toggles).
-- Open Dashboard opens and focuses the dashboard from the tray, and hides it again.
-- The watcher's log lines are saved as `hotkey-watcher-log.txt` in the uploaded results.
+Through the chord watcher:
+
+- The Dev build's own hold to talk (Ctrl+Shift+Win) and the shipped one (Ctrl+Win): a tap shorter than the 150 ms arming delay starts nothing; held, it records until the keys are let go, the dictation is pasted, and the app keeps the focus.
+
+Through the toggle-key watcher (each step waits for the watcher's own log line):
+
+- Loading the shipped defaults starts the watcher for Backquote on Release, and Backquote is held as a global hotkey.
+- Bare toggle key on Release: nothing starts while the key is still down; tap, speak, tap; the dictation is pasted, the key's own character never reaches the app, and Q is let go afterwards.
+- The note chord: hold the toggle key and tap Q (Q is grabbed through the global-shortcut plugin only while the toggle key is down); a note starts instead of a dictation, neither key types, the Q grab ends with the hold, the same chord ends the note, it is saved as a note and not pasted, and Q types normally again.
+- The toggle on the Press trigger: the watcher restarts on Press, each press logs "Toggle key pressed (trigger Press)", the recording starts while the key is still down, and Q is not grabbed; switching back to Release restarts the watcher again.
+- Rebinding the toggle to another bare key (K): the watcher restarts for K, Backquote is no longer held, types normally and starts nothing, and K toggles a dictation.
+
+Through the global-shortcut plugin:
+
+- The Dev build's own toggle (Ctrl+Shift+Backquote) starts a recording and its discard hotkey (Ctrl+Alt+Shift+X) drops it. This does not check which key edge the toggle fires on.
+- Rebinding the toggle to Ctrl+Alt+Shift+K: no watcher starts, neither K nor Backquote stays held, K types normally and starts nothing, and the combination starts a recording that the shipped discard hotkey (Ctrl+Alt+X) drops.
+- Open Dashboard (shipped Ctrl+Alt+F) opens and focuses the dashboard from the tray, and hides it again.
+
+Afterwards the test bindings are put back through `patch_settings`, and the watcher's log lines are saved as `hotkey-watcher-log.txt` in the uploaded results.
 
 Release (`.github/workflows/release.yml`) before anything is published:
 
