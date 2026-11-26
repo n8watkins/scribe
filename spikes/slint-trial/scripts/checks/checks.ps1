@@ -16,6 +16,15 @@ public static class U {
   [DllImport("user32.dll")] public static extern int GetSystemMetrics(int i);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr h, uint msg, IntPtr w, StringBuilder l);
+  [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+  // The text of the form's only child (the TextBox), by WM_GETTEXT.
+  public static string ChildText(IntPtr form) {
+    IntPtr c = GetWindow(form, 5);
+    int n = SendMessage(c, 0x000E, IntPtr.Zero, IntPtr.Zero).ToInt32();
+    var s = new StringBuilder(n + 1); SendMessage(c, 0x000D, (IntPtr)(n + 1), s); return s.ToString();
+  }
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
@@ -103,7 +112,7 @@ function Wait-For([scriptblock]$c, [int]$ms, [string]$what) { $end = (Get-Date).
 function Find-Win([uint32]$procId, [string]$title) { foreach ($h in [U]::Windows($procId)) { if ([U]::IsWindowVisible($h) -and [U]::Title($h) -eq $title) { return $h } }; return [IntPtr]::Zero }
 function Rect($h) { $r = New-Object U+RECT; [void][U]::GetWindowRect($h, [ref]$r); return $r }
 function Fg { $h = [U]::GetForegroundWindow(); return [ordered]@{ pid = [U]::FgPid(); title = [U]::Title($h) } }
-function Sink-Text { $e = [Windows.Automation.AutomationElement]::FromHandle($script:sinkH).FindFirst([Windows.Automation.TreeScope]::Descendants, (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::Edit))); return $e.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value }
+function Sink-Text { return [U]::ChildText($script:sinkH) }
 function Click([int]$x, [int]$y) { [U]::Move($x, $y); Pause-Ms 60; [U]::Down(); Pause-Ms 60; [U]::Up(); Pause-Ms 80 }
 $typed = New-Object Text.StringBuilder
 function Type-Chunk([string]$s) { foreach ($c in $s.ToCharArray()) { [U]::Char($c); Pause-Ms 12 }; [void]$typed.Append($s) }
@@ -159,7 +168,7 @@ try {
     $ex = [int64][U]::GetWindowLongPtrW($ph, -20)
     $R.steps.A2.exStyle = ("0x{0:X}" -f $ex)
     $R.steps.A2.inAltTabByRule = [U]::InAltTab($ph)
-    $tb = [Windows.Automation.AutomationElement]::RootElement.FindFirst([Windows.Automation.TreeScope]::Children, (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ClassNameProperty, "Shell_TrayWnd")))
+    $tb = [Windows.Automation.AutomationElement]::FromHandle([U]::FindWindow("Shell_TrayWnd", $null))
     $names = @($tb.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name } | Where-Object { $_ })
     $R.steps.A2.taskbarNamesWithScribe = @($names | Where-Object { $_ -match "Scribe" })
     # Real drag: press in the middle, move 120 px left and 200 px up in steps, release.
@@ -263,7 +272,7 @@ try {
     Wait-For { Has-Event "start" } 10000 "start"
     Pause-Ms 1500
     $root = [Windows.Automation.AutomationElement]::RootElement
-    $tb = $root.FindFirst([Windows.Automation.TreeScope]::Children, (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ClassNameProperty, "Shell_TrayWnd")))
+    $tb = [Windows.Automation.AutomationElement]::FromHandle([U]::FindWindow("Shell_TrayWnd", $null))
     $icon = @($tb.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) | Where-Object { $_.Current.Name -match "Scribe Slint trial" }) | Select-Object -First 1
     $R.steps.E = [ordered]@{}
     if (-not $icon -or $icon.Current.IsOffscreen -or $icon.Current.BoundingRectangle.Width -le 0) {
@@ -402,7 +411,7 @@ try {
   Log "ALL DONE"
 } catch {
   $R.stoppedEarly = $_.Exception.Message
-  Log "STOPPED: $($_.Exception.Message)"
+  Log "STOPPED: $($_.Exception.Message) at $($_.InvocationInfo.ScriptLineNumber): $($_.InvocationInfo.Line.Trim())"
 } finally {
   Stop-Trial
   [U]::Up()
