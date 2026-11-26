@@ -330,11 +330,17 @@ impl ReplacementStore {
 pub type Replacements = Arc<ReplacementStore>;
 
 /// Lets GitHub backup pick up a changed replacements.txt.
+pub fn notify_backup_with(core: &crate::core::Core) {
+    core.note_sync().notify();
+}
+
+/// [`notify_backup_with`] for callers that still hold an `AppHandle`.
 pub fn notify_backup(app: &tauri::AppHandle) {
     use tauri::Manager;
 
-    if let Some(worker) = app.try_state::<crate::note_sync::NoteSyncWorker>() {
-        worker.notify();
+    match app.try_state::<crate::core::Core>() {
+        Some(core) => notify_backup_with(&core),
+        None => log::warn!("Could not tell GitHub backup about replacements.txt: no engine yet"),
     }
 }
 
