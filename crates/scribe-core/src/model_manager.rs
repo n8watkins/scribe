@@ -136,7 +136,14 @@ pub fn list_models_with(
     db: &Database,
     downloads: &DownloadRegistry,
 ) -> Result<Vec<ModelInfo>, CommandError> {
-    let paths = host.paths();
+    list_models_in(&ModelFolders::of(host), db, downloads)
+}
+
+fn list_models_in(
+    folders: &ModelFolders,
+    db: &Database,
+    downloads: &DownloadRegistry,
+) -> Result<Vec<ModelInfo>, CommandError> {
     let settings = db.get_settings()?;
     let records = db
         .list_model_records()?
@@ -148,7 +155,7 @@ pub fn list_models_with(
         .iter()
         .map(|catalog_model| {
             model_info_for_catalog(
-                paths,
+                folders,
                 *catalog_model,
                 records.get(catalog_model.id),
                 &settings,
@@ -199,7 +206,7 @@ pub fn retry_model_download_with(
     model_id: &str,
 ) -> Result<ModelInfo, CommandError> {
     let catalog_model = catalog_model(model_id)?;
-    let _ = fs::remove_file(partial_path(host.paths(), catalog_model));
+    let _ = fs::remove_file(ModelFolders::of(host).partial_path(catalog_model));
     download_model_with(host, state, model_id)
 }
 
@@ -239,10 +246,17 @@ pub fn delete_model_with(
     db: &Database,
     model_id: &str,
 ) -> Result<ModelInfo, CommandError> {
-    let paths = host.paths();
+    delete_model_in(&ModelFolders::of(host), db, model_id)
+}
+
+fn delete_model_in(
+    folders: &ModelFolders,
+    db: &Database,
+    model_id: &str,
+) -> Result<ModelInfo, CommandError> {
     let catalog_model = catalog_model(model_id)?;
-    let model_path = app_data_model_path(paths, catalog_model);
-    let part_path = partial_path(paths, catalog_model);
+    let model_path = folders.model_path(catalog_model);
+    let part_path = folders.partial_path(catalog_model);
 
     match fs::remove_file(&model_path) {
         Ok(()) => {}
@@ -259,7 +273,7 @@ pub fn delete_model_with(
 
     let mut settings = db.get_settings()?;
     let was_selected = settings.selected_model_id.as_deref() == Some(model_id);
-    if was_selected && resolve_model_file(paths, catalog_model).is_none() {
+    if was_selected && resolve_model_file(folders, catalog_model).is_none() {
         settings.selected_model_id = None;
         db.save_settings(&settings)?;
     }
@@ -278,7 +292,7 @@ pub fn delete_model_with(
     db.upsert_model_record(&record)?;
 
     let registry = DownloadRegistry::default();
-    model_info_for_catalog(paths, catalog_model, Some(&record), &settings, &registry)
+    model_info_for_catalog(folders, catalog_model, Some(&record), &settings, &registry)
 }
 
 pub fn select_model(
@@ -297,9 +311,9 @@ pub fn select_model_with(
     state: &BackendState,
     model_id: &str,
 ) -> Result<ModelInfo, CommandError> {
-    let paths = host.paths();
+    let folders = ModelFolders::of(host);
     let catalog_model = catalog_model(model_id)?;
-    let resolved = resolve_model_file(paths, catalog_model);
+    let resolved = resolve_model_file(&folders, catalog_model);
     let Some(resolved) = resolved else {
         return Err(CommandError::new(
             "whisper_model_missing",
@@ -345,7 +359,7 @@ pub fn select_model_with(
     db.mark_model_selected(model_id)?;
 
     let registry = DownloadRegistry::default();
-    model_info_for_catalog(paths, catalog_model, Some(&record), &settings, &registry)
+    model_info_for_catalog(&folders, catalog_model, Some(&record), &settings, &registry)
 }
 
 pub fn selected_model_path(
@@ -361,13 +375,20 @@ pub fn selected_model_path_with(
     host: &dyn Host,
     db: &Database,
 ) -> Result<(String, PathBuf), CommandError> {
+    selected_model_path_in(&ModelFolders::of(host), db)
+}
+
+fn selected_model_path_in(
+    folders: &ModelFolders,
+    db: &Database,
+) -> Result<(String, PathBuf), CommandError> {
     let settings = db.get_settings()?;
     let model_id = settings
         .selected_model_id
         .as_deref()
         .unwrap_or(DEFAULT_MODEL_ID);
     let catalog_model = catalog_model(model_id)?;
-    let resolved = resolve_model_file(host.paths(), catalog_model);
+    let resolved = resolve_model_file(folders, catalog_model);
 
     let Some(resolved) = resolved else {
         return Err(CommandError::new(
@@ -397,8 +418,15 @@ pub fn model_path_for_id_with(
     host: &dyn Host,
     model_id: &str,
 ) -> Result<(String, PathBuf), CommandError> {
+    model_path_for_id_in(&ModelFolders::of(host), model_id)
+}
+
+fn model_path_for_id_in(
+    folders: &ModelFolders,
+    model_id: &str,
+) -> Result<(String, PathBuf), CommandError> {
     let catalog_model = catalog_model(model_id)?;
-    match resolve_model_file(host.paths(), catalog_model) {
+    match resolve_model_file(folders, catalog_model) {
         Some(resolved) => Ok((catalog_model.id.to_string(), resolved.path)),
         None => Err(CommandError::new(
             "whisper_model_missing",
@@ -426,12 +454,21 @@ pub fn session_model_path_with(
     db: &Database,
     session_id: &str,
 ) -> Result<(String, PathBuf), CommandError> {
+    session_model_path_in(&ModelFolders::of(host), db, session_id)
+}
+
+fn session_model_path_in(
+    folders: &ModelFolders,
+    db: &Database,
+    session_id: &str,
+) -> Result<(String, PathBuf), CommandError> {
     let selected = db.get_settings()?.selected_model_id;
     match crate::session_model::global().model_for(session_id, selected.as_deref()) {
         Some(model_id) if Some(model_id.as_str()) != selected.as_deref() => {
-            model_path_for_id_with(host, &model_id).or_else(|_| selected_model_path_with(host, db))
+            model_path_for_id_in(folders, &model_id)
+                .or_else(|_| selected_model_path_in(folders, db))
         }
-        _ => selected_model_path_with(host, db),
+        _ => selected_model_path_in(folders, db),
     }
 }
 
@@ -442,7 +479,8 @@ fn download_model_inner(
     model_id: &str,
 ) -> Result<ModelInfo, CommandError> {
     let catalog_model = catalog_model(model_id)?;
-    let model_dir = models_dir_in(host.paths());
+    let folders = ModelFolders::of(host);
+    let model_dir = folders.app_data.clone();
     fs::create_dir_all(&model_dir).map_err(|error| {
         CommandError::new(
             "model_download_failed",
@@ -508,13 +546,7 @@ fn download_model_inner(
 
     let settings = state.db()?.get_settings()?;
     let registry = DownloadRegistry::default();
-    model_info_for_catalog(
-        host.paths(),
-        catalog_model,
-        Some(&record),
-        &settings,
-        &registry,
-    )
+    model_info_for_catalog(&folders, catalog_model, Some(&record), &settings, &registry)
 }
 
 #[derive(Debug)]
@@ -773,13 +805,13 @@ fn download_progress(
 }
 
 fn model_info_for_catalog(
-    paths: &Paths,
+    folders: &ModelFolders,
     catalog_model: CatalogModel,
     record: Option<&ModelRecord>,
     settings: &AppSettings,
     downloads: &DownloadRegistry,
 ) -> Result<ModelInfo, CommandError> {
-    let resolved = resolve_model_file(paths, catalog_model);
+    let resolved = resolve_model_file(folders, catalog_model);
     let selected = settings.selected_model_id.as_deref() == Some(catalog_model.id);
     let status = if downloads.is_downloading(catalog_model.id) {
         ModelStatus::Downloading
@@ -837,16 +869,40 @@ fn models_dir_in(paths: &Paths) -> PathBuf {
     paths.data_dir().join("models")
 }
 
-fn app_data_model_path(paths: &Paths, catalog_model: CatalogModel) -> PathBuf {
-    models_dir_in(paths).join(catalog_model.filename)
+/// Where model files are looked for: Scribe's own models folder first, then
+/// the folders named by `SCRIBE_MODEL_DIR` and `LOCALDICTATE_MODEL_DIR`. The
+/// engine reads those variables each time it takes the folders; tests name
+/// their own folders so a developer's variables never leak in.
+struct ModelFolders {
+    /// `<app data>/models`, where downloads go.
+    app_data: PathBuf,
+    /// Read-only folders searched after it.
+    external: Vec<PathBuf>,
 }
 
-fn partial_path(paths: &Paths, catalog_model: CatalogModel) -> PathBuf {
-    models_dir_in(paths).join(format!("{}.part", catalog_model.filename))
+impl ModelFolders {
+    fn of(host: &dyn Host) -> Self {
+        Self {
+            app_data: models_dir_in(host.paths()),
+            external: external_model_dirs(),
+        }
+    }
+
+    fn model_path(&self, catalog_model: CatalogModel) -> PathBuf {
+        self.app_data.join(catalog_model.filename)
+    }
+
+    fn partial_path(&self, catalog_model: CatalogModel) -> PathBuf {
+        self.app_data
+            .join(format!("{}.part", catalog_model.filename))
+    }
 }
 
-fn resolve_model_file(paths: &Paths, catalog_model: CatalogModel) -> Option<ResolvedModelFile> {
-    for (path, source) in model_file_candidates(paths, catalog_model) {
+fn resolve_model_file(
+    folders: &ModelFolders,
+    catalog_model: CatalogModel,
+) -> Option<ResolvedModelFile> {
+    for (path, source) in model_file_candidates(folders, catalog_model) {
         let metadata = fs::metadata(&path)
             .ok()
             .filter(|metadata| metadata.is_file());
@@ -873,30 +929,31 @@ pub fn smallest_downloaded_model_path(app: &AppHandle) -> Option<PathBuf> {
 /// probe, where device enumeration is model-independent so loading a multi-GB
 /// model would be pure waste. Returns `None` when nothing is downloaded.
 pub fn smallest_downloaded_model_path_with(host: &dyn Host) -> Option<PathBuf> {
+    smallest_downloaded_model_path_in(&ModelFolders::of(host))
+}
+
+fn smallest_downloaded_model_path_in(folders: &ModelFolders) -> Option<PathBuf> {
     crate::models::catalog()
         .iter()
         // The probe runs whisper-cli, which only loads Whisper models.
         .filter(|model| model.engine == models::EngineKind::Whisper)
         .filter_map(|model| {
-            resolve_model_file(host.paths(), *model)
-                .map(|resolved| (resolved.size_bytes, resolved.path))
+            resolve_model_file(folders, *model).map(|resolved| (resolved.size_bytes, resolved.path))
         })
         .min_by_key(|(size, _)| *size)
         .map(|(_, path)| path)
 }
 
 fn model_file_candidates(
-    paths: &Paths,
+    folders: &ModelFolders,
     catalog_model: CatalogModel,
 ) -> Vec<(PathBuf, ModelSource)> {
-    let mut candidates = vec![(
-        app_data_model_path(paths, catalog_model),
-        ModelSource::AppData,
-    )];
+    let mut candidates = vec![(folders.model_path(catalog_model), ModelSource::AppData)];
 
     candidates.extend(
-        external_model_dirs()
-            .into_iter()
+        folders
+            .external
+            .iter()
             .map(|dir| (dir.join(catalog_model.filename), ModelSource::ExternalCache)),
     );
 
@@ -961,21 +1018,33 @@ mod tests {
         fs::write(path, b"not really a model").unwrap();
     }
 
+    /// The folders the engine takes for `host`, without the folders a
+    /// developer's `SCRIBE_MODEL_DIR` or `LOCALDICTATE_MODEL_DIR` would add.
+    fn hosts_folders_only(host: &RecordingHost) -> ModelFolders {
+        ModelFolders {
+            external: Vec::new(),
+            ..ModelFolders::of(host)
+        }
+    }
+
     #[test]
     fn models_live_in_the_hosts_data_folder() {
         let (host, root) = temp_host("folder");
-        assert_eq!(models_dir_with(&host), root.join("data").join("models"));
+        let models = root.join("data").join("models");
+        assert_eq!(models_dir_with(&host), models);
+        assert_eq!(ModelFolders::of(&host).app_data, models);
     }
 
     #[test]
     fn a_model_in_the_hosts_folder_is_listed_selected_and_found() {
         let (host, root) = temp_host("list");
+        let folders = hosts_folders_only(&host);
         let db = Database::in_memory().unwrap();
         let tiny = models::catalog_model("tiny.en").unwrap();
         let file = root.join("data").join("models").join(tiny.filename);
         place(&file);
 
-        let listed = list_models_with(&host, &db, &DownloadRegistry::default()).unwrap();
+        let listed = list_models_in(&folders, &db, &DownloadRegistry::default()).unwrap();
         assert_eq!(listed.len(), models::catalog().len());
         let info = listed.iter().find(|info| info.id == "tiny.en").unwrap();
         assert_eq!(info.status, ModelStatus::Downloaded);
@@ -988,26 +1057,26 @@ mod tests {
         let mut settings = db.get_settings().unwrap();
         settings.selected_model_id = Some("tiny.en".into());
         db.save_settings(&settings).unwrap();
-        let listed = list_models_with(&host, &db, &DownloadRegistry::default()).unwrap();
+        let listed = list_models_in(&folders, &db, &DownloadRegistry::default()).unwrap();
         let info = listed.iter().find(|info| info.id == "tiny.en").unwrap();
         assert_eq!(info.status, ModelStatus::Selected);
         assert_eq!(
-            selected_model_path_with(&host, &db).unwrap(),
+            selected_model_path_in(&folders, &db).unwrap(),
             ("tiny.en".to_string(), file.clone())
         );
         assert_eq!(
-            model_path_for_id_with(&host, "tiny.en").unwrap().1,
+            model_path_for_id_in(&folders, "tiny.en").unwrap().1,
             file.clone()
         );
         // With no dictation pinning a model, a session uses the selected one.
         assert_eq!(
-            session_model_path_with(&host, &db, "no-such-session")
+            session_model_path_in(&folders, &db, "no-such-session")
                 .unwrap()
                 .1,
             file
         );
         assert_eq!(
-            model_path_for_id_with(&host, "base.en").unwrap_err().code,
+            model_path_for_id_in(&folders, "base.en").unwrap_err().code,
             "whisper_model_missing"
         );
 
@@ -1015,8 +1084,42 @@ mod tests {
     }
 
     #[test]
+    fn an_external_model_folder_is_searched_after_the_hosts() {
+        let (host, root) = temp_host("external");
+        let external = root.join("external");
+        let folders = ModelFolders {
+            external: vec![external.clone()],
+            ..ModelFolders::of(&host)
+        };
+        let tiny = models::catalog_model("tiny.en").unwrap();
+        let outside = external.join(tiny.filename);
+        place(&outside);
+        assert_eq!(
+            model_path_for_id_in(&folders, "tiny.en").unwrap().1,
+            outside
+        );
+        let info = model_info_for_catalog(
+            &folders,
+            tiny,
+            None,
+            &AppSettings::default(),
+            &DownloadRegistry::default(),
+        )
+        .unwrap();
+        assert_eq!(info.source, Some(ModelSource::ExternalCache));
+
+        // A copy in the app's own folder wins.
+        let inside = root.join("data").join("models").join(tiny.filename);
+        place(&inside);
+        assert_eq!(model_path_for_id_in(&folders, "tiny.en").unwrap().1, inside);
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn deleting_the_selected_model_removes_its_files_and_the_selection() {
         let (host, root) = temp_host("delete");
+        let folders = hosts_folders_only(&host);
         let db = Database::in_memory().unwrap();
         let tiny = models::catalog_model("tiny.en").unwrap();
         let models = root.join("data").join("models");
@@ -1028,13 +1131,13 @@ mod tests {
         settings.selected_model_id = Some("tiny.en".into());
         db.save_settings(&settings).unwrap();
 
-        let info = delete_model_with(&host, &db, "tiny.en").unwrap();
+        let info = delete_model_in(&folders, &db, "tiny.en").unwrap();
         assert_eq!(info.status, ModelStatus::NotDownloaded);
         assert!(!file.exists());
         assert!(!part.exists());
         assert_eq!(db.get_settings().unwrap().selected_model_id, None);
         assert_eq!(
-            delete_model_with(&host, &db, "no-such-model")
+            delete_model_in(&folders, &db, "no-such-model")
                 .unwrap_err()
                 .code,
             "unknown_model"
@@ -1074,13 +1177,14 @@ mod tests {
     #[test]
     fn the_gpu_probe_picks_the_smallest_whisper_model_in_the_hosts_folder() {
         let (host, root) = temp_host("smallest");
-        assert_eq!(smallest_downloaded_model_path_with(&host), None);
+        let folders = hosts_folders_only(&host);
+        assert_eq!(smallest_downloaded_model_path_in(&folders), None);
         let models = root.join("data").join("models");
         let base = models.join(models::catalog_model("base.en").unwrap().filename);
         let tiny = models.join(models::catalog_model("tiny.en").unwrap().filename);
         place(&base);
         fs::write(&tiny, b"tiny").unwrap();
-        assert_eq!(smallest_downloaded_model_path_with(&host), Some(tiny));
+        assert_eq!(smallest_downloaded_model_path_in(&folders), Some(tiny));
 
         fs::remove_dir_all(&root).unwrap();
     }

@@ -347,6 +347,13 @@ impl WarmTranscriber {
         if host.is_none() || backend.is_none() {
             log::warn!("The speech engine was set up before the shell's host or backend");
         }
+        debug_assert!(
+            host.is_some() && backend.is_some(),
+            "WarmTranscriber::new needs the shell's host installed and BackendState managed first \
+             (host: {}, backend: {})",
+            host.is_some(),
+            backend.is_some()
+        );
         Self::build(host, backend, measurements_path)
     }
 
