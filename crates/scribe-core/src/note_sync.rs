@@ -272,7 +272,11 @@ fn combine_sync_results(
 }
 
 /// Owns the channel that note-save events are pushed onto. Held in Tauri's
-/// managed state; dropping it (on app exit) ends the worker thread.
+/// managed state. Clones share the channel (Tauri state and `core::Core` hold
+/// the same worker). The thread would end once every clone dropped, but the
+/// app never drops them; it ends with the process, so nothing may rely on drop
+/// to finish a sync.
+#[derive(Clone)]
 pub struct NoteSyncWorker {
     tx: Sender<()>,
 }

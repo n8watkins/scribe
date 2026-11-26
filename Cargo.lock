@@ -101,7 +101,10 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 name = "app"
 version = "0.16.3"
 dependencies = [
+ "base64 0.22.1",
+ "chrono",
  "log",
+ "rfd",
  "scribe-core",
  "serde",
  "serde_json",
@@ -4314,6 +4317,7 @@ dependencies = [
  "chrono",
  "cpal",
  "crossbeam-channel",
+ "dirs 7.0.0",
  "futures-util",
  "hound",
  "keyring",
@@ -4325,7 +4329,6 @@ dependencies = [
  "objc2-core-graphics",
  "objc2-foundation",
  "reqwest 0.12.28",
- "rfd",
  "rubato",
  "rusqlite",
  "serde",

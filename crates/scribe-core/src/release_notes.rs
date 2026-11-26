@@ -5,9 +5,7 @@
 //! used before this feature existed has no record yet, so it sees the card
 //! once; a brand-new install records its version silently and shows nothing.
 
-use tauri::{AppHandle, State};
-
-use crate::{commands::BackendState, db::Database, error::CommandError};
+use crate::{db::Database, error::CommandError};
 
 /// The version whose card should show now, or `None`.
 pub fn pending_version(db: &Database, current: &str) -> Result<Option<String>, CommandError> {
@@ -25,29 +23,6 @@ pub fn pending_version(db: &Database, current: &str) -> Result<Option<String>, C
             }
         }
     }
-}
-
-/// The running version when its "What's new" card has not been dismissed yet.
-#[tauri::command]
-pub fn whats_new_pending(
-    app: AppHandle,
-    state: State<'_, BackendState>,
-) -> Result<Option<String>, CommandError> {
-    let db = state.db()?;
-    pending_version(&db, &app.package_info().version.to_string())
-}
-
-/// Remembers that the card for `version` was dismissed.
-#[tauri::command]
-pub fn dismiss_whats_new(
-    state: State<'_, BackendState>,
-    version: String,
-) -> Result<(), CommandError> {
-    let version = version.trim();
-    if version.is_empty() || version.len() > 64 {
-        return Err(CommandError::new("invalid_version", "Invalid app version."));
-    }
-    state.db()?.set_whats_new_seen_version(version)
 }
 
 #[cfg(test)]

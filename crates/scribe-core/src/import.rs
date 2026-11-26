@@ -194,6 +194,67 @@ fn invalid_record(index: usize, reason: &str) -> CommandError {
     )
 }
 
+/// What a backup holds, shown before the user confirms a restore.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptImportPreview {
+    pub path: String,
+    pub file_name: String,
+    pub total: u32,
+    pub notes: u32,
+    pub dictations: u32,
+    pub conflicts: u32,
+    pub audio_paths_removed: u32,
+    pub metadata_corrected: u32,
+    pub fingerprint: String,
+}
+
+/// A validated backup and the fingerprint of the bytes it was read from.
+pub struct LoadedTranscriptImport {
+    pub prepared: PreparedImport,
+    pub fingerprint: String,
+}
+
+/// Reads and validates a Scribe JSON export from `path`.
+pub fn load_transcript_import(
+    path: &std::path::Path,
+) -> Result<LoadedTranscriptImport, CommandError> {
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+    {
+        return Err(CommandError::new(
+            "invalid_import_file",
+            "Choose a .json file exported by Scribe.",
+        ));
+    }
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        CommandError::new(
+            "import_read_failed",
+            format!("Could not read {}. {error}", path.display()),
+        )
+    })?;
+    if metadata.len() > MAX_IMPORT_BYTES {
+        return Err(CommandError::new(
+            "import_too_large",
+            "The backup is larger than the 100 MB restore limit.",
+        ));
+    }
+    let contents = std::fs::read(path).map_err(|error| {
+        CommandError::new(
+            "import_read_failed",
+            format!("Could not read {}. {error}", path.display()),
+        )
+    })?;
+    let fingerprint = sha256_fingerprint(&contents);
+    let prepared = prepare_json(&contents)?;
+    Ok(LoadedTranscriptImport {
+        prepared,
+        fingerprint,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

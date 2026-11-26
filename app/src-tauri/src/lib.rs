@@ -2,13 +2,15 @@
 //! run loop) on Scribe's engine, crates/scribe-core. The engine's modules are
 //! re-exported here under their old `app_lib::` paths.
 
+pub mod commands;
+pub mod tauri_host;
 pub mod tray;
 pub mod window_size;
 
 #[cfg(feature = "e2e-audio")]
 pub use scribe_core::test_audio;
 pub use scribe_core::{
-    app_state, audio, autostart, child_guard, commands, data_hygiene, db, diagnostics, dictation,
+    app_state, audio, autostart, backend, child_guard, data_hygiene, db, diagnostics, dictation,
     dictation_state, dictation_worker, display_name, error, export, file_transcribe, filler,
     github_backup, github_oauth, gpu, hotkeys, import, incremental, is_dev_flavor, model_manager,
     models, note_analysis, note_sync, output, parakeet, platform, process_info, prompt_budget,
@@ -17,22 +19,11 @@ pub use scribe_core::{
     status_file, sync_history, text_replace, transcript, update_check, whisper, whisper_server,
 };
 
+pub use scribe_core::{core::Core, events, host, paths};
+
 use commands::BackendState;
 use db::Database;
 use tauri::Manager;
-
-/// The tray and main-window functions the engine calls (see
-/// `scribe_core::shell`).
-fn shell_hooks() -> shell::ShellHooks {
-    shell::ShellHooks {
-        update_tray_status: tray::update_tray_status,
-        update_engine_summary: tray::update_engine_summary,
-        sync_settings: tray::sync_settings,
-        open_dashboard: tray::open_dashboard,
-        toggle_dashboard: tray::toggle_dashboard,
-        main_window_logical_size: window_size::current_logical,
-    }
-}
 
 /// Carry forward a pre-rebrand install's data after the LocalDictate->Scribe
 /// rename.
@@ -253,6 +244,9 @@ fn missing_command_state(app: &tauri::App) -> Vec<&'static str> {
     if app.try_state::<note_sync::NoteSyncWorker>().is_none() {
         missing.push("NoteSyncWorker");
     }
+    if app.try_state::<Core>().is_none() {
+        missing.push("Core");
+    }
     missing
 }
 
@@ -291,8 +285,6 @@ fn create_config_windows(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     install_panic_logger();
-    // Before anything can run engine code that touches the tray or a window.
-    shell::install(shell_hooks());
     tauri::Builder::default()
         // The single-instance plugin must be the first plugin registered so
         // it can take over before anything else initializes.
@@ -303,11 +295,9 @@ pub fn run() {
             if let Some(command) = remote_command::RemoteCommand::parse(&args) {
                 // A launch that lands while setup still runs (the callback
                 // can come off the main thread) must not reach state that
-                // isn't managed yet.
-                if app
-                    .try_state::<dictation_worker::DictationWorker>()
-                    .is_none()
-                {
+                // isn't managed yet. The Core is managed after every part
+                // it holds, the dictation worker included.
+                if app.try_state::<Core>().is_none() {
                     log::warn!("Scribe is still starting; ignored {:?}", command);
                     return;
                 }
@@ -354,6 +344,13 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
+                    // Setup manages the Core before it registers a hotkey;
+                    // this guards the engine work a key press starts if that
+                    // order ever changes.
+                    if app.try_state::<Core>().is_none() {
+                        log::warn!("Scribe is still starting; ignored a hotkey");
+                        return;
+                    }
                     hotkeys::handle_shortcut(app, shortcut, event);
                 })
                 .build(),
@@ -364,6 +361,26 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(platform_script())
         .setup(|app| {
+            // The engine resolves its folders without Tauri; they must be the
+            // ones Tauri resolves (checked in debug builds and in a test).
+            // Checked in every build, so a real install's layout (the Windows
+            // end-to-end job runs a release build) shows any disagreement in
+            // the log; Tauri's folders stay the ones in use.
+            let paths = tauri_host::resolve_paths(app)?;
+            let mismatches = tauri_host::paths_mismatches(app, &paths);
+            for mismatch in &mismatches {
+                log::error!("The engine's folder differs from Tauri's: {}", mismatch);
+            }
+            debug_assert_eq!(
+                mismatches,
+                Vec::<String>::new(),
+                "the engine's folders differ from Tauri's"
+            );
+            // Before anything can run engine code that touches the tray or a
+            // window, an event or a folder.
+            let host: std::sync::Arc<dyn host::Host> =
+                std::sync::Arc::new(tauri_host::TauriHost::new(app.handle().clone(), paths));
+            shell::install(host.clone());
             let app_data_dir = app.path().app_data_dir()?;
             let audio_temp_dir = app.path().app_cache_dir()?.join("recordings");
             std::fs::create_dir_all(&app_data_dir)?;
@@ -433,7 +450,11 @@ pub fn run() {
                 data_dir: app_data_dir.clone(),
                 cache_dir: app.path().app_cache_dir()?,
             };
-            app.manage(BackendState::new(db, audio_temp_dir, dirs));
+            // Each part of the engine is managed on its own (the commands
+            // and the engine still look them up by type) and handed to the
+            // Core below, which holds the very same instance.
+            let backend = BackendState::new(db, audio_temp_dir, dirs);
+            app.manage(backend.clone());
             // Folder cleanup (pre-rename paths, orphaned clips, stale temp
             // files) touches the disk, so it runs off the startup path.
             {
@@ -460,43 +481,36 @@ pub fn run() {
                     stale
                 );
             }
-            app.manage(whisper_server::WarmTranscriber::new(
+            let warm_transcriber = whisper_server::WarmTranscriber::new(
                 app.handle().clone(),
                 speech_engine::measurements_path(&app_data_dir),
-            ));
+            );
+            app.manage(warm_transcriber.clone());
             // Offer Scribe's live dictation state to external tools over an
             // in-process loopback HTTP+SSE server. Additive and best-effort: a
             // bind failure must never block the app, so log and carry on.
-            match state_server::start(app.handle()) {
+            let dictation_server = match state_server::start(app.handle()) {
                 Ok(server) => {
                     log::info!("Dictation-state interface on {}", server.base_url());
-                    app.manage(server);
+                    app.manage(server.clone());
+                    Some(server)
                 }
                 Err(error) => {
                     log::warn!("Could not start dictation-state server: {}", error);
+                    None
                 }
-            }
+            };
             // Background worker that debounces note saves into GitHub auto-syncs.
-            app.manage(note_sync::NoteSyncWorker::spawn(app.handle().clone()));
+            let note_sync = note_sync::NoteSyncWorker::spawn(app.handle().clone());
+            app.manage(note_sync.clone());
             // Every dictation action (hotkeys, tray, pill, dashboard) runs on
             // this one worker thread, so it must exist before any of them.
-            app.manage(dictation_worker::DictationWorker::spawn(
-                app.handle().clone(),
-            )?);
-            // The Wayland portals need Scribe's app id and a place to keep
-            // the permission they grant, before the hotkeys start.
-            #[cfg(target_os = "linux")]
-            platform::init(app_data_dir.clone(), &app.config().identifier);
-            hotkeys::setup(
-                app.handle(),
-                &settings.hotkeys,
-                settings.notes_analysis_enabled,
-            )?;
-            tray::setup(app.handle(), &settings)?;
+            let dictation_worker = dictation_worker::DictationWorker::spawn(app.handle().clone())?;
+            app.manage(dictation_worker.clone());
             // Replacements live in replacements.txt in the data folder; the
             // first run moves the list kept in settings there. A watcher picks
             // up edits made in any editor.
-            {
+            let replacements = {
                 use tauri::Emitter;
                 let store = std::sync::Arc::new(replacements_file::ReplacementStore::open(
                     app_data_dir.join(replacements_file::FILE_NAME),
@@ -515,8 +529,41 @@ pub fn run() {
                         worker.notify();
                     }
                 });
-                app.manage(store);
-            }
+                app.manage(store.clone());
+                store
+            };
+            // The hotkey runtime exists (empty) before any hotkey is
+            // registered; hotkeys::setup fills it in below.
+            let hotkey_runtime = hotkeys::HotkeyRuntimeState::default();
+            app.manage(hotkey_runtime.clone());
+            // The engine as one handle, holding the parts managed above. It
+            // is managed before anything that can start engine work from
+            // outside (a hotkey, a remote command from a second launch, the
+            // tray, a window), so that work always finds it.
+            let core = Core::new(
+                host,
+                scribe_core::core::CoreParts {
+                    backend,
+                    warm_transcriber,
+                    dictation_server,
+                    note_sync,
+                    dictation_worker,
+                    hotkey_runtime: hotkey_runtime.clone(),
+                    replacements,
+                },
+            );
+            app.manage(core);
+            // The Wayland portals need Scribe's app id and a place to keep
+            // the permission they grant, before the hotkeys start.
+            #[cfg(target_os = "linux")]
+            platform::init(app_data_dir.clone(), &app.config().identifier);
+            hotkeys::setup(
+                app.handle(),
+                &hotkey_runtime,
+                &settings.hotkeys,
+                settings.notes_analysis_enabled,
+            )?;
+            tray::setup(app.handle(), &settings)?;
             // Only now, with every piece of state managed, may a webview
             // exist and invoke commands (see create_config_windows).
             create_config_windows(app)?;
@@ -611,85 +658,93 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            commands::get_app_state,
-            release_notes::whats_new_pending,
-            release_notes::dismiss_whats_new,
-            diagnostics::collect_diagnostics,
-            commands::get_settings,
-            commands::patch_settings,
-            commands::get_last_transcript,
-            commands::clear_last_transcript,
-            commands::list_recent_transcripts,
-            commands::search_transcripts,
-            commands::get_transcript,
-            commands::update_transcript,
-            commands::delete_transcript,
-            commands::clear_transcript_history,
-            commands::clear_notes,
-            commands::combine_transcripts,
-            commands::save_combined_transcript,
-            commands::open_transcript_externally,
-            commands::get_transcript_audio,
-            commands::get_basic_stats,
-            commands::refresh_basic_stats,
-            commands::get_hotkey_status,
-            commands::bind_portal_shortcuts,
-            commands::configure_portal_shortcuts,
-            commands::get_paste_permission,
-            commands::request_paste_permission,
-            commands::rebind_hotkey,
-            commands::set_hotkey_trigger,
-            commands::reset_hotkeys_to_defaults,
-            commands::load_production_hotkey_defaults,
-            commands::open_dashboard,
-            commands::list_microphones,
-            commands::start_recording,
-            commands::stop_dictation,
-            commands::cancel_recording,
-            commands::record_test_clip,
-            commands::get_test_clip_audio,
-            commands::open_data_folder,
-            commands::get_replacements,
-            commands::add_replacements,
-            commands::remove_replacement,
-            commands::open_replacements_file,
-            commands::open_models_folder,
-            commands::open_logs_folder,
-            commands::get_logs_dir,
-            commands::open_failed_recordings_folder,
-            commands::get_failed_recordings_dir,
-            commands::get_data_dir,
-            commands::pick_data_dir,
-            commands::save_window_size,
-            commands::transcribe_file,
-            commands::analyze_note,
-            commands::llm_status,
-            gpu::probe_gpu_devices,
-            commands::save_text_file,
-            commands::paste_last_transcript,
-            commands::copy_last_transcript,
-            commands::paste_transcript,
-            commands::copy_transcript,
-            commands::transform_selection,
-            commands::list_models,
-            commands::download_model,
-            commands::cancel_model_download,
-            commands::retry_model_download,
-            commands::delete_model,
-            commands::select_model,
-            commands::get_engine_status,
-            commands::check_for_update,
-            commands::open_release_page,
-            commands::github_status,
-            commands::github_device_start,
-            commands::github_device_poll,
-            commands::github_device_cancel,
-            commands::github_disconnect,
-            commands::github_sync_now,
-            commands::github_sync_activity,
-            commands::export_transcripts,
-            commands::preview_transcript_import,
-            commands::restore_transcript_import
+            // status
+            commands::status::get_app_state,
+            // audio
+            commands::audio::list_microphones,
+            commands::audio::start_recording,
+            commands::audio::stop_dictation,
+            commands::audio::cancel_recording,
+            commands::audio::record_test_clip,
+            commands::audio::get_test_clip_audio,
+            commands::audio::transcribe_file,
+            commands::audio::save_text_file,
+            commands::audio::paste_last_transcript,
+            // output
+            commands::output::get_paste_permission,
+            commands::output::request_paste_permission,
+            commands::output::copy_last_transcript,
+            commands::output::paste_transcript,
+            commands::output::copy_transcript,
+            commands::output::transform_selection,
+            // models
+            commands::models::open_models_folder,
+            commands::models::list_models,
+            commands::models::download_model,
+            commands::models::cancel_model_download,
+            commands::models::retry_model_download,
+            commands::models::delete_model,
+            commands::models::select_model,
+            commands::models::get_engine_status,
+            commands::models::probe_gpu_devices,
+            // hotkeys
+            commands::hotkeys::get_hotkey_status,
+            commands::hotkeys::bind_portal_shortcuts,
+            commands::hotkeys::configure_portal_shortcuts,
+            commands::hotkeys::rebind_hotkey,
+            commands::hotkeys::set_hotkey_trigger,
+            commands::hotkeys::reset_hotkeys_to_defaults,
+            commands::hotkeys::load_production_hotkey_defaults,
+            // data
+            commands::data::get_settings,
+            commands::data::patch_settings,
+            commands::data::get_last_transcript,
+            commands::data::clear_last_transcript,
+            commands::data::list_recent_transcripts,
+            commands::data::search_transcripts,
+            commands::data::get_transcript,
+            commands::data::update_transcript,
+            commands::data::delete_transcript,
+            commands::data::clear_transcript_history,
+            commands::data::clear_notes,
+            commands::data::combine_transcripts,
+            commands::data::save_combined_transcript,
+            commands::data::open_transcript_externally,
+            commands::data::get_transcript_audio,
+            commands::data::get_basic_stats,
+            commands::data::refresh_basic_stats,
+            commands::data::open_data_folder,
+            commands::data::get_data_dir,
+            commands::data::pick_data_dir,
+            commands::data::open_logs_folder,
+            commands::data::get_logs_dir,
+            commands::data::open_failed_recordings_folder,
+            commands::data::get_failed_recordings_dir,
+            commands::data::export_transcripts,
+            commands::data::preview_transcript_import,
+            commands::data::restore_transcript_import,
+            commands::data::get_replacements,
+            commands::data::add_replacements,
+            commands::data::remove_replacement,
+            commands::data::open_replacements_file,
+            commands::data::whats_new_pending,
+            commands::data::dismiss_whats_new,
+            commands::data::collect_diagnostics,
+            // sync
+            commands::sync::analyze_note,
+            commands::sync::llm_status,
+            commands::sync::github_status,
+            commands::sync::github_device_start,
+            commands::sync::github_device_poll,
+            commands::sync::github_device_cancel,
+            commands::sync::github_disconnect,
+            commands::sync::github_sync_now,
+            commands::sync::github_sync_activity,
+            // shell
+            commands::shell::open_dashboard,
+            commands::shell::save_window_size,
+            commands::shell::check_for_update,
+            commands::shell::open_release_page
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
@@ -697,8 +752,14 @@ pub fn run() {
             // Tear down the resident whisper-server process so no orphan
             // survives app quit (shutdown is safe to call multiple times).
             if let tauri::RunEvent::Exit = event {
-                // Leave the status file reflecting a not-listening app so a
-                // reader isn't stranded on a stale Recording/Stopping state.
+                // The status file, the dictation-state server and the speech
+                // engine, in that order (see Core::shutdown).
+                if let Some(core) = app.try_state::<Core>() {
+                    core.shutdown();
+                    return;
+                }
+                // Setup failed before the Core existed: stop whatever parts
+                // did start, the same way.
                 status_file::publish_idle(app);
                 // Stop the dictation-state server, close live SSE streams, and
                 // remove the ~/.scribe discovery file so a consumer sees Scribe
@@ -802,6 +863,160 @@ mod install_identity_tests {
 }
 
 #[cfg(test)]
+mod command_list_tests {
+    /// Every command the windows invoke, by the name they invoke it with, as
+    /// registered on main before the commands moved into
+    /// src/commands/<domain>.rs. The windows call commands by name, so the
+    /// registered set must stay exactly this.
+    const COMMANDS: [&str; 79] = [
+        "add_replacements",
+        "analyze_note",
+        "bind_portal_shortcuts",
+        "cancel_model_download",
+        "cancel_recording",
+        "check_for_update",
+        "clear_last_transcript",
+        "clear_notes",
+        "clear_transcript_history",
+        "collect_diagnostics",
+        "combine_transcripts",
+        "configure_portal_shortcuts",
+        "copy_last_transcript",
+        "copy_transcript",
+        "delete_model",
+        "delete_transcript",
+        "dismiss_whats_new",
+        "download_model",
+        "export_transcripts",
+        "get_app_state",
+        "get_basic_stats",
+        "get_data_dir",
+        "get_engine_status",
+        "get_failed_recordings_dir",
+        "get_hotkey_status",
+        "get_last_transcript",
+        "get_logs_dir",
+        "get_paste_permission",
+        "get_replacements",
+        "get_settings",
+        "get_test_clip_audio",
+        "get_transcript",
+        "get_transcript_audio",
+        "github_device_cancel",
+        "github_device_poll",
+        "github_device_start",
+        "github_disconnect",
+        "github_status",
+        "github_sync_activity",
+        "github_sync_now",
+        "list_microphones",
+        "list_models",
+        "list_recent_transcripts",
+        "llm_status",
+        "load_production_hotkey_defaults",
+        "open_dashboard",
+        "open_data_folder",
+        "open_failed_recordings_folder",
+        "open_logs_folder",
+        "open_models_folder",
+        "open_release_page",
+        "open_replacements_file",
+        "open_transcript_externally",
+        "paste_last_transcript",
+        "paste_transcript",
+        "patch_settings",
+        "pick_data_dir",
+        "preview_transcript_import",
+        "probe_gpu_devices",
+        "rebind_hotkey",
+        "record_test_clip",
+        "refresh_basic_stats",
+        "remove_replacement",
+        "request_paste_permission",
+        "reset_hotkeys_to_defaults",
+        "restore_transcript_import",
+        "retry_model_download",
+        "save_combined_transcript",
+        "save_text_file",
+        "save_window_size",
+        "search_transcripts",
+        "select_model",
+        "set_hotkey_trigger",
+        "start_recording",
+        "stop_dictation",
+        "transcribe_file",
+        "transform_selection",
+        "update_transcript",
+        "whats_new_pending",
+    ];
+
+    /// The paths listed in `generate_handler!`, in order.
+    fn registered() -> Vec<String> {
+        let source = include_str!("lib.rs");
+        let start = source.find("generate_handler![").unwrap() + "generate_handler![".len();
+        let end = start + source[start..].find("])").unwrap();
+        source[start..end]
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with("//"))
+            .map(|line| line.trim_end_matches(',').to_string())
+            .collect()
+    }
+
+    #[test]
+    fn every_command_keeps_its_name() {
+        let registered = registered();
+        let mut names: Vec<&str> = registered
+            .iter()
+            .map(|path| path.rsplit("::").next().unwrap())
+            .collect();
+        names.sort_unstable();
+        let mut expected = COMMANDS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(names, expected);
+    }
+
+    /// Each command is registered from the file of its domain
+    /// (`commands::<domain>::<name>`), and each of those files exists.
+    #[test]
+    fn every_command_comes_from_a_domain_file() {
+        let domains = [
+            ("audio", include_str!("commands/audio.rs")),
+            ("output", include_str!("commands/output.rs")),
+            ("models", include_str!("commands/models.rs")),
+            ("hotkeys", include_str!("commands/hotkeys.rs")),
+            ("data", include_str!("commands/data.rs")),
+            ("sync", include_str!("commands/sync.rs")),
+            ("status", include_str!("commands/status.rs")),
+            ("shell", include_str!("commands/shell.rs")),
+        ];
+        let mut defined = 0;
+        for (_, source) in domains {
+            defined += source.matches("#[tauri::command]").count();
+        }
+        assert_eq!(
+            defined,
+            COMMANDS.len(),
+            "a command is defined twice or missing"
+        );
+        for path in registered() {
+            let parts: Vec<&str> = path.split("::").collect();
+            assert_eq!(parts.len(), 3, "{path} is not commands::<domain>::<name>");
+            assert_eq!(parts[0], "commands");
+            let (_, source) = domains
+                .iter()
+                .find(|(domain, _)| *domain == parts[1])
+                .unwrap_or_else(|| panic!("{path} names no domain file"));
+            assert!(
+                source.contains(&format!("fn {}(", parts[2])),
+                "{path} is not defined in commands/{}.rs",
+                parts[1]
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod startup_order_tests {
     /// Tauri builds every config window marked `create` (the default) before
     /// it runs the setup closure, so the webview loads and invokes commands
@@ -840,5 +1055,66 @@ mod startup_order_tests {
             create > last_manage,
             "setup creates the windows before it manages all of its state"
         );
+    }
+
+    /// The engine starts in a fixed order: the host first (the engine's
+    /// tray, window and event calls go through it), then each part, then the
+    /// Core, which holds them all, and only then what can start engine work
+    /// from outside: the hotkeys (a key press), the tray (a menu click) and
+    /// the windows (a command). A remote command from a second launch waits
+    /// for the Core too (see the single-instance handler). So engine code
+    /// reached that way always finds the Core managed.
+    #[test]
+    fn setup_starts_the_engine_in_order() {
+        let source = include_str!("lib.rs");
+        let start = source.find(".setup(|app| {").unwrap();
+        let end = start + source[start..].find(".on_window_event(").unwrap();
+        let setup = &source[start..end];
+        let steps = [
+            "shell::install(host.clone())",
+            "Database::open(",
+            "app.manage(backend.clone())",
+            "child_guard::init(",
+            "app.manage(warm_transcriber.clone())",
+            "app.manage(server.clone())",
+            "app.manage(note_sync.clone())",
+            "app.manage(dictation_worker.clone())",
+            "app.manage(store.clone())",
+            "app.manage(hotkey_runtime.clone())",
+            "app.manage(core)",
+            "hotkeys::setup(",
+            "tray::setup(",
+            "create_config_windows(app)",
+        ];
+        let mut previous = 0;
+        for step in steps {
+            let at = setup
+                .find(step)
+                .unwrap_or_else(|| panic!("setup no longer has `{step}`"));
+            assert_eq!(setup.matches(step).count(), 1, "`{step}` appears twice");
+            assert!(at > previous, "`{step}` runs out of order");
+            previous = at;
+        }
+        // Every part the Core holds is managed on its own too, so the
+        // existing `app.state::<X>()` lookups keep finding it.
+        let handler = source.find("tauri_plugin_single_instance::init(").unwrap();
+        let remote = handler + source[handler..].find("RemoteCommand::parse").unwrap();
+        let guard = remote + source[remote..].find("command.run(app)").unwrap();
+        assert!(
+            source[remote..guard].contains("try_state::<Core>()"),
+            "a remote command must wait for the Core"
+        );
+        let shortcuts = source
+            .find("tauri_plugin_global_shortcut::Builder")
+            .unwrap();
+        let handle = shortcuts
+            + source[shortcuts..]
+                .find("hotkeys::handle_shortcut")
+                .unwrap();
+        assert!(
+            source[shortcuts..handle].contains("try_state::<Core>()"),
+            "a hotkey press must wait for the Core"
+        );
+        assert_eq!(setup.matches("app.manage(").count(), 8);
     }
 }

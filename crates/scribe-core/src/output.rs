@@ -713,19 +713,19 @@ fn transcript_not_found(id: &str) -> CommandError {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct OutputStartedPayload {
-    transcript_id: String,
-    action: OutputAction,
-    output_mode: OutputMode,
-    paste_method: Option<PasteMethod>,
+pub struct OutputStartedPayload {
+    pub transcript_id: String,
+    pub action: OutputAction,
+    pub output_mode: OutputMode,
+    pub paste_method: Option<PasteMethod>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct OutputFailedPayload {
-    transcript_id: String,
-    code: String,
-    message: String,
+pub struct OutputFailedPayload {
+    pub transcript_id: String,
+    pub code: String,
+    pub message: String,
 }
 
 struct PasteStateGuard<'a> {
@@ -760,6 +760,71 @@ impl Drop for PasteStateGuard<'_> {
         let state = self.app.state::<BackendState>();
         if let Ok(snapshot) = state.transition_app_state(AppEvent::PasteCompleted) {
             emit_state_snapshot(self.app, &snapshot);
+        }
+    }
+}
+
+/// Whether pasting into other apps needs a permission, whether it has been
+/// given, and how dictations reach other apps right now.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PastePermission {
+    pub required: bool,
+    pub granted: bool,
+    /// Which permission: "accessibility" (macOS, granted in System
+    /// Settings), "waylandPortal" (Linux on Wayland, granted once in a
+    /// desktop dialog) or "none".
+    pub kind: &'static str,
+    /// The user turned the Wayland request down; Scribe copies instead and
+    /// doesn't ask again on its own.
+    pub declined: bool,
+    /// The insert method in effect (the Dashboard shows it).
+    pub method: crate::platform::InsertMethod,
+}
+
+/// The paste permission on this system right now.
+pub fn paste_permission() -> PastePermission {
+    let method = crate::platform::insert_method();
+    #[cfg(target_os = "macos")]
+    {
+        PastePermission {
+            required: true,
+            granted: crate::platform::accessibility_granted(),
+            kind: "accessibility",
+            declined: false,
+            method,
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use crate::platform::PortalPaste;
+        match crate::platform::wayland_paste_permission() {
+            Some((state, granted)) => PastePermission {
+                required: true,
+                granted,
+                kind: "waylandPortal",
+                declined: state == PortalPaste::Declined,
+                method,
+            },
+            // X11 lets any app send keystrokes.
+            None => PastePermission {
+                required: false,
+                granted: true,
+                kind: "none",
+                declined: false,
+                method,
+            },
+        }
+    }
+    // Windows lets any app send keystrokes.
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        PastePermission {
+            required: false,
+            granted: true,
+            kind: "none",
+            declined: false,
+            method,
         }
     }
 }

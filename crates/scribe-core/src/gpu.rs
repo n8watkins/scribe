@@ -20,8 +20,6 @@
 use serde::Serialize;
 use tauri::AppHandle;
 
-use crate::error::CommandError;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VulkanDevice {
@@ -217,17 +215,6 @@ fn probe_uncached(_app: &AppHandle) -> GpuProbe {
     // The bundled whisper binaries are Windows-only, so there's nothing to probe
     // on other platforms (dev/CI on Linux).
     probe_from_stderr("", false)
-}
-
-/// Tauri command: probe the Vulkan GPUs available for transcription. Runs the
-/// (blocking, model-loading) probe on a worker thread so it never hitches the UI
-/// / IPC thread, and returns instantly from the session cache after the first
-/// successful probe.
-#[tauri::command]
-pub async fn probe_gpu_devices(app: AppHandle) -> Result<GpuProbe, CommandError> {
-    tauri::async_runtime::spawn_blocking(move || probe(&app))
-        .await
-        .map_err(|error| CommandError::new("gpu_probe_failed", error.to_string()))
 }
 
 #[cfg(test)]

@@ -31,6 +31,9 @@ const HEADER: &str = "# Scribe replacements: one \"heard -> written\" per line.\
 /// How often the watcher checks the file for outside edits.
 const WATCH_INTERVAL: Duration = Duration::from_secs(2);
 
+/// Sent with the new contents when replacements.txt changes outside Scribe.
+pub const REPLACEMENTS_CHANGED_EVENT: &str = "scribe:replacements-changed";
+
 /// What the file holds right now.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -321,6 +324,26 @@ impl ReplacementStore {
                 }
             });
     }
+}
+
+/// The store as Tauri manages it.
+pub type Replacements = Arc<ReplacementStore>;
+
+/// Lets GitHub backup pick up a changed replacements.txt.
+pub fn notify_backup(app: &tauri::AppHandle) {
+    use tauri::Manager;
+
+    if let Some(worker) = app.try_state::<crate::note_sync::NoteSyncWorker>() {
+        worker.notify();
+    }
+}
+
+/// The error for a replacements.txt that could not be written.
+pub fn replacements_error(error: std::io::Error) -> crate::error::CommandError {
+    crate::error::CommandError::new(
+        "replacements_write_failed",
+        format!("Could not save replacements.txt. {}", error),
+    )
 }
 
 #[cfg(test)]

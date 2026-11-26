@@ -363,6 +363,81 @@ fn files_identical(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// The directory Scribe treats as its data root: the user-chosen `data_dir`
+/// when set, otherwise the OS app-data directory. Existing data is never moved
+/// when this changes; only future data lands in the new location.
+pub fn effective_data_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandError> {
+    if let Some(custom) = app
+        .state::<BackendState>()
+        .db()
+        .ok()
+        .and_then(|db| db.get_settings().ok())
+        .and_then(|settings| settings.data_dir)
+    {
+        let trimmed = custom.trim();
+        if !trimmed.is_empty() {
+            return Ok(std::path::PathBuf::from(trimmed));
+        }
+    }
+
+    app.path().app_data_dir().map_err(|error| {
+        CommandError::new(
+            "app_data_dir_unavailable",
+            format!("Could not locate Scribe app data directory. {}", error),
+        )
+    })
+}
+
+/// The directory tauri-plugin-log writes rotating log files to (TargetKind::
+/// LogDir resolves to app_log_dir()). Unlike the data/models folders this is
+/// always the OS log dir and is not affected by the custom data_dir setting.
+pub fn logs_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandError> {
+    app.path().app_log_dir().map_err(|error| {
+        CommandError::new(
+            "app_log_dir_unavailable",
+            format!("Could not locate the Scribe logs directory. {}", error),
+        )
+    })
+}
+
+/// The folder where audio from a dictation whose transcription failed is
+/// quarantined so it isn't lost. This deliberately mirrors the location used by
+/// dictation::quarantine_failed_recording — the OS app-data dir's `failed/`
+/// subfolder, *not* the custom data_dir — so "Open" always lands on the real
+/// quarantine folder rather than an empty one.
+pub fn failed_recordings_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandError> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("failed"))
+        .map_err(|error| {
+            CommandError::new(
+                "app_data_dir_unavailable",
+                format!("Could not locate the Scribe app data directory. {}", error),
+            )
+        })
+}
+
+/// Creates `dir` when missing and opens it in the system file manager.
+pub fn open_folder(app: &tauri::AppHandle, dir: std::path::PathBuf) -> Result<(), CommandError> {
+    use tauri_plugin_opener::OpenerExt;
+
+    std::fs::create_dir_all(&dir).map_err(|error| {
+        CommandError::new(
+            "open_folder_failed",
+            format!("Could not create folder {}. {}", dir.display(), error),
+        )
+    })?;
+
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|error| {
+            CommandError::new(
+                "open_folder_failed",
+                format!("Could not open folder {}. {}", dir.display(), error),
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

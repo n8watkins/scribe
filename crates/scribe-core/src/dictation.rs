@@ -41,9 +41,9 @@ pub enum DictationStatus {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DictationSaveFailedPayload {
-    transcript_id: String,
-    message: String,
+pub struct DictationSaveFailedPayload {
+    pub transcript_id: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -625,8 +625,8 @@ fn transition_if_transcribing(app: &AppHandle, event: AppEvent) {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct DictationEmptyPayload {
-    message: String,
+pub struct DictationEmptyPayload {
+    pub message: String,
 }
 
 /// Tells the frontend that a dictation finished without producing any text,
