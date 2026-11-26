@@ -295,11 +295,9 @@ pub fn run() {
             if let Some(command) = remote_command::RemoteCommand::parse(&args) {
                 // A launch that lands while setup still runs (the callback
                 // can come off the main thread) must not reach state that
-                // isn't managed yet.
-                if app
-                    .try_state::<dictation_worker::DictationWorker>()
-                    .is_none()
-                {
+                // isn't managed yet. The Core is managed after every part
+                // it holds, the dictation worker included.
+                if app.try_state::<Core>().is_none() {
                     log::warn!("Scribe is still starting; ignored {:?}", command);
                     return;
                 }
@@ -346,6 +344,13 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
+                    // Setup manages the Core before it registers a hotkey;
+                    // this guards the engine work a key press starts if that
+                    // order ever changes.
+                    if app.try_state::<Core>().is_none() {
+                        log::warn!("Scribe is still starting; ignored a hotkey");
+                        return;
+                    }
                     hotkeys::handle_shortcut(app, shortcut, event);
                 })
                 .build(),
@@ -358,9 +363,16 @@ pub fn run() {
         .setup(|app| {
             // The engine resolves its folders without Tauri; they must be the
             // ones Tauri resolves (checked in debug builds and in a test).
+            // Checked in every build, so a real install's layout (the Windows
+            // end-to-end job runs a release build) shows any disagreement in
+            // the log; Tauri's folders stay the ones in use.
             let paths = tauri_host::resolve_paths(app)?;
+            let mismatches = tauri_host::paths_mismatches(app, &paths);
+            for mismatch in &mismatches {
+                log::error!("The engine's folder differs from Tauri's: {}", mismatch);
+            }
             debug_assert_eq!(
-                tauri_host::paths_mismatches(app, &paths),
+                mismatches,
                 Vec::<String>::new(),
                 "the engine's folders differ from Tauri's"
             );
@@ -495,18 +507,6 @@ pub fn run() {
             // this one worker thread, so it must exist before any of them.
             let dictation_worker = dictation_worker::DictationWorker::spawn(app.handle().clone())?;
             app.manage(dictation_worker.clone());
-            // The Wayland portals need Scribe's app id and a place to keep
-            // the permission they grant, before the hotkeys start.
-            #[cfg(target_os = "linux")]
-            platform::init(app_data_dir.clone(), &app.config().identifier);
-            hotkeys::setup(
-                app.handle(),
-                &settings.hotkeys,
-                settings.notes_analysis_enabled,
-            )?;
-            // hotkeys::setup manages the hotkey runtime itself.
-            let hotkey_runtime = app.state::<hotkeys::HotkeyRuntimeState>().inner().clone();
-            tray::setup(app.handle(), &settings)?;
             // Replacements live in replacements.txt in the data folder; the
             // first run moves the list kept in settings there. A watcher picks
             // up edits made in any editor.
@@ -532,7 +532,14 @@ pub fn run() {
                 app.manage(store.clone());
                 store
             };
-            // The engine as one handle, holding the parts managed above.
+            // The hotkey runtime exists (empty) before any hotkey is
+            // registered; hotkeys::setup fills it in below.
+            let hotkey_runtime = hotkeys::HotkeyRuntimeState::default();
+            app.manage(hotkey_runtime.clone());
+            // The engine as one handle, holding the parts managed above. It
+            // is managed before anything that can start engine work from
+            // outside (a hotkey, a remote command from a second launch, the
+            // tray, a window), so that work always finds it.
             let core = Core::new(
                 host,
                 scribe_core::core::CoreParts {
@@ -541,11 +548,22 @@ pub fn run() {
                     dictation_server,
                     note_sync,
                     dictation_worker,
-                    hotkey_runtime,
+                    hotkey_runtime: hotkey_runtime.clone(),
                     replacements,
                 },
             );
             app.manage(core);
+            // The Wayland portals need Scribe's app id and a place to keep
+            // the permission they grant, before the hotkeys start.
+            #[cfg(target_os = "linux")]
+            platform::init(app_data_dir.clone(), &app.config().identifier);
+            hotkeys::setup(
+                app.handle(),
+                &hotkey_runtime,
+                &settings.hotkeys,
+                settings.notes_analysis_enabled,
+            )?;
+            tray::setup(app.handle(), &settings)?;
             // Only now, with every piece of state managed, may a webview
             // exist and invoke commands (see create_config_windows).
             create_config_windows(app)?;
@@ -734,8 +752,14 @@ pub fn run() {
             // Tear down the resident whisper-server process so no orphan
             // survives app quit (shutdown is safe to call multiple times).
             if let tauri::RunEvent::Exit = event {
-                // Leave the status file reflecting a not-listening app so a
-                // reader isn't stranded on a stale Recording/Stopping state.
+                // The status file, the dictation-state server and the speech
+                // engine, in that order (see Core::shutdown).
+                if let Some(core) = app.try_state::<Core>() {
+                    core.shutdown();
+                    return;
+                }
+                // Setup failed before the Core existed: stop whatever parts
+                // did start, the same way.
                 status_file::publish_idle(app);
                 // Stop the dictation-state server, close live SSE streams, and
                 // remove the ~/.scribe discovery file so a consumer sees Scribe
@@ -1034,11 +1058,12 @@ mod startup_order_tests {
     }
 
     /// The engine starts in a fixed order: the host first (the engine's
-    /// tray, window and event calls go through it), then each part in the
-    /// order it was started before the Core existed, then the Core, which
-    /// holds them all, and only then the windows. A later part may rely on an
-    /// earlier one (the dictation worker before the hotkeys that queue onto
-    /// it, the backend before everything that reads it).
+    /// tray, window and event calls go through it), then each part, then the
+    /// Core, which holds them all, and only then what can start engine work
+    /// from outside: the hotkeys (a key press), the tray (a menu click) and
+    /// the windows (a command). A remote command from a second launch waits
+    /// for the Core too (see the single-instance handler). So engine code
+    /// reached that way always finds the Core managed.
     #[test]
     fn setup_starts_the_engine_in_order() {
         let source = include_str!("lib.rs");
@@ -1054,10 +1079,11 @@ mod startup_order_tests {
             "app.manage(server.clone())",
             "app.manage(note_sync.clone())",
             "app.manage(dictation_worker.clone())",
+            "app.manage(store.clone())",
+            "app.manage(hotkey_runtime.clone())",
+            "app.manage(core)",
             "hotkeys::setup(",
             "tray::setup(",
-            "app.manage(store.clone())",
-            "app.manage(core)",
             "create_config_windows(app)",
         ];
         let mut previous = 0;
@@ -1071,6 +1097,24 @@ mod startup_order_tests {
         }
         // Every part the Core holds is managed on its own too, so the
         // existing `app.state::<X>()` lookups keep finding it.
-        assert_eq!(setup.matches("app.manage(").count(), 7);
+        let handler = source.find("tauri_plugin_single_instance::init(").unwrap();
+        let remote = handler + source[handler..].find("RemoteCommand::parse").unwrap();
+        let guard = remote + source[remote..].find("command.run(app)").unwrap();
+        assert!(
+            source[remote..guard].contains("try_state::<Core>()"),
+            "a remote command must wait for the Core"
+        );
+        let shortcuts = source
+            .find("tauri_plugin_global_shortcut::Builder")
+            .unwrap();
+        let handle = shortcuts
+            + source[shortcuts..]
+                .find("hotkeys::handle_shortcut")
+                .unwrap();
+        assert!(
+            source[shortcuts..handle].contains("try_state::<Core>()"),
+            "a hotkey press must wait for the Core"
+        );
+        assert_eq!(setup.matches("app.manage(").count(), 8);
     }
 }

@@ -473,16 +473,18 @@ impl HotkeyRuntime {
     }
 }
 
+/// Registers the hotkeys. `runtime` is the hotkey runtime the shell created
+/// and already manages (and handed to the `Core`), so a key press that
+/// arrives the moment a hotkey is registered finds it.
 pub fn setup(
     app: &AppHandle,
+    runtime: &HotkeyRuntimeState,
     hotkeys: &HotkeySettings,
     transform_enabled: bool,
 ) -> Result<(), CommandError> {
-    let runtime = HotkeyRuntimeState::default();
     runtime
         .transform_enabled
         .store(transform_enabled, Ordering::SeqCst);
-    app.manage(runtime);
     validate_hotkeys(hotkeys)?;
     #[cfg(target_os = "linux")]
     wayland::start_portal(app, hotkeys);

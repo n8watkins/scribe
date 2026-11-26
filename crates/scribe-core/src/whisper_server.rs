@@ -293,8 +293,9 @@ struct Shared {
 /// (an engine runs one inference at a time anyway).
 ///
 /// A cheap handle: clones share the same engine (Tauri state and
-/// `core::Core` hold the same one), and the engine is stopped when the last
-/// clone goes.
+/// `core::Core` hold the same one). Stop the engine with [`Self::shutdown`]
+/// (`Core::shutdown` does, at exit): the handles are never all dropped while
+/// the app runs or as it exits, so nothing may rely on drop to stop it.
 #[derive(Clone)]
 pub struct WarmTranscriber {
     inner: Arc<Mutex<Inner>>,
@@ -302,7 +303,9 @@ pub struct WarmTranscriber {
     _stop_on_last_drop: Arc<StopOnDrop>,
 }
 
-/// Stops the speech engine when the last [`WarmTranscriber`] handle drops.
+/// Stops the speech engine if the last [`WarmTranscriber`] handle is ever
+/// dropped (a test, or a shell that drops its `Core`). A safety net only: the
+/// app stops the engine explicitly through `Core::shutdown`.
 struct StopOnDrop(Arc<Mutex<Inner>>);
 
 impl Drop for StopOnDrop {

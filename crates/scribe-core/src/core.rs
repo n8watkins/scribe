@@ -110,4 +110,119 @@ impl Core {
     pub fn replacements(&self) -> &Arc<ReplacementStore> {
         &self.0.parts.replacements
     }
+
+    /// Stops the engine when the app exits. Every shell must call this once,
+    /// on its way out: nothing in the engine stops on drop (the handles are
+    /// shared, and Tauri never drops its managed state at exit).
+    ///
+    /// In order: the status file says Scribe is idle (so a reader is not
+    /// stranded on Recording), the dictation-state server closes its streams
+    /// and removes its discovery file, and the speech engine process stops.
+    /// Safe to call more than once.
+    pub fn shutdown(&self) {
+        shutdown_in_order(
+            self.0.host.as_ref(),
+            self.0
+                .parts
+                .dictation_server
+                .as_ref()
+                .map(|s| s as &dyn Stop),
+            &self.0.parts.warm_transcriber,
+        );
+    }
+}
+
+/// A part [`Core::shutdown`] stops.
+trait Stop {
+    fn stop(&self);
+}
+
+impl Stop for DictationServer {
+    fn stop(&self) {
+        self.shutdown();
+    }
+}
+
+impl Stop for WarmTranscriber {
+    fn stop(&self) {
+        self.shutdown();
+    }
+}
+
+fn shutdown_in_order(host: &dyn Host, dictation_server: Option<&dyn Stop>, warm: &dyn Stop) {
+    crate::status_file::publish_idle_with(host);
+    if let Some(server) = dictation_server {
+        server.stop();
+    }
+    warm.stop();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::RecordingHost;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    /// Records when it was stopped, and whether the status file already
+    /// said idle by then.
+    struct FakePart {
+        name: &'static str,
+        status_file: PathBuf,
+        log: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl Stop for FakePart {
+        fn stop(&self) {
+            let idle = std::fs::read_to_string(&self.status_file)
+                .map(|text| text.contains("\"Idle\""))
+                .unwrap_or(false);
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("{} (status idle: {})", self.name, idle));
+        }
+    }
+
+    #[test]
+    fn shutdown_publishes_idle_then_stops_the_server_then_the_engine() {
+        let root =
+            std::env::temp_dir().join(format!("scribe-core-shutdown-test-{}", std::process::id()));
+        let cache = root.join("cache");
+        let host = RecordingHost::new(
+            Paths::from_parts(
+                root.join("data"),
+                cache.clone(),
+                root.join("logs"),
+                None,
+                None,
+            ),
+            Flavor::Stable,
+        );
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let part = |name| FakePart {
+            name,
+            status_file: cache.join("status.json"),
+            log: log.clone(),
+        };
+        let server = part("server");
+        let warm = part("speech engine");
+
+        shutdown_in_order(&host, Some(&server), &warm);
+        assert_eq!(
+            *log.lock().unwrap(),
+            [
+                "server (status idle: true)",
+                "speech engine (status idle: true)"
+            ]
+        );
+
+        // With no dictation-state server (it is best-effort), the engine
+        // still stops.
+        log.lock().unwrap().clear();
+        shutdown_in_order(&host, None, &warm);
+        assert_eq!(*log.lock().unwrap(), ["speech engine (status idle: true)"]);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
