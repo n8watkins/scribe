@@ -556,9 +556,6 @@ pub fn record_test_clip_for_app(
     Ok(result)
 }
 
-/// Tells the UI a recording started and plays the start cue. Called once
-/// capture is already running; the cue is only queued (it plays on its own
-/// thread), so it never delays the recording.
 /// The result of a stopped session's worker. When the worker failed (it
 /// panicked, or the WAV could not be written), no recording-stopped event
 /// and no stop cue follow, as before; the sound player is told the
@@ -575,6 +572,9 @@ fn finished_recording(
     result
 }
 
+/// Tells the UI a recording started and plays the start cue. Called once
+/// capture is already running; the cue is only queued (it plays on its own
+/// thread), so it never delays the recording.
 fn emit_recording_started(app: &AppHandle, info: &RecordingSessionInfo) {
     let _ = app.emit("audio://recording-started", info);
     crate::sounds::play(app, crate::sounds::Cue::Start);
