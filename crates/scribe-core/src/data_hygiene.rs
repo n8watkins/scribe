@@ -386,7 +386,7 @@ fn files_identical(a: &Path, b: &Path) -> bool {
 /// when set, otherwise the OS app-data directory. Existing data is never moved
 /// when this changes; only future data lands in the new location.
 pub fn effective_data_dir_with(core: &Core) -> PathBuf {
-    effective_data_dir_from(core.backend(), core.paths().data_dir())
+    effective_data_dir_from(core.backend())
 }
 
 /// [`effective_data_dir_with`] for callers that still hold an `AppHandle`.
@@ -401,8 +401,9 @@ pub fn effective_data_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, 
 }
 
 /// The user-chosen data folder stored in `state`'s settings when set (and
-/// not blank), otherwise `app_data_dir` (`Paths::data_dir`).
-fn effective_data_dir_from(state: &BackendState, app_data_dir: &Path) -> PathBuf {
+/// not blank), otherwise the app data folder `state` writes into
+/// (`DataDirs::data_dir`, the folder Tauri resolved at startup).
+fn effective_data_dir_from(state: &BackendState) -> PathBuf {
     if let Some(custom) = state
         .db()
         .ok()
@@ -414,12 +415,13 @@ fn effective_data_dir_from(state: &BackendState, app_data_dir: &Path) -> PathBuf
             return PathBuf::from(trimmed);
         }
     }
-    app_data_dir.to_path_buf()
+    state.dirs().data_dir.clone()
 }
 
 /// The directory tauri-plugin-log writes rotating log files to (TargetKind::
 /// LogDir resolves to app_log_dir()). Unlike the data/models folders this is
 /// always the OS log dir and is not affected by the custom data_dir setting.
+/// `DataDirs` has no log folder, so this is the host's (`Paths::log_dir`).
 pub fn logs_dir_with(host: &dyn Host) -> PathBuf {
     host.paths().log_dir().to_path_buf()
 }
@@ -439,18 +441,21 @@ pub fn logs_dir(_app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandEr
 /// quarantined so it isn't lost. This deliberately mirrors the location used by
 /// dictation::quarantine_failed_recording — the OS app-data dir's `failed/`
 /// subfolder, *not* the custom data_dir — so "Open" always lands on the real
-/// quarantine folder rather than an empty one.
-pub fn failed_recordings_dir_with(host: &dyn Host) -> PathBuf {
-    host.paths().data_dir().join("failed")
+/// quarantine folder rather than an empty one. It is the folder the backend's
+/// `DataDirs` name, which "Clear history" and retention delete from.
+pub fn failed_recordings_dir_with(core: &Core) -> PathBuf {
+    core.backend().dirs().failed_recordings()
 }
 
 /// [`failed_recordings_dir_with`] for callers that still hold an
 /// `AppHandle`.
-pub fn failed_recordings_dir(_app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandError> {
-    match crate::shell::host() {
-        Some(host) => Ok(failed_recordings_dir_with(host.as_ref())),
+pub fn failed_recordings_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandError> {
+    match app.try_state::<Core>() {
+        Some(core) => Ok(failed_recordings_dir_with(&core)),
         None => {
-            log::warn!("Could not find the failed recordings folder: no host yet");
+            log::warn!(
+                "Could not find the failed recordings folder: the engine is not running yet"
+            );
             Err(no_main_window())
         }
     }
@@ -722,38 +727,60 @@ mod tests {
         )
     }
 
+    fn choose_data_dir(state: &BackendState, dir: &str) {
+        let mut settings = state.db().unwrap().get_settings().unwrap();
+        settings.data_dir = Some(dir.into());
+        state.db().unwrap().save_settings(&settings).unwrap();
+    }
+
+    /// Writes `path` and dates it `age` ago.
+    fn write_aged(path: &Path, age: Duration) {
+        write(path, b"x");
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(SystemTime::now() - age)
+            .unwrap();
+    }
+
+    const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+
     #[test]
-    fn the_data_folder_is_the_chosen_one_when_set_else_the_app_data_folder() {
+    fn the_data_folder_is_the_chosen_one_when_set_else_the_backends_data_folder() {
         let root = tempfile::tempdir().unwrap();
         let state = state_with(Database::in_memory().unwrap(), root.path());
-        let app_data = root.path().join("app-data");
-        assert_eq!(effective_data_dir_from(&state, &app_data), app_data);
+        let app_data = root.path().join("data");
+        assert_eq!(state.dirs().data_dir, app_data);
+        assert_eq!(effective_data_dir_from(&state), app_data);
 
         for blank in ["", "   "] {
-            let mut settings = state.db().unwrap().get_settings().unwrap();
-            settings.data_dir = Some(blank.into());
-            state.db().unwrap().save_settings(&settings).unwrap();
-            assert_eq!(effective_data_dir_from(&state, &app_data), app_data);
+            choose_data_dir(&state, blank);
+            assert_eq!(effective_data_dir_from(&state), app_data);
         }
 
         let chosen = root.path().join("chosen");
-        let mut settings = state.db().unwrap().get_settings().unwrap();
-        settings.data_dir = Some(format!(" {} ", chosen.display()));
-        state.db().unwrap().save_settings(&settings).unwrap();
-        assert_eq!(effective_data_dir_from(&state, &app_data), chosen);
+        choose_data_dir(&state, &format!(" {} ", chosen.display()));
+        assert_eq!(effective_data_dir_from(&state), chosen);
     }
 
-    /// The logs and failed-recordings folders come from the host's folders
-    /// and never follow the data folder the user chose.
+    /// The logs folder is the host's, and the failed-recordings folder is the
+    /// backend's (where dictation writes and Clear history deletes); neither
+    /// follows the data folder the user chose.
     #[test]
     fn logs_and_failed_recordings_ignore_the_chosen_data_folder() {
         let root = tempfile::tempdir().unwrap();
         let host = host_in(root.path());
+        let state = state_with(Database::in_memory().unwrap(), root.path());
+        let chosen = root.path().join("chosen");
+        choose_data_dir(&state, &chosen.to_string_lossy());
+        assert_eq!(effective_data_dir_from(&state), chosen);
+
         assert_eq!(logs_dir_with(&host), root.path().join("app-logs"));
-        assert_eq!(
-            failed_recordings_dir_with(&host),
-            root.path().join("app-data").join("failed")
-        );
+        // What failed_recordings_dir_with(core) answers.
+        let failed = state.dirs().failed_recordings();
+        assert_eq!(failed, root.path().join("data").join("failed"));
+        assert!(!failed.starts_with(&chosen));
     }
 
     #[test]
@@ -763,14 +790,7 @@ mod tests {
         let dirs = state.dirs().clone();
         write(&dirs.editor_copy("t1"), b"text");
         let stale = dirs.temp_recordings().join("old.wav");
-        write(&stale, b"x");
-        let day_ago = SystemTime::now() - STALE_TEMP_AGE - Duration::from_secs(60);
-        fs::File::options()
-            .write(true)
-            .open(&stale)
-            .unwrap()
-            .set_modified(day_ago)
-            .unwrap();
+        write_aged(&stale, STALE_TEMP_AGE + Duration::from_secs(60));
         let fresh = dirs.temp_recordings().join("new.wav");
         write(&fresh, b"x");
 
@@ -779,5 +799,67 @@ mod tests {
         assert!(!dirs.editor_copy("t1").exists());
         assert!(!stale.exists());
         assert!(fresh.exists());
+    }
+
+    /// Failed recordings past the history retention window and clips no
+    /// transcript points at go; recent ones and referenced clips stay.
+    #[test]
+    fn startup_maintenance_applies_retention_and_sweeps_orphaned_clips() {
+        let root = tempfile::tempdir().unwrap();
+        let state = state_with(Database::in_memory().unwrap(), root.path());
+        let dirs = state.dirs().clone();
+        let mut settings = state.db().unwrap().get_settings().unwrap();
+        settings.history_retention_days = Some(7);
+        state.db().unwrap().save_settings(&settings).unwrap();
+
+        let old_failed = dirs.failed_recordings().join("old.wav");
+        write_aged(&old_failed, DAY * 8);
+        let new_failed = dirs.failed_recordings().join("new.wav");
+        write_aged(&new_failed, DAY * 6);
+
+        let referenced = dirs.clips().join("kept.wav");
+        write_aged(&referenced, DAY * 2);
+        insert_with_audio(&state.db().unwrap(), "kept", &referenced.to_string_lossy());
+        let orphan = dirs.clips().join("orphan.wav");
+        write_aged(&orphan, DAY * 2);
+        let recent_orphan = dirs.clips().join("saving.wav");
+        write(&recent_orphan, b"x");
+
+        run_startup_maintenance_with(&state, None, false);
+
+        assert!(!old_failed.exists());
+        assert!(new_failed.exists());
+        assert!(referenced.exists());
+        assert!(!orphan.exists());
+        assert!(recent_orphan.exists(), "inside the grace period");
+    }
+
+    /// A data folder the user chose is theirs: the startup pass never
+    /// touches it, however old or unreferenced its files are.
+    #[test]
+    fn startup_maintenance_leaves_a_chosen_data_folder_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let state = state_with(Database::in_memory().unwrap(), root.path());
+        let chosen = root.path().join("chosen");
+        let mut settings = state.db().unwrap().get_settings().unwrap();
+        settings.data_dir = Some(chosen.to_string_lossy().into_owned());
+        settings.history_retention_days = Some(7);
+        state.db().unwrap().save_settings(&settings).unwrap();
+        let files = [
+            chosen.join("clips").join("orphan.wav"),
+            chosen.join("failed").join("old.wav"),
+            chosen.join("recordings").join("old.wav"),
+            chosen.join("scribe-export").join("t1.txt"),
+            chosen.join("notes.txt"),
+        ];
+        for file in &files {
+            write_aged(file, DAY * 30);
+        }
+
+        run_startup_maintenance_with(&state, None, false);
+
+        for file in &files {
+            assert!(file.exists(), "{} was removed", file.display());
+        }
     }
 }

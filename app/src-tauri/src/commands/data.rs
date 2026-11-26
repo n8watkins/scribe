@@ -398,7 +398,7 @@ pub async fn open_failed_recordings_folder(
     core: State<'_, Core>,
 ) -> Result<(), CommandError> {
     off_main_core(core.inner().clone(), move |core| {
-        open_folder(&app, failed_recordings_dir_with(core.host().as_ref()))
+        open_folder(&app, failed_recordings_dir_with(core))
     })
     .await
 }
@@ -407,7 +407,7 @@ pub async fn open_failed_recordings_folder(
 /// Privacy view, mirroring get_logs_dir.
 #[tauri::command]
 pub fn get_failed_recordings_dir(core: State<'_, Core>) -> Result<String, CommandError> {
-    Ok(failed_recordings_dir_with(core.host().as_ref())
+    Ok(failed_recordings_dir_with(&core)
         .to_string_lossy()
         .into_owned())
 }
