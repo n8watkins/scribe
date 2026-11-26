@@ -32,10 +32,29 @@ pub const SETTINGS_CHANGED_EVENT: &str = "scribe:settings-changed";
 /// saving the new ones (and announcing them), so no write is lost and the
 /// events go out in the order the writes happened. The guarded value is `()`,
 /// so a lock poisoned by a panic carries no broken state and is recovered.
+///
+/// Never take it on the main thread. The lock is held while the host is
+/// called (the announcement updates the tray menu, and a settings change
+/// registers hotkeys), and a host may wait for its main thread there (Tauri
+/// does), so a main-thread caller could wait on itself. Debug builds assert
+/// this; every caller runs on an engine thread (the async commands through
+/// `off_main` or `off_main_core`, the tray and window-focus handlers on
+/// their own `launch-at-startup` threads).
 pub fn lock(writes: &Mutex<()>) -> MutexGuard<'_, ()> {
+    debug_assert!(
+        !on_main_thread(),
+        "the settings write lock must never be taken on the main thread"
+    );
     writes
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Whether this is the process's main thread, the one that runs `main` and
+/// with it the shell's event loop. Rust's runtime names that thread "main",
+/// whatever the shell, and Scribe gives no other thread that name.
+fn on_main_thread() -> bool {
+    std::thread::current().name() == Some("main")
 }
 
 /// Tells every window, and the tray menu, the stored settings changed.
@@ -116,7 +135,7 @@ where
 /// switch) exactly as a window's patch is applied. Blocks; call it off the
 /// main thread.
 ///
-/// Still takes the `AppHandle` for the hotkeys and the startup entry (see
+/// Still takes the `AppHandle` for the hotkeys (see
 /// [`apply_settings_change_with`]).
 pub fn patch_settings_now_with(
     app: &AppHandle,
@@ -132,38 +151,33 @@ pub fn patch_settings_now_with(
     )
 }
 
-/// [`patch_settings_now_with`] for callers that still hold only an
-/// `AppHandle`.
-pub fn patch_settings_now(
-    app: &AppHandle,
-    patch: &serde_json::Map<String, serde_json::Value>,
-) -> Result<AppSettings, CommandError> {
-    patch_settings_now_with(app, &core_of(app)?, patch)
-}
-
 /// Shows the switch the user may have flipped in Windows' Startup apps list
 /// while Scribe was running: copies it into "Launch at startup". Never writes
 /// the startup entry. Holds the settings write lock from read to save, so it
 /// cannot undo a flip the user is making in Scribe at the same moment.
 /// Blocks; call it off the main thread.
-///
-/// Still takes the `AppHandle` for `autostart::follow_windows_switch`.
-pub fn sync_launch_at_startup_with(
-    app: &AppHandle,
-    core: &Core,
-) -> Result<AppSettings, CommandError> {
-    follow_launch_switch(core.backend(), core.host().as_ref(), |stored| {
-        crate::autostart::follow_windows_switch(app, stored)
-    })
+pub fn sync_launch_at_startup_with(core: &Core) -> Result<AppSettings, CommandError> {
+    sync_launch_at_startup_in(core.backend(), core.host().as_ref())
 }
 
 /// [`sync_launch_at_startup_with`] for callers that still hold only an
 /// `AppHandle`.
 pub fn sync_launch_at_startup(app: &AppHandle) -> Result<AppSettings, CommandError> {
-    sync_launch_at_startup_with(app, &core_of(app)?)
+    sync_launch_at_startup_with(&core_of(app)?)
 }
 
-/// The body of [`sync_launch_at_startup_with`]: `follow` gets the stored
+/// The body of [`sync_launch_at_startup_with`], over the parts it uses: the
+/// host answers Windows' switch.
+fn sync_launch_at_startup_in(
+    state: &BackendState,
+    host: &dyn Host,
+) -> Result<AppSettings, CommandError> {
+    follow_launch_switch(state, host, |stored| {
+        crate::autostart::follow_windows_switch_with(host, stored)
+    })
+}
+
+/// The body of [`sync_launch_at_startup_in`]: `follow` gets the stored
 /// "Launch at startup" and answers the value to store instead, or None to
 /// leave it.
 fn follow_launch_switch(
@@ -205,7 +219,7 @@ pub fn set_launch_at_startup(app: &AppHandle, enabled: bool) -> Result<AppSettin
 /// lock.
 ///
 /// Still takes the `AppHandle` for the hotkeys lane's `replace_hotkeys_with`
-/// (the global-shortcut plugin) and for `autostart::apply`.
+/// (the global-shortcut plugin).
 fn apply_settings_change_with(
     app: &AppHandle,
     core: &Core,
@@ -244,7 +258,7 @@ struct AppEffects<'a> {
 
 impl SettingsEffects for AppEffects<'_> {
     fn apply_autostart(&self, enabled: bool) -> Result<(), CommandError> {
-        crate::autostart::apply(self.app, enabled)
+        crate::autostart::apply_with(self.core.host().as_ref(), enabled)
     }
 
     fn set_transform_enabled(&self, enabled: bool) {
@@ -433,6 +447,116 @@ mod tests {
                 serde_json::to_value(&settings).unwrap()
             )]
         );
+    }
+
+    /// Runs `work` on a new thread called `name` and waits for it; "main"
+    /// stands in for the thread the shell's event loop runs on.
+    fn on_a_thread_named<T: Send + 'static>(
+        name: &str,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> thread::Result<T> {
+        thread::Builder::new()
+            .name(name.into())
+            .spawn(work)
+            .unwrap()
+            .join()
+    }
+
+    /// The panic message of a failed thread.
+    #[cfg(debug_assertions)]
+    fn panic_text(panic: Box<dyn std::any::Any + Send>) -> String {
+        panic
+            .downcast_ref::<&str>()
+            .map(|text| text.to_string())
+            .or_else(|| panic.downcast_ref::<String>().cloned())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn the_settings_lock_is_taken_off_the_main_thread() {
+        assert!(!on_main_thread());
+        let writes = Arc::new(Mutex::new(()));
+        let shared = Arc::clone(&writes);
+        on_a_thread_named("launch-at-startup", move || drop(lock(&shared))).unwrap();
+        // Nothing was poisoned or left held.
+        assert!(writes.try_lock().is_ok());
+    }
+
+    /// A synchronous command (or any other main-thread caller) taking the
+    /// lock is a bug, caught in debug builds before the lock is taken.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn taking_the_settings_lock_on_the_main_thread_panics_in_debug_builds() {
+        let writes = Arc::new(Mutex::new(()));
+        let shared = Arc::clone(&writes);
+        let panic = on_a_thread_named("main", move || {
+            assert!(on_main_thread());
+            drop(lock(&shared));
+        })
+        .unwrap_err();
+        assert_eq!(
+            panic_text(panic),
+            "the settings write lock must never be taken on the main thread"
+        );
+        // The assertion fires before the lock is taken, so it is not poisoned.
+        assert!(writes.try_lock().is_ok());
+
+        // Every settings write takes the lock through `lock`, so each one is
+        // caught too.
+        let panic = on_a_thread_named("main", || {
+            let writes = Mutex::new(());
+            let _ = patch_locked(
+                &writes,
+                &patch(json!({ "pillX": 1 })),
+                || Ok(AppSettings::default()),
+                |_, next| Ok(next),
+            );
+        })
+        .unwrap_err();
+        assert_eq!(
+            panic_text(panic),
+            "the settings write lock must never be taken on the main thread"
+        );
+    }
+
+    /// Outside a Windows release build there is no Windows switch to follow
+    /// (`follow_windows_switch_with` answers `None` before it reads the
+    /// host), so syncing keeps the stored settings, announces nothing and
+    /// makes no host call, even when the startup entry differs from them.
+    #[cfg(any(debug_assertions, not(windows)))]
+    #[test]
+    fn syncing_launch_at_startup_off_a_windows_release_build_changes_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let host = host_in(root.path());
+        host.set_launch_at_login_state(true);
+        let state = state_in(root.path());
+        let stored = state.db().unwrap().get_settings().unwrap();
+
+        let settings = sync_launch_at_startup_in(&state, &host).unwrap();
+
+        assert_eq!(settings, stored);
+        assert_eq!(state.db().unwrap().get_settings().unwrap(), stored);
+        assert!(host.events().is_empty());
+        assert!(host.calls().is_empty());
+    }
+
+    #[test]
+    fn syncing_launch_at_startup_with_a_broken_database_fails_and_sends_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let host = host_in(root.path());
+        let state = state_in(root.path());
+        let poisoner = state.clone();
+        let _ = thread::spawn(move || {
+            let _db = poisoner.db().unwrap();
+            panic!("poison the database lock");
+        })
+        .join();
+
+        let error = sync_launch_at_startup_in(&state, &host).unwrap_err();
+
+        assert_eq!(error.code, "database_lock_poisoned");
+        assert!(host.events().is_empty());
+        assert!(host.calls().is_empty());
     }
 
     #[test]
