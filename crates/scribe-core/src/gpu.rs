@@ -146,10 +146,22 @@ fn write_silent_wav(path: &std::path::Path) -> std::io::Result<()> {
 /// yet) is deliberately NOT cached, so it retries once a model exists.
 static PROBE_CACHE: std::sync::Mutex<Option<GpuProbe>> = std::sync::Mutex::new(None);
 
-/// The model and binary of a probe that ran and failed, so the same probe is
-/// not tried again this session (each try unloads the resident engine). A
-/// new model or binary tries again.
-static FAILED_PROBE: std::sync::Mutex<Option<ProbeInputs>> = std::sync::Mutex::new(None);
+/// The model and binary of each background probe that ran and failed, so a
+/// background load does not try the same probe again this session (each try
+/// unloads the resident engine). A new model or binary tries again, and a
+/// probe the person asks for (the Audio page) always runs.
+static FAILED_PROBES: std::sync::Mutex<Vec<ProbeInputs>> = std::sync::Mutex::new(Vec::new());
+
+/// Who wants the probe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProbeAsker {
+    /// A background load, before it loads the model: skips a probe that
+    /// already failed with the same model and binary.
+    BackgroundLoad,
+    /// The person, on the Audio page: always tries (a failure may have been
+    /// a passing one), and leaves the background memory alone.
+    Person,
+}
 
 /// What a probe runs: the bundled whisper-cli on the smallest Whisper model.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,6 +174,10 @@ struct ProbeInputs {
 /// Windows (the only platform whose bundled whisper-cli lists Vulkan
 /// devices), no Whisper model downloaded, or no whisper-cli.
 fn probe_inputs(host: &dyn Host) -> Option<ProbeInputs> {
+    #[cfg(test)]
+    if let Some(inputs) = fake::inputs(host) {
+        return Some(inputs);
+    }
     if !cfg!(windows) {
         return None;
     }
@@ -194,18 +210,25 @@ pub fn probe_with(
     host: &dyn Host,
     warm: Option<&crate::whisper_server::WarmTranscriber>,
 ) -> GpuProbe {
-    probe_using(host, |probe| match warm {
+    probe_using(host, ProbeAsker::Person, |probe| match warm {
         Some(warm) => warm.run_exclusive(probe),
         None => probe(),
     })
 }
 
+/// "Not probed": the result when no probe ran.
+pub(crate) fn not_probed() -> GpuProbe {
+    probe_from_stderr("", false)
+}
+
 /// The probe, with `run` choosing how the model run is fenced off from the
 /// resident engine. `run` is called only when a probe can really run (see
-/// [`probe_inputs`]) and has not already failed with the same model and
-/// binary, so a probe that cannot succeed never unloads the engine.
+/// [`probe_inputs`]) and, for a background load, has not already failed
+/// with the same model and binary, so a probe that cannot succeed never
+/// unloads the engine for it.
 pub(crate) fn probe_using(
     host: &dyn Host,
+    asker: ProbeAsker,
     run: impl FnOnce(&mut dyn FnMut() -> GpuProbe) -> GpuProbe,
 ) -> GpuProbe {
     if let Ok(guard) = PROBE_CACHE.lock() {
@@ -214,28 +237,95 @@ pub(crate) fn probe_using(
         }
     }
     let Some(inputs) = probe_inputs(host) else {
-        return probe_from_stderr("", false);
+        return not_probed();
     };
-    let already_failed = FAILED_PROBE
-        .lock()
-        .map(|failed| failed.as_ref() == Some(&inputs))
-        .unwrap_or(false);
-    if already_failed {
-        return probe_from_stderr("", false);
+    let background = asker == ProbeAsker::BackgroundLoad;
+    if background {
+        let already_failed = FAILED_PROBES
+            .lock()
+            .map(|failed| failed.contains(&inputs))
+            .unwrap_or(false);
+        if already_failed {
+            return not_probed();
+        }
     }
-    let result = run(&mut || probe_uncached(&inputs));
+    let result = run(&mut || run_probe(&inputs));
     if result.probed {
         if let Ok(mut guard) = PROBE_CACHE.lock() {
             *guard = Some(result.clone());
         }
-    } else if let Ok(mut failed) = FAILED_PROBE.lock() {
-        log::warn!(
-            "The GPU probe failed with {}; not trying it again this session",
-            inputs.model.display()
-        );
-        *failed = Some(inputs);
+    } else if background {
+        if let Ok(mut failed) = FAILED_PROBES.lock() {
+            log::warn!(
+                "The GPU probe failed with {}; background loads will not try it again this \
+                 session",
+                inputs.model.display()
+            );
+            if !failed.contains(&inputs) {
+                failed.push(inputs);
+            }
+        }
     }
     result
+}
+
+fn run_probe(inputs: &ProbeInputs) -> GpuProbe {
+    #[cfg(test)]
+    if let Some(result) = fake::run(inputs) {
+        return result;
+    }
+    probe_uncached(inputs)
+}
+
+/// A probe that can run on any platform and always fails, for tests of what
+/// the engine does around the probe. Keyed by the host's data folder, so
+/// tests running at the same time never see each other's.
+#[cfg(test)]
+pub(crate) mod fake {
+    use std::{
+        path::{Path, PathBuf},
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Mutex,
+        },
+    };
+
+    use super::{GpuProbe, ProbeInputs};
+    use crate::host::Host;
+
+    static FAILING: Mutex<Vec<(PathBuf, Arc<AtomicUsize>)>> = Mutex::new(Vec::new());
+
+    /// Makes the probe for hosts with `data_dir` runnable and failing.
+    /// Returns how many times it has run.
+    pub(crate) fn failing_probe(data_dir: &Path) -> Arc<AtomicUsize> {
+        let runs = Arc::new(AtomicUsize::new(0));
+        FAILING
+            .lock()
+            .unwrap()
+            .push((data_dir.to_path_buf(), runs.clone()));
+        runs
+    }
+
+    pub(super) fn inputs(host: &dyn Host) -> Option<ProbeInputs> {
+        let data_dir = host.paths().data_dir();
+        let failing = FAILING.lock().unwrap();
+        failing
+            .iter()
+            .any(|(dir, _)| dir == data_dir)
+            .then(|| ProbeInputs {
+                model: data_dir.join("fake-probe-model.bin"),
+                executable: data_dir.join("fake-whisper-cli"),
+            })
+    }
+
+    pub(super) fn run(inputs: &ProbeInputs) -> Option<GpuProbe> {
+        let failing = FAILING.lock().unwrap();
+        let (_, runs) = failing
+            .iter()
+            .find(|(dir, _)| Some(dir.as_path()) == inputs.model.parent())?;
+        runs.fetch_add(1, Ordering::SeqCst);
+        Some(super::not_probed())
+    }
 }
 
 /// Runs the bundled whisper-cli against a sliver of silence and parses the
@@ -304,17 +394,51 @@ mod tests {
             ),
             Flavor::Stable,
         );
-        let mut fenced = false;
-        let result = probe_using(&host, |probe| {
-            fenced = true;
-            probe()
-        });
-        assert!(
-            !fenced,
-            "the engine was unloaded for a probe that cannot run"
+        for asker in [ProbeAsker::BackgroundLoad, ProbeAsker::Person] {
+            let mut fenced = false;
+            let result = probe_using(&host, asker, |probe| {
+                fenced = true;
+                probe()
+            });
+            assert!(
+                !fenced,
+                "the engine was unloaded for a probe that cannot run ({asker:?})"
+            );
+            assert!(!result.probed);
+            assert!(result.devices.is_empty());
+        }
+    }
+
+    /// A background load does not retry a probe that failed with the same
+    /// model and binary; the person on the Audio page always can.
+    #[test]
+    fn only_background_loads_skip_a_probe_that_already_failed() {
+        use crate::host::{Flavor, RecordingHost};
+        let root =
+            std::env::temp_dir().join(format!("scribe-gpu-failedprobe-{}", std::process::id()));
+        let host = RecordingHost::new(
+            crate::paths::Paths::from_parts(
+                root.join("data"),
+                root.join("cache"),
+                root.join("logs"),
+                None,
+                None,
+            ),
+            Flavor::Stable,
         );
-        assert!(!result.probed);
-        assert!(result.devices.is_empty());
+        let runs = fake::failing_probe(&root.join("data"));
+        let probe = |asker| probe_using(&host, asker, |probe| probe());
+
+        // The person's failures are not remembered.
+        assert!(!probe(ProbeAsker::Person).probed);
+        assert!(!probe(ProbeAsker::Person).probed);
+        assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 2);
+        // The first background failure is, for background loads only.
+        assert!(!probe(ProbeAsker::BackgroundLoad).probed);
+        assert!(!probe(ProbeAsker::BackgroundLoad).probed);
+        assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 3);
+        assert!(!probe(ProbeAsker::Person).probed);
+        assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 4);
     }
 
     const REAL_7800XT: &str = "\

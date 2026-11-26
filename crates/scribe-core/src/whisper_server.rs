@@ -318,6 +318,11 @@ struct Shared {
 /// list the Vulkan devices), so only there does a load probe first.
 const PROBE_GPU_BEFORE_LOAD: bool = cfg!(windows);
 
+/// What a transcription or a load answers once Scribe is quitting.
+fn quitting_error() -> CommandError {
+    CommandError::new("speech_engine_stopped", "Scribe is quitting.")
+}
+
 /// Starts the thread that tells `host` each new engine status: the event
 /// (`scribe:engine-status`), then the tray line. It ends when the last
 /// sender is gone.
@@ -548,15 +553,28 @@ impl WarmTranscriber {
         let warm = self.clone();
         let spawned = spawn_named("speech-engine-load", move || {
             shared.prewarm_pending.store(false, Ordering::SeqCst);
+            if shared.quitting() {
+                return;
+            }
             // The GPU probe loads a model of its own, so it runs (once per
             // session, then cached) before this load rather than later next
             // to the loaded model, when the Models page asks for it.
             if shared.probe_gpu_before_load {
                 if let Some(host) = shared.host.as_deref() {
-                    let _ = crate::gpu::probe_using(host, |probe| warm.run_unloaded(probe));
+                    let _ = crate::gpu::probe_using(
+                        host,
+                        crate::gpu::ProbeAsker::BackgroundLoad,
+                        |probe| {
+                            warm.run_unloaded(probe)
+                                .unwrap_or_else(crate::gpu::not_probed)
+                        },
+                    );
                 }
             }
             drop(warm);
+            if shared.quitting() {
+                return;
+            }
             let Some(settings) = current_settings(&shared) else {
                 return;
             };
@@ -593,7 +611,11 @@ impl WarmTranscriber {
     /// memory together. The resident model is unloaded first and, when the
     /// switch is on, loaded again afterwards.
     pub fn run_exclusive<T>(&self, work: impl FnOnce() -> T) -> T {
-        let result = self.run_unloaded(work);
+        let result = {
+            let mut inner = lock(&self.inner);
+            self.unload_locked(&mut inner);
+            work()
+        };
         if lock(&self.shared.live)
             .selection
             .as_ref()
@@ -607,14 +629,23 @@ impl WarmTranscriber {
     /// Runs `work` with no resident model loaded (it is unloaded first), and
     /// never loads one again afterwards. A background load uses this for its
     /// GPU probe: it is about to load the model itself, and asking for
-    /// another background load from there would repeat without end.
-    fn run_unloaded<T>(&self, work: impl FnOnce() -> T) -> T {
+    /// another background load from there would repeat without end. None,
+    /// without running `work`, once Scribe is quitting (the probe loads a
+    /// model of its own).
+    fn run_unloaded<T>(&self, work: impl FnOnce() -> T) -> Option<T> {
         let mut inner = lock(&self.inner);
+        if self.shared.quitting() {
+            return None;
+        }
+        self.unload_locked(&mut inner);
+        Some(work())
+    }
+
+    fn unload_locked(&self, inner: &mut Inner) {
         if inner.slot.unload() {
             self.shared.after_unload();
             self.publish(None);
         }
-        work()
     }
 
     /// [`Self::transcribe_with`]; the transcriber already knows its host, so
@@ -656,15 +687,18 @@ impl WarmTranscriber {
         // (a driver crash or VRAM OOM on a big model), retry once on CPU
         // (--no-gpu) so a GPU problem degrades to slower-but-working instead of
         // losing the dictation. WS5.
+        // After quitting began (it may have just stopped the server under a
+        // request), no whisper-cli run starts: it would load the model again.
         let mut inner = lock(&self.inner);
-        if inner.slot.unload() {
-            self.shared.after_unload();
-            self.publish(None);
+        if self.shared.quitting() {
+            return Err(quitting_error());
         }
+        self.unload_locked(&mut inner);
         let result = match self.shared.host.as_deref() {
             None => Err(no_main_window()),
             Some(host) => match whisper::transcribe_with(host, request.clone()) {
                 Ok(transcription) => Ok(transcription),
+                Err(_) if self.shared.quitting() => Err(quitting_error()),
                 Err(error) => match cpu_retry_request(&request) {
                     Some(cpu_request) => {
                         log::warn!(
@@ -1186,8 +1220,10 @@ fn load(
         .slot
         .resident()
         .is_some_and(|resident| resident.config() == config);
-    if !matches && shared.quitting() {
-        return Err("Scribe is quitting.".to_string());
+    // Checked whether or not the slot's config matches: a resident process
+    // that has died would be started again by `ensure`.
+    if shared.quitting() {
+        return Err(quitting_error().message);
     }
     if !matches {
         if inner.slot.unload() {
@@ -2043,28 +2079,23 @@ mod tests {
         let settings = current_settings(&warm.shared).unwrap();
 
         warm.sync_with_settings(&settings);
-        std::thread::sleep(Duration::from_millis(1500));
-        let after_a_while = loads_started(&host);
-        std::thread::sleep(Duration::from_millis(1000));
-        let later = loads_started(&host);
+        let first = settled_loads(&host, 1);
+        let later = settled_loads(&host, 1);
         warm.shutdown();
 
-        assert_eq!(
-            (after_a_while, later),
-            (1, 1),
-            "loads started after 1.5 s and after 2.5 s"
-        );
+        assert_eq!((first, later), (1, 1), "loads started, then a while later");
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// Waits until `host` has seen `count` loads start (or 5 s pass), then a
-    /// little longer, so a load that should not happen has time to show.
+    /// Waits until `host` has seen `count` loads start (or 5 s pass), then
+    /// half a second longer, so a load that should not happen has time to
+    /// show (the old loop started thousands in that time).
     fn settled_loads(host: &crate::host::RecordingHost, count: usize) -> usize {
         let started = Instant::now();
         while loads_started(host) < count && started.elapsed() < Duration::from_secs(5) {
             std::thread::sleep(Duration::from_millis(10));
         }
-        std::thread::sleep(Duration::from_millis(300));
+        std::thread::sleep(Duration::from_millis(500));
         loads_started(host)
     }
 
@@ -2247,22 +2278,122 @@ mod tests {
             assert!(started.elapsed() < Duration::from_secs(5), "no status sent");
             std::thread::sleep(Duration::from_millis(10));
         }
-        // Let the status thread finish unwinding.
-        std::thread::sleep(Duration::from_millis(300));
-
-        settings.selected_model_id = Some("tiny.en".into());
+        // New statuses until one arrives: a status sent while the dead thread
+        // is still unwinding is lost with it, the next one restarts it.
         settings.keep_whisper_loaded = false;
-        warm.sync_with_settings(&settings);
+        let models = ["tiny.en", "base.en"];
         let started = Instant::now();
-        while host.inner.events().is_empty() && started.elapsed() < Duration::from_secs(5) {
-            std::thread::sleep(Duration::from_millis(10));
+        let mut sent = 0;
+        while host.inner.events().is_empty() {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "no status reached the host after {sent} tries"
+            );
+            settings.selected_model_id = Some(models[sent % 2].into());
+            warm.sync_with_settings(&settings);
+            sent += 1;
+            std::thread::sleep(Duration::from_millis(20));
         }
         let events = host.inner.events();
-        assert_eq!(events.len(), 1, "{events:?}");
         let CoreEvent::EngineStatus(status) = &events[0] else {
             panic!("not an engine status: {:?}", events[0]);
         };
-        assert_eq!(status.model_id.as_deref(), Some("tiny.en"));
+        assert!(
+            models.contains(&status.model_id.as_deref().unwrap_or_default()),
+            "{status:?}"
+        );
+
+        warm.shutdown();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// After quitting began, a Whisper transcription does not fall back to
+    /// whisper-cli (which would load the model again), and the background
+    /// load's probe step runs nothing.
+    #[test]
+    fn nothing_loads_a_model_once_quitting_began() {
+        let root = std::env::temp_dir().join(format!("scribe-warm-quitcli-{}", std::process::id()));
+        let host = recording_host(&root);
+        let warm = parakeet_engine(&root, host.clone(), false);
+        let model = root.join("data").join("models").join("ggml-tiny.en.bin");
+        let wav = root.join("cache").join("clip.wav");
+        for file in [&model, &wav] {
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, b"not really audio or a model").unwrap();
+        }
+        let request = WhisperRequest {
+            engine: EngineKind::Whisper,
+            model_id: "tiny.en".into(),
+            model_path: model,
+            wav_path: wav,
+            language: "en".into(),
+            translate: false,
+            vocabulary_prompt: String::new(),
+            filler: None,
+            gpu: crate::settings::GpuAcceleration::Auto,
+            gpu_device_index: None,
+        };
+        // Before quitting, the fallback runs (and fails: no whisper-cli here).
+        assert_eq!(
+            warm.transcribe_with(request.clone()).unwrap_err().code,
+            "missing_whisper_executable"
+        );
+
+        warm.shutdown();
+        assert_eq!(
+            warm.transcribe_with(request).unwrap_err().code,
+            "speech_engine_stopped"
+        );
+        let mut ran = false;
+        assert_eq!(warm.run_unloaded(|| ran = true), None);
+        assert!(!ran);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// One of the two loop fixes: the background load probes through
+    /// `run_unloaded`, which asks for no further load. With a probe that can
+    /// run and fails, probing through `run_exclusive` instead would start a
+    /// second load (the failure memory then stops a third), so exactly one
+    /// load and one probe run are expected.
+    #[test]
+    fn a_background_probe_that_runs_and_fails_leads_to_one_load() {
+        let root =
+            std::env::temp_dir().join(format!("scribe-warm-probefail-{}", std::process::id()));
+        let host = recording_host(&root);
+        let warm = parakeet_engine(&root, host.clone(), true);
+        let probe_runs = crate::gpu::fake::failing_probe(&root.join("data"));
+
+        warm.sync_with_settings(&current_settings(&warm.shared).unwrap());
+        assert_eq!(settled_loads(&host, 1), 1);
+        assert_eq!(settled_loads(&host, 1), 1);
+        assert_eq!(probe_runs.load(Ordering::SeqCst), 1);
+
+        warm.shutdown();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The Audio page's probe ignores the background failure memory, so it
+    /// can still try; each try loads the kept model again once (as any
+    /// one-off run does) and then the engine settles.
+    #[test]
+    fn the_person_can_probe_again_and_the_engine_still_settles() {
+        let root = std::env::temp_dir().join(format!("scribe-warm-uiprobe-{}", std::process::id()));
+        let host = recording_host(&root);
+        let warm = parakeet_engine(&root, host.clone(), true);
+        let probe_runs = crate::gpu::fake::failing_probe(&root.join("data"));
+        warm.sync_with_settings(&current_settings(&warm.shared).unwrap());
+        assert_eq!(settled_loads(&host, 1), 1);
+        assert_eq!(probe_runs.load(Ordering::SeqCst), 1);
+
+        for click in 1..=2 {
+            let result = crate::gpu::probe_with(host.as_ref(), Some(&warm));
+            assert!(!result.probed);
+            assert_eq!(settled_loads(&host, 1 + click), 1 + click, "click {click}");
+            assert_eq!(settled_loads(&host, 1 + click), 1 + click, "click {click}");
+        }
+        // Each click ran the probe; the background loads it caused did not.
+        assert_eq!(probe_runs.load(Ordering::SeqCst), 3);
 
         warm.shutdown();
         let _ = fs::remove_dir_all(&root);
