@@ -7,23 +7,35 @@
 //!
 //! How playback works:
 //!
-//! - [`play`] never waits. It hands the cue to a player thread through a small
-//!   bounded queue; when the queue is full the cue is dropped.
-//! - The player keeps one output stream open while cues are playing and
-//!   mixes each new cue into it the moment it arrives, so cues overlap the
-//!   way the Web Audio ones did instead of waiting for each other.
-//! - The stream is closed once it has been silent for [`IDLE_CLOSE_AFTER`],
-//!   so no output device (or audio service process) stays open while Scribe
-//!   is idle. The next cue opens the *current* default device, which is how a
-//!   changed default device is picked up. A stream that reports an error is
-//!   closed and reopened on the next cue.
-//! - Device calls (open and close) can hang or panic inside a driver. Panics
-//!   are caught. A player stuck in a device call for [`STUCK_AFTER`] is
-//!   abandoned and a fresh one started, at most [`MAX_PLAYERS`] per session,
-//!   so a broken driver costs a few parked threads at worst, never a growing
-//!   queue.
+//! - [`play`] never waits on audio. It hands the cue to a player thread
+//!   through a small bounded queue; when the queue is full the cue is dropped.
+//! - The player keeps one output stream open and mixes each new cue into it
+//!   the moment it arrives, so cues overlap the way the Web Audio ones did.
+//! - The start cue opens the stream and it stays open for the whole
+//!   recording, so the stop cue never lands on a freshly opened device (some
+//!   Bluetooth, HDMI and USB outputs mute the first few hundred milliseconds
+//!   of a new stream). It closes [`IDLE_CLOSE_AFTER`] after the stop cue has
+//!   finished, so no output device stays open while Scribe is idle. A
+//!   recording that never reports its end is let go after
+//!   [`max_recording_hold`].
+//! - Idle is measured by the frames the device consumed and, as a fallback,
+//!   by the wall clock, so a stream whose callback silently stops is still
+//!   closed. A stream that reports an error, or stops taking samples while a
+//!   cue is waiting, is closed and the next cue opens a fresh one on the
+//!   *current* default device (which is also how a changed default device is
+//!   picked up).
+//! - The output callback never allocates, frees or waits on a lock: cues are
+//!   rendered before they are handed over, finished cues are freed by the
+//!   player thread, and a contended lock means one buffer of silence.
+//! - Device calls can hang or panic inside a driver. Panics are caught. A
+//!   player stuck in one device call for [`STUCK_AFTER`] is abandoned and its
+//!   cue handed to a fresh player. At most [`MAX_UNPROVEN_STARTS`] players
+//!   are started in a row without one of them playing a cue, so a broken
+//!   driver costs a few parked threads at worst, and sounds come back as soon
+//!   as a player plays a cue again.
 
 use std::{
+    any::Any,
     panic::{catch_unwind, AssertUnwindSafe},
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -91,23 +103,40 @@ const PEAK_GAIN: f32 = 0.15;
 const FLOOR_GAIN: f32 = 0.0001;
 /// Rise time from the floor to the peak.
 const ATTACK_S: f32 = 0.012;
-/// How long the output stream stays open after the last cue finished. Long
-/// enough that a stop followed by a quick start reuses the open stream, short
-/// enough that nothing stays open while Scribe is idle.
+/// How long the output stream stays open after the last cue finished, when
+/// no recording is in progress.
 const IDLE_CLOSE_AFTER: Duration = Duration::from_secs(3);
-/// How often the player checks whether an open stream has gone idle.
-const IDLE_CHECK_EVERY: Duration = Duration::from_millis(250);
+/// Extra wall-clock time on top of [`IDLE_CLOSE_AFTER`] before the stream is
+/// closed even though its callback has not reported the silence (a callback
+/// that silently stopped running).
+const IDLE_CLOCK_SLACK: Duration = Duration::from_secs(2);
+/// A cue that should have finished this long ago but is still waiting in the
+/// mixer means the device stopped taking samples.
+const STALL_AFTER: Duration = Duration::from_secs(2);
+/// How often the player checks an open stream.
+const CHECK_EVERY: Duration = Duration::from_millis(250);
 /// A cue still waiting this long after it was asked for is dropped: a late
 /// blip would be more confusing than none.
 const STALE_AFTER: Duration = Duration::from_secs(1);
 /// Cues waiting for the player. Recording start and stop come one at a time,
 /// so a full queue only happens when the player is stuck.
 const QUEUE_CAPACITY: usize = 4;
-/// A player inside one device call this long is treated as stuck.
-const STUCK_AFTER: Duration = Duration::from_secs(5);
-/// Player threads started per session, including replacements for stuck or
-/// dead ones. Bounds what a broken driver can cost.
-const MAX_PLAYERS: usize = 4;
+/// A player inside one device call this long is treated as stuck. Opening an
+/// output while Windows switches a Bluetooth headset between its headset and
+/// stereo profiles (which a recording start can trigger) can take several
+/// seconds; this sits well above that.
+const STUCK_AFTER: Duration = Duration::from_secs(15);
+/// Players started in a row without any of them playing a cue. A successful
+/// cue resets the count.
+const MAX_UNPROVEN_STARTS: usize = 4;
+
+/// The longest a recording can run (the largest allowed safety ceiling) plus
+/// a minute: how long a start cue can hold the stream open without the
+/// matching stop cue.
+fn max_recording_hold() -> Duration {
+    let ceiling_ms = *crate::settings::RECORDING_CEILING_RANGE_MS.end();
+    Duration::from_millis(u64::from(ceiling_ms)) + Duration::from_secs(60)
+}
 
 impl Cue {
     fn tones(self) -> &'static [Tone] {
@@ -123,71 +152,121 @@ struct Request {
     queued_at: Instant,
 }
 
+// ---------------------------------------------------------------------------
+// Handing cues to the player
+// ---------------------------------------------------------------------------
+
 /// The running player thread, as seen from [`play`].
-struct Player {
+struct PlayerHandle {
     sender: Sender<Request>,
     /// When the player entered its current device call, in [`clock_ms`]
     /// units; 0 while it is not inside one.
     busy_since: Arc<AtomicU64>,
 }
 
-static PLAYER: Mutex<Option<Player>> = Mutex::new(None);
-static PLAYERS_STARTED: AtomicUsize = AtomicUsize::new(0);
+/// Owns the current player and decides when to replace it.
+struct Dispatcher {
+    current: Option<PlayerHandle>,
+    /// Players started since a player last played a cue. Shared with the
+    /// players, which reset it.
+    unproven_starts: Arc<AtomicUsize>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Dispatched {
+    Queued,
+    QueueFull,
+    NoPlayer,
+}
+
+impl Dispatcher {
+    fn new() -> Self {
+        Self {
+            current: None,
+            unproven_starts: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// Hands `request` to the current player, replacing a player that is
+    /// stuck or gone. `start` starts a new player.
+    fn dispatch(
+        &mut self,
+        mut request: Request,
+        now_ms: u64,
+        start: &mut dyn FnMut(Arc<AtomicUsize>) -> Option<PlayerHandle>,
+    ) -> Dispatched {
+        if let Some(player) = &self.current {
+            if is_stuck(player.busy_since.load(Ordering::SeqCst), now_ms) {
+                log::warn!("The sound player is stuck in the audio driver; starting a new one");
+                self.current = None;
+            }
+        }
+
+        if let Some(player) = &self.current {
+            match player.sender.try_send(request) {
+                Ok(()) => return Dispatched::Queued,
+                Err(TrySendError::Full(_)) => return Dispatched::QueueFull,
+                // The player thread is gone (it panicked): start a new one.
+                Err(TrySendError::Disconnected(returned)) => {
+                    request = returned;
+                    self.current = None;
+                }
+            }
+        }
+
+        if self.unproven_starts.load(Ordering::SeqCst) >= MAX_UNPROVEN_STARTS {
+            return Dispatched::NoPlayer;
+        }
+        self.unproven_starts.fetch_add(1, Ordering::SeqCst);
+        let Some(player) = start(self.unproven_starts.clone()) else {
+            return Dispatched::NoPlayer;
+        };
+        let outcome = match player.sender.try_send(request) {
+            Ok(()) => Dispatched::Queued,
+            Err(_) => Dispatched::QueueFull,
+        };
+        self.current = Some(player);
+        outcome
+    }
+}
 
 /// Queues `cue` for playback if the Sounds setting is on. Never blocks on
 /// audio: the only wait is a short lock around handing the cue over.
 pub fn play(app: &AppHandle, cue: Cue) {
-    let mut request = Request {
+    static DISPATCHER: OnceLock<Mutex<Dispatcher>> = OnceLock::new();
+    let request = Request {
         cue,
         queued_at: Instant::now(),
     };
-    let mut slot = lock(&PLAYER);
-
-    if let Some(player) = slot.as_ref() {
-        if is_stuck(player.busy_since.load(Ordering::SeqCst), clock_ms()) {
-            log::warn!("The sound player is stuck in the audio driver; starting a new one");
-            *slot = None;
-        }
+    let outcome = lock(DISPATCHER.get_or_init(|| Mutex::new(Dispatcher::new()))).dispatch(
+        request,
+        clock_ms(),
+        &mut |unproven| start_player(app, unproven),
+    );
+    if outcome != Dispatched::Queued {
+        log::debug!("Skipping the {:?} sound: {:?}", cue, outcome);
     }
-
-    if let Some(player) = slot.as_ref() {
-        match player.sender.try_send(request) {
-            Ok(()) => return,
-            Err(TrySendError::Full(_)) => {
-                log::debug!("Sound queue full; dropping the {:?} sound", cue);
-                return;
-            }
-            // The player thread is gone (it panicked): start a new one.
-            Err(TrySendError::Disconnected(returned)) => {
-                request = returned;
-                *slot = None;
-            }
-        }
-    }
-
-    let Some(player) = start_player(app) else {
-        return;
-    };
-    let _ = player.sender.try_send(request);
-    *slot = Some(player);
 }
 
-/// Starts a player thread, unless [`MAX_PLAYERS`] were already started this
-/// session.
-fn start_player(app: &AppHandle) -> Option<Player> {
-    if PLAYERS_STARTED.fetch_add(1, Ordering::SeqCst) >= MAX_PLAYERS {
-        log::debug!("Sound player limit reached; sounds are off for this session");
-        return None;
-    }
+/// Starts the real player thread.
+fn start_player(app: &AppHandle, unproven_starts: Arc<AtomicUsize>) -> Option<PlayerHandle> {
     let (sender, receiver) = bounded::<Request>(QUEUE_CAPACITY);
     let busy_since = Arc::new(AtomicU64::new(0));
     let thread_busy = busy_since.clone();
     let app = app.clone();
     let spawned = thread::Builder::new()
         .name("scribe-sounds".into())
-        .spawn(move || run_player(&app, &receiver, &thread_busy));
+        .spawn(move || {
+            let player = Player::new(
+                open_default_output,
+                move || sounds_enabled(&app),
+                thread_busy,
+                unproven_starts,
+            );
+            run_player(player, &receiver);
+        });
     match spawned {
-        Ok(_) => Some(Player { sender, busy_since }),
+        Ok(_) => Some(PlayerHandle { sender, busy_since }),
         Err(error) => {
             log::warn!("Could not start the sound player: {}", error);
             None
@@ -195,58 +274,46 @@ fn start_player(app: &AppHandle) -> Option<Player> {
     }
 }
 
-/// The player thread. Exits when its queue is dropped (it was replaced).
-fn run_player(app: &AppHandle, receiver: &Receiver<Request>, busy: &AtomicU64) {
-    let mut output: Option<Output> = None;
+/// The player thread's loop. Exits when its queue is dropped (the player was
+/// replaced).
+fn run_player<O, S>(mut player: Player<O, S>, receiver: &Receiver<Request>)
+where
+    O: FnMut() -> Result<OpenStream, String>,
+    S: FnMut() -> Option<bool>,
+{
     loop {
-        let request = if output.is_some() {
-            match receiver.recv_timeout(IDLE_CHECK_EVERY) {
+        let request = match player.wait() {
+            Some(wait) => match receiver.recv_timeout(wait) {
                 Ok(request) => Some(request),
                 Err(RecvTimeoutError::Timeout) => None,
                 Err(RecvTimeoutError::Disconnected) => break,
-            }
-        } else {
-            match receiver.recv() {
+            },
+            None => match receiver.recv() {
                 Ok(request) => Some(request),
                 Err(_) => break,
-            }
+            },
         };
-
-        if output
-            .as_ref()
-            .is_some_and(|open| open.failed() || open.idle_for() >= IDLE_CLOSE_AFTER)
-        {
-            close(output.take(), busy);
-        }
-
-        let Some(request) = request else {
-            continue;
-        };
-        if !should_play(sounds_enabled(app), request.queued_at.elapsed()) {
-            continue;
-        }
-        if output.is_none() {
-            output = device_call(busy, open_default_output).and_then(|opened| {
-                opened
-                    .map_err(|error| log::debug!("Could not open sound output: {}", error))
-                    .ok()
-            });
-        }
-        // Opening can be slow; a cue that went stale meanwhile is skipped.
-        if let Some(open) = &output {
-            if request.queued_at.elapsed() <= STALE_AFTER {
-                open.add(request.cue);
-            }
-        }
+        player.step(request, Instant::now());
     }
-    close(output.take(), busy);
+    player.close();
 }
 
-/// Closes an output stream, surviving a panic in the driver's close.
-fn close(output: Option<Output>, busy: &AtomicU64) {
-    if let Some(output) = output {
-        device_call(busy, move || drop(output));
-    }
+/// Milliseconds on a process-wide monotonic clock, starting at 1 so that 0
+/// can mean "not busy".
+fn clock_ms() -> u64 {
+    static BASE: OnceLock<Instant> = OnceLock::new();
+    BASE.get_or_init(Instant::now).elapsed().as_millis() as u64 + 1
+}
+
+/// Whether a player that entered a device call at `busy_since` (0: it is not
+/// in one) counts as stuck at `now`.
+///
+/// On platforms whose monotonic clock keeps running through system sleep, a
+/// device call that spans a sleep can look stuck once after wake. That costs
+/// one extra player start, and the budget recovers with the next cue, so it
+/// is not worth tracking sleep separately.
+fn is_stuck(busy_since: u64, now: u64) -> bool {
+    busy_since != 0 && now.saturating_sub(busy_since) >= STUCK_AFTER.as_millis() as u64
 }
 
 /// Runs one device call with the stuck-detection clock running and any panic
@@ -264,19 +331,6 @@ fn device_call<R>(busy: &AtomicU64, call: impl FnOnce() -> R) -> Option<R> {
     }
 }
 
-/// Milliseconds on a process-wide monotonic clock, starting at 1 so that 0
-/// can mean "not busy".
-fn clock_ms() -> u64 {
-    static BASE: OnceLock<Instant> = OnceLock::new();
-    BASE.get_or_init(Instant::now).elapsed().as_millis() as u64 + 1
-}
-
-/// Whether a player that entered a device call at `busy_since` (0: it is not
-/// in one) counts as stuck at `now`.
-fn is_stuck(busy_since: u64, now: u64) -> bool {
-    busy_since != 0 && now.saturating_sub(busy_since) >= STUCK_AFTER.as_millis() as u64
-}
-
 /// Reads the Sounds setting at the moment the cue is about to play, so a
 /// change takes effect at once.
 fn sounds_enabled(app: &AppHandle) -> Option<bool> {
@@ -292,6 +346,161 @@ fn sounds_enabled(app: &AppHandle) -> Option<bool> {
 fn should_play(sounds_enabled: Option<bool>, waited: Duration) -> bool {
     sounds_enabled == Some(true) && waited <= STALE_AFTER
 }
+
+// ---------------------------------------------------------------------------
+// The player: one output stream, opened and closed by rule
+// ---------------------------------------------------------------------------
+
+/// The player thread's state. The stream opener and the settings source are
+/// injected so the open and close rules can be tested without a device.
+struct Player<O, S> {
+    open: O,
+    sounds_enabled: S,
+    output: Option<OpenStream>,
+    /// When the last cue handed to the open stream should have finished.
+    last_cue_end: Option<Instant>,
+    /// Set by a played start cue, cleared by any stop cue.
+    recording_since: Option<Instant>,
+    busy: Arc<AtomicU64>,
+    unproven_starts: Arc<AtomicUsize>,
+}
+
+impl<O, S> Player<O, S>
+where
+    O: FnMut() -> Result<OpenStream, String>,
+    S: FnMut() -> Option<bool>,
+{
+    fn new(
+        open: O,
+        sounds_enabled: S,
+        busy: Arc<AtomicU64>,
+        unproven_starts: Arc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            open,
+            sounds_enabled,
+            output: None,
+            last_cue_end: None,
+            recording_since: None,
+            busy,
+            unproven_starts,
+        }
+    }
+
+    /// How long to wait for the next cue before checking the open stream
+    /// again; `None` (wait for ever) when no stream is open.
+    fn wait(&self) -> Option<Duration> {
+        self.output.as_ref().map(|_| CHECK_EVERY)
+    }
+
+    /// Handles one wake-up at `now`: frees finished cues, applies the close
+    /// rules, then plays `request` if there is one.
+    fn step(&mut self, request: Option<Request>, now: Instant) {
+        self.free_finished_cues();
+        if self.should_close(now) {
+            self.close();
+        }
+
+        let Some(request) = request else {
+            return;
+        };
+        if request.cue == Cue::Stop {
+            self.recording_since = None;
+        }
+        let waited = now.saturating_duration_since(request.queued_at);
+        if !should_play((self.sounds_enabled)(), waited) {
+            return;
+        }
+        if self.output.is_none() {
+            let open = &mut self.open;
+            self.output = device_call(&self.busy, open).and_then(|opened| {
+                opened
+                    .map_err(|error| log::debug!("Could not open sound output: {}", error))
+                    .ok()
+            });
+        }
+        let Some(output) = &self.output else {
+            return;
+        };
+        // Opening can be slow; a cue that went stale meanwhile is skipped.
+        if request.queued_at.elapsed() > STALE_AFTER {
+            return;
+        }
+
+        // Render before taking the lock the output callback needs.
+        let samples = render(request.cue, output.sample_rate);
+        lock(&output.mixer).add(samples);
+        self.last_cue_end = Some(now + Duration::from_secs_f32(cue_length_s(request.cue)));
+        if request.cue == Cue::Start {
+            self.recording_since = Some(now);
+        }
+        self.unproven_starts.store(0, Ordering::SeqCst);
+    }
+
+    /// Whether the open stream should be closed at `now`.
+    fn should_close(&self, now: Instant) -> bool {
+        let Some(output) = &self.output else {
+            return false;
+        };
+        if output.failed.load(Ordering::SeqCst) {
+            return true;
+        }
+        let Some(last_cue_end) = self.last_cue_end else {
+            return true;
+        };
+        let (pending, idle_frames) = {
+            let mixer = lock(&output.mixer);
+            (mixer.has_pending(), mixer.idle_frames)
+        };
+        if pending {
+            // The device stopped taking samples: a fresh stream may work.
+            return now >= last_cue_end + STALL_AFTER;
+        }
+        if let Some(since) = self.recording_since {
+            if now < since + max_recording_hold() {
+                return false;
+            }
+        }
+        let idle_by_frames =
+            Duration::from_secs_f64(idle_frames as f64 / output.sample_rate as f64)
+                >= IDLE_CLOSE_AFTER;
+        let idle_by_clock = now >= last_cue_end + IDLE_CLOSE_AFTER + IDLE_CLOCK_SLACK;
+        idle_by_frames || idle_by_clock
+    }
+
+    /// Takes finished cues out of the mixer and frees them here, not in the
+    /// output callback.
+    fn free_finished_cues(&mut self) {
+        let Some(output) = &self.output else {
+            return;
+        };
+        let finished = {
+            let mut mixer = lock(&output.mixer);
+            if mixer.voices.iter().any(Voice::finished) {
+                let (finished, live): (Vec<Voice>, Vec<Voice>) = std::mem::take(&mut mixer.voices)
+                    .into_iter()
+                    .partition(Voice::finished);
+                mixer.voices = live;
+                finished
+            } else {
+                Vec::new()
+            }
+        };
+        drop(finished);
+    }
+
+    /// Closes the open stream, surviving a panic in the driver's close.
+    fn close(&mut self) {
+        if let Some(output) = self.output.take() {
+            device_call(&self.busy, move || drop(output));
+        }
+        self.last_cue_end = None;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tones
+// ---------------------------------------------------------------------------
 
 /// Gain envelope of one blip at `t` seconds after it starts: an exponential
 /// rise from the floor to the peak over the attack, then an exponential fall
@@ -338,9 +547,15 @@ fn render(cue: Cue, sample_rate: u32) -> Vec<f32> {
         .collect()
 }
 
+// ---------------------------------------------------------------------------
+// Mixing and the output stream
+// ---------------------------------------------------------------------------
+
 /// Cues currently sounding, mixed together by the output callback.
 #[derive(Default)]
 struct Mixer {
+    /// Cues being played. Finished ones stay here until the player thread
+    /// frees them, so the callback never frees memory.
     voices: Vec<Voice>,
     /// Frames written since the last cue finished (0 while one is playing).
     idle_frames: u64,
@@ -349,6 +564,12 @@ struct Mixer {
 struct Voice {
     samples: Vec<f32>,
     position: usize,
+}
+
+impl Voice {
+    fn finished(&self) -> bool {
+        self.position >= self.samples.len()
+    }
 }
 
 impl Mixer {
@@ -360,8 +581,12 @@ impl Mixer {
         self.idle_frames = 0;
     }
 
+    fn has_pending(&self) -> bool {
+        self.voices.iter().any(|voice| !voice.finished())
+    }
+
     /// Fills an interleaved buffer of `channels` channels with the mix of all
-    /// sounding cues, then forgets the cues that have finished.
+    /// sounding cues. Never allocates or frees.
     fn fill<T>(&mut self, out: &mut [T], channels: usize)
     where
         T: SizedSample + FromSample<f32>,
@@ -377,9 +602,7 @@ impl Mixer {
             }
             write_frame(frame, value.clamp(-1.0, 1.0));
         }
-        self.voices
-            .retain(|voice| voice.position < voice.samples.len());
-        if self.voices.is_empty() {
+        if !self.has_pending() {
             self.idle_frames += (out.len() / channels) as u64;
         }
     }
@@ -399,6 +622,22 @@ where
     }
 }
 
+/// The output callback: mixes into `data`, or writes one buffer of silence
+/// when the player thread holds the lock at that instant, so the callback
+/// never waits.
+fn output_callback<T>(mixer: &Mutex<Mixer>, data: &mut [T], channels: usize)
+where
+    T: SizedSample + FromSample<f32>,
+{
+    match mixer.try_lock() {
+        Ok(mut mixer) => mixer.fill(data, channels),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+            poisoned.into_inner().fill(data, channels)
+        }
+        Err(std::sync::TryLockError::WouldBlock) => data.fill(T::EQUILIBRIUM),
+    }
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
@@ -407,87 +646,74 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// An open output stream and the mixer feeding it. Dropping it closes the
 /// device.
-struct Output {
-    _stream: cpal::Stream,
+struct OpenStream {
+    /// The platform stream; dropping it closes the device.
+    _stream: Box<dyn Any>,
     mixer: Arc<Mutex<Mixer>>,
     sample_rate: u32,
+    /// Set by the stream's error callback.
     failed: Arc<AtomicBool>,
 }
 
-impl Output {
-    fn open(device: &Device) -> Result<Output, String> {
-        let supported = device
-            .default_output_config()
-            .map_err(|error| format!("no usable output config: {}", error))?;
-        let sample_format = supported.sample_format();
-        let config: StreamConfig = supported.into();
-        match sample_format {
-            SampleFormat::F32 => Self::open_as::<f32>(device, config),
-            SampleFormat::F64 => Self::open_as::<f64>(device, config),
-            SampleFormat::I16 => Self::open_as::<i16>(device, config),
-            SampleFormat::I32 => Self::open_as::<i32>(device, config),
-            SampleFormat::U16 => Self::open_as::<u16>(device, config),
-            SampleFormat::U8 => Self::open_as::<u8>(device, config),
-            SampleFormat::I8 => Self::open_as::<i8>(device, config),
-            other => Err(format!("unsupported sample format {:?}", other)),
-        }
-    }
-
-    fn open_as<T>(device: &Device, config: StreamConfig) -> Result<Output, String>
-    where
-        T: SizedSample + FromSample<f32>,
-    {
-        let mixer = Arc::new(Mutex::new(Mixer::default()));
-        let failed = Arc::new(AtomicBool::new(false));
-        let channels = config.channels as usize;
-        let callback_mixer = mixer.clone();
-        let callback_failed = failed.clone();
-        let stream = device
-            .build_output_stream(
-                &config,
-                move |data: &mut [T], _| lock(&callback_mixer).fill(data, channels),
-                move |error| {
-                    log::debug!("Sound output stream error: {}", error);
-                    callback_failed.store(true, Ordering::SeqCst);
-                },
-                None,
-            )
-            .map_err(|error| error.to_string())?;
-        stream.play().map_err(|error| error.to_string())?;
-        Ok(Output {
-            _stream: stream,
-            mixer,
-            sample_rate: config.sample_rate.0.max(1),
-            failed,
-        })
-    }
-
-    fn add(&self, cue: Cue) {
-        lock(&self.mixer).add(render(cue, self.sample_rate));
-    }
-
-    fn failed(&self) -> bool {
-        self.failed.load(Ordering::SeqCst)
-    }
-
-    /// How long the stream has played only silence.
-    fn idle_for(&self) -> Duration {
-        let frames = lock(&self.mixer).idle_frames;
-        Duration::from_secs_f64(frames as f64 / self.sample_rate as f64)
-    }
-}
-
-fn open_default_output() -> Result<Output, String> {
+fn open_default_output() -> Result<OpenStream, String> {
     let device = cpal::default_host()
         .default_output_device()
         .ok_or_else(|| "no output device".to_string())?;
-    Output::open(&device)
+    open_output(&device)
+}
+
+fn open_output(device: &Device) -> Result<OpenStream, String> {
+    let supported = device
+        .default_output_config()
+        .map_err(|error| format!("no usable output config: {}", error))?;
+    let sample_format = supported.sample_format();
+    let config: StreamConfig = supported.into();
+    match sample_format {
+        SampleFormat::F32 => open_output_as::<f32>(device, config),
+        SampleFormat::F64 => open_output_as::<f64>(device, config),
+        SampleFormat::I16 => open_output_as::<i16>(device, config),
+        SampleFormat::I32 => open_output_as::<i32>(device, config),
+        SampleFormat::U16 => open_output_as::<u16>(device, config),
+        SampleFormat::U8 => open_output_as::<u8>(device, config),
+        SampleFormat::I8 => open_output_as::<i8>(device, config),
+        other => Err(format!("unsupported sample format {:?}", other)),
+    }
+}
+
+fn open_output_as<T>(device: &Device, config: StreamConfig) -> Result<OpenStream, String>
+where
+    T: SizedSample + FromSample<f32>,
+{
+    let mixer = Arc::new(Mutex::new(Mixer::default()));
+    let failed = Arc::new(AtomicBool::new(false));
+    let channels = config.channels as usize;
+    let callback_mixer = mixer.clone();
+    let callback_failed = failed.clone();
+    let stream = device
+        .build_output_stream(
+            &config,
+            move |data: &mut [T], _| output_callback(&callback_mixer, data, channels),
+            move |error| {
+                log::debug!("Sound output stream error: {}", error);
+                callback_failed.store(true, Ordering::SeqCst);
+            },
+            None,
+        )
+        .map_err(|error| error.to_string())?;
+    stream.play().map_err(|error| error.to_string())?;
+    Ok(OpenStream {
+        _stream: Box::new(stream),
+        mixer,
+        sample_rate: config.sample_rate.0.max(1),
+        failed,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use cpal::Sample;
+    use std::{cell::Cell, rc::Rc};
 
     const RATE: u32 = 48_000;
 
@@ -633,7 +859,12 @@ mod tests {
             );
             assert_eq!(out[frame * 2], out[frame * 2 + 1], "left and right match");
         }
-        assert!(mixer.voices.is_empty(), "finished cues are forgotten");
+        assert!(!mixer.has_pending(), "both cues finished");
+        assert_eq!(
+            mixer.voices.len(),
+            2,
+            "the callback leaves finished cues for the player to free"
+        );
     }
 
     #[test]
@@ -650,12 +881,25 @@ mod tests {
 
         let mut rest = vec![0.0f32; 6_000];
         mixer.fill(&mut rest, 1);
-        assert!(mixer.voices.is_empty());
+        assert!(!mixer.has_pending());
         assert_eq!(mixer.idle_frames, 6_000);
         assert!(
             rest[5_500..].iter().all(|s| *s == 0.0),
             "silence after the cue"
         );
+    }
+
+    #[test]
+    fn a_busy_mixer_lock_means_one_buffer_of_silence() {
+        let mixer = Mutex::new(Mixer::default());
+        lock(&mixer).add(vec![0.5; 4]);
+        let held = lock(&mixer);
+        let mut out = [1.0f32; 4];
+        output_callback(&mixer, &mut out, 2);
+        assert_eq!(out, [0.0; 4], "silence instead of waiting");
+        drop(held);
+        output_callback(&mixer, &mut out, 2);
+        assert_eq!(out, [0.5; 4], "the cue plays on the next buffer");
     }
 
     #[test]
@@ -711,6 +955,7 @@ mod tests {
     #[test]
     fn a_player_is_stuck_only_inside_a_long_device_call() {
         let stuck_ms = STUCK_AFTER.as_millis() as u64;
+        assert!(stuck_ms >= 15_000, "well above a slow Bluetooth open");
         assert!(!is_stuck(0, 1_000_000), "not in a device call");
         assert!(!is_stuck(1_000, 1_000 + stuck_ms - 1));
         assert!(is_stuck(1_000, 1_000 + stuck_ms));
@@ -725,71 +970,440 @@ mod tests {
         assert_eq!(device_call(&busy, || 7), Some(7));
     }
 
-    /// Without a device this cannot run the player end to end, so it checks
+    // --- The player's open and close rules, on a fake stream -------------
+
+    /// A fake output: counts opens and closes and lets the test play the
+    /// device's part by consuming frames from the mixer.
+    struct Fake {
+        opens: Rc<Cell<usize>>,
+        closes: Rc<Cell<usize>>,
+        mixers: Rc<std::cell::RefCell<Vec<Arc<Mutex<Mixer>>>>>,
+        failed: Rc<std::cell::RefCell<Vec<Arc<AtomicBool>>>>,
+        enabled: Rc<Cell<Option<bool>>>,
+        open_fails: Rc<Cell<bool>>,
+    }
+
+    struct CloseCounter(Rc<Cell<usize>>);
+
+    impl Drop for CloseCounter {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    impl Fake {
+        fn new() -> Self {
+            Self {
+                opens: Rc::default(),
+                closes: Rc::default(),
+                mixers: Rc::default(),
+                failed: Rc::default(),
+                enabled: Rc::new(Cell::new(Some(true))),
+                open_fails: Rc::default(),
+            }
+        }
+
+        fn player(
+            &self,
+        ) -> Player<impl FnMut() -> Result<OpenStream, String>, impl FnMut() -> Option<bool>>
+        {
+            let (opens, closes, mixers, failed, fails) = (
+                self.opens.clone(),
+                self.closes.clone(),
+                self.mixers.clone(),
+                self.failed.clone(),
+                self.open_fails.clone(),
+            );
+            let enabled = self.enabled.clone();
+            Player::new(
+                move || {
+                    if fails.get() {
+                        return Err("no device".into());
+                    }
+                    opens.set(opens.get() + 1);
+                    let mixer = Arc::new(Mutex::new(Mixer::default()));
+                    let flag = Arc::new(AtomicBool::new(false));
+                    mixers.borrow_mut().push(mixer.clone());
+                    failed.borrow_mut().push(flag.clone());
+                    Ok(OpenStream {
+                        _stream: Box::new(CloseCounter(closes.clone())),
+                        mixer,
+                        sample_rate: RATE,
+                        failed: flag,
+                    })
+                },
+                move || enabled.get(),
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicUsize::new(0)),
+            )
+        }
+
+        /// The device consumes `ms` of audio from the newest stream, in 10 ms
+        /// buffers like a real callback.
+        fn consume(&self, ms: u64) {
+            let mixer = self.mixers.borrow().last().cloned().expect("a stream");
+            let mut buffer = vec![0.0f32; RATE as usize / 100 * 2];
+            for _ in 0..ms / 10 {
+                lock(&mixer).fill(&mut buffer, 2);
+            }
+        }
+    }
+
+    fn at(base: Instant, ms: u64) -> Instant {
+        base + Duration::from_millis(ms)
+    }
+
+    fn cue(cue: Cue, queued_at: Instant) -> Option<Request> {
+        Some(Request { cue, queued_at })
+    }
+
+    #[test]
+    fn a_stop_cue_closes_the_stream_three_seconds_after_it_ends() {
+        let fake = Fake::new();
+        let mut player = fake.player();
+        let base = Instant::now();
+        assert_eq!(player.wait(), None, "nothing open: sleep until a cue");
+
+        player.step(cue(Cue::Stop, base), base);
+        assert_eq!(fake.opens.get(), 1);
+        assert_eq!(player.wait(), Some(CHECK_EVERY));
+
+        fake.consume(130 + 2_900);
+        player.step(None, at(base, 3_030));
+        assert_eq!(fake.closes.get(), 0, "not yet 3 s of silence");
+
+        fake.consume(100);
+        player.step(None, at(base, 3_130));
+        assert_eq!(fake.closes.get(), 1, "closed after 3 s of silence");
+        assert_eq!(player.wait(), None);
+    }
+
+    #[test]
+    fn the_next_cue_after_a_close_opens_a_fresh_stream() {
+        let fake = Fake::new();
+        let mut player = fake.player();
+        let base = Instant::now();
+        player.step(cue(Cue::Stop, base), base);
+        fake.consume(3_200);
+        // The close and the next cue land on the same wake-up.
+        player.step(cue(Cue::Start, at(base, 3_200)), at(base, 3_200));
+        assert_eq!(fake.closes.get(), 1, "the idle stream was closed");
+        assert_eq!(fake.opens.get(), 2, "and a fresh one opened for the cue");
+        let mixer = fake.mixers.borrow()[1].clone();
+        assert!(lock(&mixer).has_pending(), "the cue went to the new stream");
+    }
+
+    #[test]
+    fn the_stream_stays_open_for_the_whole_recording() {
+        let fake = Fake::new();
+        let mut player = fake.player();
+        let base = Instant::now();
+        player.step(cue(Cue::Start, base), base);
+        fake.consume(60_000);
+        player.step(None, at(base, 60_000));
+        assert_eq!(fake.closes.get(), 0, "a minute in, still open");
+
+        player.step(cue(Cue::Stop, at(base, 60_000)), at(base, 60_000));
+        assert_eq!(fake.opens.get(), 1, "the stop cue reuses the open stream");
+        fake.consume(130 + 3_000);
+        player.step(None, at(base, 63_130));
+        assert_eq!(fake.closes.get(), 1, "closed 3 s after the stop cue");
+    }
+
+    #[test]
+    fn a_recording_that_never_ends_lets_the_device_go() {
+        let fake = Fake::new();
+        let mut player = fake.player();
+        let base = Instant::now();
+        player.step(cue(Cue::Start, base), base);
+        let hold = max_recording_hold().as_millis() as u64;
+        fake.consume(5_000);
+        player.step(None, at(base, hold - 1));
+        assert_eq!(fake.closes.get(), 0);
+        player.step(None, at(base, hold + 1));
+        assert_eq!(
+            fake.closes.get(),
+            1,
+            "held at most for the longest recording"
+        );
+    }
+
+    #[test]
+    fn a_callback_that_stops_counting_still_closes_by_the_clock() {
+        let fake = Fake::new();
+        let mut player = fake.player();
+        let base = Instant::now();
+        player.step(cue(Cue::Stop, base), base);
+        // The device took the cue, then its callback stopped running.
+        fake.consume(130);
+        player.step(None, at(base, 4_000));
+        assert_eq!(fake.closes.get(), 0, "within the slack");
+        player.step(None, at(base, 130 + 5_000));
+        assert_eq!(fake.closes.get(), 1, "closed by the wall clock");
+    }
+
+    #[test]
+    fn a_stream_that_stops_taking_samples_is_replaced() {
+        let fake = Fake::new();
+        let mut player = fake.player();
+        let base = Instant::now();
+        player.step(cue(Cue::Start, base), base);
+        // The callback never runs, even during the recording.
+        player.step(None, at(base, 1_000));
+        assert_eq!(fake.closes.get(), 0);
+        player.step(None, at(base, 120 + 2_000));
+        assert_eq!(fake.closes.get(), 1, "a stalled stream is closed");
+
+        let now = at(base, 5_000);
+        player.step(cue(Cue::Stop, now), now);
+        assert_eq!(fake.opens.get(), 2, "the stop cue gets a fresh stream");
+    }
+
+    #[test]
+    fn a_stream_error_closes_it_and_the_next_cue_reopens() {
+        let fake = Fake::new();
+        let mut player = fake.player();
+        let base = Instant::now();
+        player.step(cue(Cue::Start, base), base);
+        fake.failed.borrow()[0].store(true, Ordering::SeqCst);
+        player.step(None, at(base, 250));
+        assert_eq!(fake.closes.get(), 1);
+        player.step(cue(Cue::Stop, at(base, 400)), at(base, 400));
+        assert_eq!(fake.opens.get(), 2);
+    }
+
+    #[test]
+    fn finished_cues_are_freed_by_the_player_not_the_callback() {
+        let fake = Fake::new();
+        let mut player = fake.player();
+        let base = Instant::now();
+        player.step(cue(Cue::Stop, base), base);
+        fake.consume(200);
+        let mixer = fake.mixers.borrow()[0].clone();
+        assert_eq!(lock(&mixer).voices.len(), 1, "left for the player");
+        player.step(None, at(base, 250));
+        assert!(lock(&mixer).voices.is_empty(), "freed on the player thread");
+    }
+
+    #[test]
+    fn nothing_opens_when_sounds_are_off_stale_or_there_is_no_device() {
+        let fake = Fake::new();
+        let mut player = fake.player();
+        let base = Instant::now();
+        fake.enabled.set(Some(false));
+        player.step(cue(Cue::Start, base), base);
+        fake.enabled.set(None);
+        player.step(cue(Cue::Start, base), base);
+        fake.enabled.set(Some(true));
+        player.step(cue(Cue::Start, base), at(base, 1_001));
+        assert_eq!(fake.opens.get(), 0);
+
+        fake.open_fails.set(true);
+        player.step(cue(Cue::Start, base), base);
+        assert_eq!(player.wait(), None, "no device: nothing open");
+    }
+
+    #[test]
+    fn a_played_cue_resets_the_player_start_budget() {
+        let fake = Fake::new();
+        let mut player = fake.player();
+        player.unproven_starts.store(3, Ordering::SeqCst);
+        let base = Instant::now();
+        player.step(cue(Cue::Start, base), base);
+        assert_eq!(player.unproven_starts.load(Ordering::SeqCst), 0);
+    }
+
+    // --- Handing cues over and replacing players -------------------------
+
+    /// Starts fake players: a channel and a busy clock, no thread.
+    #[derive(Default)]
+    struct FakeStarts {
+        receivers: Vec<Receiver<Request>>,
+        busy: Vec<Arc<AtomicU64>>,
+    }
+
+    impl FakeStarts {
+        fn start(&mut self, _unproven: Arc<AtomicUsize>) -> Option<PlayerHandle> {
+            let (sender, receiver) = bounded(QUEUE_CAPACITY);
+            let busy_since = Arc::new(AtomicU64::new(0));
+            self.receivers.push(receiver);
+            self.busy.push(busy_since.clone());
+            Some(PlayerHandle { sender, busy_since })
+        }
+    }
+
+    fn request(cue: Cue) -> Request {
+        Request {
+            cue,
+            queued_at: Instant::now(),
+        }
+    }
+
+    fn send(
+        dispatcher: &mut Dispatcher,
+        starts: &mut FakeStarts,
+        cue: Cue,
+        now_ms: u64,
+    ) -> Dispatched {
+        dispatcher.dispatch(request(cue), now_ms, &mut |unproven| starts.start(unproven))
+    }
+
+    #[test]
+    fn a_stuck_player_is_abandoned_and_its_cue_handed_over() {
+        let mut dispatcher = Dispatcher::new();
+        let mut starts = FakeStarts::default();
+        assert_eq!(
+            send(&mut dispatcher, &mut starts, Cue::Start, 1),
+            Dispatched::Queued
+        );
+        assert_eq!(starts.receivers.len(), 1);
+
+        // The first player has been inside a device call for 15 s.
+        starts.busy[0].store(1_000, Ordering::SeqCst);
+        let now = 1_000 + STUCK_AFTER.as_millis() as u64;
+        assert_eq!(
+            send(&mut dispatcher, &mut starts, Cue::Stop, now),
+            Dispatched::Queued
+        );
+        assert_eq!(starts.receivers.len(), 2, "a new player was started");
+        let handed = starts.receivers[1]
+            .try_recv()
+            .expect("the cue was handed over");
+        assert_eq!(handed.cue, Cue::Stop);
+        assert!(starts.receivers[0].try_recv().is_ok(), "only the first cue");
+        assert!(starts.receivers[0].try_recv().is_err());
+    }
+
+    #[test]
+    fn a_slow_device_call_is_not_mistaken_for_a_stuck_player() {
+        let mut dispatcher = Dispatcher::new();
+        let mut starts = FakeStarts::default();
+        send(&mut dispatcher, &mut starts, Cue::Start, 1);
+        // A Bluetooth profile switch: 8 s inside the open.
+        starts.busy[0].store(1_000, Ordering::SeqCst);
+        send(&mut dispatcher, &mut starts, Cue::Stop, 9_000);
+        assert_eq!(starts.receivers.len(), 1, "the same player keeps the cue");
+    }
+
+    #[test]
+    fn a_full_queue_drops_the_cue_instead_of_growing() {
+        let mut dispatcher = Dispatcher::new();
+        let mut starts = FakeStarts::default();
+        for _ in 0..QUEUE_CAPACITY {
+            assert_eq!(
+                send(&mut dispatcher, &mut starts, Cue::Start, 1),
+                Dispatched::Queued
+            );
+        }
+        assert_eq!(
+            send(&mut dispatcher, &mut starts, Cue::Start, 1),
+            Dispatched::QueueFull
+        );
+        assert_eq!(
+            starts.receivers.len(),
+            1,
+            "no extra player for a full queue"
+        );
+    }
+
+    #[test]
+    fn the_player_start_budget_runs_out_and_recovers_after_a_cue_plays() {
+        let mut dispatcher = Dispatcher::new();
+        let mut starts = FakeStarts::default();
+        // Each player dies before playing anything.
+        for round in 0..MAX_UNPROVEN_STARTS {
+            assert_eq!(
+                send(&mut dispatcher, &mut starts, Cue::Start, 1),
+                Dispatched::Queued,
+                "start {round}"
+            );
+            starts.receivers.clear();
+        }
+        assert_eq!(
+            send(&mut dispatcher, &mut starts, Cue::Start, 1),
+            Dispatched::NoPlayer,
+            "out of budget"
+        );
+
+        // A player plays a cue: the budget is back.
+        dispatcher.unproven_starts.store(0, Ordering::SeqCst);
+        assert_eq!(
+            send(&mut dispatcher, &mut starts, Cue::Start, 1),
+            Dispatched::Queued
+        );
+    }
+
+    /// Without a device this cannot run the app end to end, so it checks
     /// the source instead: each recording event is emitted from exactly one
-    /// helper in audio.rs, and that helper plays the matching cue.
+    /// helper in audio.rs, that helper plays the matching cue, and code (not
+    /// only a comment) calls the helper.
     #[test]
     fn recording_events_play_their_cues() {
         // A Windows checkout can have CRLF line endings.
         let audio = include_str!("audio.rs").replace("\r\n", "\n");
+        let code: String = audio
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
         for (event, helper, cue) in [
             (
                 "\"audio://recording-started\"",
-                "fn emit_recording_started(",
+                "emit_recording_started",
                 "Cue::Start",
             ),
             (
                 "\"audio://recording-stopped\"",
-                "fn emit_recording_stopped(",
+                "emit_recording_stopped",
                 "Cue::Stop",
             ),
         ] {
             assert_eq!(
-                audio.matches(event).count(),
+                code.matches(event).count(),
                 1,
                 "{event} is emitted only from {helper}"
             );
-            let body_start = audio.find(helper).expect("the helper exists");
-            let body = &audio[body_start..];
-            let body = &body[..body.find("\n}\n").expect("the helper ends")];
+            let definition = format!("fn {helper}(");
+            let body_start = code.find(&definition).expect("the helper exists");
+            let body = &code[body_start..];
+            let body = &body[..body.find("\n}").expect("the helper ends")];
             assert!(body.contains(event), "{helper} emits {event}");
             assert!(
                 body.contains(&format!("crate::sounds::play(app, crate::sounds::{cue})")),
                 "{helper} plays {cue}"
             );
-            let calls = audio.matches(&helper[3..]).count() - 1;
-            assert!(calls >= 1, "{helper} is called");
+            let calls = code.matches(&format!("{helper}(")).count() - 1;
+            assert!(calls >= 1, "{helper} is called from code");
         }
     }
 
     /// Plays two overlapping cues through a real output stream, checks the
-    /// device consumed every sample of both and that the stream then reports
-    /// itself idle (which is when the player closes it), then closes it.
-    /// Needs an output device, and on a real one it is audible, so run it by
-    /// hand: `cargo test --lib sounds -- --ignored`.
+    /// device consumed every sample of both and then counted silence (what
+    /// the close rule reads), then closes the stream. Needs an output device,
+    /// and on a real one it is audible, so run it by hand:
+    /// `cargo test --lib sounds -- --ignored`.
     #[test]
     #[ignore = "needs an output device"]
     fn cues_play_through_a_real_output_stream() {
         let output = open_default_output().expect("an output stream opens");
-        output.add(Cue::Stop);
+        lock(&output.mixer).add(render(Cue::Stop, output.sample_rate));
         thread::sleep(Duration::from_millis(40));
-        output.add(Cue::Start);
+        lock(&output.mixer).add(render(Cue::Start, output.sample_rate));
 
         let deadline = Instant::now() + Duration::from_secs(3);
-        while !lock(&output.mixer).voices.is_empty() {
+        while lock(&output.mixer).has_pending() {
             assert!(
                 Instant::now() < deadline,
                 "the device stopped taking samples"
             );
             thread::sleep(Duration::from_millis(10));
         }
-        while output.idle_for() < Duration::from_millis(100) {
+        while lock(&output.mixer).idle_frames < u64::from(output.sample_rate / 10) {
             assert!(Instant::now() < deadline, "the stream never went idle");
             thread::sleep(Duration::from_millis(10));
         }
-        assert!(!output.failed(), "the stream reported no error");
+        assert!(!output.failed.load(Ordering::SeqCst), "no stream error");
         let busy = AtomicU64::new(0);
-        close(Some(output), &busy);
-        assert_eq!(busy.load(Ordering::SeqCst), 0);
+        assert!(device_call(&busy, move || drop(output)).is_some());
     }
 }
