@@ -230,11 +230,8 @@ impl AudioService {
             .collect())
     }
 
-    /// Still takes the app for the incremental session, whose segment
-    /// transcription goes through the models lane with the app.
     fn start(
         &mut self,
-        app: &AppHandle,
         core: &Core,
         settings: &AppSettings,
         request: StartRecordingRequest,
@@ -310,7 +307,6 @@ impl AudioService {
                 .then_some(settings.segment_pause_ms as u64);
             let segment_max_ms = settings.segment_max_ms as u64;
             crate::incremental::start_session_with(
-                app,
                 core,
                 &session_id,
                 self.temp_dir.clone(),
@@ -444,13 +440,11 @@ pub fn start_recording_for_app(
     allow_auto_stop: bool,
 ) -> Result<RecordingSessionInfo, CommandError> {
     let core = core_for(app, "start recording")?;
-    start_recording_with(app, &core, request, allow_auto_stop)
+    start_recording_with(&core, request, allow_auto_stop)
 }
 
-/// [`start_recording_for_app`] on the engine. Still takes the app for the
-/// incremental session (see [`AudioService::start`]).
+/// [`start_recording_for_app`] on the engine.
 pub fn start_recording_with(
-    app: &AppHandle,
     core: &Core,
     request: Option<StartRecordingRequest>,
     allow_auto_stop: bool,
@@ -470,7 +464,6 @@ pub fn start_recording_with(
         }
 
         let outcome = state.audio()?.start(
-            app,
             core,
             &settings,
             request.unwrap_or_default(),
@@ -498,7 +491,6 @@ pub fn start_recording_with(
         Ok(outcome.info)
     } else if snapshot.status == AppStatus::Recording {
         let outcome = state.audio()?.start(
-            app,
             core,
             &settings,
             request.unwrap_or_default(),
@@ -567,13 +559,11 @@ pub fn record_test_clip_for_app(
     duration_ms: Option<u64>,
 ) -> Result<RecordingResult, CommandError> {
     let core = core_for(app, "record a test clip")?;
-    record_test_clip_with(app, &core, duration_ms)
+    record_test_clip_with(&core, duration_ms)
 }
 
-/// Records a test clip of a fixed length. Still takes the app because
-/// [`AudioService::start`] does.
+/// Records a test clip of a fixed length.
 pub fn record_test_clip_with(
-    app: &AppHandle,
     core: &Core,
     duration_ms: Option<u64>,
 ) -> Result<RecordingResult, CommandError> {
@@ -593,7 +583,7 @@ pub fn record_test_clip_with(
     // duration and must capture whatever the mic hears.
     let outcome = state
         .audio()?
-        .start(app, core, &settings, request, true, false)?;
+        .start(core, &settings, request, true, false)?;
 
     if !outcome.started {
         return Err(CommandError::new(

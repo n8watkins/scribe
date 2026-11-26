@@ -385,7 +385,6 @@ pub fn start_session(
         return None;
     };
     start_session_with(
-        app,
         &core,
         session_id,
         temp_dir,
@@ -395,11 +394,8 @@ pub fn start_session(
     )
 }
 
-/// [`start_session`] on the engine. Still takes the app because the
-/// coordinator transcribes each segment through the models lane
-/// (`model_manager::session_model_path`, `WarmTranscriber::transcribe`).
+/// [`start_session`] on the engine.
 pub fn start_session_with(
-    app: &AppHandle,
     core: &Core,
     session_id: &str,
     temp_dir: PathBuf,
@@ -419,20 +415,11 @@ pub fn start_session_with(
         },
     );
 
-    let coordinator_app = app.clone();
     let coordinator_core = core.clone();
     let coordinator_session = session_id.to_string();
     let spawned = std::thread::Builder::new()
         .name("incremental-transcribe".to_string())
-        .spawn(move || {
-            run_coordinator(
-                coordinator_app,
-                coordinator_core,
-                coordinator_session,
-                msg_rx,
-                result_tx,
-            )
-        });
+        .spawn(move || run_coordinator(coordinator_core, coordinator_session, msg_rx, result_tx));
 
     if let Err(error) = spawned {
         log::warn!(
@@ -480,7 +467,6 @@ struct SegmentContext {
 }
 
 fn run_coordinator(
-    app: AppHandle,
     core: Core,
     session_id: String,
     msg_rx: Receiver<Msg>,
@@ -496,14 +482,8 @@ fn run_coordinator(
             Ok(Msg::Segment(path)) => {
                 if !failed {
                     let accumulated = join_segments(&texts);
-                    match transcribe_segment(
-                        &app,
-                        &core,
-                        &session_id,
-                        &mut context,
-                        &path,
-                        &accumulated,
-                    ) {
+                    match transcribe_segment(&core, &session_id, &mut context, &path, &accumulated)
+                    {
                         Ok(text) => {
                             segments += 1;
                             if !text.is_empty() {
@@ -555,10 +535,7 @@ fn run_coordinator(
     }
 }
 
-/// Still takes the app for `WarmTranscriber::transcribe` and
-/// [`segment_context`] (models).
 fn transcribe_segment(
-    app: &AppHandle,
     core: &Core,
     session_id: &str,
     context: &mut Option<SegmentContext>,
@@ -566,45 +543,45 @@ fn transcribe_segment(
     accumulated: &str,
 ) -> Result<String, String> {
     if context.is_none() {
-        *context = Some(segment_context(app, core.backend(), session_id)?);
+        *context = Some(segment_context(
+            core.host().as_ref(),
+            core.backend(),
+            session_id,
+        )?);
     }
     let context = context.as_ref().expect("segment context resolved above");
 
     let transcription = core
         .warm_transcriber()
-        .transcribe(
-            app,
-            WhisperRequest {
-                engine: context.engine,
-                model_id: context.model_id.clone(),
-                model_path: context.model_path.clone(),
-                wav_path: wav_path.to_path_buf(),
-                language: context.language.clone(),
-                translate: context.translate,
-                vocabulary_prompt: crate::prompt_budget::prompt_with_context(
-                    &context.vocabulary_prompt,
-                    accumulated,
-                ),
-                filler: context.filler.clone(), // FILLER
-                gpu: context.gpu,
-                gpu_device_index: context.gpu_device_index,
-            },
-        )
+        .transcribe_with(WhisperRequest {
+            engine: context.engine,
+            model_id: context.model_id.clone(),
+            model_path: context.model_path.clone(),
+            wav_path: wav_path.to_path_buf(),
+            language: context.language.clone(),
+            translate: context.translate,
+            vocabulary_prompt: crate::prompt_budget::prompt_with_context(
+                &context.vocabulary_prompt,
+                accumulated,
+            ),
+            filler: context.filler.clone(), // FILLER
+            gpu: context.gpu,
+            gpu_device_index: context.gpu_device_index,
+        })
         .map_err(|error| error.message)?;
 
     Ok(transcription.text)
 }
 
-/// Still takes the app for `model_manager::session_model_path` (models).
 fn segment_context(
-    app: &AppHandle,
+    host: &dyn Host,
     state: &BackendState,
     session_id: &str,
 ) -> Result<SegmentContext, String> {
     let db = state.db().map_err(|error| error.message)?;
     let settings = db.get_settings().map_err(|error| error.message)?;
-    let (model_id, model_path) =
-        model_manager::session_model_path(app, &db, session_id).map_err(|error| error.message)?;
+    let (model_id, model_path) = model_manager::session_model_path_with(host, &db, session_id)
+        .map_err(|error| error.message)?;
 
     Ok(SegmentContext {
         engine: crate::models::catalog_model(&model_id)

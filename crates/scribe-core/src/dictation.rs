@@ -74,8 +74,7 @@ pub fn transcribe_recording_for_app(
 }
 
 /// [`transcribe_recording_for_app`] on the engine. Still takes the app for
-/// the models lane (the dictation's model and the speech engine) and the
-/// output lane (pasting the text, the transform's paste).
+/// the output lane (pasting the text, the transform's paste).
 pub fn transcribe_recording_with(
     app: &AppHandle,
     core: &Core,
@@ -230,9 +229,7 @@ fn prune_failed_recordings(dir: &Path, keep: usize) {
     }
 }
 
-/// Still takes the app for `model_manager::session_model_path` and
-/// `WarmTranscriber::transcribe` (models) and
-/// `output::handle_transcription_output_with` and
+/// Still takes the app for `output::handle_transcription_output_with` and
 /// `selection_transform::apply_result_with` (output).
 fn transcribe_recording_inner(
     app: &AppHandle,
@@ -248,7 +245,7 @@ fn transcribe_recording_inner(
     let settings = state.db()?.get_settings()?;
     let (model_id, model_path) = {
         let db = state.db()?;
-        model_manager::session_model_path(app, &db, &recording.session_id)?
+        model_manager::session_model_path_with(host, &db, &recording.session_id)?
     };
     let language = whisper_language(&settings.language);
 
@@ -278,15 +275,13 @@ fn transcribe_recording_inner(
                 );
                 // The warm whisper-server transcriber falls back to whisper-cli
                 // internally when the server path is unavailable.
-                core.warm_transcriber().transcribe(
-                    app,
-                    WhisperRequest::for_settings(
+                core.warm_transcriber()
+                    .transcribe_with(WhisperRequest::for_settings(
                         &model_id,
                         model_path,
                         wav_path.clone(),
                         &settings,
-                    ),
-                )
+                    ))
             }
         }
     };

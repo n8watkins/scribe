@@ -516,18 +516,13 @@ fn execute_with(
         DictationCommand::Start {
             request,
             allow_auto_stop,
-        } => Outcome::Started(audio::start_recording_with(
-            app,
-            core,
-            request,
-            allow_auto_stop,
-        )?),
+        } => Outcome::Started(audio::start_recording_with(core, request, allow_auto_stop)?),
         DictationCommand::StartNote => {
             let request = StartRecordingRequest {
                 is_note: true,
                 ..Default::default()
             };
-            Outcome::Started(audio::start_recording_with(app, core, Some(request), true)?)
+            Outcome::Started(audio::start_recording_with(core, Some(request), true)?)
         }
         DictationCommand::StartTransform => {
             start_transform(app, core)?;

@@ -57,16 +57,13 @@ pub async fn cancel_recording(core: tauri::State<'_, Core>) -> Result<(), Comman
     Ok(())
 }
 
-/// Still takes the app: recording goes through `audio::record_test_clip_with`,
-/// which needs it until the models lane's functions take the host.
 #[tauri::command]
 pub async fn record_test_clip(
-    app: tauri::AppHandle,
     core: tauri::State<'_, Core>,
     duration_ms: Option<u64>,
 ) -> Result<RecordingResult, CommandError> {
     off_main_core(core.inner().clone(), move |core| {
-        audio::record_test_clip_with(&app, core, duration_ms)
+        audio::record_test_clip_with(core, duration_ms)
     })
     .await
 }
@@ -78,8 +75,7 @@ pub async fn get_test_clip_audio(core: tauri::State<'_, Core>) -> Result<String,
 
 /// Transcribes a user-picked audio/video file. Async so the (possibly
 /// minutes-long) whisper-cli run happens on a blocking worker, never the
-/// main thread. Still takes the app for the models lane (see
-/// `file_transcribe::transcribe_file_with`).
+/// main thread.
 #[tauri::command]
 pub async fn transcribe_file(
     app: tauri::AppHandle,

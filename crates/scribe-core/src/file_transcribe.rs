@@ -40,8 +40,10 @@ pub fn transcribe_file(app: &AppHandle, path: &str) -> Result<TranscribeFileResu
 }
 
 /// [`transcribe_file`] on the engine. Still takes the app for
-/// `model_manager::selected_model_path` and
-/// `whisper::transcribe_with_output_prefix` (models).
+/// `whisper::transcribe_with_output_prefix` (models): that lane offers
+/// `transcribe_with_output_prefix_with`, but its `pub(crate)` wrapper has no
+/// other caller, so switching here would leave the wrapper unused in a file
+/// this lane may not change.
 pub fn transcribe_file_with(
     app: &AppHandle,
     core: &Core,
@@ -62,7 +64,8 @@ pub fn transcribe_file_with(
     let (settings, model_id, model_path) = {
         let db = state.db()?;
         let settings = db.get_settings()?;
-        let (model_id, model_path) = model_manager::selected_model_path(app, &db)?;
+        let (model_id, model_path) =
+            model_manager::selected_model_path_with(core.host().as_ref(), &db)?;
         (settings, model_id, model_path)
     };
 
