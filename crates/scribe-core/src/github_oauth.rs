@@ -20,7 +20,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::backend::BackendState;
 use crate::error::CommandError;
+use crate::host::Host;
+use crate::settings::AppSettings;
+use crate::settings_store;
 
 /// Public GitHub App client id for the device flow. GitHub App client ids use
 /// the `Iv` prefix. OAuth App ids use `Ov` and are deliberately rejected so a
@@ -638,11 +642,181 @@ pub struct GithubDeviceStart {
     pub interval_secs: u64,
 }
 
+/// Best-effort: opens the device flow's verification page in the browser so
+/// the user only types the code. A failure is ignored (the UI shows the URL).
+pub fn open_verification_page(host: &dyn Host, verification_uri: &str) {
+    let _ = host.open_url(verification_uri);
+}
+
+/// Records the signed-in login in the settings and announces them. Holds the
+/// settings write lock from the read to the announcement, so events go out in
+/// the order the writes happened (the lock must not be taken on the main
+/// thread).
+pub fn save_connected_login(
+    state: &BackendState,
+    host: &dyn Host,
+    login: String,
+) -> Result<AppSettings, CommandError> {
+    let _writes = settings_store::lock(state.settings_writes());
+    let mut settings = state.db()?.get_settings()?;
+    settings.github_account_login = login;
+    state.db()?.save_settings(&settings)?;
+    settings_store::emit_changed_with(host, &settings);
+    Ok(settings)
+}
+
+/// Resets the GitHub backup settings after the stored token is cleared (both
+/// backup toggles off, login and repo cleared, backup activity dropped) and
+/// announces them. Same lock rule as [`save_connected_login`].
+pub fn reset_backup_settings(
+    state: &BackendState,
+    host: &dyn Host,
+) -> Result<AppSettings, CommandError> {
+    let _writes = settings_store::lock(state.settings_writes());
+    let mut settings = state.db()?.get_settings()?;
+    settings.github_account_login = String::new();
+    settings.github_sync_enabled = false;
+    settings.github_sync_all_transcripts = false;
+    settings.github_repo = String::new();
+    state
+        .db()?
+        .save_settings_and_clear_github_activity(&settings)?;
+    settings_store::emit_changed_with(host, &settings);
+    Ok(settings)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+
+    use crate::data_hygiene::DataDirs;
+    use crate::db::Database;
+    use crate::events::CoreEvent;
+    use crate::host::{Failing, Flavor, HostCall, RecordingHost};
+    use crate::paths::Paths;
+
+    fn host_in(root: &std::path::Path) -> RecordingHost {
+        RecordingHost::new(
+            Paths::from_parts(
+                root.join("data"),
+                root.join("cache"),
+                root.join("logs"),
+                None,
+                None,
+            ),
+            Flavor::Stable,
+        )
+    }
+
+    fn state_in(root: &std::path::Path) -> BackendState {
+        BackendState::new(
+            Database::in_memory().unwrap(),
+            root.join("cache").join("recordings"),
+            DataDirs {
+                data_dir: root.join("data"),
+                cache_dir: root.join("cache"),
+            },
+        )
+    }
+
+    /// The `scribe:settings-changed` payloads a host was sent, and nothing
+    /// else (any other event fails the test).
+    fn announced(host: &RecordingHost) -> Vec<AppSettings> {
+        host.events()
+            .into_iter()
+            .map(|event| match event {
+                CoreEvent::SettingsChanged(settings) => settings,
+                other => panic!("unexpected event {}", other.name()),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_verification_page_opens_through_the_host() {
+        let root = tempfile::tempdir().unwrap();
+        let host = host_in(root.path());
+        open_verification_page(&host, "https://github.com/login/device");
+        assert_eq!(
+            host.calls(),
+            [HostCall::OpenUrl("https://github.com/login/device".into())]
+        );
+        assert!(host.events().is_empty());
+    }
+
+    #[test]
+    fn a_browser_that_will_not_open_is_ignored() {
+        let root = tempfile::tempdir().unwrap();
+        let host = host_in(root.path());
+        host.fail(Failing::OpenUrl);
+        open_verification_page(&host, "https://github.com/login/device");
+        assert_eq!(
+            host.calls(),
+            [HostCall::OpenUrl("https://github.com/login/device".into())]
+        );
+        assert!(host.events().is_empty());
+    }
+
+    #[test]
+    fn connecting_saves_the_login_then_announces_once() {
+        let root = tempfile::tempdir().unwrap();
+        let host = host_in(root.path());
+        let state = state_in(root.path());
+
+        let settings = save_connected_login(&state, &host, "alice".into()).unwrap();
+
+        assert_eq!(settings.github_account_login, "alice");
+        let stored = state.db().unwrap().get_settings().unwrap();
+        assert_eq!(stored.github_account_login, "alice");
+        // One announcement, carrying exactly what was stored.
+        assert_eq!(announced(&host), [stored]);
+        assert!(host.calls().is_empty());
+    }
+
+    #[test]
+    fn disconnecting_resets_the_backup_settings_then_announces_once() {
+        let root = tempfile::tempdir().unwrap();
+        let host = host_in(root.path());
+        let state = state_in(root.path());
+        let mut before = state.db().unwrap().get_settings().unwrap();
+        before.github_account_login = "alice".into();
+        before.github_sync_enabled = true;
+        before.github_sync_all_transcripts = true;
+        before.github_repo = "alice/notes".into();
+        state.db().unwrap().save_settings(&before).unwrap();
+
+        let settings = reset_backup_settings(&state, &host).unwrap();
+
+        assert_eq!(settings.github_account_login, "");
+        assert!(!settings.github_sync_enabled);
+        assert!(!settings.github_sync_all_transcripts);
+        assert_eq!(settings.github_repo, "");
+        assert_eq!(state.db().unwrap().get_settings().unwrap(), settings);
+        assert_eq!(announced(&host), [settings]);
+    }
+
+    #[test]
+    fn nothing_is_announced_when_the_save_fails() {
+        let root = tempfile::tempdir().unwrap();
+        let host = host_in(root.path());
+        let state = state_in(root.path());
+        // Poison the database lock, as a panic in another thread would.
+        std::thread::scope(|scope| {
+            let poisoner = scope.spawn(|| {
+                let _db = state.db().unwrap();
+                panic!("poison the database lock");
+            });
+            assert!(poisoner.join().is_err());
+        });
+
+        let connect = save_connected_login(&state, &host, "alice".into()).unwrap_err();
+        assert_eq!(connect.code, "database_lock_poisoned");
+        let reset = reset_backup_settings(&state, &host).unwrap_err();
+        assert_eq!(reset.code, "database_lock_poisoned");
+        assert!(host.events().is_empty());
+        assert!(host.calls().is_empty());
+    }
 
     #[test]
     fn device_flow_registry_cancels_and_reaps_an_attempt() {

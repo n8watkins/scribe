@@ -9,7 +9,7 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use tauri::{AppHandle, Manager};
 
 use crate::commands::BackendState;
-use crate::core::Core;
+use crate::core::{Core, CoreCell};
 use crate::error::CommandError;
 use crate::github_backup::{GitHubBackup, SyncReport};
 use crate::replacements_file::ReplacementStore;
@@ -24,19 +24,8 @@ const DEBOUNCE: Duration = Duration::from_secs(3);
 /// so callers run it off the main thread. The DB lock is dropped before any
 /// network call.
 ///
-/// The `AppHandle` wrapper of [`collect_and_sync_with`]; the sign-in is
-/// looked up under the Core's flavour, which is the app's identifier.
-pub fn collect_and_sync(app: &AppHandle, _service: &str) -> Result<SyncReport, CommandError> {
-    match app.try_state::<Core>() {
-        Some(core) => collect_and_sync_with(core.inner()),
-        None => {
-            log::warn!("Could not sync notes to GitHub: the engine is not ready yet");
-            Err(crate::host::no_main_window())
-        }
-    }
-}
-
-/// [`collect_and_sync`] on the engine handle.
+/// The sign-in is looked up under the Core's flavour, which is the app's
+/// identifier.
 pub fn collect_and_sync_with(core: &Core) -> Result<SyncReport, CommandError> {
     collect_notes(
         core.backend(),
@@ -178,22 +167,6 @@ fn clear_token_if_unauthorized(
 /// so callers run it off the main thread; the DB lock is dropped before the
 /// network call. A no-op (empty report) when the setting is off or there are no
 /// dictation transcripts.
-///
-/// The `AppHandle` wrapper of [`collect_and_sync_all_transcripts_with`].
-pub fn collect_and_sync_all_transcripts(
-    app: &AppHandle,
-    _service: &str,
-) -> Result<SyncReport, CommandError> {
-    match app.try_state::<Core>() {
-        Some(core) => collect_and_sync_all_transcripts_with(core.inner()),
-        None => {
-            log::warn!("Could not back up transcripts to GitHub: the engine is not ready yet");
-            Err(crate::host::no_main_window())
-        }
-    }
-}
-
-/// [`collect_and_sync_all_transcripts`] on the engine handle.
 pub fn collect_and_sync_all_transcripts_with(core: &Core) -> Result<SyncReport, CommandError> {
     collect_transcripts(core.backend(), core.flavor().identifier())
 }
@@ -255,27 +228,6 @@ impl SyncAttempt {
 /// Runs both configured backup paths so one destination can still succeed when
 /// the other fails. The first failure is returned while successful progress is
 /// retained for persisted health reporting.
-///
-/// The `AppHandle` wrapper of [`collect_sync_attempt_with`]. With no engine
-/// yet the attempt carries the no-engine error and no progress.
-pub fn collect_sync_attempt(app: &AppHandle, _service: &str) -> SyncAttempt {
-    match app.try_state::<Core>() {
-        Some(core) => collect_sync_attempt_with(core.inner()),
-        None => {
-            log::warn!("Could not back up to GitHub: the engine is not ready yet");
-            SyncAttempt {
-                repo: String::new(),
-                report: SyncReport {
-                    synced_notes: 0,
-                    files_written: 0,
-                },
-                error: Some(crate::host::no_main_window()),
-            }
-        }
-    }
-}
-
-/// [`collect_sync_attempt`] on the engine handle.
 pub fn collect_sync_attempt_with(core: &Core) -> SyncAttempt {
     let repo = core
         .backend()
@@ -290,16 +242,7 @@ pub fn collect_sync_attempt_with(core: &Core) -> SyncAttempt {
     )
 }
 
-/// The `AppHandle` wrapper of [`record_sync_attempt_with`]; with no engine
-/// yet it only logs.
-pub fn record_sync_attempt(app: &AppHandle, source: SyncSource, attempt: &SyncAttempt) {
-    match app.try_state::<Core>() {
-        Some(core) => record_sync_attempt_with(core.inner(), source, attempt),
-        None => log::warn!("Could not save GitHub backup status: the engine is not ready yet"),
-    }
-}
-
-/// [`record_sync_attempt`] on the engine handle.
+/// Saves the outcome of a sync attempt as the GitHub backup activity.
 pub fn record_sync_attempt_with(core: &Core, source: SyncSource, attempt: &SyncAttempt) {
     record_attempt(core.backend(), source, attempt);
 }
@@ -359,21 +302,42 @@ pub struct NoteSyncWorker {
 
 impl NoteSyncWorker {
     /// Spawns the background debounce-and-sync thread.
+    ///
+    /// The worker starts before the Core exists (the Core holds the worker),
+    /// so it finds the Core through the app each time it syncs. Step 3 of the
+    /// engine split switches the shell to [`NoteSyncWorker::spawn_with`].
     pub fn spawn(app: AppHandle) -> Self {
+        Self::start(
+            move || app.try_state::<Core>().map(|core| core.inner().clone()),
+            sync_automatically,
+            DEBOUNCE,
+        )
+        .0
+    }
+
+    /// [`NoteSyncWorker::spawn`] without the app: the worker finds the `Core`
+    /// through `cell` once per sync and drops it when the sync ends. It never
+    /// stores a strong `Core`, so dropping the last `Core` closes the channel
+    /// and ends the thread. Until the cell is filled it polls every 50 ms and
+    /// drops no note-saved signal.
+    pub fn spawn_with(cell: CoreCell) -> Self {
+        Self::start(move || cell.get(), sync_automatically, DEBOUNCE).0
+    }
+
+    /// Starts the thread over any way of finding the engine, so tests can run
+    /// the whole worker without building a `Core`. Returns the thread's
+    /// handle too (`None` when the thread could not start).
+    fn start<C: Send + 'static>(
+        find_core: impl Fn() -> Option<C> + Send + 'static,
+        sync: impl Fn(&C) + Send + 'static,
+        debounce: Duration,
+    ) -> (Self, Option<thread::JoinHandle<()>>) {
         let (tx, rx) = crossbeam_channel::unbounded::<()>();
-        // The worker starts before the Core exists (the Core holds the
-        // worker), so it finds the Core through the app each time it syncs.
-        let _ = thread::Builder::new()
+        let handle = thread::Builder::new()
             .name("scribe-note-sync".into())
-            .spawn(move || {
-                worker_loop(
-                    || app.try_state::<Core>().map(|core| core.inner().clone()),
-                    sync_automatically,
-                    DEBOUNCE,
-                    rx,
-                )
-            });
-        Self { tx }
+            .spawn(move || worker_loop(find_core, sync, debounce, rx))
+            .ok();
+        (Self { tx }, handle)
     }
 
     /// Signals that a note was saved. The worker debounces, then syncs. Cheap
@@ -605,6 +569,39 @@ mod tests {
         drop(tx);
         worker.join().unwrap();
         assert_eq!(*synced.lock().unwrap(), vec![7]);
+    }
+
+    #[test]
+    fn a_started_worker_syncs_one_burst_once_and_ends_with_its_handle() {
+        let polls = Arc::new(AtomicUsize::new(0));
+        let synced = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (seen_polls, seen_synced) = (polls.clone(), synced.clone());
+        let (worker, thread) = NoteSyncWorker::start(
+            move || (seen_polls.fetch_add(1, Ordering::SeqCst) >= 2).then_some(9u32),
+            move |core| seen_synced.lock().unwrap().push(*core),
+            Duration::from_millis(20),
+        );
+        // A burst of saves collapses into one sync, on an engine that
+        // appears late.
+        worker.notify();
+        worker.notify();
+        worker.notify();
+        wait_until("the sync", || !synced.lock().unwrap().is_empty());
+        // Dropping the last handle closes the channel and ends the thread.
+        drop(worker);
+        thread.expect("the thread started").join().unwrap();
+        assert_eq!(*synced.lock().unwrap(), vec![9]);
+    }
+
+    #[test]
+    fn a_worker_on_an_empty_core_cell_keeps_the_signal_and_ends_with_its_handle() {
+        // A cell that is never filled is the shell before it has built the
+        // engine: the signal is not dropped, and nothing panics.
+        let cell = CoreCell::new();
+        let worker = NoteSyncWorker::spawn_with(cell.clone());
+        worker.notify();
+        assert!(cell.get().is_none());
+        drop(worker);
     }
 
     #[test]

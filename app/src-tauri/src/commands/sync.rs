@@ -1,8 +1,6 @@
 //! Commands of the `sync` domain (note_sync, github_backup, github_oauth,
 //! sync_history, note_analysis).
 
-use tauri_plugin_opener::OpenerExt;
-
 use super::off_main_core;
 use scribe_core::core::Core;
 
@@ -10,7 +8,6 @@ use crate::{
     error::CommandError,
     github_oauth::{GithubDeviceStart, GithubStatus},
     settings::AppSettings,
-    settings_store,
     transcript::Transcript,
 };
 
@@ -110,7 +107,6 @@ pub async fn github_status(core: tauri::State<'_, Core>) -> Result<GithubStatus,
 /// Does NOT block on polling — the frontend then calls `github_device_poll`.
 #[tauri::command]
 pub async fn github_device_start(
-    app: tauri::AppHandle,
     core: tauri::State<'_, Core>,
 ) -> Result<GithubDeviceStart, CommandError> {
     let device = tauri::async_runtime::spawn_blocking(crate::github_oauth::request_device_code)
@@ -118,9 +114,7 @@ pub async fn github_device_start(
         .map_err(|error| CommandError::new("github_auth_failed", error.to_string()))??;
 
     // Best-effort: open the verification page so the user just types the code.
-    let _ = app
-        .opener()
-        .open_url(device.verification_uri.clone(), None::<&str>);
+    crate::github_oauth::open_verification_page(core.host().as_ref(), &device.verification_uri);
 
     core.backend()
         .github_device_flows()
@@ -140,7 +134,6 @@ pub async fn github_device_start(
 /// connected login in settings, and returns the updated settings. Long-running.
 #[tauri::command]
 pub async fn github_device_poll(
-    app: tauri::AppHandle,
     core: tauri::State<'_, Core>,
     device_code: String,
     interval: u64,
@@ -179,13 +172,7 @@ pub async fn github_device_poll(
     .unwrap_or_default();
 
     off_main_core(core.inner().clone(), move |core| {
-        let state = core.backend();
-        let _writes = settings_store::lock(state.settings_writes());
-        let mut settings = state.db()?.get_settings()?;
-        settings.github_account_login = login;
-        state.db()?.save_settings(&settings)?;
-        settings_store::emit_changed(&app, &settings);
-        Ok(settings)
+        crate::github_oauth::save_connected_login(core.backend(), core.host().as_ref(), login)
     })
     .await
 }
@@ -206,28 +193,14 @@ pub fn github_device_cancel(
 /// reconnect then starts clean rather than silently resuming pushes to a stale
 /// repo. Returns the updated settings.
 #[tauri::command]
-pub async fn github_disconnect(
-    app: tauri::AppHandle,
-    core: tauri::State<'_, Core>,
-) -> Result<AppSettings, CommandError> {
+pub async fn github_disconnect(core: tauri::State<'_, Core>) -> Result<AppSettings, CommandError> {
     let service = core.flavor().identifier().to_string();
     tauri::async_runtime::spawn_blocking(move || crate::github_oauth::sign_out(&service))
         .await
         .map_err(|error| CommandError::new("github_auth_failed", error.to_string()))??;
 
     off_main_core(core.inner().clone(), move |core| {
-        let state = core.backend();
-        let _writes = settings_store::lock(state.settings_writes());
-        let mut settings = state.db()?.get_settings()?;
-        settings.github_account_login = String::new();
-        settings.github_sync_enabled = false;
-        settings.github_sync_all_transcripts = false;
-        settings.github_repo = String::new();
-        state
-            .db()?
-            .save_settings_and_clear_github_activity(&settings)?;
-        settings_store::emit_changed(&app, &settings);
-        Ok(settings)
+        crate::github_oauth::reset_backup_settings(core.backend(), core.host().as_ref())
     })
     .await
 }
