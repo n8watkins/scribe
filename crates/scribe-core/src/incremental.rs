@@ -24,14 +24,16 @@ use std::{
 
 use crossbeam_channel::{bounded, unbounded, Receiver, RecvTimeoutError, Sender};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::{
     audio::{self, AUTO_STOP_SPEECH_RMS, SILENCE_RMS_THRESHOLD},
-    commands::BackendState,
+    backend::BackendState,
+    core::Core,
+    events::CoreEvent,
+    host::Host,
     model_manager,
     whisper::WhisperRequest,
-    whisper_server::WarmTranscriber,
 };
 
 // The pause threshold and length cap are now per-recording settings
@@ -74,22 +76,41 @@ pub struct PartialTranscriptEvent {
 /// Emits a `scribe:partial-transcript` event. The dictation stop path
 /// uses this for the final `finalized: true` event; the coordinator emits the
 /// in-progress ones.
+///
+/// Needs only the host, which is installed before anything else, so it uses
+/// that rather than the `Core` (like `status_file::publish`).
 pub fn emit_partial_transcript(
-    app: &AppHandle,
+    _app: &AppHandle,
     session_id: &str,
     text: &str,
     segments: u32,
     finalized: bool,
 ) {
-    let _ = app.emit(
-        PARTIAL_TRANSCRIPT_EVENT,
-        PartialTranscriptEvent {
-            session_id: session_id.to_string(),
-            text: text.to_string(),
-            segments,
-            finalized,
-        },
-    );
+    match crate::shell::host() {
+        Some(host) => {
+            emit_partial_transcript_with(host.as_ref(), session_id, text, segments, finalized)
+        }
+        None => log::warn!(
+            "Could not send the partial transcript of session {}: no host yet",
+            session_id
+        ),
+    }
+}
+
+/// [`emit_partial_transcript`] on the host.
+pub fn emit_partial_transcript_with(
+    host: &dyn Host,
+    session_id: &str,
+    text: &str,
+    segments: u32,
+    finalized: bool,
+) {
+    host.emit(CoreEvent::PartialTranscript(PartialTranscriptEvent {
+        session_id: session_id.to_string(),
+        text: text.to_string(),
+        segments,
+        finalized,
+    }));
 }
 
 /// Cuts a stream of audio chunks into transcribable segments. A segment is
@@ -356,10 +377,36 @@ pub fn start_session(
     pause_ms: Option<u64>,
     max_ms: u64,
 ) -> Option<WorkerLink> {
+    let Some(core) = app.try_state::<Core>() else {
+        log::warn!(
+            "Could not start incremental transcription for session {}: the engine is not ready yet",
+            session_id
+        );
+        return None;
+    };
+    start_session_with(
+        &core,
+        session_id,
+        temp_dir,
+        source_sample_rate,
+        pause_ms,
+        max_ms,
+    )
+}
+
+/// [`start_session`] on the engine.
+pub fn start_session_with(
+    core: &Core,
+    session_id: &str,
+    temp_dir: PathBuf,
+    source_sample_rate: u32,
+    pause_ms: Option<u64>,
+    max_ms: u64,
+) -> Option<WorkerLink> {
     let (msg_tx, msg_rx) = unbounded::<Msg>();
     let (result_tx, result_rx) = bounded::<Result<AssembledTranscript, ()>>(1);
 
-    let registry_state = app.state::<BackendState>();
+    let registry_state = core.backend();
     registry_state.incremental().register(
         session_id.to_string(),
         SessionHandle {
@@ -368,11 +415,11 @@ pub fn start_session(
         },
     );
 
-    let coordinator_app = app.clone();
+    let coordinator_core = core.clone();
     let coordinator_session = session_id.to_string();
     let spawned = std::thread::Builder::new()
         .name("incremental-transcribe".to_string())
-        .spawn(move || run_coordinator(coordinator_app, coordinator_session, msg_rx, result_tx));
+        .spawn(move || run_coordinator(coordinator_core, coordinator_session, msg_rx, result_tx));
 
     if let Err(error) = spawned {
         log::warn!(
@@ -420,7 +467,7 @@ struct SegmentContext {
 }
 
 fn run_coordinator(
-    app: AppHandle,
+    core: Core,
     session_id: String,
     msg_rx: Receiver<Msg>,
     result_tx: Sender<Result<AssembledTranscript, ()>>,
@@ -435,14 +482,15 @@ fn run_coordinator(
             Ok(Msg::Segment(path)) => {
                 if !failed {
                     let accumulated = join_segments(&texts);
-                    match transcribe_segment(&app, &session_id, &mut context, &path, &accumulated) {
+                    match transcribe_segment(&core, &session_id, &mut context, &path, &accumulated)
+                    {
                         Ok(text) => {
                             segments += 1;
                             if !text.is_empty() {
                                 texts.push(text);
                             }
-                            emit_partial_transcript(
-                                &app,
+                            emit_partial_transcript_with(
+                                core.host().as_ref(),
                                 &session_id,
                                 &join_segments(&texts),
                                 segments,
@@ -488,48 +536,52 @@ fn run_coordinator(
 }
 
 fn transcribe_segment(
-    app: &AppHandle,
+    core: &Core,
     session_id: &str,
     context: &mut Option<SegmentContext>,
     wav_path: &Path,
     accumulated: &str,
 ) -> Result<String, String> {
     if context.is_none() {
-        *context = Some(segment_context(app, session_id)?);
+        *context = Some(segment_context(
+            core.host().as_ref(),
+            core.backend(),
+            session_id,
+        )?);
     }
     let context = context.as_ref().expect("segment context resolved above");
 
-    let transcription = app
-        .state::<WarmTranscriber>()
-        .transcribe(
-            app,
-            WhisperRequest {
-                engine: context.engine,
-                model_id: context.model_id.clone(),
-                model_path: context.model_path.clone(),
-                wav_path: wav_path.to_path_buf(),
-                language: context.language.clone(),
-                translate: context.translate,
-                vocabulary_prompt: crate::prompt_budget::prompt_with_context(
-                    &context.vocabulary_prompt,
-                    accumulated,
-                ),
-                filler: context.filler.clone(), // FILLER
-                gpu: context.gpu,
-                gpu_device_index: context.gpu_device_index,
-            },
-        )
+    let transcription = core
+        .warm_transcriber()
+        .transcribe_with(WhisperRequest {
+            engine: context.engine,
+            model_id: context.model_id.clone(),
+            model_path: context.model_path.clone(),
+            wav_path: wav_path.to_path_buf(),
+            language: context.language.clone(),
+            translate: context.translate,
+            vocabulary_prompt: crate::prompt_budget::prompt_with_context(
+                &context.vocabulary_prompt,
+                accumulated,
+            ),
+            filler: context.filler.clone(), // FILLER
+            gpu: context.gpu,
+            gpu_device_index: context.gpu_device_index,
+        })
         .map_err(|error| error.message)?;
 
     Ok(transcription.text)
 }
 
-fn segment_context(app: &AppHandle, session_id: &str) -> Result<SegmentContext, String> {
-    let state = app.state::<BackendState>();
+fn segment_context(
+    host: &dyn Host,
+    state: &BackendState,
+    session_id: &str,
+) -> Result<SegmentContext, String> {
     let db = state.db().map_err(|error| error.message)?;
     let settings = db.get_settings().map_err(|error| error.message)?;
-    let (model_id, model_path) =
-        model_manager::session_model_path(app, &db, session_id).map_err(|error| error.message)?;
+    let (model_id, model_path) = model_manager::session_model_path_with(host, &db, session_id)
+        .map_err(|error| error.message)?;
 
     Ok(SegmentContext {
         engine: crate::models::catalog_model(&model_id)
@@ -741,5 +793,37 @@ mod tests {
 
         assert_eq!(join_segments(&texts), "Hello there. Second phrase.");
         assert_eq!(join_segments(&[]), "");
+    }
+
+    #[test]
+    fn partial_transcripts_go_to_the_host_with_todays_payload() {
+        let fixture = crate::dictation_state::test_parts::Fixture::new();
+
+        emit_partial_transcript_with(fixture.host.as_ref(), "session-1", "Hello", 1, false);
+        emit_partial_transcript_with(fixture.host.as_ref(), "session-1", "Hello there", 2, true);
+
+        assert_eq!(
+            fixture.sent(),
+            [
+                (
+                    PARTIAL_TRANSCRIPT_EVENT,
+                    serde_json::json!({
+                        "sessionId": "session-1",
+                        "text": "Hello",
+                        "segments": 1,
+                        "finalized": false,
+                    })
+                ),
+                (
+                    PARTIAL_TRANSCRIPT_EVENT,
+                    serde_json::json!({
+                        "sessionId": "session-1",
+                        "text": "Hello there",
+                        "segments": 2,
+                        "finalized": true,
+                    })
+                ),
+            ]
+        );
     }
 }

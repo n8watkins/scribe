@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
-use crate::{commands::BackendState, file_transcribe, model_manager};
+use crate::{backend::BackendState, core::Core, file_transcribe, host::Host, model_manager};
 
 /// The command-line flag that starts a self-test run.
 pub const FLAG: &str = "--self-test-transcribe";
@@ -60,11 +60,25 @@ where
 /// Runs the self-test on a worker thread, then exits the app with 0 on a
 /// non-empty transcript and 1 otherwise.
 pub fn spawn(app: &AppHandle, request: SelfTestRequest) {
+    let Some(core) = app.try_state::<Core>() else {
+        log::error!("Could not start the self-test: the engine is not ready yet");
+        app.exit(1);
+        return;
+    };
+    spawn_with(app, &core, request);
+}
+
+/// [`spawn`] on the engine. Still takes the app to exit it when done, and for
+/// the app's version: Dev and installer-upgrade builds override it with
+/// `--config`, so it is not the engine crate's `CARGO_PKG_VERSION`.
+pub fn spawn_with(app: &AppHandle, core: &Core, request: SelfTestRequest) {
     let handle = app.clone();
+    let core = core.clone();
+    let app_version = app.package_info().version.to_string();
     let spawned = std::thread::Builder::new()
         .name("self-test".into())
         .spawn(move || {
-            let outcome = run(&handle, &request.audio);
+            let outcome = run(&handle, &core, app_version, &request.audio);
             let ok = outcome.ok;
             if let Err(error) = write_result(&request.result, &outcome) {
                 log::error!("Self-test could not write its result. {}", error);
@@ -78,10 +92,12 @@ pub fn spawn(app: &AppHandle, request: SelfTestRequest) {
     }
 }
 
-fn run(app: &AppHandle, audio: &Path) -> SelfTestResult {
+/// `app_version` is the running app's version (see [`spawn_with`]). Still
+/// takes the app for `file_transcribe::transcribe_file_with`.
+fn run(app: &AppHandle, core: &Core, app_version: String, audio: &Path) -> SelfTestResult {
     let mut result = SelfTestResult {
         ok: false,
-        app_version: app.package_info().version.to_string(),
+        app_version,
         model_id: None,
         text: None,
         latency_ms: None,
@@ -89,12 +105,12 @@ fn run(app: &AppHandle, audio: &Path) -> SelfTestResult {
     };
     log::info!("Self-test: transcribing {}", audio.display());
 
-    if let Err(error) = ensure_selected_model(app, &mut result) {
+    if let Err(error) = ensure_selected_model(core.host().as_ref(), core.backend(), &mut result) {
         result.error = Some(error);
         return result;
     }
 
-    match file_transcribe::transcribe_file(app, &audio.to_string_lossy()) {
+    match file_transcribe::transcribe_file_with(app, core, &audio.to_string_lossy()) {
         Ok(transcription) => {
             result.ok = !transcription.text.trim().is_empty();
             if !result.ok {
@@ -110,8 +126,11 @@ fn run(app: &AppHandle, audio: &Path) -> SelfTestResult {
 
 /// Downloads the selected model through the normal, SHA-256 verified path when
 /// it is not on disk yet, so the self-test covers model download too.
-fn ensure_selected_model(app: &AppHandle, result: &mut SelfTestResult) -> Result<(), String> {
-    let state = app.state::<BackendState>();
+fn ensure_selected_model(
+    host: &dyn Host,
+    state: &BackendState,
+    result: &mut SelfTestResult,
+) -> Result<(), String> {
     // The download takes the database lock for each short step, so the lock
     // is released before it starts.
     let (model_id, present) = {
@@ -121,7 +140,7 @@ fn ensure_selected_model(app: &AppHandle, result: &mut SelfTestResult) -> Result
             .map_err(|error| error.message)?
             .selected_model_id
             .unwrap_or_else(|| crate::models::DEFAULT_MODEL_ID.to_string());
-        let present = model_manager::selected_model_path(app, &db).is_ok();
+        let present = model_manager::selected_model_path_with(host, &db).is_ok();
         (model_id, present)
     };
     result.model_id = Some(model_id.clone());
@@ -129,7 +148,7 @@ fn ensure_selected_model(app: &AppHandle, result: &mut SelfTestResult) -> Result
         return Ok(());
     }
     log::info!("Self-test: downloading model {}", model_id);
-    model_manager::download_model(app, &state, &model_id)
+    model_manager::download_model_with(host, state, &model_id)
         .map(|_| ())
         .map_err(|error| error.message)
 }
