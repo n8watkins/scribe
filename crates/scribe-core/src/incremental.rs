@@ -817,4 +817,36 @@ mod tests {
         assert_eq!(join_segments(&texts), "Hello there. Second phrase.");
         assert_eq!(join_segments(&[]), "");
     }
+
+    #[test]
+    fn partial_transcripts_go_to_the_host_with_todays_payload() {
+        let fixture = crate::dictation_state::test_parts::Fixture::new();
+
+        emit_partial_transcript_with(fixture.host.as_ref(), "session-1", "Hello", 1, false);
+        emit_partial_transcript_with(fixture.host.as_ref(), "session-1", "Hello there", 2, true);
+
+        assert_eq!(
+            fixture.sent(),
+            [
+                (
+                    PARTIAL_TRANSCRIPT_EVENT,
+                    serde_json::json!({
+                        "sessionId": "session-1",
+                        "text": "Hello",
+                        "segments": 1,
+                        "finalized": false,
+                    })
+                ),
+                (
+                    PARTIAL_TRANSCRIPT_EVENT,
+                    serde_json::json!({
+                        "sessionId": "session-1",
+                        "text": "Hello there",
+                        "segments": 2,
+                        "finalized": true,
+                    })
+                ),
+            ]
+        );
+    }
 }

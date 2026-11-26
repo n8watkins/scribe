@@ -2381,4 +2381,90 @@ mod tests {
         // A missing file fails open (true) so real audio is never dropped.
         assert!(wav_has_speech(std::path::Path::new("/no/such/scribe.wav")));
     }
+
+    // The recording paths on the engine's parts: the events each one sends,
+    // in order, with no microphone, output device or model.
+
+    use crate::dictation_state::test_parts::Fixture;
+    use serde_json::json;
+
+    #[test]
+    fn a_stop_with_no_recording_goes_back_to_idle_and_says_why() {
+        let fixture = Fixture::new();
+        fixture.drive(&[AppEvent::StartRecording]);
+
+        let error =
+            stop_recording_with_reason(fixture.parts(), StopReason::Completed, None).unwrap_err();
+
+        assert_eq!(error.code, "recording_not_active");
+        // Stopping, then Idle (never stranded in Stopping), and no
+        // recording-stopped event or stop cue for a recording that is gone.
+        assert_eq!(fixture.published_states(), ["Stopping", "Idle"]);
+        assert_eq!(fixture.sent().len(), 2);
+        assert_eq!(fixture.status(), AppStatus::Idle);
+    }
+
+    #[test]
+    fn a_cancel_with_no_recording_still_leaves_recording() {
+        let fixture = Fixture::new();
+        fixture.drive(&[AppEvent::StartRecording]);
+
+        cancel_recording(fixture.parts()).unwrap();
+        assert_eq!(fixture.published_states(), ["Idle"]);
+        assert_eq!(fixture.sent().len(), 1);
+
+        // Nothing to cancel and nothing recording: nothing is sent.
+        cancel_recording(fixture.parts()).unwrap();
+        assert_eq!(fixture.sent().len(), 1);
+    }
+
+    #[test]
+    fn a_timeout_for_a_recording_that_already_ended_does_nothing() {
+        let fixture = Fixture::new();
+        fixture.drive(&[AppEvent::StartRecording]);
+
+        let result = stop_timed_out_recording(fixture.parts(), "an-earlier-session").unwrap();
+
+        assert!(result.is_none());
+        assert!(fixture.sent().is_empty());
+        assert_eq!(fixture.status(), AppStatus::Recording);
+    }
+
+    #[test]
+    fn recording_errors_and_levels_go_to_the_host_with_todays_payloads() {
+        let fixture = Fixture::new();
+        let host = fixture.host.as_ref();
+
+        emit_recording_error_with(
+            host,
+            CommandError::new("microphone_unavailable", "The mic went away."),
+        );
+        let mut last_level_emit = Instant::now()
+            .checked_sub(LEVEL_EVENT_INTERVAL)
+            .unwrap_or_else(Instant::now);
+        maybe_emit_level(host, "session-1", &[0.5, -0.5], &mut last_level_emit);
+        // Inside the level interval: not sent.
+        maybe_emit_level(host, "session-1", &[0.9], &mut last_level_emit);
+
+        assert_eq!(
+            fixture.sent(),
+            [
+                (
+                    "audio://recording-error",
+                    json!({"code": "microphone_unavailable", "message": "The mic went away."})
+                ),
+                (
+                    "audio://level",
+                    json!({"sessionId": "session-1", "level": 0.5, "peak": 0.5, "rms": 0.5})
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn playing_the_test_clip_before_recording_one_says_so() {
+        let fixture = Fixture::new();
+        let error = test_clip_audio(&fixture.backend).unwrap_err();
+        assert_eq!(error.code, "no_test_clip");
+    }
 }

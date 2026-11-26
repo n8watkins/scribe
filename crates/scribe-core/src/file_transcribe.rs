@@ -227,6 +227,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_work_folder_is_made_inside_the_cache_folder() {
+        let cache = std::env::temp_dir().join(format!(
+            "scribe-file-transcribe-cache-{}",
+            Uuid::new_v4().simple()
+        ));
+        let dir = work_dir(&cache).unwrap();
+        assert_eq!(dir, cache.join("file-transcribe"));
+        assert!(dir.is_dir());
+        let _ = fs::remove_dir_all(&cache);
+    }
+
+    #[test]
     fn native_formats_skip_ffmpeg() {
         for name in ["a.wav", "b.MP3", "c.flac", "d.Ogg"] {
             assert!(!needs_ffmpeg(Path::new(name)), "{name} should be native");

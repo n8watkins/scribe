@@ -196,6 +196,108 @@ fn publish_snapshot(
     }
 }
 
+/// [`Parts`] for the audio lane's tests, which cannot build a `Core`: a
+/// backend on an in-memory database, a [`crate::host::RecordingHost`] on a
+/// temporary folder, and no dictation-state server. The folder is removed on
+/// drop.
+#[cfg(test)]
+pub(crate) mod test_parts {
+    use std::{path::PathBuf, sync::Arc};
+
+    use super::Parts;
+    use crate::{
+        app_state::{AppEvent, AppStatus},
+        backend::BackendState,
+        host::{Flavor, Host, RecordingHost},
+        paths::Paths,
+    };
+
+    pub(crate) struct Fixture {
+        pub root: PathBuf,
+        pub backend: BackendState,
+        pub recorder: Arc<RecordingHost>,
+        pub host: Arc<dyn Host>,
+    }
+
+    impl Fixture {
+        pub fn new() -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "scribe-audio-lane-test-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4()
+            ));
+            let backend = BackendState::new(
+                crate::db::Database::in_memory().unwrap(),
+                root.join("recordings"),
+                crate::data_hygiene::DataDirs {
+                    data_dir: root.join("data"),
+                    cache_dir: root.join("cache"),
+                },
+            );
+            let recorder = Arc::new(RecordingHost::new(
+                Paths::from_parts(
+                    root.join("data"),
+                    root.join("cache"),
+                    root.join("logs"),
+                    None,
+                    None,
+                ),
+                Flavor::Stable,
+            ));
+            let host: Arc<dyn Host> = recorder.clone();
+            Self {
+                root,
+                backend,
+                recorder,
+                host,
+            }
+        }
+
+        pub fn parts(&self) -> Parts<'_> {
+            Parts {
+                backend: &self.backend,
+                host: &self.host,
+                server: None,
+            }
+        }
+
+        /// Drives the state machine through `events` without sending anything.
+        pub fn drive(&self, events: &[AppEvent]) {
+            for event in events {
+                self.backend.transition_app_state(event.clone()).unwrap();
+            }
+        }
+
+        pub fn status(&self) -> AppStatus {
+            self.backend.app_state().unwrap().snapshot().status
+        }
+
+        /// The (name, JSON payload) of every event sent so far.
+        pub fn sent(&self) -> Vec<(&'static str, serde_json::Value)> {
+            self.recorder
+                .events()
+                .iter()
+                .map(|event| (event.name(), serde_json::to_value(event).unwrap()))
+                .collect()
+        }
+
+        /// The statuses of the `scribe:app-state` events sent so far.
+        pub fn published_states(&self) -> Vec<String> {
+            self.sent()
+                .into_iter()
+                .filter(|(name, _)| *name == "scribe:app-state")
+                .map(|(_, payload)| payload["status"].as_str().unwrap().to_string())
+                .collect()
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -840,3 +840,162 @@ mod tests {
         prune_failed_recordings(Path::new("/scribe-nonexistent/failed/xyz"), 20);
     }
 }
+
+/// The dictation paths on the engine's parts: the events each one sends, in
+/// order, with no model, clipboard or window.
+#[cfg(test)]
+mod engine_tests {
+    use super::*;
+    use crate::dictation_state::test_parts::Fixture;
+    use serde_json::json;
+    use std::cell::Cell;
+
+    const TO_TRANSCRIBING: [AppEvent; 3] = [
+        AppEvent::StartRecording,
+        AppEvent::StopRecording,
+        AppEvent::ValidAudio,
+    ];
+
+    fn recording(is_note: bool) -> RecordingResult {
+        RecordingResult {
+            session_id: "session-1".to_string(),
+            status: RecordingResultStatus::Completed,
+            wav_path: Some("/tmp/session-1.wav".to_string()),
+            duration_ms: 1_200,
+            sample_rate: 16_000,
+            channels: 1,
+            bits_per_sample: 16,
+            bytes_written: None,
+            reason: None,
+            started_at: Utc::now(),
+            stopped_at: Utc::now(),
+            is_note,
+            is_transform: false,
+            disconnected: false,
+        }
+    }
+
+    fn transcript(text: &str, is_note: bool) -> Transcript {
+        let mut transcript = Transcript::new_last_buffer(
+            text,
+            Some(1_200),
+            Some("base.en".to_string()),
+            Some("en".to_string()),
+        )
+        .unwrap();
+        transcript.is_note = is_note;
+        transcript
+    }
+
+    #[test]
+    fn an_empty_dictation_sends_its_message() {
+        let fixture = Fixture::new();
+        emit_dictation_empty_with(fixture.host.as_ref());
+        assert_eq!(
+            fixture.sent(),
+            [(
+                "scribe:dictation-empty",
+                json!({"message": EMPTY_DICTATION_MESSAGE})
+            )]
+        );
+    }
+
+    #[test]
+    fn transitions_leave_transcribing_once_and_otherwise_send_nothing() {
+        let fixture = Fixture::new();
+        fixture.drive(&TO_TRANSCRIBING);
+
+        transition_after_empty(fixture.parts());
+        assert_eq!(fixture.published_states(), ["Idle"]);
+
+        // Already past Transcribing: no transition and nothing sent.
+        transition_after_success(fixture.parts());
+        transition_after_failure(fixture.parts());
+        assert_eq!(fixture.published_states(), ["Idle"]);
+        assert_eq!(fixture.status(), AppStatus::Idle);
+    }
+
+    #[test]
+    fn a_transform_with_no_captured_selection_returns_to_idle_then_says_so() {
+        let fixture = Fixture::new();
+        fixture.drive(&TO_TRANSCRIBING);
+        let applied = Cell::new(false);
+
+        let result = finish_selection_transform_in(
+            fixture.parts(),
+            &AppSettings::default(),
+            "make it formal",
+            |_, _| {
+                applied.set(true);
+                Err(CommandError::new("unexpected", "Nothing should be pasted."))
+            },
+        )
+        .unwrap();
+
+        assert!(result.is_none());
+        assert!(!applied.get());
+        let sent = fixture.sent();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0].0, "scribe:app-state");
+        assert_eq!(sent[0].1["status"], "Idle");
+        assert_eq!(
+            sent[1],
+            (
+                "scribe:selection-transform-failed",
+                json!("No selected text was captured. Highlight text, then trigger Transform Selection.")
+            )
+        );
+    }
+
+    #[test]
+    fn a_saved_dictation_is_announced_and_wakes_the_backup_when_it_is_on() {
+        let fixture = Fixture::new();
+        let settings = AppSettings {
+            github_sync_all_transcripts: true,
+            ..AppSettings::default()
+        };
+        let woken = Cell::new(0);
+
+        let result = save_and_announce(
+            &fixture.backend,
+            fixture.host.as_ref(),
+            || woken.set(woken.get() + 1),
+            &settings,
+            &recording(false),
+            transcript("hello there", false),
+            "base.en".to_string(),
+            321,
+        );
+
+        assert!(matches!(result.status, DictationStatus::Saved));
+        assert_eq!(result.transcription_latency_ms, 321);
+        assert_eq!(result.duration_ms, 1_200);
+        assert_eq!(woken.get(), 1);
+        assert_eq!(
+            fixture.sent(),
+            [(
+                "scribe:dictation-transcribed",
+                serde_json::to_value(&result).unwrap()
+            )]
+        );
+        let last = fixture.backend.last_transcript().unwrap().unwrap();
+        assert_eq!(last.text, "hello there");
+
+        // A note, with the notes backup off: saved and announced, the backup
+        // left asleep.
+        let result = save_and_announce(
+            &fixture.backend,
+            fixture.host.as_ref(),
+            || woken.set(woken.get() + 1),
+            &settings,
+            &recording(true),
+            transcript("a note", true),
+            "base.en".to_string(),
+            5,
+        );
+        assert!(matches!(result.status, DictationStatus::Saved));
+        assert_eq!(woken.get(), 1);
+        assert_eq!(fixture.sent().len(), 2);
+        assert_eq!(fixture.sent()[1].0, "scribe:dictation-transcribed");
+    }
+}
