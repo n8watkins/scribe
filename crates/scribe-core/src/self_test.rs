@@ -68,8 +68,9 @@ pub fn spawn(app: &AppHandle, request: SelfTestRequest) {
     spawn_with(app, &core, request);
 }
 
-/// [`spawn`] on the engine. Still takes the app to exit it when done, and for
-/// the model download and the transcription (models).
+/// [`spawn`] on the engine. Still takes the app to exit it when done, for the
+/// app's version (which Dev builds override, so it is not the engine crate's),
+/// and for the model download and the transcription (models).
 pub fn spawn_with(app: &AppHandle, core: &Core, request: SelfTestRequest) {
     let handle = app.clone();
     let core = core.clone();
@@ -93,7 +94,9 @@ pub fn spawn_with(app: &AppHandle, core: &Core, request: SelfTestRequest) {
 fn run(app: &AppHandle, core: &Core, audio: &Path) -> SelfTestResult {
     let mut result = SelfTestResult {
         ok: false,
-        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        // The app's version, not the engine crate's: Dev and installer-upgrade
+        // builds override it with `--config`.
+        app_version: app.package_info().version.to_string(),
         model_id: None,
         text: None,
         latency_ms: None,
