@@ -77,7 +77,7 @@ impl ParakeetProcess {
     /// Starts the sidecar for `config` and waits until the model is loaded.
     pub fn launch(app: &AppHandle, config: &EngineConfig) -> Result<Self, String> {
         match tauri::Manager::try_state::<crate::core::Core>(app) {
-            Some(core) => Self::launch_with(core.host().as_ref(), config),
+            Some(core) => Self::launch_with(core.host().as_ref(), config, &|_| true),
             None => {
                 log::warn!("ParakeetProcess::launch ran before the engine was ready");
                 Err(crate::host::no_main_window().message)
@@ -86,17 +86,24 @@ impl ParakeetProcess {
     }
 
     /// Starts the sidecar bundled in the resources of `host` for `config` and
-    /// waits until the model is loaded.
-    pub fn launch_with(host: &dyn Host, config: &EngineConfig) -> Result<Self, String> {
+    /// waits until the model is loaded. `started` hears the sidecar's pid the
+    /// moment it runs; when it answers false (Scribe is quitting) the sidecar
+    /// is stopped at once.
+    pub fn launch_with(
+        host: &dyn Host,
+        config: &EngineConfig,
+        started: &dyn Fn(u32) -> bool,
+    ) -> Result<Self, String> {
         let executable = whisper::resolve_bundled_executable_with(host, SIDECAR_EXECUTABLE)
             .map_err(|error| error.message)?;
-        Self::launch_executable(&executable, config, threads())
+        Self::launch_executable(&executable, config, threads(), started)
     }
 
     pub(crate) fn launch_executable(
         executable: &Path,
         config: &EngineConfig,
         threads: usize,
+        started: &dyn Fn(u32) -> bool,
     ) -> Result<Self, String> {
         let args = sidecar_args(config, threads, std::process::id());
         let mut command = std::process::Command::new(executable);
@@ -119,6 +126,12 @@ impl ParakeetProcess {
         let mut child = crate::child_guard::spawn(command)
             .map_err(|error| format!("Could not start scribe-parakeet. {}", error))?;
         crate::child_guard::track(child.id());
+        if !started(child.id()) {
+            let _ = child.kill();
+            let _ = child.wait();
+            crate::child_guard::untrack(child.id());
+            return Err("Scribe is quitting.".to_string());
+        }
 
         let stdin = child.stdin.take();
         let stdout = child
@@ -330,7 +343,8 @@ mod tests {
             ..config()
         };
         let mut process =
-            ParakeetProcess::launch_executable(Path::new(&bin), &config, 4).expect("sidecar loads");
+            ParakeetProcess::launch_executable(Path::new(&bin), &config, 4, &|_| true)
+                .expect("sidecar loads");
         let jfk = Path::new(env!("CARGO_MANIFEST_DIR")).join(JFK_FIXTURE);
         let result = process.transcribe(&jfk).expect("sidecar transcribes");
         let lower = result.text.to_lowercase();
