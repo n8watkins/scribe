@@ -1,0 +1,310 @@
+// The main window: sidebar, a 2,000-row history list, a 60,000-character
+// editor, input-method fields and accessible controls. Fixture data only.
+
+import { ListView, TextEdit, LineEdit, Button, Switch, CheckBox, Slider, Palette, VerticalBox } from "std-widgets.slint";
+
+export struct HistoryRow {
+    time: string,
+    lang: string,
+    preview: string,
+    // First strong character is right-to-left (see fixtures::starts_rtl).
+    rtl: bool,
+    // A font for CJK transcripts, empty for the default (see fixtures::family_for).
+    family: string,
+}
+
+// A sidebar entry: a tab in a tab list, reachable with Tab, opened with Enter or Space.
+component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    callback activated();
+    height: 36px;
+    border-radius: 6px;
+    background: root.selected ? Palette.accent-background.with-alpha(0.22) : touch.has-hover ? Palette.alternate-background : transparent;
+    accessible-role: tab;
+    accessible-label: root.label;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.selected;
+    accessible-action-default => { root.activated(); }
+    forward-focus: focus;
+    focus := FocusScope {
+        key-pressed(e) => {
+            if e.text == Key.Return || e.text == " " {
+                root.activated();
+                return accept;
+            }
+            reject
+        }
+    }
+    touch := TouchArea {
+        clicked => {
+            focus.focus();
+            root.activated();
+        }
+    }
+    Text {
+        x: 12px;
+        height: parent.height;
+        vertical-alignment: center;
+        text: root.label;
+        color: Palette.foreground;
+        font-weight: root.selected ? 600 : 400;
+    }
+    if focus.has-focus: Rectangle {
+        border-width: 2px;
+        border-radius: root.border-radius;
+        border-color: Palette.accent-background;
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "Scribe Slint trial";
+    preferred-width: 960px;
+    preferred-height: 680px;
+    min-width: 820px;
+    min-height: 540px;
+    background: Palette.background;
+
+    in property <[HistoryRow]> rows;
+    in-out property <int> page: 0;
+    in-out property <string> transcript;
+    in property <int> transcript-chars;
+    // The history list's scroll position (the measuring hook scrolls it).
+    in-out property <length> list-y;
+    out property <length> list-content-height;
+    out property <length> list-visible-height;
+    in-out property <bool> pill-enabled: true;
+    in-out property <bool> sounds: true;
+    in-out property <bool> launch-at-login: false;
+    in-out property <float> volume: 70;
+    in-out property <string> single-line;
+    in-out property <string> ime-text;
+    in property <string> status-text: "Fixture data. Nothing here is saved.";
+
+    callback show-pill();
+    callback copy-transcript();
+    callback page-changed(int);
+    callback pill-toggled(bool);
+    changed pill-enabled => {
+        root.pill-toggled(self.pill-enabled);
+    }
+
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+    }
+
+    HorizontalLayout {
+        // Sidebar
+        Rectangle {
+            width: 200px;
+            background: Palette.alternate-background;
+            accessible-role: tab-list;
+            accessible-label: "Sections";
+            VerticalLayout {
+                padding: 12px;
+                spacing: 4px;
+                alignment: start;
+                Text {
+                    text: "Scribe trial";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Palette.foreground;
+                    accessible-role: text;
+                }
+                Rectangle { height: 12px; }
+                for item[i] in ["History", "Editor", "Input", "Controls"]: NavItem {
+                    label: item;
+                    selected: root.page == i;
+                    activated => {
+                        root.page = i;
+                        root.page-changed(i);
+                    }
+                }
+            }
+        }
+
+        // Content
+        VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            if root.page == 0: VerticalLayout {
+                spacing: 8px;
+                Text {
+                    text: "History (" + root.rows.length + " transcripts)";
+                    font-size: 18px;
+                    font-weight: 600;
+                    color: Palette.foreground;
+                    accessible-role: text;
+                }
+                list := ListView {
+                    content-y <=> root.list-y;
+                    accessible-label: "Transcript history";
+                    init => {
+                        root.list-content-height = self.content-height;
+                        root.list-visible-height = self.visible-height;
+                    }
+                    changed content-height => { root.list-content-height = self.content-height; }
+                    changed visible-height => { root.list-visible-height = self.visible-height; }
+                    for row[i] in root.rows: Rectangle {
+                        height: body.preferred-height;
+                        accessible-role: list-item;
+                        accessible-label: row.preview;
+                        accessible-item-index: i;
+                        accessible-item-count: root.rows.length;
+                        body := VerticalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            padding-top: 8px;
+                            padding-bottom: 9px;
+                            spacing: 3px;
+                            Text {
+                                text: row.time + "  ·  " + row.lang;
+                                font-size: 11px;
+                                color: Palette.foreground.with-alpha(0.6);
+                                horizontal-alignment: start;
+                            }
+                            Text {
+                                text: row.preview;
+                                font-family: row.family;
+                                wrap: word-wrap;
+                                font-size: 13px;
+                                color: Palette.foreground;
+                                horizontal-alignment: row.rtl ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+                            }
+                        }
+                        Rectangle {
+                            y: parent.height - 1px;
+                            height: 1px;
+                            background: Palette.border;
+                        }
+                    }
+                }
+            }
+
+            if root.page == 1: VerticalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        // Unicode scalar values, as Rust counts them (`character-count`
+                        // counts grapheme clusters, 15 fewer with the Arabic marks).
+                        text: "Transcript (" + root.transcript-chars + " characters)";
+                        font-size: 18px;
+                        font-weight: 600;
+                        color: Palette.foreground;
+                        vertical-alignment: center;
+                    }
+                    Rectangle { }
+                    Button {
+                        text: "Copy all";
+                        clicked => { root.copy-transcript(); }
+                    }
+                }
+                editor := TextEdit {
+                    text <=> root.transcript;
+                    wrap: word-wrap;
+                    font-size: 13px;
+                    accessible-label: "Transcript editor";
+                }
+                // Workaround: the TextEdit scrolls itself about two lines down while it
+                // is first laid out (its keep-the-cursor-visible rule runs before its
+                // visible height is known). Scroll it back once, right after.
+                Timer {
+                    interval: 1ms;
+                    triggered => {
+                        editor.content-y = 0;
+                        self.running = false;
+                    }
+                }
+            }
+
+            if root.page == 2: VerticalLayout {
+                spacing: 10px;
+                alignment: start;
+                Text {
+                    text: "Input method test";
+                    font-size: 18px;
+                    font-weight: 600;
+                    color: Palette.foreground;
+                }
+                Text {
+                    text: "Type Japanese, Chinese, Korean or Hindi with the Windows input method in both fields.";
+                    color: Palette.foreground.with-alpha(0.7);
+                    wrap: word-wrap;
+                }
+                LineEdit {
+                    text <=> root.single-line;
+                    placeholder-text: "Single-line field";
+                    accessible-label: "Single-line field";
+                }
+                TextEdit {
+                    text <=> root.ime-text;
+                    height: 220px;
+                    wrap: word-wrap;
+                    accessible-label: "Multi-line field";
+                }
+            }
+
+            if root.page == 3: VerticalLayout {
+                spacing: 12px;
+                alignment: start;
+                Text {
+                    text: "Controls";
+                    font-size: 18px;
+                    font-weight: 600;
+                    color: Palette.foreground;
+                }
+                CheckBox {
+                    text: "Show floating pill";
+                    checked <=> root.pill-enabled;
+                }
+                Switch {
+                    text: "Play sounds";
+                    checked <=> root.sounds;
+                }
+                Switch {
+                    text: "Launch at login";
+                    checked <=> root.launch-at-login;
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text {
+                        text: "Cue volume";
+                        vertical-alignment: center;
+                        color: Palette.foreground;
+                    }
+                    Slider {
+                        minimum: 0;
+                        maximum: 100;
+                        value <=> root.volume;
+                        accessible-label: "Cue volume";
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: start;
+                    Button {
+                        text: "Show pill";
+                        clicked => { root.show-pill(); }
+                    }
+                    Button {
+                        text: "Copy transcript";
+                        clicked => { root.copy-transcript(); }
+                    }
+                    Button {
+                        text: "Delete history";
+                        enabled: false;
+                    }
+                }
+            }
+
+            Text {
+                text: root.status-text;
+                font-size: 11px;
+                color: Palette.foreground.with-alpha(0.55);
+                accessible-role: text;
+            }
+        }
+    }
+}

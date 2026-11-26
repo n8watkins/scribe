@@ -1,0 +1,57 @@
+[package]
+name = "scribe-slint-trial"
+description = "Throwaway go or no-go trial: Scribe's pill, history, editor and tray drawn by Slint, with fixture data."
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# A workspace of its own: never part of the app build, never packaged.
+[workspace]
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[dependencies]
+# Same pin as Pulse (1.19.1), winit backend. Both CPU renderers are compiled in and picked at
+# run time (`TRIAL_RENDERER`): `skia-software` (the default) and Slint's own `software`.
+# Unlike Pulse, `accessibility` is on.
+slint = { version = "=1.19.1", default-features = false, features = [
+    "std",
+    "backend-winit",
+    "renderer-skia",
+    "renderer-software",
+    "accessibility",
+    "compat-1-2",
+    "raw-window-handle-06",
+    "unstable-winit-030",
+] }
+png = "0.17"
+
+[target.'cfg(windows)'.dependencies]
+tray-icon = { version = "=0.27.0", default-features = false }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dwm",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+slint-build = "=1.19.1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
