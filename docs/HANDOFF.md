@@ -237,7 +237,7 @@ build` clean. The maintainer is running 0.5.22 (installed via WSL→Windows).
 
 ### Verification & parallel-work commands
 
-- **Backend:** `cd app/src-tauri && cargo test` (171 tests).
+- **Backend:** `cargo test --workspace` from the repository root (171 tests then; the shell and the engine crate today).
 - **Frontend:** `cd app && npx tsc --noEmit && npm run build`.
 - **Parallel feature work:** `git worktree add -b feat/X ../scribe-wt-X HEAD` then
   `ln -sfn /home/natkins/n8builds/public/scribe/app/node_modules

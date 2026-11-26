@@ -78,15 +78,28 @@ jobs:
           Set-Content -Path (Join-Path $stage "version.txt") -Value $version -NoNewline
           Set-Content -Path (Join-Path $stage "flavor.txt") -Value $flavor -NoNewline
 
+      # The SBOM covers what ships: the app's npm packages and the Rust crates
+      # of the workspace Cargo.lock (see sbom-source.ps1). CI's "Release SBOM"
+      # job runs the same three steps on every pull request.
+      - name: Stage the SBOM source
+        shell: pwsh
+        run: ./.github/scripts/sbom-source.ps1 -Out "$env:RUNNER_TEMP\scribe"
+
       - name: Generate source SBOM
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
-          path: app
+          path: ${{ runner.temp }}/scribe
           format: cyclonedx-json
           output-file: ${{ runner.temp }}/scribe-release/scribe-${{ steps.metadata.outputs.version }}.cdx.json
           upload-artifact: false
           upload-release-assets: false
           dependency-snapshot: false
+
+      - name: Check the SBOM lists the Rust crates and npm packages
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./.github/scripts/check-sbom.ps1 -Sbom "$env:RUNNER_TEMP\scribe-release\scribe-${{ steps.metadata.outputs.version }}.cdx.json" -Repository "${{ github.repository }}"
 
       - name: Add bundled whisper.cpp to SBOM
         shell: pwsh
@@ -161,19 +174,32 @@ jobs:
       # esbuild's is the only one the Windows build needs, so it runs on its own.
       - name: Install and validate application dependencies
         working-directory: app
+        # pwsh fails a step only on its last command's exit code, so each
+        # command is checked.
         run: |
           npm ci --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
           npm rebuild esbuild
+          if ($LASTEXITCODE -ne 0) { throw "npm rebuild esbuild failed" }
           npm audit
+          if ($LASTEXITCODE -ne 0) { throw "npm audit failed" }
           npm run lint
+          if ($LASTEXITCODE -ne 0) { throw "npm run lint failed" }
           npm test
+          if ($LASTEXITCODE -ne 0) { throw "npm test failed" }
           npm run build
+          if ($LASTEXITCODE -ne 0) { throw "npm run build failed" }
 
-      - name: Validate Rust backend
-        run: |
-          cargo fmt --all --check
-          cargo clippy --locked --workspace --all-targets -- -D warnings
-          cargo test --locked --workspace
+      # One command per step: a pwsh step fails only on its last command's
+      # exit code.
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+
+      - name: Run clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Run backend tests
+        run: cargo test --locked --workspace
 
       - name: Build reviewed whisper.cpp source with Vulkan
         shell: pwsh
@@ -195,7 +221,9 @@ jobs:
             -DWHISPER_BUILD_EXAMPLES=ON `
             -DWHISPER_BUILD_TESTS=OFF `
             -DWHISPER_BUILD_SERVER=ON
+          if ($LASTEXITCODE -ne 0) { throw "Configuring whisper.cpp failed" }
           cmake --build build -j
+          if ($LASTEXITCODE -ne 0) { throw "Building whisper.cpp failed" }
           Pop-Location
           $cli = Get-ChildItem -Path "$src\build" -Recurse -Filter whisper-cli.exe | Select-Object -First 1
           if (-not $cli) { throw "whisper-cli.exe not found after the Vulkan build" }

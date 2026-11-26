@@ -56,7 +56,9 @@ jobs:
         working-directory: app
         run: |
           npm ci --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
           npm rebuild esbuild
+          if ($LASTEXITCODE -ne 0) { throw "npm rebuild esbuild failed" }
 
       # Same command as the release build, with the version raised and no
       # updater artifacts (so no signing key is needed).

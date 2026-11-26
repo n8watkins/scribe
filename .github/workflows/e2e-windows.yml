@@ -160,7 +160,9 @@ jobs:
         working-directory: app
         run: |
           npm ci --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
           npm rebuild esbuild
+          if ($LASTEXITCODE -ne 0) { throw "npm rebuild esbuild failed" }
 
       # A release build of the Dev flavor (its own data folders), with the test
       # audio input compiled in and the updater pointed nowhere.
