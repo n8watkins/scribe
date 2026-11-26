@@ -356,10 +356,7 @@ impl AudioService {
             is_test_clip,
             limits
         );
-        let _ = app.emit("audio://recording-started", &info);
-        // Only queued here: the cue plays on its own thread, after capture is
-        // already running, so it never delays the recording.
-        crate::sounds::play(app, crate::sounds::Cue::Start);
+        emit_recording_started(app, &info);
         Ok(StartOutcome {
             info,
             started: true,
@@ -559,6 +556,14 @@ pub fn record_test_clip_for_app(
 
     emit_recording_stopped(app, &result);
     Ok(result)
+}
+
+/// Tells the UI a recording started and plays the start cue. Called once
+/// capture is already running; the cue is only queued (it plays on its own
+/// thread), so it never delays the recording.
+fn emit_recording_started(app: &AppHandle, info: &RecordingSessionInfo) {
+    let _ = app.emit("audio://recording-started", info);
+    crate::sounds::play(app, crate::sounds::Cue::Start);
 }
 
 /// Tells the UI a recording ended and plays the stop cue. Every way a

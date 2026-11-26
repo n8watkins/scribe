@@ -55,8 +55,8 @@ Adding the interface does not require touching any transition logic.
 ### 2.3 Events emitted today
 
 - `scribe:app-state` - full `AppStateSnapshot`, emitted on every transition (`audio.rs:789`, `dictation.rs:634`, `output.rs:486`).
-- `audio://recording-started` - `RecordingSessionInfo` (`app/src-tauri/src/audio.rs:393`).
-- `audio://recording-stopped` - `RecordingResult` (`audio.rs:772`, plus cancel/test paths at 562/613).
+- `audio://recording-started` - `RecordingSessionInfo`, emitted only by `emit_recording_started` in `app/src-tauri/src/audio.rs`.
+- `audio://recording-stopped` - `RecordingResult`, emitted only by `emit_recording_stopped` in `audio.rs` (every way a recording ends: stop, cancel, timeout, disconnect, test clip).
 - `audio://recording-timeout`, `audio://level` - recording internals, not state.
 
 These are Tauri webview events, not an external surface.
