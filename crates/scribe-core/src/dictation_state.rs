@@ -10,10 +10,19 @@
 //! The wire contract these types implement is frozen in
 //! `docs/integrations/dictation-state-contract.md`.
 
-use crate::app_state::{AppStateSnapshot, AppStatus};
+use std::sync::Arc;
+
+use crate::{
+    app_state::{AppStateSnapshot, AppStatus},
+    backend::BackendState,
+    core::Core,
+    events::CoreEvent,
+    host::Host,
+    state_server::DictationServer,
+};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 /// Snapshot contract version. Bumped only on a breaking change to the snapshot
 /// shape; see the wire contract's versioning rules.
@@ -105,10 +114,187 @@ impl DictationSnapshot {
 ///   2. mirror the snapshot to the on-disk status file (the file fallback),
 ///   3. broadcast it to the in-process HTTP+SSE server, if it is running.
 pub fn emit_state_snapshot(app: &AppHandle, snapshot: &AppStateSnapshot) {
-    let _ = app.emit("scribe:app-state", snapshot);
-    crate::status_file::publish(app, snapshot);
-    if let Some(server) = app.try_state::<crate::state_server::DictationServer>() {
+    match app.try_state::<Core>() {
+        Some(core) => emit_state_snapshot_with(&core, snapshot),
+        None => log::warn!(
+            "Could not publish the dictation state {:?}: the engine is not ready yet",
+            snapshot.status
+        ),
+    }
+}
+
+/// [`emit_state_snapshot`] on the engine.
+pub fn emit_state_snapshot_with(core: &Core, snapshot: &AppStateSnapshot) {
+    Parts::of(core).publish(snapshot);
+}
+
+/// The parts of the engine the audio lane's recording and dictation paths
+/// use: the backend state, the host, and the dictation-state server. Built
+/// from a [`Core`] in the app, and from the bare parts in tests (which cannot
+/// build a `Core`). Each is a cheap handle, so a thread that outlives the
+/// call can take owned clones ([`Parts::to_owned`]).
+#[derive(Clone, Copy)]
+pub(crate) struct Parts<'a> {
+    pub backend: &'a BackendState,
+    pub host: &'a Arc<dyn Host>,
+    pub server: Option<&'a DictationServer>,
+}
+
+impl<'a> Parts<'a> {
+    pub fn of(core: &'a Core) -> Self {
+        Self {
+            backend: core.backend(),
+            host: core.host(),
+            server: core.dictation_server(),
+        }
+    }
+
+    /// Fans a fresh state snapshot out: the `scribe:app-state` event, the
+    /// status file, and the dictation-state server when it runs.
+    pub fn publish(&self, snapshot: &AppStateSnapshot) {
+        publish_snapshot(self.host.as_ref(), self.server, snapshot);
+    }
+
+    /// Owned clones of the parts, for a thread that outlives the call.
+    pub fn to_owned(self) -> OwnedParts {
+        OwnedParts {
+            backend: self.backend.clone(),
+            host: self.host.clone(),
+            server: self.server.cloned(),
+        }
+    }
+}
+
+/// [`Parts`] a thread can own.
+pub(crate) struct OwnedParts {
+    pub backend: BackendState,
+    pub host: Arc<dyn Host>,
+    pub server: Option<DictationServer>,
+}
+
+impl OwnedParts {
+    pub fn parts(&self) -> Parts<'_> {
+        Parts {
+            backend: &self.backend,
+            host: &self.host,
+            server: self.server.as_ref(),
+        }
+    }
+}
+
+/// The three side effects of a new state, in their order: the event to the
+/// interface, the status file, the dictation-state server.
+fn publish_snapshot(
+    host: &dyn Host,
+    server: Option<&DictationServer>,
+    snapshot: &AppStateSnapshot,
+) {
+    host.emit(CoreEvent::AppState(snapshot.clone()));
+    crate::status_file::publish_with(host, snapshot);
+    if let Some(server) = server {
         server.publish(snapshot);
+    }
+}
+
+/// [`Parts`] for the audio lane's tests, which cannot build a `Core`: a
+/// backend on an in-memory database, a [`crate::host::RecordingHost`] on a
+/// temporary folder, and no dictation-state server. The folder is removed on
+/// drop.
+#[cfg(test)]
+pub(crate) mod test_parts {
+    use std::{path::PathBuf, sync::Arc};
+
+    use super::Parts;
+    use crate::{
+        app_state::{AppEvent, AppStatus},
+        backend::BackendState,
+        host::{Flavor, Host, RecordingHost},
+        paths::Paths,
+    };
+
+    pub(crate) struct Fixture {
+        pub root: PathBuf,
+        pub backend: BackendState,
+        pub recorder: Arc<RecordingHost>,
+        pub host: Arc<dyn Host>,
+    }
+
+    impl Fixture {
+        pub fn new() -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "scribe-audio-lane-test-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4()
+            ));
+            let backend = BackendState::new(
+                crate::db::Database::in_memory().unwrap(),
+                root.join("recordings"),
+                crate::data_hygiene::DataDirs {
+                    data_dir: root.join("data"),
+                    cache_dir: root.join("cache"),
+                },
+            );
+            let recorder = Arc::new(RecordingHost::new(
+                Paths::from_parts(
+                    root.join("data"),
+                    root.join("cache"),
+                    root.join("logs"),
+                    None,
+                    None,
+                ),
+                Flavor::Stable,
+            ));
+            let host: Arc<dyn Host> = recorder.clone();
+            Self {
+                root,
+                backend,
+                recorder,
+                host,
+            }
+        }
+
+        pub fn parts(&self) -> Parts<'_> {
+            Parts {
+                backend: &self.backend,
+                host: &self.host,
+                server: None,
+            }
+        }
+
+        /// Drives the state machine through `events` without sending anything.
+        pub fn drive(&self, events: &[AppEvent]) {
+            for event in events {
+                self.backend.transition_app_state(event.clone()).unwrap();
+            }
+        }
+
+        pub fn status(&self) -> AppStatus {
+            self.backend.app_state().unwrap().snapshot().status
+        }
+
+        /// The (name, JSON payload) of every event sent so far.
+        pub fn sent(&self) -> Vec<(&'static str, serde_json::Value)> {
+            self.recorder
+                .events()
+                .iter()
+                .map(|event| (event.name(), serde_json::to_value(event).unwrap()))
+                .collect()
+        }
+
+        /// The statuses of the `scribe:app-state` events sent so far.
+        pub fn published_states(&self) -> Vec<String> {
+            self.sent()
+                .into_iter()
+                .filter(|(name, _)| *name == "scribe:app-state")
+                .map(|(_, payload)| payload["status"].as_str().unwrap().to_string())
+                .collect()
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
     }
 }
 
@@ -230,6 +416,48 @@ mod tests {
         let snap = DictationSnapshot::from_state(&state, Utc::now(), 1);
         assert!(!snap.dictating);
         assert!(!snap.busy);
+    }
+
+    #[test]
+    fn a_new_state_goes_to_the_interface_then_the_status_file() {
+        use crate::host::{Flavor, RecordingHost};
+        use crate::paths::Paths;
+
+        let root = std::env::temp_dir().join(format!(
+            "scribe-dictation-state-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let cache = root.join("cache");
+        let host = RecordingHost::new(
+            Paths::from_parts(
+                root.join("data"),
+                cache.clone(),
+                root.join("logs"),
+                None,
+                None,
+            ),
+            Flavor::Stable,
+        );
+        let state = AppStateSnapshot {
+            status: AppStatus::Recording,
+            error: None,
+            updated_at: Utc::now(),
+        };
+
+        publish_snapshot(&host, None, &state);
+
+        let events = host.events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].name(), "scribe:app-state");
+        assert_eq!(
+            serde_json::to_value(&events[0]).unwrap(),
+            serde_json::to_value(&state).unwrap()
+        );
+        let status = std::fs::read_to_string(cache.join("status.json")).unwrap();
+        assert!(status.contains("\"Recording\""), "{status}");
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

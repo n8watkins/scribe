@@ -7,7 +7,7 @@ use cpal::{
 };
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::AppHandle;
 use uuid::Uuid;
 
 use std::{
@@ -21,9 +21,14 @@ use std::{
 
 use crate::{
     app_state::{AppEvent, AppStatus},
-    commands::BackendState,
-    dictation_state::emit_state_snapshot,
+    backend::BackendState,
+    core::Core,
+    dictation_state::Parts,
+    dictation_worker::{DictationCommand, DictationWorker, Intent},
     error::CommandError,
+    events::CoreEvent,
+    host::Host,
+    output::core_for,
     settings::AppSettings,
 };
 
@@ -227,7 +232,7 @@ impl AudioService {
 
     fn start(
         &mut self,
-        app: &AppHandle,
+        core: &Core,
         settings: &AppSettings,
         request: StartRecordingRequest,
         is_test_clip: bool,
@@ -286,7 +291,7 @@ impl AudioService {
         };
         let (chunk_tx, chunk_rx) = unbounded::<AudioChunk>();
         let (control_tx, control_rx) = unbounded::<WorkerControl>();
-        let app_for_worker = app.clone();
+        let core_for_worker = core.clone();
         let temp_dir = self.temp_dir.clone();
         let min_recording_ms = settings.min_recording_ms as u64;
         let silence_trim_enabled = settings.silence_trim_enabled;
@@ -301,8 +306,8 @@ impl AudioService {
                 .segment_pause_enabled
                 .then_some(settings.segment_pause_ms as u64);
             let segment_max_ms = settings.segment_max_ms as u64;
-            crate::incremental::start_session(
-                app,
+            crate::incremental::start_session_with(
+                core,
                 &session_id,
                 self.temp_dir.clone(),
                 source_sample_rate,
@@ -315,7 +320,7 @@ impl AudioService {
         let worker_info = info.clone();
         let worker = thread::spawn(move || {
             recording_worker(
-                app_for_worker,
+                core_for_worker,
                 worker_info,
                 chunk_rx,
                 control_rx,
@@ -328,11 +333,16 @@ impl AudioService {
             )
         });
 
-        let stream = CaptureStream::start(input.source, chunk_tx, app.clone(), session_id.clone())?;
+        let stream = CaptureStream::start(
+            input.source,
+            chunk_tx,
+            core.dictation_worker().clone(),
+            session_id.clone(),
+        )?;
 
         let timeout_active = Arc::new(AtomicBool::new(true));
         spawn_timeout_thread(
-            app.clone(),
+            core.dictation_worker().clone(),
             session_id.clone(),
             max_duration_ms,
             timeout_active.clone(),
@@ -356,7 +366,7 @@ impl AudioService {
             is_test_clip,
             limits
         );
-        emit_recording_started(app, &info);
+        emit_recording_started(Parts::of(core), &info);
         Ok(StartOutcome {
             info,
             started: true,
@@ -408,7 +418,13 @@ impl AudioService {
 }
 
 pub fn list_microphones_for_app(app: &AppHandle) -> Result<Vec<MicrophoneInfo>, CommandError> {
-    let state = app.state::<BackendState>();
+    let core = core_for(app, "list the microphones")?;
+    list_microphones_with(&core)
+}
+
+/// The input devices, with the one chosen in Settings marked.
+pub fn list_microphones_with(core: &Core) -> Result<Vec<MicrophoneInfo>, CommandError> {
+    let state = core.backend();
     let settings = state.db()?.get_settings()?;
     let microphones = state
         .audio()?
@@ -423,7 +439,18 @@ pub fn start_recording_for_app(
     request: Option<StartRecordingRequest>,
     allow_auto_stop: bool,
 ) -> Result<RecordingSessionInfo, CommandError> {
-    let state = app.state::<BackendState>();
+    let core = core_for(app, "start recording")?;
+    start_recording_with(&core, request, allow_auto_stop)
+}
+
+/// [`start_recording_for_app`] on the engine.
+pub fn start_recording_with(
+    core: &Core,
+    request: Option<StartRecordingRequest>,
+    allow_auto_stop: bool,
+) -> Result<RecordingSessionInfo, CommandError> {
+    let parts = Parts::of(core);
+    let state = core.backend();
     let settings = state.db()?.get_settings()?;
     let snapshot = state.app_state()?.snapshot();
 
@@ -433,11 +460,11 @@ pub fn start_recording_for_app(
     ) {
         if snapshot.status == AppStatus::Error {
             let snapshot = state.transition_app_state(AppEvent::ResetError)?;
-            emit_state_snapshot(app, &snapshot);
+            parts.publish(&snapshot);
         }
 
         let outcome = state.audio()?.start(
-            app,
+            core,
             &settings,
             request.unwrap_or_default(),
             false,
@@ -455,18 +482,16 @@ pub fn start_recording_for_app(
             // there even if they switch apps while it transcribes.
             state.set_paste_target(crate::output::current_paste_target());
             let snapshot = state.transition_app_state(AppEvent::StartRecording)?;
-            emit_state_snapshot(app, &snapshot);
+            parts.publish(&snapshot);
             // Load the speech model while the person speaks, if it isn't
             // loaded already ("Keep the speech model loaded" off, or a crash).
-            if let Some(warm) = app.try_state::<crate::whisper_server::WarmTranscriber>() {
-                warm.prewarm();
-            }
+            core.warm_transcriber().prewarm();
         }
 
         Ok(outcome.info)
     } else if snapshot.status == AppStatus::Recording {
         let outcome = state.audio()?.start(
-            app,
+            core,
             &settings,
             request.unwrap_or_default(),
             false,
@@ -482,11 +507,27 @@ pub fn start_recording_for_app(
 }
 
 pub fn stop_recording_for_app(app: &AppHandle) -> Result<RecordingResult, CommandError> {
-    stop_recording_with_reason(app, StopReason::Completed, None)
+    let core = core_for(app, "stop recording")?;
+    stop_recording_with(&core)
+}
+
+/// Stops the active recording the way a toggle press does.
+pub fn stop_recording_with(core: &Core) -> Result<RecordingResult, CommandError> {
+    stop_recording_with_reason(Parts::of(core), StopReason::Completed, None)
 }
 
 pub fn cancel_recording_for_app(app: &AppHandle) -> Result<(), CommandError> {
-    let state = app.state::<BackendState>();
+    let core = core_for(app, "cancel the recording")?;
+    cancel_recording_with(&core)
+}
+
+/// Drops the active recording without transcribing it.
+pub fn cancel_recording_with(core: &Core) -> Result<(), CommandError> {
+    cancel_recording(Parts::of(core))
+}
+
+fn cancel_recording(parts: Parts) -> Result<(), CommandError> {
+    let state = parts.backend;
     let result = state.audio()?.stop(StopReason::Cancelled)?;
 
     if let Some(result) = result {
@@ -501,13 +542,13 @@ pub fn cancel_recording_for_app(app: &AppHandle) -> Result<(), CommandError> {
         if result.is_transform {
             state.discard_pending_transform();
         }
-        emit_recording_stopped(app, &result);
+        emit_recording_stopped(parts, &result);
     }
 
     let snapshot = state.app_state()?.snapshot();
     if snapshot.status == AppStatus::Recording {
         let snapshot = state.transition_app_state(AppEvent::CancelRecording)?;
-        emit_state_snapshot(app, &snapshot);
+        parts.publish(&snapshot);
     }
 
     Ok(())
@@ -517,7 +558,16 @@ pub fn record_test_clip_for_app(
     app: &AppHandle,
     duration_ms: Option<u64>,
 ) -> Result<RecordingResult, CommandError> {
-    let state = app.state::<BackendState>();
+    let core = core_for(app, "record a test clip")?;
+    record_test_clip_with(&core, duration_ms)
+}
+
+/// Records a test clip of a fixed length.
+pub fn record_test_clip_with(
+    core: &Core,
+    duration_ms: Option<u64>,
+) -> Result<RecordingResult, CommandError> {
+    let state = core.backend();
     let settings = state.db()?.get_settings()?;
     let duration_ms = duration_ms.unwrap_or(DEFAULT_TEST_CLIP_MS).clamp(
         settings.min_recording_ms as u64,
@@ -531,7 +581,9 @@ pub fn record_test_clip_for_app(
     };
     // Test clips are never silence auto-stopped: they run for a fixed
     // duration and must capture whatever the mic hears.
-    let outcome = state.audio()?.start(app, &settings, request, true, false)?;
+    let outcome = state
+        .audio()?
+        .start(core, &settings, request, true, false)?;
 
     if !outcome.started {
         return Err(CommandError::new(
@@ -552,7 +604,7 @@ pub fn record_test_clip_for_app(
         state.audio()?.set_last_test_clip(PathBuf::from(wav_path));
     }
 
-    emit_recording_stopped(app, &result);
+    emit_recording_stopped(Parts::of(core), &result);
     Ok(result)
 }
 
@@ -575,25 +627,34 @@ fn finished_recording(
 /// Tells the UI a recording started and plays the start cue. Called once
 /// capture is already running; the cue is only queued (it plays on its own
 /// thread), so it never delays the recording.
-fn emit_recording_started(app: &AppHandle, info: &RecordingSessionInfo) {
-    let _ = app.emit("audio://recording-started", info);
-    crate::sounds::play(app, crate::sounds::Cue::Start);
+fn emit_recording_started(parts: Parts, info: &RecordingSessionInfo) {
+    parts.host.emit(CoreEvent::RecordingStarted(info.clone()));
+    crate::sounds::play_with(parts.backend, crate::sounds::Cue::Start);
 }
 
 /// Tells the UI a recording ended and plays the stop cue. Every way a
 /// recording ends (stop, cancel, too short, timeout, disconnect, test clip)
 /// goes through here, matching where the stop sound always played.
-fn emit_recording_stopped(app: &AppHandle, result: &RecordingResult) {
-    let _ = app.emit("audio://recording-stopped", result);
-    crate::sounds::play(app, crate::sounds::Cue::Stop);
+fn emit_recording_stopped(parts: Parts, result: &RecordingResult) {
+    parts.host.emit(CoreEvent::RecordingStopped(result.clone()));
+    crate::sounds::play_with(parts.backend, crate::sounds::Cue::Stop);
 }
 
 /// Returns the most recent test clip WAV as a base64 string for in-app
 /// playback. Errors with code "no_test_clip" when no clip is available.
 pub fn get_test_clip_audio_for_app(app: &AppHandle) -> Result<String, CommandError> {
+    let core = core_for(app, "play the test clip")?;
+    get_test_clip_audio_with(&core)
+}
+
+/// [`get_test_clip_audio_for_app`] on the engine.
+pub fn get_test_clip_audio_with(core: &Core) -> Result<String, CommandError> {
+    test_clip_audio(core.backend())
+}
+
+fn test_clip_audio(state: &BackendState) -> Result<String, CommandError> {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-    let state = app.state::<BackendState>();
     let path = state
         .audio()?
         .last_test_clip_path()
@@ -613,32 +674,46 @@ fn no_test_clip() -> CommandError {
 /// ceiling, or the silence rule past the long-recording point (see
 /// [`StopPolicy`]). Runs on the dictation worker; a no-op when `session_id` is
 /// no longer the active recording (the user stopped it while this was
-/// queued), so the transcript is never lost or duplicated.
-pub(crate) fn finish_timed_out_recording(
+/// queued), so the transcript is never lost or duplicated. Still takes the
+/// app for the transcription (`dictation::transcribe_recording_with`).
+pub(crate) fn finish_timed_out_recording_with(
     app: &AppHandle,
+    core: &Core,
     session_id: &str,
 ) -> Result<(), CommandError> {
-    let still_active = app
-        .state::<BackendState>()
-        .audio()?
-        .active_session_id()
-        .is_some_and(|active| active == session_id);
-    if !still_active {
+    let Some(result) = stop_timed_out_recording(Parts::of(core), session_id)? else {
         return Ok(());
-    }
-
-    let result = stop_recording_with_reason(app, StopReason::Timeout, Some(session_id))?;
-    let _ = app.emit("audio://recording-timeout", &result);
+    };
 
     // Stopping moved the state machine into Transcribing: a timed-out
     // recording must be transcribed exactly like a manual stop, or the app
     // stays stuck on Transcribing forever.
     if result.status == RecordingResultStatus::TooShort {
-        crate::dictation::emit_dictation_empty(app);
+        crate::dictation::emit_dictation_empty_with(core.host().as_ref());
     } else {
-        crate::dictation::transcribe_recording_for_app(app, result)?;
+        crate::dictation::transcribe_recording_with(app, core, result)?;
     }
     Ok(())
+}
+
+/// The stop half of [`finish_timed_out_recording_with`]: `None` (and nothing
+/// sent) when `session_id` is no longer the active recording.
+fn stop_timed_out_recording(
+    parts: Parts,
+    session_id: &str,
+) -> Result<Option<RecordingResult>, CommandError> {
+    let still_active = parts
+        .backend
+        .audio()?
+        .active_session_id()
+        .is_some_and(|active| active == session_id);
+    if !still_active {
+        return Ok(None);
+    }
+
+    let result = stop_recording_with_reason(parts, StopReason::Timeout, Some(session_id))?;
+    parts.host.emit(CoreEvent::RecordingTimeout(result.clone()));
+    Ok(Some(result))
 }
 
 /// Recovers from a capture-stream error (e.g. the mic was unplugged mid-record).
@@ -648,12 +723,16 @@ pub(crate) fn finish_timed_out_recording(
 /// recording error, then finishes transcription exactly like the manual-stop
 /// and timeout paths so the app never strands in Recording/Transcribing. If the
 /// session is already gone (the user stopped first, or a duplicate error
-/// callback slipped past the guard), it no-ops cleanly.
-pub(crate) fn finish_disconnected_recording(
+/// callback slipped past the guard), it no-ops cleanly. Still takes the app
+/// for the transcription (`dictation::transcribe_recording_with`).
+pub(crate) fn finish_disconnected_recording_with(
     app: &AppHandle,
+    core: &Core,
     session_id: &str,
 ) -> Result<(), CommandError> {
-    let result = match stop_recording_with_reason(app, StopReason::Disconnected, Some(session_id)) {
+    let parts = Parts::of(core);
+    let result = match stop_recording_with_reason(parts, StopReason::Disconnected, Some(session_id))
+    {
         Ok(result) => result,
         Err(error) => {
             log::info!(
@@ -665,8 +744,8 @@ pub(crate) fn finish_disconnected_recording(
         }
     };
 
-    emit_recording_error(
-        app,
+    emit_recording_error_with(
+        parts.host.as_ref(),
         CommandError::new(
             "microphone_unavailable",
             "The microphone stopped sending audio (it may have been unplugged or disabled). \
@@ -678,19 +757,19 @@ pub(crate) fn finish_disconnected_recording(
     // (too short). Finish the same way the manual-stop / timeout paths do, or
     // the app stays stuck in Transcribing forever.
     if result.status == RecordingResultStatus::TooShort {
-        crate::dictation::emit_dictation_empty(app);
+        crate::dictation::emit_dictation_empty_with(parts.host.as_ref());
     } else {
-        crate::dictation::transcribe_recording_for_app(app, result)?;
+        crate::dictation::transcribe_recording_with(app, core, result)?;
     }
     Ok(())
 }
 
 fn stop_recording_with_reason(
-    app: &AppHandle,
+    parts: Parts,
     reason: StopReason,
     session_id: Option<&str>,
 ) -> Result<RecordingResult, CommandError> {
-    let state = app.state::<BackendState>();
+    let state = parts.backend;
     let should_transition = state.app_state()?.snapshot().status == AppStatus::Recording;
 
     if should_transition {
@@ -703,7 +782,7 @@ fn stop_recording_with_reason(
         // path would otherwise surface to the user as a confusing toast. The
         // stopper that actually takes the session still drives the rest.
         match state.transition_app_state(AppEvent::StopRecording) {
-            Ok(snapshot) => emit_state_snapshot(app, &snapshot),
+            Ok(snapshot) => parts.publish(&snapshot),
             Err(error) => log::debug!(
                 "StopRecording transition skipped; another stopper already advanced the state: {}",
                 error.message
@@ -732,7 +811,7 @@ fn stop_recording_with_reason(
             // no-op). Land back on Idle and surface the error to the caller.
             if state.app_state()?.snapshot().status == AppStatus::Stopping {
                 let snapshot = state.transition_app_state(AppEvent::StopFailed)?;
-                emit_state_snapshot(app, &snapshot);
+                parts.publish(&snapshot);
             }
             return Err(error);
         }
@@ -756,7 +835,7 @@ fn stop_recording_with_reason(
             state.discard_pending_transform();
         }
     }
-    emit_recording_stopped(app, &result);
+    emit_recording_stopped(parts, &result);
 
     let snapshot = state.app_state()?.snapshot();
     if snapshot.status == AppStatus::Stopping {
@@ -766,7 +845,7 @@ fn stop_recording_with_reason(
             AppEvent::ValidAudio
         };
         let snapshot = state.transition_app_state(event)?;
-        emit_state_snapshot(app, &snapshot);
+        parts.publish(&snapshot);
     }
 
     Ok(result)
@@ -776,7 +855,7 @@ fn stop_recording_with_reason(
 /// ceiling by counting captured audio; this timer still fires if the stream
 /// stops delivering audio without reporting an error.
 fn spawn_timeout_thread(
-    app: AppHandle,
+    worker: DictationWorker,
     session_id: String,
     max_duration_ms: u64,
     timeout_active: Arc<AtomicBool>,
@@ -789,16 +868,13 @@ fn spawn_timeout_thread(
 
         // The worker re-checks that this session is still the active one
         // when the stop runs.
-        crate::dictation_worker::dispatch(
-            &app,
-            crate::dictation_worker::DictationCommand::FinishTimedOut { session_id },
-        );
+        worker.send(DictationCommand::FinishTimedOut { session_id });
     });
 }
 
 #[allow(clippy::too_many_arguments)]
 fn recording_worker(
-    app: AppHandle,
+    core: Core,
     info: RecordingSessionInfo,
     chunk_rx: Receiver<AudioChunk>,
     control_rx: Receiver<WorkerControl>,
@@ -825,9 +901,9 @@ fn recording_worker(
             recv(chunk_rx) -> message => {
                 match message {
                     Ok(chunk) => {
-                        maybe_emit_level(&app, &info.session_id, &chunk.samples, &mut last_level_emit);
+                        maybe_emit_level(core.host().as_ref(), &info.session_id, &chunk.samples, &mut last_level_emit);
                         if let Some(signal) = stop_policy.observe(&chunk.samples) {
-                            act_on_stop_signal(&app, &info.session_id, signal, limits);
+                            act_on_stop_signal(&core, &info.session_id, signal, limits);
                         }
                         if let Some(link) = incremental.as_mut() {
                             link.push_chunk(&chunk.samples);
@@ -841,7 +917,12 @@ fn recording_worker(
     };
 
     while let Ok(chunk) = chunk_rx.try_recv() {
-        maybe_emit_level(&app, &info.session_id, &chunk.samples, &mut last_level_emit);
+        maybe_emit_level(
+            core.host().as_ref(),
+            &info.session_id,
+            &chunk.samples,
+            &mut last_level_emit,
+        );
         if let Some(link) = incremental.as_mut() {
             link.push_chunk(&chunk.samples);
         }
@@ -884,7 +965,7 @@ fn stop_reason_after_stream_end(control_rx: &Receiver<WorkerControl>) -> StopRea
 }
 
 fn maybe_emit_level(
-    app: &AppHandle,
+    host: &dyn Host,
     session_id: &str,
     samples: &[f32],
     last_level_emit: &mut Instant,
@@ -903,7 +984,7 @@ fn maybe_emit_level(
         peak: peak.clamp(0.0, 1.0),
         rms: rms.clamp(0.0, 1.0),
     };
-    let _ = app.emit("audio://level", event);
+    host.emit(CoreEvent::AudioLevel(event));
     *last_level_emit = Instant::now();
 }
 
@@ -1050,7 +1131,7 @@ impl StopPolicy {
 /// Carries out a [`StopSignal`] from the recording worker. Every stop is
 /// queued on the dictation worker: stopping joins this recording thread, so
 /// it must not run on it.
-fn act_on_stop_signal(app: &AppHandle, session_id: &str, signal: StopSignal, limits: StopLimits) {
+fn act_on_stop_signal(core: &Core, session_id: &str, signal: StopSignal, limits: StopLimits) {
     match signal {
         StopSignal::Silence => {
             log::info!(
@@ -1060,7 +1141,7 @@ fn act_on_stop_signal(app: &AppHandle, session_id: &str, signal: StopSignal, lim
             );
             // Stops exactly like a toggle press. Double stops are harmless,
             // since the worker skips a stop unless the app is still Recording.
-            crate::dictation_worker::submit(app, crate::dictation_worker::Intent::Stop);
+            crate::dictation_worker::submit_with(core, Intent::Stop);
         }
         StopSignal::LongRecordingSilence | StopSignal::Ceiling => {
             if signal == StopSignal::Ceiling {
@@ -1079,12 +1160,10 @@ fn act_on_stop_signal(app: &AppHandle, session_id: &str, signal: StopSignal, lim
             }
             // The session-scoped salvage path: it no-ops when the user
             // already stopped this session, and transcribes what was captured.
-            crate::dictation_worker::dispatch(
-                app,
-                crate::dictation_worker::DictationCommand::FinishTimedOut {
+            core.dictation_worker()
+                .send(DictationCommand::FinishTimedOut {
                     session_id: session_id.to_string(),
-                },
-            );
+                });
         }
     }
 }
@@ -1240,7 +1319,7 @@ impl CaptureStream {
     fn start(
         source: InputSource,
         chunk_tx: Sender<AudioChunk>,
-        app: AppHandle,
+        worker: DictationWorker,
         session_id: String,
     ) -> Result<Self, CommandError> {
         match source {
@@ -1248,7 +1327,9 @@ impl CaptureStream {
                 device,
                 config,
                 sample_format,
-            } => Self::start_microphone(device, config, sample_format, chunk_tx, app, session_id),
+            } => {
+                Self::start_microphone(device, config, sample_format, chunk_tx, worker, session_id)
+            }
             #[cfg(feature = "e2e-audio")]
             InputSource::TestClip(clip) => Self::start_test_clip(clip, chunk_tx),
         }
@@ -1285,7 +1366,7 @@ impl CaptureStream {
         config: StreamConfig,
         sample_format: SampleFormat,
         chunk_tx: Sender<AudioChunk>,
-        app: AppHandle,
+        worker: DictationWorker,
         session_id: String,
     ) -> Result<Self, CommandError> {
         let (ready_tx, ready_rx) = bounded::<Result<(), CommandError>>(1);
@@ -1293,16 +1374,22 @@ impl CaptureStream {
         let thread = thread::Builder::new()
             .name("scribe-audio-capture".to_string())
             .spawn(move || {
-                let started =
-                    build_input_stream(&device, &config, sample_format, chunk_tx, app, session_id)
-                        .and_then(|stream| {
-                            stream.play().map(|()| stream).map_err(|error| {
-                                CommandError::new(
-                                    "recording_failed",
-                                    format!("Could not start recording stream. {}", error),
-                                )
-                            })
-                        });
+                let started = build_input_stream(
+                    &device,
+                    &config,
+                    sample_format,
+                    chunk_tx,
+                    worker,
+                    session_id,
+                )
+                .and_then(|stream| {
+                    stream.play().map(|()| stream).map_err(|error| {
+                        CommandError::new(
+                            "recording_failed",
+                            format!("Could not start recording stream. {}", error),
+                        )
+                    })
+                });
                 let stream = match started {
                     Ok(stream) => stream,
                     Err(error) => {
@@ -1355,7 +1442,7 @@ fn build_input_stream(
     config: &StreamConfig,
     sample_format: SampleFormat,
     chunk_tx: Sender<AudioChunk>,
-    app: AppHandle,
+    worker: DictationWorker,
     session_id: String,
 ) -> Result<Stream, CommandError> {
     let channels = config.channels as usize;
@@ -1373,12 +1460,9 @@ fn build_input_stream(
         if handled.swap(true, Ordering::SeqCst) {
             return;
         }
-        crate::dictation_worker::dispatch(
-            &app,
-            crate::dictation_worker::DictationCommand::FinishDisconnected {
-                session_id: session_id.clone(),
-            },
-        );
+        worker.send(DictationCommand::FinishDisconnected {
+            session_id: session_id.clone(),
+        });
     };
 
     match sample_format {
@@ -1851,15 +1935,26 @@ pub(crate) fn duration_ms(sample_count: usize, sample_rate: u32) -> u64 {
     ((sample_count as u128 * 1_000) / sample_rate as u128) as u64
 }
 
-pub fn emit_recording_error(app: &AppHandle, error: CommandError) {
+/// Needs only the host, which is installed before anything else, so it uses
+/// that rather than the `Core` (like `status_file::publish`).
+pub fn emit_recording_error(_app: &AppHandle, error: CommandError) {
+    match crate::shell::host() {
+        Some(host) => emit_recording_error_with(host.as_ref(), error),
+        None => log::error!(
+            "Recording error {}: {} (not sent: no host yet)",
+            error.code,
+            error.message
+        ),
+    }
+}
+
+/// Logs the error and sends `audio://recording-error`.
+pub fn emit_recording_error_with(host: &dyn Host, error: CommandError) {
     log::error!("Recording error {}: {}", error.code, error.message);
-    let _ = app.emit(
-        "audio://recording-error",
-        RecordingErrorEvent {
-            code: error.code,
-            message: error.message,
-        },
-    );
+    host.emit(CoreEvent::RecordingError(RecordingErrorEvent {
+        code: error.code,
+        message: error.message,
+    }));
 }
 
 #[cfg(test)]
@@ -2275,5 +2370,91 @@ mod tests {
 
         // A missing file fails open (true) so real audio is never dropped.
         assert!(wav_has_speech(std::path::Path::new("/no/such/scribe.wav")));
+    }
+
+    // The recording paths on the engine's parts: the events each one sends,
+    // in order, with no microphone, output device or model.
+
+    use crate::dictation_state::test_parts::Fixture;
+    use serde_json::json;
+
+    #[test]
+    fn a_stop_with_no_recording_goes_back_to_idle_and_says_why() {
+        let fixture = Fixture::new();
+        fixture.drive(&[AppEvent::StartRecording]);
+
+        let error =
+            stop_recording_with_reason(fixture.parts(), StopReason::Completed, None).unwrap_err();
+
+        assert_eq!(error.code, "recording_not_active");
+        // Stopping, then Idle (never stranded in Stopping), and no
+        // recording-stopped event or stop cue for a recording that is gone.
+        assert_eq!(fixture.published_states(), ["Stopping", "Idle"]);
+        assert_eq!(fixture.sent().len(), 2);
+        assert_eq!(fixture.status(), AppStatus::Idle);
+    }
+
+    #[test]
+    fn a_cancel_with_no_recording_still_leaves_recording() {
+        let fixture = Fixture::new();
+        fixture.drive(&[AppEvent::StartRecording]);
+
+        cancel_recording(fixture.parts()).unwrap();
+        assert_eq!(fixture.published_states(), ["Idle"]);
+        assert_eq!(fixture.sent().len(), 1);
+
+        // Nothing to cancel and nothing recording: nothing is sent.
+        cancel_recording(fixture.parts()).unwrap();
+        assert_eq!(fixture.sent().len(), 1);
+    }
+
+    #[test]
+    fn a_timeout_for_a_recording_that_already_ended_does_nothing() {
+        let fixture = Fixture::new();
+        fixture.drive(&[AppEvent::StartRecording]);
+
+        let result = stop_timed_out_recording(fixture.parts(), "an-earlier-session").unwrap();
+
+        assert!(result.is_none());
+        assert!(fixture.sent().is_empty());
+        assert_eq!(fixture.status(), AppStatus::Recording);
+    }
+
+    #[test]
+    fn recording_errors_and_levels_go_to_the_host_with_todays_payloads() {
+        let fixture = Fixture::new();
+        let host = fixture.host.as_ref();
+
+        emit_recording_error_with(
+            host,
+            CommandError::new("microphone_unavailable", "The mic went away."),
+        );
+        let mut last_level_emit = Instant::now()
+            .checked_sub(LEVEL_EVENT_INTERVAL)
+            .unwrap_or_else(Instant::now);
+        maybe_emit_level(host, "session-1", &[0.5, -0.5], &mut last_level_emit);
+        // Inside the level interval: not sent.
+        maybe_emit_level(host, "session-1", &[0.9], &mut last_level_emit);
+
+        assert_eq!(
+            fixture.sent(),
+            [
+                (
+                    "audio://recording-error",
+                    json!({"code": "microphone_unavailable", "message": "The mic went away."})
+                ),
+                (
+                    "audio://level",
+                    json!({"sessionId": "session-1", "level": 0.5, "peak": 0.5, "rms": 0.5})
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn playing_the_test_clip_before_recording_one_says_so() {
+        let fixture = Fixture::new();
+        let error = test_clip_audio(&fixture.backend).unwrap_err();
+        assert_eq!(error.code, "no_test_clip");
     }
 }

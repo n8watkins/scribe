@@ -7,21 +7,24 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::AppHandle;
 
 use crate::{
     app_state::{AppEvent, AppStatus},
     audio::{RecordingResult, RecordingResultStatus},
-    commands::BackendState,
-    dictation_state::emit_state_snapshot,
+    backend::BackendState,
+    core::Core,
+    dictation_state::{OwnedParts, Parts},
     error::CommandError,
+    events::CoreEvent,
+    host::Host,
     incremental::{self, SessionHandle},
-    model_manager, output,
-    settings::Language,
-    shell,
+    model_manager,
+    output::{self, core_for, OutputResult},
+    selection_transform::CapturedSelection,
+    settings::{AppSettings, Language},
     transcript::Transcript,
     whisper::{WhisperRequest, WhisperTranscription},
-    whisper_server::WarmTranscriber,
 };
 
 /// How long the app stays in Error before self-healing back to Idle.
@@ -66,39 +69,46 @@ pub fn transcribe_recording_for_app(
     app: &AppHandle,
     recording: RecordingResult,
 ) -> Result<Option<DictationResult>, CommandError> {
+    let core = core_for(app, "transcribe the recording")?;
+    transcribe_recording_with(app, &core, recording)
+}
+
+/// [`transcribe_recording_for_app`] on the engine. Still takes the app for
+/// the output lane (pasting the text, the transform's paste).
+pub fn transcribe_recording_with(
+    app: &AppHandle,
+    core: &Core,
+    recording: RecordingResult,
+) -> Result<Option<DictationResult>, CommandError> {
     // Take ownership of the incremental session (if any) up front so it is
     // consumed exactly once, whatever happens below. `stopped` anchors the
     // stop-to-final-text latency measurement.
     let stopped = Instant::now();
-    let incremental = app
-        .state::<BackendState>()
-        .incremental()
-        .take(&recording.session_id);
+    let incremental = core.backend().incremental().take(&recording.session_id);
 
-    let result = transcribe_recording_checked(app, &recording, incremental, stopped);
+    let result = transcribe_recording_checked(app, core, &recording, incremental, stopped);
     // The dictation is done with its model. If another one was chosen
     // meanwhile, load it now, so the next dictation starts warm.
     crate::session_model::global().release(&recording.session_id);
-    if let Some(warm) = app.try_state::<crate::whisper_server::WarmTranscriber>() {
-        warm.load_if_kept();
-    }
+    core.warm_transcriber().load_if_kept();
     // A transform recording that failed before reaching the transform engine
     // still holds the captured selection; dropping it restores the clipboard.
     if recording.is_transform {
-        app.state::<BackendState>().discard_pending_transform();
+        core.backend().discard_pending_transform();
     }
     if result.is_err() {
         // Whatever failed (validation, model lookup, whisper, the database),
         // a Transcribing state must not be stranded: fail over to Error,
         // which self-heals back to Idle. No-op when already past
         // Transcribing.
-        transition_after_failure(app);
+        transition_after_failure(Parts::of(core));
     }
     result
 }
 
 fn transcribe_recording_checked(
     app: &AppHandle,
+    core: &Core,
     recording: &RecordingResult,
     incremental: Option<SessionHandle>,
     stopped: Instant,
@@ -112,7 +122,8 @@ fn transcribe_recording_checked(
     })?);
     let cleanup = WavCleanup::new(wav_path.clone());
 
-    let result = transcribe_recording_inner(app, recording, wav_path.clone(), incremental, stopped);
+    let result =
+        transcribe_recording_inner(app, core, recording, wav_path.clone(), incremental, stopped);
     match &result {
         Ok(_) => cleanup.remove(),
         Err(error) => {
@@ -124,7 +135,12 @@ fn transcribe_recording_checked(
             // can be recovered/inspected from disk. Fully best-effort: on any
             // quarantine problem fall back to the normal delete, so we never
             // leak temp files and never change the result.
-            if !quarantine_failed_recording(app, &wav_path, &recording.session_id, &error.message) {
+            if !quarantine_failed_recording(
+                &core.backend().dirs().data_dir,
+                &wav_path,
+                &recording.session_id,
+                &error.message,
+            ) {
                 cleanup.remove();
             }
         }
@@ -143,7 +159,7 @@ const MAX_FAILED_RECORDINGS: usize = 20;
 /// any problem (the caller deletes as usual). Never errors and never affects
 /// the dictation result.
 fn quarantine_failed_recording(
-    app: &AppHandle,
+    data_dir: &Path,
     wav_path: &Path,
     session_id: &str,
     reason: &str,
@@ -153,9 +169,6 @@ fn quarantine_failed_recording(
         // the WAV; there is nothing left to preserve.
         return false;
     }
-    let Ok(data_dir) = app.path().app_data_dir() else {
-        return false;
-    };
     let dir = data_dir.join("failed");
     if let Err(error) = fs::create_dir_all(&dir) {
         log::warn!(
@@ -216,23 +229,28 @@ fn prune_failed_recordings(dir: &Path, keep: usize) {
     }
 }
 
+/// Still takes the app for `output::handle_transcription_output_with` and
+/// `selection_transform::apply_result_with` (output).
 fn transcribe_recording_inner(
     app: &AppHandle,
+    core: &Core,
     recording: &RecordingResult,
     wav_path: PathBuf,
     incremental: Option<SessionHandle>,
     stopped: Instant,
 ) -> Result<Option<DictationResult>, CommandError> {
-    let state = app.state::<BackendState>();
+    let parts = Parts::of(core);
+    let host = core.host().as_ref();
+    let state = core.backend();
     let settings = state.db()?.get_settings()?;
     let (model_id, model_path) = {
         let db = state.db()?;
-        model_manager::session_model_path(app, &db, &recording.session_id)?
+        model_manager::session_model_path_with(host, &db, &recording.session_id)?
     };
     let language = whisper_language(&settings.language);
 
     let whisper_result = match incremental
-        .and_then(|handle| collect_incremental_transcription(app, recording, handle, stopped))
+        .and_then(|handle| collect_incremental_transcription(host, recording, handle, stopped))
     {
         Some(assembled) => Ok(assembled),
         None => {
@@ -257,15 +275,13 @@ fn transcribe_recording_inner(
                 );
                 // The warm whisper-server transcriber falls back to whisper-cli
                 // internally when the server path is unavailable.
-                app.state::<WarmTranscriber>().transcribe(
-                    app,
-                    WhisperRequest::for_settings(
+                core.warm_transcriber()
+                    .transcribe_with(WhisperRequest::for_settings(
                         &model_id,
                         model_path,
                         wav_path.clone(),
                         &settings,
-                    ),
-                )
+                    ))
             }
         }
     };
@@ -297,10 +313,7 @@ fn transcribe_recording_inner(
     // `whisper_result.text`, so doing it here covers both. (The file-transcribe
     // path is intentionally left untouched.) An empty replacements list returns
     // the text unchanged.
-    let replacements = app
-        .try_state::<std::sync::Arc<crate::replacements_file::ReplacementStore>>()
-        .map(|store| store.current().rows)
-        .unwrap_or_else(|| settings.text_replacements.clone());
+    let replacements = core.replacements().current().rows;
     let final_text = crate::text_replace::apply(&whisper_result.text, &replacements);
 
     // A voice Transform Selection recording: the transcribed text is the user's
@@ -308,7 +321,7 @@ fn transcribe_recording_inner(
     // rewrite the selection captured when the recording started, paste it back
     // in place — and skip the normal save / paste path entirely.
     if recording.is_transform {
-        return finish_selection_transform(app, &settings, &final_text);
+        return finish_selection_transform(app, core, &settings, &final_text);
     }
 
     // Empty or whitespace-only text is a benign outcome, not an error (e.g.
@@ -328,8 +341,8 @@ fn transcribe_recording_inner(
             recording.session_id,
             model_id
         );
-        transition_after_empty(app);
-        emit_dictation_empty(app);
+        transition_after_empty(parts);
+        emit_dictation_empty_with(host);
         return Ok(None);
     };
 
@@ -342,7 +355,7 @@ fn transcribe_recording_inner(
     // source, so the cleanup's remove becomes a no-op. A clip failure must
     // never fail the dictation itself.
     if settings.save_audio_clips {
-        match save_audio_clip(app, &wav_path, &transcript.id) {
+        match save_audio_clip(&core.backend().dirs().data_dir, &wav_path, &transcript.id) {
             Ok(clip_path) => transcript.audio_path = Some(clip_path.to_string_lossy().into_owned()),
             Err(error) => log::warn!(
                 "Could not save audio clip for transcript {}: {}",
@@ -352,7 +365,7 @@ fn transcribe_recording_inner(
         }
     }
 
-    transition_after_success(app);
+    transition_after_success(parts);
 
     // Paste first, then save: the user is waiting at the cursor, and a failed
     // save (disk full, database error) must never also cost them the text.
@@ -363,11 +376,41 @@ fn transcribe_recording_inner(
     // hallucinations into the focused app. It's in History; Paste-Last can
     // recover it if the user really did say something before the drop.
     if !transcript.is_note && !recording.disconnected {
-        if let Err(error) = output::handle_transcription_output(app, &transcript, &settings) {
-            output::emit_output_failed(app, transcript.id.clone(), &error);
+        if let Err(error) =
+            output::handle_transcription_output_with(app, core, &transcript, &settings)
+        {
+            output::emit_output_failed_with(host, transcript.id.clone(), &error);
         }
     }
 
+    Ok(Some(save_and_announce(
+        state,
+        host,
+        || core.note_sync().notify(),
+        &settings,
+        recording,
+        transcript,
+        model_id,
+        whisper_result.latency_ms,
+    )))
+}
+
+/// Saves a finished dictation (to History, or as a note) and tells the
+/// interface: `scribe:dictation-transcribed` when it saved, or
+/// `scribe:dictation-save-failed` when it did not (the text stays reachable
+/// for Paste last). A saved dictation also wakes the GitHub backup
+/// (`notify_sync`) when the backup that covers it is on.
+#[allow(clippy::too_many_arguments)]
+fn save_and_announce(
+    state: &BackendState,
+    host: &dyn Host,
+    notify_sync: impl FnOnce(),
+    settings: &AppSettings,
+    recording: &RecordingResult,
+    mut transcript: Transcript,
+    model_id: String,
+    transcription_latency_ms: u32,
+) -> DictationResult {
     let save_result = state.db().and_then(|db| {
         if transcript.is_note {
             db.save_note_transcript(&transcript)
@@ -388,24 +431,21 @@ fn transcribe_recording_inner(
         }
         // Keep it reachable for Paste last until a later save succeeds.
         state.set_unsaved_last_transcript(Some(transcript.clone()));
-        let _ = app.emit(
-            "scribe:dictation-save-failed",
-            DictationSaveFailedPayload {
-                transcript_id: transcript.id.clone(),
-                message: format!(
-                    "Scribe couldn't save this dictation to History. {} still has it until you close Scribe.",
-                    if transcript.is_note { "Copy last" } else { "Paste last" }
-                ),
-            },
-        );
-        return Ok(Some(DictationResult {
+        host.emit(CoreEvent::DictationSaveFailed(DictationSaveFailedPayload {
+            transcript_id: transcript.id.clone(),
+            message: format!(
+                "Scribe couldn't save this dictation to History. {} still has it until you close Scribe.",
+                if transcript.is_note { "Copy last" } else { "Paste last" }
+            ),
+        }));
+        return DictationResult {
             session_id: recording.session_id.clone(),
             status: DictationStatus::NotSaved,
             transcript,
             model_id,
             duration_ms: recording.duration_ms,
-            transcription_latency_ms: whisper_result.latency_ms,
-        }));
+            transcription_latency_ms,
+        };
     }
     state.set_unsaved_last_transcript(None);
 
@@ -415,15 +455,13 @@ fn transcribe_recording_inner(
     // (github_sync_all_transcripts). The worker debounces and uploads off this
     // thread, so it never delays the dictation result; it re-checks the settings
     // itself and runs only the backups that apply.
-    let notify_sync = if transcript.is_note {
+    let backup_on = if transcript.is_note {
         settings.github_sync_enabled
     } else {
         settings.github_sync_all_transcripts
     };
-    if notify_sync {
-        if let Some(worker) = app.try_state::<crate::note_sync::NoteSyncWorker>() {
-            worker.notify();
-        }
+    if backup_on {
+        notify_sync();
     }
 
     let result = DictationResult {
@@ -432,11 +470,11 @@ fn transcribe_recording_inner(
         transcript: transcript.clone(),
         model_id,
         duration_ms: recording.duration_ms,
-        transcription_latency_ms: whisper_result.latency_ms,
+        transcription_latency_ms,
     };
 
-    let _ = app.emit("scribe:dictation-transcribed", &result);
-    Ok(Some(result))
+    host.emit(CoreEvent::DictationTranscribed(result.clone()));
+    result
 }
 
 /// Completes a voice Transform Selection: the `instruction` is the transcribed
@@ -445,23 +483,38 @@ fn transcribe_recording_inner(
 /// result over the still-active selection. Nothing is saved as a transcript and
 /// the normal dictation output never runs. The state machine always leaves
 /// Transcribing (success or a toasted, recoverable failure — never a wedged
-/// Error for a routine LLM miss).
+/// Error for a routine LLM miss). Still takes the app for the paste
+/// (`selection_transform::apply_result_with`, output).
 fn finish_selection_transform(
     app: &AppHandle,
-    settings: &crate::settings::AppSettings,
+    core: &Core,
+    settings: &AppSettings,
     instruction: &str,
 ) -> Result<Option<DictationResult>, CommandError> {
-    let state = app.state::<BackendState>();
+    finish_selection_transform_in(Parts::of(core), settings, instruction, |text, captured| {
+        crate::selection_transform::apply_result_with(app, core, text, captured)
+    })
+}
+
+/// [`finish_selection_transform`] over the parts; `apply` pastes the
+/// transformed text over the captured selection.
+fn finish_selection_transform_in(
+    parts: Parts,
+    settings: &AppSettings,
+    instruction: &str,
+    apply: impl FnOnce(&str, CapturedSelection) -> Result<OutputResult, CommandError>,
+) -> Result<Option<DictationResult>, CommandError> {
+    let state = parts.backend;
 
     // Taking the selection first means every early return below drops it,
     // which restores the user's clipboard.
     let Some(captured) = state.take_pending_transform() else {
         log::warn!("Transform recording finished but no selection was captured.");
-        transition_after_empty(app);
-        let _ = app.emit(
-            "scribe:selection-transform-failed",
-            "No selected text was captured. Highlight text, then trigger Transform Selection.",
-        );
+        transition_after_empty(parts);
+        parts.host.emit(CoreEvent::SelectionTransformFailed(
+            "No selected text was captured. Highlight text, then trigger Transform Selection."
+                .to_string(),
+        ));
         return Ok(None);
     };
 
@@ -474,22 +527,22 @@ fn finish_selection_transform(
                 &settings.notes_analysis_model,
             )
         })
-        .and_then(|text| {
-            crate::selection_transform::apply_result(app, &text, captured).map(|_| text)
-        });
+        .and_then(|text| apply(&text, captured).map(|_| text));
 
     // Done either way: return to Idle. A failure toasts rather than parking the
     // app in Error, since a missed LLM call is routine and recoverable.
     match outcome {
         Ok(text) => {
-            transition_after_success(app);
+            transition_after_success(parts);
             log::info!("Selection transform applied ({} chars).", text.len());
-            let _ = app.emit("scribe:selection-transformed", &text);
+            parts.host.emit(CoreEvent::SelectionTransformed(text));
         }
         Err(error) => {
-            transition_after_empty(app);
+            transition_after_empty(parts);
             log::warn!("Selection transform failed: {}", error.message);
-            let _ = app.emit("scribe:selection-transform-failed", &error.message);
+            parts
+                .host
+                .emit(CoreEvent::SelectionTransformFailed(error.message));
         }
     }
     Ok(None)
@@ -502,7 +555,7 @@ fn finish_selection_transform(
 /// failed, or been cancelled, so the fallback never races a segment job for
 /// the WarmTranscriber (which is serialized internally anyway).
 fn collect_incremental_transcription(
-    app: &AppHandle,
+    host: &dyn Host,
     recording: &RecordingResult,
     handle: SessionHandle,
     stopped: Instant,
@@ -516,8 +569,8 @@ fn collect_incremental_transcription(
                 recording.session_id,
                 latency_ms
             );
-            incremental::emit_partial_transcript(
-                app,
+            incremental::emit_partial_transcript_with(
+                host,
                 &recording.session_id,
                 &assembled.text,
                 assembled.segments,
@@ -590,20 +643,20 @@ pub(crate) fn whisper_language(language: &Language) -> String {
     }
 }
 
-fn transition_after_success(app: &AppHandle) {
-    transition_if_transcribing(app, AppEvent::TranscriptionSucceeded);
+fn transition_after_success(parts: Parts) {
+    transition_if_transcribing(parts, AppEvent::TranscriptionSucceeded);
 }
 
-fn transition_after_failure(app: &AppHandle) {
-    transition_if_transcribing(app, AppEvent::TranscriptionFailed);
+fn transition_after_failure(parts: Parts) {
+    transition_if_transcribing(parts, AppEvent::TranscriptionFailed);
 }
 
-fn transition_after_empty(app: &AppHandle) {
-    transition_if_transcribing(app, AppEvent::TranscriptionEmpty);
+fn transition_after_empty(parts: Parts) {
+    transition_if_transcribing(parts, AppEvent::TranscriptionEmpty);
 }
 
-fn transition_if_transcribing(app: &AppHandle, event: AppEvent) {
-    let state = app.state::<BackendState>();
+fn transition_if_transcribing(parts: Parts, event: AppEvent) {
+    let state = parts.backend;
     let Ok(snapshot) = state.app_state().map(|state| state.snapshot()) else {
         return;
     };
@@ -618,10 +671,10 @@ fn transition_if_transcribing(app: &AppHandle, event: AppEvent) {
 
     if snapshot.status == AppStatus::Error {
         // Error must never wedge the app: schedule the return to Idle.
-        schedule_error_recovery(app, snapshot.updated_at);
+        schedule_error_recovery(parts.to_owned(), snapshot.updated_at);
     }
 
-    emit_state_snapshot(app, &snapshot);
+    parts.publish(&snapshot);
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -631,13 +684,10 @@ pub struct DictationEmptyPayload {
 
 /// Tells the frontend that a dictation finished without producing any text,
 /// so it can show a gentle info toast instead of an error.
-pub(crate) fn emit_dictation_empty(app: &AppHandle) {
-    let _ = app.emit(
-        "scribe:dictation-empty",
-        DictationEmptyPayload {
-            message: EMPTY_DICTATION_MESSAGE.to_string(),
-        },
-    );
+pub(crate) fn emit_dictation_empty_with(host: &dyn Host) {
+    host.emit(CoreEvent::DictationEmpty(DictationEmptyPayload {
+        message: EMPTY_DICTATION_MESSAGE.to_string(),
+    }));
 }
 
 /// Self-heals the Error state: after ERROR_RECOVERY_DELAY the app returns to
@@ -645,14 +695,11 @@ pub(crate) fn emit_dictation_empty(app: &AppHandle) {
 /// event. `entered_at` is the timestamp of the Error snapshot being healed;
 /// when any newer state (even a newer Error) has replaced it, the timer
 /// expires without doing anything, so it can never clobber later activity.
-fn schedule_error_recovery(app: &AppHandle, entered_at: DateTime<Utc>) {
-    let app = app.clone();
+fn schedule_error_recovery(parts: OwnedParts, entered_at: DateTime<Utc>) {
     thread::spawn(move || {
         thread::sleep(ERROR_RECOVERY_DELAY);
 
-        let Some(state) = app.try_state::<BackendState>() else {
-            return;
-        };
+        let state = &parts.backend;
         // Check-and-transition under a single lock so the recovery can never
         // race a state change that happens between the check and the reset.
         let snapshot = {
@@ -673,31 +720,22 @@ fn schedule_error_recovery(app: &AppHandle, entered_at: DateTime<Utc>) {
             "Error state self-healed to Idle after {:?}",
             ERROR_RECOVERY_DELAY
         );
-        emit_state_snapshot(&app, &snapshot);
-        shell::update_tray_status(&app, snapshot.status.clone());
+        parts.parts().publish(&snapshot);
+        parts.host.update_tray_status(snapshot.status.clone());
     });
 }
 
-/// Permanent home of saved dictation clips: app_data_dir/clips/{id}.wav.
-fn clips_dir(app: &AppHandle) -> Result<PathBuf, CommandError> {
-    let dir = app.path().app_data_dir().map_err(|error| {
-        CommandError::new(
-            "app_data_dir_unavailable",
-            format!("Could not locate Scribe app data directory. {}", error),
-        )
-    })?;
-    Ok(dir.join("clips"))
-}
-
-/// Moves the finished recording WAV into the clips directory. fs::rename
-/// cannot cross volumes (the recording temp dir may live on a different one
-/// than app data), so it falls back to copy + delete.
+/// Moves the finished recording WAV into the clips directory, the
+/// permanent home of saved dictation clips: `<data_dir>/clips/{id}.wav`,
+/// where `data_dir` is the app data folder. fs::rename cannot cross volumes
+/// (the recording temp dir may live on a different one than app data), so it
+/// falls back to copy + delete.
 fn save_audio_clip(
-    app: &AppHandle,
+    data_dir: &Path,
     wav_path: &Path,
     transcript_id: &str,
 ) -> Result<PathBuf, CommandError> {
-    let dir = clips_dir(app)?;
+    let dir = data_dir.join("clips");
     fs::create_dir_all(&dir).map_err(|error| {
         CommandError::new(
             "audio_clip_save_failed",
@@ -795,5 +833,221 @@ mod tests {
     fn prune_failed_recordings_tolerates_a_missing_folder() {
         // Best-effort: a directory that does not exist must not panic.
         prune_failed_recordings(Path::new("/scribe-nonexistent/failed/xyz"), 20);
+    }
+}
+
+/// The dictation paths on the engine's parts: the events each one sends, in
+/// order, with no model, clipboard or window.
+#[cfg(test)]
+mod engine_tests {
+    use super::*;
+    use crate::dictation_state::test_parts::Fixture;
+    use serde_json::json;
+    use std::cell::Cell;
+
+    const TO_TRANSCRIBING: [AppEvent; 3] = [
+        AppEvent::StartRecording,
+        AppEvent::StopRecording,
+        AppEvent::ValidAudio,
+    ];
+
+    fn recording(is_note: bool) -> RecordingResult {
+        RecordingResult {
+            session_id: "session-1".to_string(),
+            status: RecordingResultStatus::Completed,
+            wav_path: Some("/tmp/session-1.wav".to_string()),
+            duration_ms: 1_200,
+            sample_rate: 16_000,
+            channels: 1,
+            bits_per_sample: 16,
+            bytes_written: None,
+            reason: None,
+            started_at: Utc::now(),
+            stopped_at: Utc::now(),
+            is_note,
+            is_transform: false,
+            disconnected: false,
+        }
+    }
+
+    fn transcript(text: &str, is_note: bool) -> Transcript {
+        let mut transcript = Transcript::new_last_buffer(
+            text,
+            Some(1_200),
+            Some("base.en".to_string()),
+            Some("en".to_string()),
+        )
+        .unwrap();
+        transcript.is_note = is_note;
+        transcript
+    }
+
+    #[test]
+    fn an_empty_dictation_sends_its_message() {
+        let fixture = Fixture::new();
+        emit_dictation_empty_with(fixture.host.as_ref());
+        assert_eq!(
+            fixture.sent(),
+            [(
+                "scribe:dictation-empty",
+                json!({"message": EMPTY_DICTATION_MESSAGE})
+            )]
+        );
+    }
+
+    #[test]
+    fn transitions_leave_transcribing_once_and_otherwise_send_nothing() {
+        let fixture = Fixture::new();
+        fixture.drive(&TO_TRANSCRIBING);
+
+        transition_after_empty(fixture.parts());
+        assert_eq!(fixture.published_states(), ["Idle"]);
+
+        // Already past Transcribing: no transition and nothing sent.
+        transition_after_success(fixture.parts());
+        transition_after_failure(fixture.parts());
+        assert_eq!(fixture.published_states(), ["Idle"]);
+        assert_eq!(fixture.status(), AppStatus::Idle);
+    }
+
+    #[test]
+    fn a_transform_with_no_captured_selection_returns_to_idle_then_says_so() {
+        let fixture = Fixture::new();
+        fixture.drive(&TO_TRANSCRIBING);
+        let applied = Cell::new(false);
+
+        let result = finish_selection_transform_in(
+            fixture.parts(),
+            &AppSettings::default(),
+            "make it formal",
+            |_, _| {
+                applied.set(true);
+                Err(CommandError::new("unexpected", "Nothing should be pasted."))
+            },
+        )
+        .unwrap();
+
+        assert!(result.is_none());
+        assert!(!applied.get());
+        let sent = fixture.sent();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0].0, "scribe:app-state");
+        assert_eq!(sent[0].1["status"], "Idle");
+        assert_eq!(
+            sent[1],
+            (
+                "scribe:selection-transform-failed",
+                json!("No selected text was captured. Highlight text, then trigger Transform Selection.")
+            )
+        );
+    }
+
+    #[test]
+    fn a_saved_dictation_is_announced_and_wakes_the_backup_when_it_is_on() {
+        let fixture = Fixture::new();
+        let settings = AppSettings {
+            github_sync_all_transcripts: true,
+            ..AppSettings::default()
+        };
+        let woken = Cell::new(0);
+
+        let result = save_and_announce(
+            &fixture.backend,
+            fixture.host.as_ref(),
+            || woken.set(woken.get() + 1),
+            &settings,
+            &recording(false),
+            transcript("hello there", false),
+            "base.en".to_string(),
+            321,
+        );
+
+        assert!(matches!(result.status, DictationStatus::Saved));
+        assert_eq!(result.transcription_latency_ms, 321);
+        assert_eq!(result.duration_ms, 1_200);
+        assert_eq!(woken.get(), 1);
+        assert_eq!(
+            fixture.sent(),
+            [(
+                "scribe:dictation-transcribed",
+                serde_json::to_value(&result).unwrap()
+            )]
+        );
+        let last = fixture.backend.last_transcript().unwrap().unwrap();
+        assert_eq!(last.text, "hello there");
+
+        // A note, with the notes backup off: saved and announced, the backup
+        // left asleep.
+        let result = save_and_announce(
+            &fixture.backend,
+            fixture.host.as_ref(),
+            || woken.set(woken.get() + 1),
+            &settings,
+            &recording(true),
+            transcript("a note", true),
+            "base.en".to_string(),
+            5,
+        );
+        assert!(matches!(result.status, DictationStatus::Saved));
+        assert_eq!(woken.get(), 1);
+        assert_eq!(fixture.sent().len(), 2);
+        assert_eq!(fixture.sent()[1].0, "scribe:dictation-transcribed");
+    }
+
+    #[test]
+    fn a_dictation_that_could_not_be_saved_says_so_and_stays_for_paste_last() {
+        let fixture = Fixture::new();
+        // A poisoned database lock makes every save fail.
+        let backend = fixture.backend.clone();
+        let _ = std::thread::spawn(move || {
+            let _db = backend.db().unwrap();
+            panic!("poison the database lock for this test");
+        })
+        .join();
+        assert!(fixture.backend.db().is_err());
+
+        let settings = AppSettings {
+            github_sync_all_transcripts: true,
+            ..AppSettings::default()
+        };
+        let clip = fixture.root.join("clip.wav");
+        fs::create_dir_all(&fixture.root).unwrap();
+        fs::write(&clip, b"RIFF").unwrap();
+        let mut unsaved = transcript("hello there", false);
+        unsaved.audio_path = Some(clip.to_string_lossy().into_owned());
+        let id = unsaved.id.clone();
+        let woken = Cell::new(0);
+
+        let result = save_and_announce(
+            &fixture.backend,
+            fixture.host.as_ref(),
+            || woken.set(woken.get() + 1),
+            &settings,
+            &recording(false),
+            unsaved,
+            "base.en".to_string(),
+            321,
+        );
+
+        assert!(matches!(result.status, DictationStatus::NotSaved));
+        assert_eq!(result.transcript.audio_path, None);
+        // The clip of a transcript that was never saved is not kept.
+        assert!(!clip.exists());
+        // No backup wake and no dictation-transcribed: only the save failure.
+        assert_eq!(woken.get(), 0);
+        assert_eq!(
+            fixture.sent(),
+            [(
+                "scribe:dictation-save-failed",
+                json!({
+                    "transcriptId": id,
+                    "message": "Scribe couldn't save this dictation to History. Paste last still has it until you close Scribe.",
+                })
+            )]
+        );
+        // Paste last still has it.
+        let last = fixture.backend.last_transcript().unwrap().unwrap();
+        assert_eq!(last.id, id);
+        assert_eq!(last.text, "hello there");
     }
 }

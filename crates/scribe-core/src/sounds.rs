@@ -54,7 +54,7 @@ use cpal::{
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender, TrySendError};
 use tauri::{AppHandle, Manager};
 
-use crate::commands::BackendState;
+use crate::{backend::BackendState, core::Core};
 
 /// Which cue to play.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -289,12 +289,21 @@ impl Dispatcher {
 /// Queues `cue` for playback if the Sounds setting is on. Never blocks on
 /// audio: the only wait is a short lock around handing the cue over.
 pub fn play(app: &AppHandle, cue: Cue) {
+    match app.try_state::<Core>() {
+        Some(core) => play_with(core.backend(), cue),
+        None => log::warn!("Skipping the {:?} sound: the engine is not ready yet", cue),
+    }
+}
+
+/// [`play`] on the engine. `state` is where the player reads the Sounds
+/// setting from.
+pub fn play_with(state: &BackendState, cue: Cue) {
     let request = Request {
         event: Event::Cue(cue),
         queued_at: Instant::now(),
     };
     let outcome = lock(dispatcher()).dispatch(request, clock_ms(), &mut |unproven| {
-        start_player(app, unproven)
+        start_player(state, unproven)
     });
     if outcome != Dispatched::Queued {
         log::debug!("Skipping the {:?} sound: {:?}", cue, outcome);
@@ -319,17 +328,17 @@ fn dispatcher() -> &'static Mutex<Dispatcher> {
 }
 
 /// Starts the real player thread.
-fn start_player(app: &AppHandle, unproven_starts: Arc<AtomicUsize>) -> Option<PlayerHandle> {
+fn start_player(state: &BackendState, unproven_starts: Arc<AtomicUsize>) -> Option<PlayerHandle> {
     let (sender, receiver) = bounded::<Request>(QUEUE_CAPACITY);
     let busy_since = Arc::new(AtomicU64::new(0));
     let thread_busy = busy_since.clone();
-    let app = app.clone();
+    let state = state.clone();
     let spawned = thread::Builder::new()
         .name("scribe-sounds".into())
         .spawn(move || {
             let player = Player::new(
                 open_default_output,
-                move || sounds_enabled(&app),
+                move || sounds_enabled(&state),
                 thread_busy,
                 unproven_starts,
             );
@@ -403,8 +412,7 @@ fn device_call<R>(busy: &AtomicU64, call: impl FnOnce() -> R) -> Option<R> {
 
 /// Reads the Sounds setting at the moment the cue is about to play, so a
 /// change takes effect at once.
-fn sounds_enabled(app: &AppHandle) -> Option<bool> {
-    let state = app.try_state::<BackendState>()?;
+fn sounds_enabled(state: &BackendState) -> Option<bool> {
     let db = state.db().ok()?;
     db.get_settings()
         .ok()
@@ -1686,14 +1694,15 @@ pub(crate) mod tests {
             .filter(|line| !line.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
             .join("\n");
+        // `audio://recording-started` and `audio://recording-stopped`.
         for (event, helper, cue) in [
             (
-                "\"audio://recording-started\"",
+                "CoreEvent::RecordingStarted(",
                 "emit_recording_started",
                 "Cue::Start",
             ),
             (
-                "\"audio://recording-stopped\"",
+                "CoreEvent::RecordingStopped(",
                 "emit_recording_stopped",
                 "Cue::Stop",
             ),
@@ -1709,7 +1718,9 @@ pub(crate) mod tests {
             let body = &body[..body.find("\n}").expect("the helper ends")];
             assert!(body.contains(event), "{helper} emits {event}");
             assert!(
-                body.contains(&format!("crate::sounds::play(app, crate::sounds::{cue})")),
+                body.contains(&format!(
+                    "crate::sounds::play_with(parts.backend, crate::sounds::{cue})"
+                )),
                 "{helper} plays {cue}"
             );
             let calls = code.matches(&format!("{helper}(")).count() - 1;
