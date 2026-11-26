@@ -377,7 +377,7 @@ fn transcribe_recording_inner(
     // recover it if the user really did say something before the drop.
     if !transcript.is_note && !recording.disconnected {
         let outcome = output::handle_transcription_output_with(app, core, &transcript, &settings);
-        settle_output(host, &transcript, outcome);
+        settle_output(&transcript, outcome);
     }
 
     Ok(Some(save_and_announce(
@@ -393,14 +393,16 @@ fn transcribe_recording_inner(
 }
 
 /// Closes the output step of a dictation. A failed output is never fatal to
-/// the dictation (the save still follows).
-fn settle_output(
-    host: &dyn Host,
-    transcript: &Transcript,
-    outcome: Result<Option<OutputResult>, CommandError>,
-) {
+/// the dictation (the save still follows). The output functions already
+/// announced the failure (`scribe:output-failed`) on every error path, so this
+/// only logs it; announcing again would show the user two identical errors.
+fn settle_output(transcript: &Transcript, outcome: Result<Option<OutputResult>, CommandError>) {
     if let Err(error) = outcome {
-        output::emit_output_failed_with(host, transcript.id.clone(), &error);
+        log::debug!(
+            "Output of transcript {} failed ({}); already announced",
+            transcript.id,
+            error.code
+        );
     }
 }
 
@@ -910,7 +912,6 @@ mod engine_tests {
     fn a_failed_output_is_not_announced_again_by_the_dictation() {
         let fixture = Fixture::new();
         settle_output(
-            fixture.host.as_ref(),
             &transcript("hello there", false),
             Err(CommandError::new("paste_failed", "could not paste")),
         );
