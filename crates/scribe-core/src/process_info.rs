@@ -56,11 +56,14 @@ fn paths_match(a: &std::path::Path, b: &std::path::Path) -> bool {
 
 /// Stops the process `recorded` describes, but only after checking it is
 /// still that process. Returns true when it was running and was stopped.
+///
+/// The check and the stop act on one process, not twice on a pid: on
+/// Windows through one handle (opened for both), on Linux through a pidfd
+/// opened before the check. So if the process ends and its pid is reused in
+/// between (another thread may be reaping it right now), the newcomer is
+/// never stopped. macOS has no such handle and checks, then stops, by pid.
 pub fn terminate_if_same(recorded: &ProcessIdentity) -> bool {
-    if !is_same_process_running(recorded) {
-        return false;
-    }
-    imp::terminate(recorded.pid)
+    imp::terminate_if(recorded.pid, &|current| same_process(recorded, current))
 }
 
 /// Physical memory (RAM) the process uses, in bytes: the working set on
@@ -110,6 +113,28 @@ mod imp {
 
     pub fn exe_and_start_time(pid: u32) -> Option<(PathBuf, u64)> {
         let handle = open(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+        read_identity(&handle)
+    }
+
+    /// Opens the process once with both rights, checks who it is on that
+    /// handle and stops that same handle: the handle keeps naming the process
+    /// it was opened on, even if its pid is reused meanwhile.
+    pub fn terminate_if(pid: u32, check: &dyn Fn(&super::ProcessIdentity) -> bool) -> bool {
+        let Some(handle) = open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE) else {
+            return false;
+        };
+        let Some((exe, start_time)) = read_identity(&handle) else {
+            return false;
+        };
+        let current = super::ProcessIdentity {
+            pid,
+            exe,
+            start_time,
+        };
+        check(&current) && unsafe { TerminateProcess(handle.0, 1).is_ok() }
+    }
+
+    fn read_identity(handle: &OwnedHandle) -> Option<(PathBuf, u64)> {
         let mut buffer = vec![0u16; 32_768];
         let mut size = buffer.len() as u32;
         unsafe {
@@ -132,13 +157,6 @@ mod imp {
         }
         let start = (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime);
         Some((exe, start))
-    }
-
-    pub fn terminate(pid: u32) -> bool {
-        let Some(handle) = open(pid, PROCESS_TERMINATE) else {
-            return false;
-        };
-        unsafe { TerminateProcess(handle.0, 1).is_ok() }
     }
 
     pub fn resident_memory_bytes(pid: u32) -> Option<u64> {
@@ -178,8 +196,32 @@ mod imp {
         rest.split_whitespace().nth(19)?.parse().ok()
     }
 
-    pub fn terminate(pid: u32) -> bool {
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) == 0 }
+    /// Opens a pidfd first, then checks who has the pid, then signals the
+    /// pidfd. The pidfd names the process that had the pid when it was
+    /// opened; if the check (after it) still finds the recorded process, that
+    /// is the same process, so the signal can only reach it. Kernels older
+    /// than 5.3 have no pidfds: there it checks, then signals the pid.
+    pub fn terminate_if(pid: u32, check: &dyn Fn(&super::ProcessIdentity) -> bool) -> bool {
+        let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0) };
+        let same = || super::identity(pid).is_some_and(|current| check(&current));
+        if pidfd < 0 {
+            return same() && unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) == 0 };
+        }
+        let pidfd = pidfd as libc::c_int;
+        let stopped = same()
+            && unsafe {
+                libc::syscall(
+                    libc::SYS_pidfd_send_signal,
+                    pidfd,
+                    libc::SIGKILL,
+                    std::ptr::null::<libc::siginfo_t>(),
+                    0,
+                ) == 0
+            };
+        unsafe {
+            libc::close(pidfd);
+        }
+        stopped
     }
 
     pub fn resident_memory_bytes(pid: u32) -> Option<u64> {
@@ -231,8 +273,11 @@ mod imp {
         ))
     }
 
-    pub fn terminate(pid: u32) -> bool {
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) == 0 }
+    /// macOS has no process handle to hold across the check, so this checks,
+    /// then signals the pid.
+    pub fn terminate_if(pid: u32, check: &dyn Fn(&super::ProcessIdentity) -> bool) -> bool {
+        super::identity(pid).is_some_and(|current| check(&current))
+            && unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) == 0 }
     }
 
     pub fn resident_memory_bytes(pid: u32) -> Option<u64> {
@@ -279,6 +324,43 @@ mod tests {
         assert!(!is_same_process_running(&other_exe));
         // Never stops a process that only shares the pid.
         assert!(!terminate_if_same(&other_exe));
+    }
+
+    /// The process is checked and stopped through one handle (a pidfd on
+    /// Linux): a match stops it, a mismatch leaves it running.
+    #[test]
+    fn stops_only_the_recorded_process() {
+        let mut command = if cfg!(windows) {
+            let mut command = std::process::Command::new("ping");
+            command.args(["-n", "30", "127.0.0.1"]);
+            command
+        } else {
+            let mut command = std::process::Command::new("sleep");
+            command.arg("30");
+            command
+        };
+        let mut child = command
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let recorded = identity(child.id()).expect("the child is readable");
+
+        let started_later = ProcessIdentity {
+            start_time: recorded.start_time + 1,
+            ..recorded.clone()
+        };
+        assert!(!terminate_if_same(&started_later));
+        assert!(child.try_wait().unwrap().is_none(), "a mismatch stopped it");
+
+        assert!(terminate_if_same(&recorded));
+        let stopped = std::time::Instant::now();
+        while child.try_wait().unwrap().is_none() {
+            assert!(stopped.elapsed() < std::time::Duration::from_secs(5));
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // Gone (and reaped): nothing to stop any more.
+        assert!(!terminate_if_same(&recorded));
     }
 
     #[test]
