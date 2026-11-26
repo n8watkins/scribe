@@ -1,14 +1,17 @@
 use std::{thread, time::Duration};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 pub use crate::platform::PasteTarget;
 use crate::{
-    app_state::{AppEvent, AppStatus},
-    commands::BackendState,
+    app_state::{AppEvent, AppStateSnapshot, AppStatus},
+    backend::BackendState,
+    core::Core,
     dictation_state::emit_state_snapshot,
     error::CommandError,
+    events::CoreEvent,
+    host::{self, Host},
     platform,
     settings::{AppSettings, OutputMode, PasteMethod},
     transcript::Transcript,
@@ -147,28 +150,61 @@ pub struct OutputResult {
     pub message: String,
 }
 
+/// The engine's handle from an app, for the `AppHandle` wrappers of this
+/// lane (here and in `selection_transform`). When the `Core` is not managed
+/// yet, logs a warning and gives the error a function with no main window
+/// returns.
+pub(crate) fn core_for<'a>(
+    app: &'a AppHandle,
+    what: &str,
+) -> Result<tauri::State<'a, Core>, CommandError> {
+    app.try_state::<Core>().ok_or_else(|| {
+        log::warn!("Could not {what}: the engine is not ready yet");
+        host::no_main_window()
+    })
+}
+
 pub fn handle_transcription_output(
     app: &AppHandle,
     transcript: &Transcript,
     settings: &AppSettings,
 ) -> Result<Option<OutputResult>, CommandError> {
+    let core = core_for(app, "output the transcript")?;
+    handle_transcription_output_with(app, &core, transcript, settings)
+}
+
+/// Outputs a finished dictation the way the settings say (save only, paste,
+/// copy, or copy and paste). Still takes the app for the pasting state
+/// (`dictation_state::emit_state_snapshot`) and the system notification.
+pub fn handle_transcription_output_with(
+    app: &AppHandle,
+    core: &Core,
+    transcript: &Transcript,
+    settings: &AppSettings,
+) -> Result<Option<OutputResult>, CommandError> {
     // Taken whatever the output mode, so a stale target never carries over
     // to a later dictation.
-    let pinned = app.state::<BackendState>().take_paste_target();
+    let pinned = core.backend().take_paste_target();
     let result = match settings.output_mode {
         OutputMode::SaveOnly => return Ok(None),
         OutputMode::AutoPaste => paste_transcript_text(
             app,
+            core,
             transcript,
             OutputMode::AutoPaste,
             settings.paste_method.clone(),
             pinned,
             true,
         ),
-        OutputMode::CopyClipboard => {
-            copy_transcript_text(app, transcript, OutputMode::CopyClipboard, true)
+        OutputMode::CopyClipboard => copy_transcript_text(
+            core.host().as_ref(),
+            transcript,
+            OutputMode::CopyClipboard,
+            true,
+        ),
+        OutputMode::CopyAndPaste => {
+            copy_and_paste_transcript_text(app, core, transcript, pinned, true)
         }
-        OutputMode::CopyAndPaste => copy_and_paste_transcript_text(app, transcript, pinned, true),
     };
 
     result.map(Some)
@@ -184,14 +220,25 @@ pub fn handle_transcription_output(
 /// reuse `paste_transcript_text`; nothing is saved to history. Output events
 /// (`scribe:output-*`) are suppressed because this is not a dictation.
 pub fn paste_text(app: &AppHandle, text: &str) -> Result<OutputResult, CommandError> {
+    let core = core_for(app, "paste the text")?;
+    paste_text_with(app, &core, text)
+}
+
+/// [`paste_text`] on the engine. Still takes the app for the pasting state
+/// and the system notification.
+pub fn paste_text_with(
+    app: &AppHandle,
+    core: &Core,
+    text: &str,
+) -> Result<OutputResult, CommandError> {
     let transcript = Transcript::new_last_buffer(text, None, None, None).ok_or_else(|| {
         CommandError::new(
             "transform_result_empty",
             "The transform produced no text to paste.",
         )
     })?;
-    let paste_method = app
-        .state::<BackendState>()
+    let paste_method = core
+        .backend()
         .db()
         .and_then(|db| db.get_settings())
         .map(|settings| settings.paste_method)
@@ -199,6 +246,7 @@ pub fn paste_text(app: &AppHandle, text: &str) -> Result<OutputResult, CommandEr
 
     paste_transcript_text(
         app,
+        core,
         &transcript,
         OutputMode::AutoPaste,
         paste_method,
@@ -208,12 +256,23 @@ pub fn paste_text(app: &AppHandle, text: &str) -> Result<OutputResult, CommandEr
 }
 
 pub fn paste_last_transcript(app: &AppHandle) -> Result<OutputResult, CommandError> {
-    let state = app.state::<BackendState>();
+    let core = core_for(app, "paste the last transcript")?;
+    paste_last_transcript_with(app, &core)
+}
+
+/// Pastes the Last Transcript Buffer. Still takes the app for the pasting
+/// state and the system notification.
+pub fn paste_last_transcript_with(
+    app: &AppHandle,
+    core: &Core,
+) -> Result<OutputResult, CommandError> {
+    let state = core.backend();
     let transcript = state.last_transcript()?.ok_or_else(no_last_transcript)?;
     let paste_method = state.db()?.get_settings()?.paste_method;
 
     paste_transcript_text(
         app,
+        core,
         &transcript,
         OutputMode::AutoPaste,
         paste_method,
@@ -223,14 +282,34 @@ pub fn paste_last_transcript(app: &AppHandle) -> Result<OutputResult, CommandErr
 }
 
 pub fn copy_last_transcript(app: &AppHandle) -> Result<OutputResult, CommandError> {
-    let state = app.state::<BackendState>();
+    let core = core_for(app, "copy the last transcript")?;
+    copy_last_transcript_with(&core)
+}
+
+/// Copies the Last Transcript Buffer to the clipboard.
+pub fn copy_last_transcript_with(core: &Core) -> Result<OutputResult, CommandError> {
+    copy_last(core.backend(), core.host().as_ref())
+}
+
+fn copy_last(state: &BackendState, host: &dyn Host) -> Result<OutputResult, CommandError> {
     let transcript = state.last_transcript()?.ok_or_else(no_last_transcript)?;
 
-    copy_transcript_text(app, &transcript, OutputMode::CopyClipboard, true)
+    copy_transcript_text(host, &transcript, OutputMode::CopyClipboard, true)
 }
 
 pub fn paste_transcript(app: &AppHandle, id: &str) -> Result<OutputResult, CommandError> {
-    let state = app.state::<BackendState>();
+    let core = core_for(app, "paste the transcript")?;
+    paste_transcript_with(app, &core, id)
+}
+
+/// Pastes a saved transcript. Still takes the app for the pasting state and
+/// the system notification.
+pub fn paste_transcript_with(
+    app: &AppHandle,
+    core: &Core,
+    id: &str,
+) -> Result<OutputResult, CommandError> {
+    let state = core.backend();
     let (transcript, paste_method) = {
         let db = state.db()?;
         let transcript = db
@@ -242,6 +321,7 @@ pub fn paste_transcript(app: &AppHandle, id: &str) -> Result<OutputResult, Comma
 
     paste_transcript_text(
         app,
+        core,
         &transcript,
         OutputMode::AutoPaste,
         paste_method,
@@ -251,32 +331,49 @@ pub fn paste_transcript(app: &AppHandle, id: &str) -> Result<OutputResult, Comma
 }
 
 pub fn copy_transcript(app: &AppHandle, id: &str) -> Result<OutputResult, CommandError> {
-    let state = app.state::<BackendState>();
+    let core = core_for(app, "copy the transcript")?;
+    copy_transcript_with(&core, id)
+}
+
+/// Copies a saved transcript to the clipboard.
+pub fn copy_transcript_with(core: &Core, id: &str) -> Result<OutputResult, CommandError> {
+    copy_saved(core.backend(), core.host().as_ref(), id)
+}
+
+fn copy_saved(
+    state: &BackendState,
+    host: &dyn Host,
+    id: &str,
+) -> Result<OutputResult, CommandError> {
     let transcript = state
         .db()?
         .get_transcript_by_id(id)?
         .ok_or_else(|| transcript_not_found(id))?;
 
-    copy_transcript_text(app, &transcript, OutputMode::CopyClipboard, true)
+    copy_transcript_text(host, &transcript, OutputMode::CopyClipboard, true)
 }
 
 fn paste_transcript_text(
     app: &AppHandle,
+    core: &Core,
     transcript: &Transcript,
     output_mode: OutputMode,
     paste_method: PasteMethod,
     pinned: Option<PasteTarget>,
     emit_events: bool,
 ) -> Result<OutputResult, CommandError> {
+    let host = core.host().as_ref();
     emit_output_started(
-        app,
+        host,
         transcript,
         OutputAction::Paste,
         &output_mode,
         Some(&paste_method),
     );
     let result = (|| {
-        let _state_guard = PasteStateGuard::start(app);
+        let _state_guard = PasteStateGuard::start(core.backend(), |snapshot| {
+            emit_state_snapshot(app, snapshot)
+        });
 
         // The paste hotkey can fire while one of our own windows is focused;
         // the transcript must never be typed into Scribe itself.
@@ -316,27 +413,30 @@ fn paste_transcript_text(
     match result {
         Ok(result) => {
             if emit_events {
-                emit_output_completed(app, &result);
+                emit_output_completed(app, host, &result);
             }
             Ok(result)
         }
         Err(error) => {
             if emit_events {
-                emit_output_failed(app, transcript.id.clone(), &error);
+                emit_output_failed_with(host, transcript.id.clone(), &error);
             }
             Err(error)
         }
     }
 }
 
+/// Copies the transcript to the clipboard and leaves it there. A copy never
+/// skips a paste, so it never raises the "didn't paste" notification and
+/// needs nothing but the host.
 fn copy_transcript_text(
-    app: &AppHandle,
+    host: &dyn Host,
     transcript: &Transcript,
     output_mode: OutputMode,
     emit_events: bool,
 ) -> Result<OutputResult, CommandError> {
     emit_output_started(
-        app,
+        host,
         transcript,
         OutputAction::CopyClipboard,
         &output_mode,
@@ -363,13 +463,14 @@ fn copy_transcript_text(
     match result {
         Ok(result) => {
             if emit_events {
-                emit_output_completed(app, &result);
+                // Always `Completed`: no notification to raise.
+                send_output_completed(host, &result);
             }
             Ok(result)
         }
         Err(error) => {
             if emit_events {
-                emit_output_failed(app, transcript.id.clone(), &error);
+                emit_output_failed_with(host, transcript.id.clone(), &error);
             }
             Err(error)
         }
@@ -378,20 +479,24 @@ fn copy_transcript_text(
 
 fn copy_and_paste_transcript_text(
     app: &AppHandle,
+    core: &Core,
     transcript: &Transcript,
     pinned: Option<PasteTarget>,
     emit_events: bool,
 ) -> Result<OutputResult, CommandError> {
+    let host = core.host().as_ref();
     let output_mode = OutputMode::CopyAndPaste;
     emit_output_started(
-        app,
+        host,
         transcript,
         OutputAction::CopyAndPaste,
         &output_mode,
         None,
     );
     let result = (|| {
-        let _state_guard = PasteStateGuard::start(app);
+        let _state_guard = PasteStateGuard::start(core.backend(), |snapshot| {
+            emit_state_snapshot(app, snapshot)
+        });
 
         set_clipboard_text(&transcript.text)?;
         thread::sleep(Duration::from_millis(60));
@@ -428,13 +533,13 @@ fn copy_and_paste_transcript_text(
     match result {
         Ok(result) => {
             if emit_events {
-                emit_output_completed(app, &result);
+                emit_output_completed(app, host, &result);
             }
             Ok(result)
         }
         Err(error) => {
             if emit_events {
-                emit_output_failed(app, transcript.id.clone(), &error);
+                emit_output_failed_with(host, transcript.id.clone(), &error);
             }
             Err(error)
         }
@@ -631,24 +736,32 @@ fn paste_skipped_result(
 }
 
 fn emit_output_started(
-    app: &AppHandle,
+    host: &dyn Host,
     transcript: &Transcript,
     action: OutputAction,
     output_mode: &OutputMode,
     paste_method: Option<&PasteMethod>,
 ) {
-    let _ = app.emit(
-        "scribe:output-started",
-        OutputStartedPayload {
-            transcript_id: transcript.id.clone(),
-            action,
-            output_mode: output_mode.clone(),
-            paste_method: paste_method.cloned(),
-        },
-    );
+    host.emit(CoreEvent::OutputStarted(OutputStartedPayload {
+        transcript_id: transcript.id.clone(),
+        action,
+        output_mode: output_mode.clone(),
+        paste_method: paste_method.cloned(),
+    }));
 }
 
-fn emit_output_completed(app: &AppHandle, result: &OutputResult) {
+/// Logs and sends `scribe:output-completed`, then raises the system
+/// notification for a paste Scribe held back (the notification plugin is why
+/// this still takes the app).
+fn emit_output_completed(app: &AppHandle, host: &dyn Host, result: &OutputResult) {
+    send_output_completed(host, result);
+    if let Some((title, body)) = paste_skipped_notification(result) {
+        notify(app, title, body);
+    }
+}
+
+/// Logs and sends `scribe:output-completed`, without the notification.
+fn send_output_completed(host: &dyn Host, result: &OutputResult) {
     log::info!(
         "Output {:?} {:?} for transcript {}: {}",
         result.action,
@@ -656,10 +769,7 @@ fn emit_output_completed(app: &AppHandle, result: &OutputResult) {
         result.transcript_id,
         result.message
     );
-    let _ = app.emit("scribe:output-completed", result);
-    if let Some((title, body)) = paste_skipped_notification(result) {
-        notify(app, title, body);
-    }
+    host.emit(CoreEvent::OutputCompleted(result.clone()));
 }
 
 /// The system notification for a paste Scribe held back. The text did not
@@ -680,21 +790,33 @@ fn notify(app: &AppHandle, title: &str, body: &str) {
     }
 }
 
-pub fn emit_output_failed(app: &AppHandle, transcript_id: String, error: &CommandError) {
+/// Needs only the host, which is installed before anything else, so it uses
+/// that rather than the `Core` (like `status_file::publish`).
+pub fn emit_output_failed(_app: &AppHandle, transcript_id: String, error: &CommandError) {
+    match crate::shell::host() {
+        Some(host) => emit_output_failed_with(host.as_ref(), transcript_id, error),
+        None => log::warn!(
+            "Could not report the failed output of transcript {}: no host yet ({}: {})",
+            transcript_id,
+            error.code,
+            error.message
+        ),
+    }
+}
+
+/// Logs the failure and sends `scribe:output-failed`.
+pub fn emit_output_failed_with(host: &dyn Host, transcript_id: String, error: &CommandError) {
     log::error!(
         "Output failed for transcript {} ({}): {}",
         transcript_id,
         error.code,
         error.message
     );
-    let _ = app.emit(
-        "scribe:output-failed",
-        OutputFailedPayload {
-            transcript_id,
-            code: error.code.clone(),
-            message: error.message.clone(),
-        },
-    );
+    host.emit(CoreEvent::OutputFailed(OutputFailedPayload {
+        transcript_id,
+        code: error.code.clone(),
+        message: error.message.clone(),
+    }));
 }
 
 fn no_last_transcript() -> CommandError {
@@ -728,14 +850,18 @@ pub struct OutputFailedPayload {
     pub message: String,
 }
 
-struct PasteStateGuard<'a> {
-    app: &'a AppHandle,
+/// Shows Pasting while a paste runs, when the dictation state was Ready, and
+/// goes back to Ready when dropped. `publish` sends each new state out; the
+/// paste paths pass `dictation_state::emit_state_snapshot` (the `audio`
+/// lane's, which still takes the app).
+struct PasteStateGuard<'a, F: Fn(&AppStateSnapshot)> {
+    state: &'a BackendState,
+    publish: F,
     active: bool,
 }
 
-impl<'a> PasteStateGuard<'a> {
-    fn start(app: &'a AppHandle) -> Self {
-        let state = app.state::<BackendState>();
+impl<'a, F: Fn(&AppStateSnapshot)> PasteStateGuard<'a, F> {
+    fn start(state: &'a BackendState, publish: F) -> Self {
         let active = state
             .app_state()
             .map(|state| state.snapshot().status == AppStatus::Ready)
@@ -743,23 +869,26 @@ impl<'a> PasteStateGuard<'a> {
 
         if active {
             if let Ok(snapshot) = state.transition_app_state(AppEvent::StartPasting) {
-                emit_state_snapshot(app, &snapshot);
+                publish(&snapshot);
             }
         }
 
-        Self { app, active }
+        Self {
+            state,
+            publish,
+            active,
+        }
     }
 }
 
-impl Drop for PasteStateGuard<'_> {
+impl<F: Fn(&AppStateSnapshot)> Drop for PasteStateGuard<'_, F> {
     fn drop(&mut self) {
         if !self.active {
             return;
         }
 
-        let state = self.app.state::<BackendState>();
-        if let Ok(snapshot) = state.transition_app_state(AppEvent::PasteCompleted) {
-            emit_state_snapshot(self.app, &snapshot);
+        if let Ok(snapshot) = self.state.transition_app_state(AppEvent::PasteCompleted) {
+            (self.publish)(&snapshot);
         }
     }
 }
@@ -964,6 +1093,157 @@ mod tests {
         );
         assert!(!result.copied);
         assert!(result.pasted);
+    }
+
+    fn recording_host() -> crate::host::RecordingHost {
+        crate::host::RecordingHost::new(
+            crate::paths::Paths::from_parts("/d".into(), "/c".into(), "/l".into(), None, None),
+            crate::host::Flavor::Stable,
+        )
+    }
+
+    /// The (name, JSON payload) of every event the host was sent.
+    fn sent(host: &crate::host::RecordingHost) -> Vec<(&'static str, serde_json::Value)> {
+        host.events()
+            .iter()
+            .map(|event| (event.name(), serde_json::to_value(event).unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn output_events_go_to_the_host_with_todays_names_and_payloads() {
+        let host = recording_host();
+        let transcript = Transcript::new_last_buffer("hello", Some(100), None, None).unwrap();
+
+        emit_output_started(
+            &host,
+            &transcript,
+            OutputAction::Paste,
+            &OutputMode::AutoPaste,
+            Some(&PasteMethod::ClipboardPaste),
+        );
+        let completed = paste_skipped_result(
+            &transcript,
+            OutputMode::AutoPaste,
+            PasteMethod::ClipboardPaste,
+            PasteBlock::FocusChanged,
+        );
+        send_output_completed(&host, &completed);
+        emit_output_failed_with(
+            &host,
+            transcript.id.clone(),
+            &CommandError::new("clipboard_unavailable", "Could not access the clipboard."),
+        );
+
+        assert_eq!(
+            sent(&host),
+            [
+                (
+                    "scribe:output-started",
+                    serde_json::json!({
+                        "transcriptId": transcript.id,
+                        "action": "paste",
+                        "outputMode": "auto_paste",
+                        "pasteMethod": "clipboard_paste",
+                    })
+                ),
+                (
+                    "scribe:output-completed",
+                    serde_json::to_value(&completed).unwrap()
+                ),
+                (
+                    "scribe:output-failed",
+                    serde_json::json!({
+                        "transcriptId": transcript.id,
+                        "code": "clipboard_unavailable",
+                        "message": "Could not access the clipboard.",
+                    })
+                ),
+            ]
+        );
+    }
+
+    fn backend() -> (BackendState, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "scribe-output-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let backend = BackendState::new(
+            crate::db::Database::in_memory().unwrap(),
+            root.join("recordings"),
+            crate::data_hygiene::DataDirs {
+                data_dir: root.join("data"),
+                cache_dir: root.join("cache"),
+            },
+        );
+        (backend, root)
+    }
+
+    fn to_ready(state: &BackendState) {
+        for event in [
+            AppEvent::StartRecording,
+            AppEvent::StopRecording,
+            AppEvent::ValidAudio,
+            AppEvent::TranscriptionSucceeded,
+        ] {
+            state.transition_app_state(event).unwrap();
+        }
+    }
+
+    fn status(state: &BackendState) -> AppStatus {
+        state.app_state().unwrap().snapshot().status
+    }
+
+    #[test]
+    fn a_paste_after_a_dictation_shows_pasting_then_ready() {
+        let (state, root) = backend();
+        to_ready(&state);
+        let published = std::cell::RefCell::new(Vec::new());
+        {
+            let _guard = PasteStateGuard::start(&state, |snapshot: &AppStateSnapshot| {
+                published.borrow_mut().push(snapshot.status.clone())
+            });
+            assert_eq!(status(&state), AppStatus::Pasting);
+        }
+        assert_eq!(status(&state), AppStatus::Ready);
+        assert_eq!(
+            published.into_inner(),
+            [AppStatus::Pasting, AppStatus::Ready]
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_paste_outside_ready_leaves_the_state_alone() {
+        let (state, root) = backend();
+        let published = std::cell::RefCell::new(Vec::new());
+        {
+            let _guard = PasteStateGuard::start(&state, |snapshot: &AppStateSnapshot| {
+                published.borrow_mut().push(snapshot.status.clone())
+            });
+            assert_eq!(status(&state), AppStatus::Idle);
+        }
+        assert_eq!(status(&state), AppStatus::Idle);
+        assert!(published.into_inner().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    // The copies' success path writes the real clipboard, so only the paths
+    // that stop before it are tested here.
+    #[test]
+    fn copying_with_nothing_to_copy_fails_before_any_event() {
+        let (state, root) = backend();
+        let host = recording_host();
+
+        let error = copy_last(&state, &host).unwrap_err();
+        assert_eq!(error.code, "last_transcript_missing");
+        let error = copy_saved(&state, &host, "no-such-id").unwrap_err();
+        assert_eq!(error.code, "transcript_not_found");
+        assert!(error.message.contains("no-such-id"));
+
+        assert!(host.events().is_empty());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     // NOTE: `clipboard_paste` itself needs a real clipboard and a window to
