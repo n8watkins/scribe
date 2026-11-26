@@ -135,11 +135,11 @@ pub struct RecordingResult {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct AudioLevelEvent {
-    session_id: String,
-    level: f32,
-    peak: f32,
-    rms: f32,
+pub struct AudioLevelEvent {
+    pub session_id: String,
+    pub level: f32,
+    pub peak: f32,
+    pub rms: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]

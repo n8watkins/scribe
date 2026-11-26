@@ -40,6 +40,11 @@ log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+[dev-dependencies]
+# tauri::test's mock app, to check the engine's folders against Tauri's
+# resolver (src/tauri_host.rs).
+tauri = { version = "2", features = ["tray-icon", "test"] }
+
 [target.'cfg(windows)'.dependencies]
 # Colors the native title bar (style_native_titlebar in src/lib.rs).
 windows = { version = "0.58", features = [

@@ -31,6 +31,9 @@ const HEADER: &str = "# Scribe replacements: one \"heard -> written\" per line.\
 /// How often the watcher checks the file for outside edits.
 const WATCH_INTERVAL: Duration = Duration::from_secs(2);
 
+/// Sent with the new contents when replacements.txt changes outside Scribe.
+pub const REPLACEMENTS_CHANGED_EVENT: &str = "scribe:replacements-changed";
+
 /// What the file holds right now.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

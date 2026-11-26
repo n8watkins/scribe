@@ -4270,6 +4270,7 @@ dependencies = [
  "chrono",
  "cpal",
  "crossbeam-channel",
+ "dirs 7.0.0",
  "futures-util",
  "hound",
  "keyring",

@@ -60,15 +60,15 @@ const SEGMENT_TAIL_PAD_MS: u64 = 300;
 /// text before falling back to full-clip transcription.
 pub const RESULT_TIMEOUT: Duration = Duration::from_secs(15);
 
-const PARTIAL_TRANSCRIPT_EVENT: &str = "scribe:partial-transcript";
+pub const PARTIAL_TRANSCRIPT_EVENT: &str = "scribe:partial-transcript";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct PartialTranscriptEvent {
-    session_id: String,
-    text: String,
-    segments: u32,
-    finalized: bool,
+pub struct PartialTranscriptEvent {
+    pub session_id: String,
+    pub text: String,
+    pub segments: u32,
+    pub finalized: bool,
 }
 
 /// Emits a `scribe:partial-transcript` event. The dictation stop path

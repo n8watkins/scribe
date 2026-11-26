@@ -2,6 +2,7 @@
 //! run loop) on Scribe's engine, crates/scribe-core. The engine's modules are
 //! re-exported here under their old `app_lib::` paths.
 
+pub mod tauri_host;
 pub mod tray;
 pub mod window_size;
 
@@ -364,6 +365,14 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(platform_script())
         .setup(|app| {
+            // The engine resolves its folders without Tauri; they must be the
+            // ones Tauri resolves (checked in debug builds and in a test).
+            let paths = tauri_host::resolve_paths(app)?;
+            debug_assert_eq!(
+                tauri_host::paths_mismatches(app, &paths),
+                Vec::<String>::new(),
+                "the engine's folders differ from Tauri's"
+            );
             let app_data_dir = app.path().app_data_dir()?;
             let audio_temp_dir = app.path().app_cache_dir()?.join("recordings");
             std::fs::create_dir_all(&app_data_dir)?;

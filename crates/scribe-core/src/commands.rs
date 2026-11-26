@@ -1996,8 +1996,7 @@ pub async fn get_engine_status(
     .await
 }
 
-/// Sent with the new contents when replacements.txt changes outside Scribe.
-pub const REPLACEMENTS_CHANGED_EVENT: &str = "scribe:replacements-changed";
+pub use crate::replacements_file::REPLACEMENTS_CHANGED_EVENT;
 
 type Replacements = std::sync::Arc<crate::replacements_file::ReplacementStore>;
 

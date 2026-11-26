@@ -49,6 +49,9 @@ keyring = { version = "3", features = ["windows-native"] }
 # own; tiny_http fits that model on a dedicated thread with hand-written SSE
 # framing, and pulls in almost no transitive dependencies.
 tiny_http = "0.12"
+# The app's folders without Tauri (src/paths.rs). The same major as Tauri's
+# own path resolver uses, so both name the same folders.
+dirs = "7"
 
 [target.'cfg(windows)'.dependencies]
 # Native folder picker for choosing the data directory. Windows-only (the app

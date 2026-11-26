@@ -713,19 +713,19 @@ fn transcript_not_found(id: &str) -> CommandError {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct OutputStartedPayload {
-    transcript_id: String,
-    action: OutputAction,
-    output_mode: OutputMode,
-    paste_method: Option<PasteMethod>,
+pub struct OutputStartedPayload {
+    pub transcript_id: String,
+    pub action: OutputAction,
+    pub output_mode: OutputMode,
+    pub paste_method: Option<PasteMethod>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct OutputFailedPayload {
-    transcript_id: String,
-    code: String,
-    message: String,
+pub struct OutputFailedPayload {
+    pub transcript_id: String,
+    pub code: String,
+    pub message: String,
 }
 
 struct PasteStateGuard<'a> {

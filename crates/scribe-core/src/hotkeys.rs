@@ -211,8 +211,8 @@ pub struct HotkeyRegistrationFailure {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct RegistrationFailedEvent<'a> {
-    failures: &'a [HotkeyRegistrationFailure],
+pub(crate) struct RegistrationFailedEvent<'a> {
+    pub(crate) failures: &'a [HotkeyRegistrationFailure],
 }
 
 /// Notifies the frontend that one or more hotkey bindings could not be
