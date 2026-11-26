@@ -730,7 +730,8 @@ mod tests {
     /// helper in audio.rs, and that helper plays the matching cue.
     #[test]
     fn recording_events_play_their_cues() {
-        let audio = include_str!("audio.rs");
+        // A Windows checkout can have CRLF line endings.
+        let audio = include_str!("audio.rs").replace("\r\n", "\n");
         for (event, helper, cue) in [
             (
                 "\"audio://recording-started\"",
