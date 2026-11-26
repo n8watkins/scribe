@@ -142,16 +142,26 @@ pub fn open_main(page: i32, activate: bool) {
             return;
         }
     };
+    // `--row-fonts=0` shows the rows without per-language fonts (the default fallback).
+    let no_family = std::env::args().any(|a| a == "--row-fonts=0");
     let rows: Vec<HistoryRow> = fixtures::history()
         .into_iter()
         .map(|r| HistoryRow {
+            rtl: fixtures::starts_rtl(&r.preview),
+            family: if no_family {
+                "".into()
+            } else {
+                fixtures::family_for(r.lang).into()
+            },
             time: r.time.into(),
             lang: r.lang.into(),
             preview: r.preview.into(),
         })
         .collect();
     m.set_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
-    m.set_transcript(fixtures::transcript().into());
+    let transcript = fixtures::transcript();
+    m.set_transcript_chars(transcript.chars().count() as i32);
+    m.set_transcript(transcript.into());
     m.set_page(page);
     m.set_pill_enabled(with_state(|s| s.pill_enabled).unwrap_or(true));
     m.on_show_pill(show_pill_recording);
@@ -188,6 +198,13 @@ pub fn open_main(page: i32, activate: bool) {
         log("main-first-frame", &[("ms", format!("{:.1}", end - t0))]);
     });
     MAIN.with(|slot| *slot.borrow_mut() = Some(m));
+    if !activate {
+        // Off every monitor Windows sends no first WM_PAINT; ask Slint for the
+        // frame itself (later redraws, from property changes, paint normally).
+        after(50, || {
+            main_window(|m| m.window().request_redraw());
+        });
+    }
 }
 
 /// Destroys the main window (not just hides it).
@@ -383,6 +400,10 @@ fn pill_cycle() {
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = Config::load();
     let start = Instant::now();
+    if let Some(p) = &cfg.font_path {
+        // SAFETY: still single-threaded; nothing else reads the environment yet.
+        unsafe { std::env::set_var("SLINT_FONT_PATH", p) };
+    }
     probe::now_ms();
     status::init(cfg.status.clone(), start);
 
@@ -407,7 +428,20 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 a
             }
-            WindowKind::Main { activate } => a.with_active(activate),
+            // A measuring run opens the main window off every monitor, so it is
+            // never on the owner's screen; the tray opens it normally.
+            // `--main-onscreen=1` keeps the default place (frame timings need it).
+            WindowKind::Main { activate: false }
+                if std::env::args().any(|a| a == "--main-onscreen=1") =>
+            {
+                a.with_active(false)
+            }
+            WindowKind::Main { activate: false } => {
+                use slint::winit_030::winit::dpi::PhysicalPosition;
+                a.with_active(false)
+                    .with_position(PhysicalPosition::new(-20000, -20000))
+            }
+            WindowKind::Main { activate: true } => a.with_active(true),
         });
     selector.select()?;
     log(
@@ -426,6 +460,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let probe_name = cfg.probe.clone();
     let fake_click = cfg.fake_click;
     let snapshot = cfg.snapshot.clone();
+    let snapshot_main = cfg.snapshot_main.clone();
     STATE.with(|s| {
         *s.borrow_mut() = Some(State {
             cfg,
@@ -469,6 +504,28 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(dir) = snapshot {
         snapshot_all(dir);
+    }
+    if let Some(file) = snapshot_main {
+        probe::on_next_frame(move |_| {
+            after(1500, move || {
+                let saved = main_window(|m| m.window().take_snapshot());
+                match saved {
+                    Some(Ok(buf)) => {
+                        let r = write_png(&file, buf.width(), buf.height(), buf.as_bytes());
+                        log(
+                            "snapshot-main",
+                            &[
+                                ("ok", r.is_ok().to_string()),
+                                ("path", js(&file.to_string_lossy())),
+                            ],
+                        );
+                    }
+                    Some(Err(e)) => log("error", &[("what", js(&format!("snapshot-main: {e}")))]),
+                    None => log("error", &[("what", js("snapshot-main: no window"))]),
+                }
+                let _ = slint::quit_event_loop();
+            });
+        });
     }
     match probe_name.as_deref() {
         Some("scroll") => probe_scroll(),

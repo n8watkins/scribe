@@ -52,6 +52,23 @@ pub struct Row {
     pub preview: String,
 }
 
+/// The font family for a transcript in a CJK language. Slint's fallback has
+/// no language: with the default chain, Han characters fall back to a
+/// Japanese font that lacks simplified Chinese glyphs (话 发 给 show as
+/// boxes). Scribe knows each transcript's language, so rows name the font.
+pub fn family_for(lang: &str) -> &'static str {
+    if cfg!(windows) {
+        match lang {
+            "Chinese" => "Microsoft YaHei UI",
+            "Japanese" => "Yu Gothic UI",
+            "Korean" => "Malgun Gothic",
+            _ => "",
+        }
+    } else {
+        ""
+    }
+}
+
 /// Deterministic rows: script by index, one to three copies of its sentence.
 pub fn history() -> Vec<Row> {
     (0..ROWS)
@@ -102,6 +119,22 @@ pub fn transcript() -> String {
         n += 1;
     }
     out
+}
+
+/// True when the first strongly directional character is Hebrew or Arabic.
+/// Slint's `horizontal-alignment: start` does not follow the paragraph
+/// direction in a `Text` (it does in `TextEdit`), so rows pick right or left.
+pub fn starts_rtl(text: &str) -> bool {
+    for c in text.chars() {
+        let u = c as u32;
+        if matches!(u, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF) {
+            return true;
+        }
+        if c.is_alphabetic() {
+            return false;
+        }
+    }
+    false
 }
 
 /// Words the fake recogniser "hears", one at a time, for the live text.

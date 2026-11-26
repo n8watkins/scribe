@@ -35,6 +35,10 @@ pub struct Config {
     pub no_trim: bool,
     /// Save a picture of every pill state into this folder, then quit.
     pub snapshot: Option<PathBuf>,
+    /// Save Slint's own picture of the main window (with `open`) to this file, then quit.
+    pub snapshot_main: Option<PathBuf>,
+    /// Extra fonts for Slint's fallback chain (sets SLINT_FONT_PATH before start).
+    pub font_path: Option<String>,
     pub pill_font: Option<String>,
 }
 
@@ -93,6 +97,8 @@ impl Config {
             no_clipboard: opt("no-clipboard").is_some_and(|v| v == "1"),
             no_trim: opt("no-trim").is_some_and(|v| v == "1"),
             snapshot,
+            snapshot_main: opt("snapshot-main").map(PathBuf::from),
+            font_path: opt("font-path"),
             pill_font: opt("pill-font"),
         }
     }
