@@ -12,10 +12,11 @@
 
 use crate::app_state::{AppStateSnapshot, AppStatus};
 use crate::dictation_state::{self, SCHEMA_VERSION};
+use crate::host::Host;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::path::Path;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 /// The on-disk payload. `rename_all = "camelCase"` keeps the JSON keys aligned
 /// with the rest of Scribe's IPC surface (e.g. `updatedAt`).
@@ -91,25 +92,20 @@ fn write_atomic(dir: &Path, payload: &StatusFile) -> std::io::Result<()> {
     }
 }
 
-/// Publish a state snapshot to the status file. Best-effort: a failure is
-/// logged and swallowed, never propagated, so status publishing can never
-/// disrupt dictation. Called next to every `emit_state_snapshot`.
-pub fn publish(app: &AppHandle, snapshot: &AppStateSnapshot) {
-    let dir = match app.path().app_cache_dir() {
-        Ok(dir) => dir,
-        Err(error) => {
-            log::warn!("Could not resolve cache dir for status file: {}", error);
-            return;
-        }
-    };
+/// Publish a state snapshot to the status file in the host's cache folder.
+/// Best-effort: a failure is logged and swallowed, never propagated, so status
+/// publishing can never disrupt dictation. Called next to every
+/// `emit_state_snapshot`.
+pub fn publish_with(host: &dyn Host, snapshot: &AppStateSnapshot) {
+    let dir = host.paths().cache_dir();
     // The cache dir is created during setup(), but a first write on a fresh
     // profile (or after a manual wipe) should still succeed.
-    if let Err(error) = std::fs::create_dir_all(&dir) {
+    if let Err(error) = std::fs::create_dir_all(dir) {
         log::warn!("Could not create cache dir for status file: {}", error);
         return;
     }
     let payload = build(snapshot, Utc::now(), std::process::id());
-    if let Err(error) = write_atomic(&dir, &payload) {
+    if let Err(error) = write_atomic(dir, &payload) {
         log::warn!("Could not write status file: {}", error);
     }
 }
@@ -117,13 +113,30 @@ pub fn publish(app: &AppHandle, snapshot: &AppStateSnapshot) {
 /// Publish a fresh `Idle` snapshot. Used at startup (so the file exists before
 /// the first real transition) and at shutdown (so a reader sees Scribe is no
 /// longer listening).
-pub fn publish_idle(app: &AppHandle) {
+pub fn publish_idle_with(host: &dyn Host) {
     let snapshot = AppStateSnapshot {
         status: AppStatus::Idle,
         error: None,
         updated_at: Utc::now(),
     };
-    publish(app, &snapshot);
+    publish_with(host, &snapshot);
+}
+
+/// [`publish_with`] for callers that still hold an `AppHandle`. Publishes
+/// through the host the shell installed first thing in its setup.
+pub fn publish(_app: &AppHandle, snapshot: &AppStateSnapshot) {
+    match crate::shell::host() {
+        Some(host) => publish_with(host.as_ref(), snapshot),
+        None => log::warn!("Could not resolve cache dir for status file: no host yet"),
+    }
+}
+
+/// [`publish_idle_with`] for callers that still hold an `AppHandle`.
+pub fn publish_idle(_app: &AppHandle) {
+    match crate::shell::host() {
+        Some(host) => publish_idle_with(host.as_ref()),
+        None => log::warn!("Could not resolve cache dir for status file: no host yet"),
+    }
 }
 
 #[cfg(test)]
@@ -214,5 +227,45 @@ mod tests {
         assert!(!staging.exists(), "temp file must be renamed away");
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The status file lands in the host's cache folder, created if missing,
+    /// with no Tauri app in sight.
+    #[test]
+    fn publish_writes_into_the_hosts_cache_folder() {
+        use crate::host::{Flavor, RecordingHost};
+        use crate::paths::Paths;
+
+        let root =
+            std::env::temp_dir().join(format!("scribe-status-host-test-{}", std::process::id()));
+        let cache = root.join("cache");
+        let host = RecordingHost::new(
+            Paths::from_parts(
+                root.join("data"),
+                cache.clone(),
+                root.join("logs"),
+                None,
+                None,
+            ),
+            Flavor::Stable,
+        );
+
+        publish_idle_with(&host);
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(cache.join("status.json")).unwrap())
+                .unwrap();
+        assert_eq!(value["status"], "Idle");
+        assert_eq!(value["dictating"], false);
+
+        publish_with(&host, &snapshot(AppStatus::Recording));
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(cache.join("status.json")).unwrap())
+                .unwrap();
+        assert_eq!(value["status"], "Recording");
+        // Publishing sends no event; the interface hears about state through
+        // `scribe:app-state`, not the status file.
+        assert!(host.events().is_empty());
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -20,7 +20,7 @@ pub mod sync;
 
 pub use scribe_core::commands::*;
 
-use scribe_core::error::CommandError;
+use scribe_core::{core::Core, error::CommandError};
 
 /// Runs blocking command work on Tauri's blocking thread pool. Tauri runs every
 /// non-async command on the main thread, where anything slow (the database,
@@ -32,6 +32,25 @@ where
     F: FnOnce(&tauri::AppHandle) -> Result<T, CommandError> + Send + 'static,
 {
     tauri::async_runtime::spawn_blocking(move || work(&app))
+        .await
+        .map_err(|error| {
+            CommandError::new(
+                "command_failed",
+                format!("Scribe could not finish that action. {}", error),
+            )
+        })?
+}
+
+/// [`off_main`] for commands converted to the engine handle: runs `work`
+/// with the [`Core`] on Tauri's blocking thread pool. Take the core as
+/// `core: tauri::State<'_, Core>` and pass `core.inner().clone()` (a cheap
+/// handle clone).
+pub(crate) async fn off_main_core<T, F>(core: Core, work: F) -> Result<T, CommandError>
+where
+    T: Send + 'static,
+    F: FnOnce(&Core) -> Result<T, CommandError> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(move || work(&core))
         .await
         .map_err(|error| {
             CommandError::new(
