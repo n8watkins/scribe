@@ -6,6 +6,7 @@ use std::{
 };
 
 use serde::Serialize;
+use tauri::AppHandle;
 use uuid::Uuid;
 
 use crate::{
@@ -32,7 +33,16 @@ pub struct TranscribeFileResult {
 /// Transcribes a user-provided audio/video file with whisper-cli directly
 /// (never the warm server, which is tuned for short dictation segments).
 /// Long files are expected; the caller runs this on a worker thread.
-pub fn transcribe_file_with(core: &Core, path: &str) -> Result<TranscribeFileResult, CommandError> {
+///
+/// Still takes the app for `whisper::transcribe_with_output_prefix` (models):
+/// switching to its `_with` version would leave that `pub(crate)` wrapper
+/// without a caller in a file this lane may not change, so the switch and
+/// the wrapper's deletion wait for P1-4 step 4.
+pub fn transcribe_file_with(
+    app: &AppHandle,
+    core: &Core,
+    path: &str,
+) -> Result<TranscribeFileResult, CommandError> {
     let source = PathBuf::from(path.trim());
     if !source.is_file() {
         return Err(CommandError::new(
@@ -73,10 +83,9 @@ pub fn transcribe_file_with(core: &Core, path: &str) -> Result<TranscribeFileRes
     let output_prefix = work_dir.join(format!("file-{}", Uuid::new_v4().simple()));
     // A one-off whisper-cli run loads its own copy of the model, so the
     // resident one is unloaded first: never two models in memory.
-    let host = core.host().as_ref();
-    let transcription = core.warm_transcriber().run_exclusive(|| {
-        whisper::transcribe_with_output_prefix_with(host, &request, &output_prefix)
-    })?;
+    let transcription = core
+        .warm_transcriber()
+        .run_exclusive(|| whisper::transcribe_with_output_prefix(app, &request, &output_prefix))?;
     drop(converted);
 
     Ok(TranscribeFileResult {
