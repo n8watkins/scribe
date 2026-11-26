@@ -14,7 +14,6 @@ use std::{
 
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 use serde::Deserialize;
-use tauri::AppHandle;
 
 use crate::{
     filler::TimedWord,
@@ -74,17 +73,6 @@ pub struct ParakeetResult {
 }
 
 impl ParakeetProcess {
-    /// Starts the sidecar for `config` and waits until the model is loaded.
-    pub fn launch(app: &AppHandle, config: &EngineConfig) -> Result<Self, String> {
-        match tauri::Manager::try_state::<crate::core::Core>(app) {
-            Some(core) => Self::launch_with(core.host().as_ref(), config, &|_| true),
-            None => {
-                log::warn!("ParakeetProcess::launch ran before the engine was ready");
-                Err(crate::host::no_main_window().message)
-            }
-        }
-    }
-
     /// Starts the sidecar bundled in the resources of `host` for `config` and
     /// waits until the model is loaded. `started` hears the sidecar's pid the
     /// moment it runs; when it answers false (Scribe is quitting) the sidecar
