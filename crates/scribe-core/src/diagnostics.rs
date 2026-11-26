@@ -78,16 +78,23 @@ const SETTINGS_ALLOW_LIST: &[&str] = &[
     "hotkeys",
 ];
 
-/// Builds the diagnostics report (the `collect_diagnostics` command).
-pub fn collect_with(core: &Core) -> Result<String, CommandError> {
-    collect_from(core.backend(), core.host().as_ref())
+/// Builds the diagnostics report (the `collect_diagnostics` command) for the
+/// running app's `version`. The shell passes the app's own version: Dev and
+/// test builds override it, so it can differ from this crate's.
+pub fn collect_with(core: &Core, version: &str) -> Result<String, CommandError> {
+    collect_from(core.backend(), core.host().as_ref(), version)
 }
 
 /// [`collect_with`] for callers that still hold an `AppHandle`. Needs only
-/// `state` and the host, which the shell installs before anything else.
-pub fn collect(_app: &AppHandle, state: &BackendState) -> Result<String, CommandError> {
+/// `state`, the host (which the shell installs before anything else) and the
+/// app's version.
+pub fn collect(app: &AppHandle, state: &BackendState) -> Result<String, CommandError> {
     match crate::shell::host() {
-        Some(host) => collect_from(state, host.as_ref()),
+        Some(host) => collect_from(
+            state,
+            host.as_ref(),
+            &app.package_info().version.to_string(),
+        ),
         None => {
             log::warn!("Could not build the diagnostics report: no host yet");
             Err(no_main_window())
@@ -95,9 +102,14 @@ pub fn collect(_app: &AppHandle, state: &BackendState) -> Result<String, Command
     }
 }
 
-/// The report for the engine `state` runs under `host`: the host names the
-/// app (its flavour), the home folder to mask and the log folder.
-fn collect_from(state: &BackendState, host: &dyn Host) -> Result<String, CommandError> {
+/// The report for the engine `state` runs under `host` as app `version`: the
+/// host names the app (its flavour), the home folder to mask and the log
+/// folder.
+fn collect_from(
+    state: &BackendState,
+    host: &dyn Host,
+    version: &str,
+) -> Result<String, CommandError> {
     let (settings, models) = {
         let db = state.db()?;
         (db.get_settings()?, db.list_model_records()?)
@@ -124,7 +136,7 @@ fn collect_from(state: &BackendState, host: &dyn Host) -> Result<String, Command
     line(format!(
         "App: {} {} ({})",
         flavor.display_name(),
-        env!("CARGO_PKG_VERSION"),
+        version,
         flavor.identifier()
     ));
     line(format!(
@@ -509,7 +521,7 @@ mod tests {
         assert_eq!(recent_problems(&lines, 2), vec!["[ERROR] c", "[WARN] e"]);
     }
 
-    /// The report names the host's flavour and the engine's version, and
+    /// The report names the host's flavour and the version passed in, and
     /// reads the newest log in the host's log folder with the home folder
     /// masked.
     #[test]
@@ -552,13 +564,11 @@ mod tests {
             },
         );
 
-        let report = collect_from(&state, &host).unwrap();
+        // A Dev build's version, which differs from this crate's.
+        let report = collect_from(&state, &host, "0.16.4-123").unwrap();
 
         assert!(
-            report.contains(&format!(
-                "App: Scribe Dev {} (com.natkins.scribe.dev)",
-                env!("CARGO_PKG_VERSION")
-            )),
+            report.contains("App: Scribe Dev 0.16.4-123 (com.natkins.scribe.dev)"),
             "{report}"
         );
         assert!(report.contains("  [WARN] Could not read ~"), "{report}");

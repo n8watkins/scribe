@@ -661,9 +661,13 @@ pub async fn open_replacements_file(
 }
 
 /// The running version when its "What's new" card has not been dismissed yet.
+/// Takes the `AppHandle` for the app's version, which Dev builds override.
 #[tauri::command]
-pub fn whats_new_pending(core: State<'_, Core>) -> Result<Option<String>, CommandError> {
-    crate::release_notes::pending_version_with(&core)
+pub fn whats_new_pending(
+    app: tauri::AppHandle,
+    core: State<'_, Core>,
+) -> Result<Option<String>, CommandError> {
+    crate::release_notes::pending_version_with(&core, &app.package_info().version.to_string())
 }
 
 /// Remembers that the card for `version` was dismissed.
@@ -676,8 +680,12 @@ pub fn dismiss_whats_new(core: State<'_, Core>, version: String) -> Result<(), C
     core.backend().db()?.set_whats_new_seen_version(version)
 }
 
-/// Builds the diagnostics report.
+/// Builds the diagnostics report. Takes the `AppHandle` for the app's
+/// version, which Dev builds override.
 #[tauri::command]
-pub fn collect_diagnostics(core: State<'_, Core>) -> Result<String, CommandError> {
-    crate::diagnostics::collect_with(&core)
+pub fn collect_diagnostics(
+    app: tauri::AppHandle,
+    core: State<'_, Core>,
+) -> Result<String, CommandError> {
+    crate::diagnostics::collect_with(&core, &app.package_info().version.to_string())
 }

@@ -7,10 +7,11 @@
 
 use crate::{core::Core, db::Database, error::CommandError};
 
-/// [`pending_version`] for the running version (the `whats_new_pending`
-/// command).
-pub fn pending_version_with(core: &Core) -> Result<Option<String>, CommandError> {
-    pending_version(&*core.backend().db()?, env!("CARGO_PKG_VERSION"))
+/// [`pending_version`] for the running app's `version` (the
+/// `whats_new_pending` command). The shell passes the app's own version:
+/// Dev and test builds override it, so it can differ from this crate's.
+pub fn pending_version_with(core: &Core, version: &str) -> Result<Option<String>, CommandError> {
+    pending_version(&*core.backend().db()?, version)
 }
 
 /// The version whose card should show now, or `None`.
@@ -60,6 +61,19 @@ mod tests {
         );
         db.set_whats_new_seen_version("0.10.0").unwrap();
         assert_eq!(pending_version(&db, "0.10.0").unwrap(), None);
+    }
+
+    /// Dev and test builds carry a version the shell overrides (say
+    /// 0.16.4-123); the card follows that version, not this crate's.
+    #[test]
+    fn the_card_follows_the_version_passed_in() {
+        let db = Database::in_memory().unwrap();
+        db.set_whats_new_seen_version("0.16.4-123").unwrap();
+        assert_eq!(pending_version(&db, "0.16.4-123").unwrap(), None);
+        assert_eq!(
+            pending_version(&db, "0.16.4-124").unwrap().as_deref(),
+            Some("0.16.4-124")
+        );
     }
 
     #[test]
