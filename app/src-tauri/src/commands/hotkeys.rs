@@ -1,10 +1,10 @@
 //! Commands of the `hotkeys` domain (hotkeys, remote_command,
 //! platform/linux).
 //!
-//! Every command but `configure_portal_shortcuts` still takes the app next to
-//! the `Core`: the hotkeys are registered and checked through the
-//! global-shortcut plugin, and the settings commands announce the change with
-//! `settings_store::emit_changed` (data), which takes the app.
+//! The hotkeys are registered and checked through the `Core`'s host. The four
+//! settings commands still take the app, only to pass it on to
+//! `hotkeys::replace_hotkeys_with`, which keeps an unused `_app` parameter for
+//! its `settings_store` caller until P1-4 step 4.
 
 use scribe_core::core::Core;
 
@@ -20,21 +20,19 @@ use crate::{
 /// (Wayland), then reports the hotkeys.
 #[tauri::command]
 pub async fn bind_portal_shortcuts(
-    app: tauri::AppHandle,
     core: tauri::State<'_, Core>,
 ) -> Result<HotkeyStatus, CommandError> {
-    let core = core.inner().clone();
-    off_main(app, move |app| {
+    off_main_core(core.inner().clone(), |core| {
         #[cfg(target_os = "linux")]
         {
             crate::platform::shortcuts::bind_again()
                 .map_err(|message| CommandError::new("portal_shortcuts_failed", message))?;
             let settings = core.backend().db()?.get_settings()?;
-            hotkeys::status_with(app, &core, &settings.hotkeys)
+            hotkeys::status_with(core, &settings.hotkeys)
         }
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = (app, core);
+            let _ = core;
             Err(CommandError::new(
                 "portal_shortcuts_unsupported",
                 "Desktop-managed shortcuts exist only on Linux.",
@@ -66,14 +64,10 @@ pub async fn configure_portal_shortcuts(core: tauri::State<'_, Core>) -> Result<
 }
 
 #[tauri::command]
-pub async fn get_hotkey_status(
-    app: tauri::AppHandle,
-    core: tauri::State<'_, Core>,
-) -> Result<HotkeyStatus, CommandError> {
-    let core = core.inner().clone();
-    off_main(app, move |app| {
+pub async fn get_hotkey_status(core: tauri::State<'_, Core>) -> Result<HotkeyStatus, CommandError> {
+    off_main_core(core.inner().clone(), |core| {
         let settings = core.backend().db()?.get_settings()?;
-        hotkeys::status_with(app, &core, &settings.hotkeys)
+        hotkeys::status_with(core, &settings.hotkeys)
     })
     .await
 }
@@ -122,9 +116,9 @@ pub async fn rebind_hotkey(
             return Err(error);
         }
 
-        settings_store::emit_changed(app, &settings);
+        settings_store::emit_changed_with(core.host().as_ref(), &settings);
         hotkeys::emit_registration_failures_with(core.host().as_ref(), &failures);
-        hotkeys::status_with(app, &core, &settings.hotkeys)
+        hotkeys::status_with(&core, &settings.hotkeys)
     })
     .await
 }
@@ -164,9 +158,9 @@ pub async fn set_hotkey_trigger(
             return Err(error);
         }
 
-        settings_store::emit_changed(app, &settings);
+        settings_store::emit_changed_with(core.host().as_ref(), &settings);
         hotkeys::emit_registration_failures_with(core.host().as_ref(), &failures);
-        hotkeys::status_with(app, &core, &settings.hotkeys)
+        hotkeys::status_with(&core, &settings.hotkeys)
     })
     .await
 }
@@ -200,9 +194,9 @@ pub async fn reset_hotkeys_to_defaults(
             return Err(error);
         }
 
-        settings_store::emit_changed(app, &settings);
+        settings_store::emit_changed_with(core.host().as_ref(), &settings);
         hotkeys::emit_registration_failures_with(core.host().as_ref(), &failures);
-        hotkeys::status_with(app, &core, &settings.hotkeys)
+        hotkeys::status_with(&core, &settings.hotkeys)
     })
     .await
 }
@@ -234,9 +228,9 @@ pub async fn load_production_hotkey_defaults(
             return Err(error);
         }
 
-        settings_store::emit_changed(app, &settings);
+        settings_store::emit_changed_with(core.host().as_ref(), &settings);
         hotkeys::emit_registration_failures_with(core.host().as_ref(), &failures);
-        hotkeys::status_with(app, &core, &settings.hotkeys)
+        hotkeys::status_with(&core, &settings.hotkeys)
     })
     .await
 }

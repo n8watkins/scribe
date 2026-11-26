@@ -13,7 +13,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::{
     core::Core,
-    hotkeys::{self, HotkeyAction},
+    hotkeys::{self, ActionTarget, HotkeyAction},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,29 +46,30 @@ impl RemoteCommand {
     /// (the shell's single-instance handler already drops it before then).
     pub fn run(self, app: &AppHandle) {
         match app.try_state::<Core>() {
-            Some(core) => self.run_with(app, core.inner()),
+            Some(core) => self.run_with(core.inner()),
             None => {
                 log::warn!("Ignored {self:?} from the command line: the engine is not ready yet")
             }
         }
     }
 
-    /// [`RemoteCommand::run`] on the engine handle. Transitional: the hotkey
-    /// actions queue dictation work with the app.
-    pub fn run_with(self, app: &AppHandle, core: &Core) {
+    /// [`RemoteCommand::run`] on the engine handle.
+    pub fn run_with(self, core: &Core) {
+        self.run_on(core);
+    }
+
+    /// [`RemoteCommand::run_with`] on what the hotkey edges act through, so
+    /// tests can run it without a `Core`.
+    fn run_on(self, target: &(impl ActionTarget + ?Sized)) {
         log::info!("Running {self:?} from the command line");
         match self {
-            Self::Toggle => hotkeys::run_action_with(app, core, HotkeyAction::ToggleDictation),
-            Self::HoldStart => hotkeys::handle_press_edge_with(app, core, HotkeyAction::HoldToTalk),
-            Self::HoldStop => {
-                hotkeys::handle_release_edge_with(app, core, HotkeyAction::HoldToTalk)
-            }
-            Self::PasteLast => {
-                hotkeys::run_action_with(app, core, HotkeyAction::PasteLastTranscript)
-            }
-            Self::Cancel => hotkeys::run_action_with(app, core, HotkeyAction::DiscardDictation),
+            Self::Toggle => hotkeys::run_action_with(target, HotkeyAction::ToggleDictation),
+            Self::HoldStart => hotkeys::handle_press_edge_with(target, HotkeyAction::HoldToTalk),
+            Self::HoldStop => hotkeys::handle_release_edge_with(target, HotkeyAction::HoldToTalk),
+            Self::PasteLast => hotkeys::run_action_with(target, HotkeyAction::PasteLastTranscript),
+            Self::Cancel => hotkeys::run_action_with(target, HotkeyAction::DiscardDictation),
             Self::Dashboard => {
-                if let Err(error) = core.host().open_dashboard(None) {
+                if let Err(error) = target.host().open_dashboard(None) {
                     log::warn!("Could not open the dashboard: {}", error.message);
                 }
             }
@@ -121,5 +122,55 @@ mod tests {
             None
         );
         assert_eq!(RemoteCommand::parse::<&str>(&[]), None);
+    }
+
+    /// Each command acts as its hotkey: the same `scribe:hotkey-action`
+    /// event (none for hold-stop), then the same queued intent.
+    #[test]
+    fn each_command_acts_as_its_hotkey() {
+        use crate::{dictation_worker::Intent, hotkeys::test_target::Recorder};
+
+        let cases: [(RemoteCommand, &[&str], Intent); 5] = [
+            (RemoteCommand::Toggle, &["toggle_dictation"], Intent::Toggle),
+            (
+                RemoteCommand::HoldStart,
+                &["hold_to_talk"],
+                Intent::StartHold,
+            ),
+            (RemoteCommand::HoldStop, &[], Intent::Stop),
+            (
+                RemoteCommand::PasteLast,
+                &["paste_last_transcript"],
+                Intent::PasteLast,
+            ),
+            (
+                RemoteCommand::Cancel,
+                &["discard_dictation"],
+                Intent::Cancel,
+            ),
+        ];
+        for (command, events, intent) in cases {
+            let target = Recorder::new();
+            command.run_on(&target);
+            assert_eq!(target.event_names(), events, "{command:?}");
+            assert_eq!(target.submitted(), [(intent, events.len())], "{command:?}");
+            assert!(target.host.calls().is_empty());
+            assert!(target.host.dashboard_calls().is_empty());
+        }
+    }
+
+    /// `dashboard` only opens the main window, exactly once, on its default
+    /// route (it never toggles): no event, no dictation work, and a missing
+    /// window is only logged.
+    #[test]
+    fn the_dashboard_command_only_opens_the_window() {
+        use crate::hotkeys::test_target::{DashboardCall, Recorder};
+
+        let target = Recorder::new();
+        RemoteCommand::Dashboard.run_on(&target);
+        assert_eq!(target.host.dashboard_calls(), [DashboardCall::Open(None)]);
+        assert!(target.host.events().is_empty());
+        assert!(target.submitted().is_empty());
+        assert!(target.host.calls().is_empty());
     }
 }
