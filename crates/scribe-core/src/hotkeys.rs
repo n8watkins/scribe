@@ -1847,10 +1847,86 @@ mod wayland {
     }
 }
 
+/// An [`ActionTarget`] for tests: a `RecordingHost`, a hotkey runtime, and
+/// the intents queued, each with how many events the host had been sent
+/// when it was queued (so a test can pin an event before its intent).
+#[cfg(test)]
+pub(crate) mod test_target {
+    use std::sync::Mutex;
+
+    use super::{ActionTarget, HotkeyRuntime};
+    use crate::{
+        dictation_worker::Intent,
+        host::{Flavor, Host, RecordingHost},
+        paths::Paths,
+    };
+
+    pub(crate) struct Recorder {
+        pub(crate) host: RecordingHost,
+        pub(crate) runtime: HotkeyRuntime,
+        pub(crate) dashboard_toggles: bool,
+        submitted: Mutex<Vec<(Intent, usize)>>,
+    }
+
+    impl Recorder {
+        pub(crate) fn new() -> Self {
+            Self {
+                host: RecordingHost::new(
+                    Paths::from_parts("/d".into(), "/c".into(), "/l".into(), None, None),
+                    Flavor::Stable,
+                ),
+                runtime: HotkeyRuntime::default(),
+                dashboard_toggles: true,
+                submitted: Mutex::new(Vec::new()),
+            }
+        }
+
+        /// The intents queued so far, oldest first, each with the number of
+        /// events sent before it.
+        pub(crate) fn submitted(&self) -> Vec<(Intent, usize)> {
+            self.submitted.lock().unwrap().clone()
+        }
+
+        /// The `scribe:hotkey-action` payloads sent so far (and the names
+        /// of any other events), oldest first.
+        pub(crate) fn event_names(&self) -> Vec<String> {
+            self.host
+                .events()
+                .iter()
+                .map(|event| match event.name() {
+                    "scribe:hotkey-action" => event.payload().as_str().unwrap().to_string(),
+                    other => other.to_string(),
+                })
+                .collect()
+        }
+    }
+
+    impl ActionTarget for Recorder {
+        fn host(&self) -> &dyn Host {
+            &self.host
+        }
+
+        fn runtime(&self) -> &HotkeyRuntime {
+            &self.runtime
+        }
+
+        fn submit(&self, intent: Intent) {
+            let sent = self.host.events().len();
+            self.submitted.lock().unwrap().push((intent, sent));
+        }
+
+        fn dashboard_hotkey_toggles(&self) -> bool {
+            self.dashboard_toggles
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::{Failing, HostCall};
     use crate::settings::AppSettings;
+    use test_target::Recorder;
 
     #[test]
     fn transform_selection_is_only_registered_with_local_ai_on() {
@@ -2168,5 +2244,505 @@ mod tests {
         assert_ne!(prod.open_dashboard, dev.open_dashboard);
         assert_ne!(prod.discard_dictation, dev.discard_dictation);
         assert_ne!(prod.transform_selection, dev.transform_selection);
+    }
+
+    // The hotkey edges, through a recorder standing in for the `Core`.
+
+    /// Hold to talk sends its event before starting, and stops without one.
+    #[test]
+    fn hold_to_talk_announces_then_starts_and_stops_silently() {
+        let target = Recorder::new();
+
+        handle_press_edge_with(&target, HotkeyAction::HoldToTalk);
+        assert_eq!(target.event_names(), ["hold_to_talk"]);
+        assert_eq!(target.submitted(), [(Intent::StartHold, 1)]);
+
+        handle_release_edge_with(&target, HotkeyAction::HoldToTalk);
+        assert_eq!(target.event_names(), ["hold_to_talk"]);
+        assert_eq!(
+            target.submitted(),
+            [(Intent::StartHold, 1), (Intent::Stop, 1)]
+        );
+        assert!(target.host.calls().is_empty());
+    }
+
+    /// A single-shot action fires on the edge its trigger selects, once.
+    #[test]
+    fn single_shot_actions_fire_on_their_trigger_edge_only() {
+        let target = Recorder::new();
+        target.runtime.store_triggers(HashMap::from([
+            (HotkeyAction::PasteLastTranscript, TriggerEdge::Press),
+            (HotkeyAction::DiscardDictation, TriggerEdge::Release),
+        ]));
+
+        handle_press_edge_with(&target, HotkeyAction::PasteLastTranscript);
+        handle_release_edge_with(&target, HotkeyAction::PasteLastTranscript);
+        assert_eq!(target.event_names(), ["paste_last_transcript"]);
+        assert_eq!(target.submitted(), [(Intent::PasteLast, 1)]);
+
+        handle_press_edge_with(&target, HotkeyAction::DiscardDictation);
+        assert_eq!(target.event_names(), ["paste_last_transcript"]);
+        handle_release_edge_with(&target, HotkeyAction::DiscardDictation);
+        assert_eq!(
+            target.event_names(),
+            ["paste_last_transcript", "discard_dictation"]
+        );
+        assert_eq!(
+            target.submitted(),
+            [(Intent::PasteLast, 1), (Intent::Cancel, 2)]
+        );
+    }
+
+    /// Each dictation action sends its `scribe:hotkey-action` event, then
+    /// queues its intent. Hold to talk is not a single-shot action: as
+    /// before, it still sends its event but queues nothing.
+    #[test]
+    fn each_action_sends_its_event_then_queues_its_intent() {
+        let target = Recorder::new();
+        let actions = [
+            (HotkeyAction::ToggleDictation, Intent::Toggle),
+            (HotkeyAction::PasteLastTranscript, Intent::PasteLast),
+            (HotkeyAction::DiscardDictation, Intent::Cancel),
+            (HotkeyAction::TransformSelection, Intent::ToggleTransform),
+        ];
+        for (action, _) in actions {
+            run_action_with(&target, action);
+        }
+
+        let events = target.host.events();
+        assert_eq!(events.len(), actions.len(), "one event per action");
+        assert!(events
+            .iter()
+            .all(|event| event.name() == "scribe:hotkey-action"));
+        for (index, (action, intent)) in actions.into_iter().enumerate() {
+            assert_eq!(target.event_names()[index], action.event_name());
+            assert_eq!(target.submitted()[index], (intent, index + 1));
+        }
+        assert_eq!(target.submitted().len(), actions.len());
+
+        run_action_with(&target, HotkeyAction::HoldToTalk);
+        assert_eq!(target.event_names().len(), actions.len() + 1);
+        assert_eq!(target.event_names().last().unwrap(), "hold_to_talk");
+        assert_eq!(target.submitted().len(), actions.len());
+        assert!(target.host.calls().is_empty());
+    }
+
+    /// The toggle clears its pressed mark, so a key that sends no release
+    /// still toggles on its next press.
+    #[test]
+    fn the_toggle_action_clears_its_pressed_mark() {
+        let target = Recorder::new();
+        assert!(target
+            .runtime
+            .mark_pressed_once(HotkeyAction::ToggleDictation));
+        run_action_with(&target, HotkeyAction::ToggleDictation);
+        assert!(target
+            .runtime
+            .mark_pressed_once(HotkeyAction::ToggleDictation));
+    }
+
+    /// Open Dashboard queues no dictation work; a dashboard the host can't
+    /// show comes back as one `audio://recording-error`, after the action's
+    /// event, whether the hotkey toggles or only opens.
+    #[test]
+    fn open_dashboard_reports_a_missing_window_as_a_recording_error() {
+        for toggles in [true, false] {
+            let mut target = Recorder::new();
+            target.dashboard_toggles = toggles;
+
+            run_action_with(&target, HotkeyAction::OpenDashboard);
+
+            let events = target.host.events();
+            assert_eq!(events.len(), 2);
+            assert_eq!(events[0].name(), "scribe:hotkey-action");
+            assert_eq!(events[0].payload(), serde_json::json!("open_dashboard"));
+            assert_eq!(events[1].name(), "audio://recording-error");
+            let missing = crate::host::no_main_window();
+            assert_eq!(
+                events[1].payload(),
+                serde_json::to_value(crate::audio::RecordingErrorEvent {
+                    code: missing.code,
+                    message: missing.message,
+                })
+                .unwrap()
+            );
+            assert!(target.submitted().is_empty());
+        }
+    }
+
+    /// Press-mode toggle key: its event, then the toggle.
+    #[test]
+    fn the_toggle_key_in_press_mode_announces_then_toggles() {
+        let target = Recorder::new();
+        on_toggle_key_press_with(&target);
+        assert_eq!(target.event_names(), ["toggle_dictation"]);
+        assert_eq!(target.submitted(), [(Intent::Toggle, 1)]);
+    }
+
+    /// The note chord: `note_dictation`, then a note toggle.
+    #[test]
+    fn the_note_chord_announces_then_toggles_a_note() {
+        let target = Recorder::new();
+        handle_note_chord_with(&target);
+        assert_eq!(target.event_names(), ["note_dictation"]);
+        assert_eq!(target.submitted(), [(Intent::ToggleNote, 1)]);
+        assert!(target.host.calls().is_empty());
+    }
+
+    // Registering through the host.
+
+    fn plugin_shortcut(text: &str) -> HotKey {
+        expect_plugin(text)
+    }
+
+    /// Every enabled binding with a key is registered with the host, in
+    /// action order, and found again by its shortcut id; nothing is sent.
+    #[test]
+    fn bindings_are_registered_through_the_host_in_action_order() {
+        let host = recording_host();
+        let runtime = HotkeyRuntime::default();
+        let hotkeys = keyed_hotkeys();
+
+        let registration = register_bindings(&host, &runtime, &hotkeys);
+
+        assert!(registration.failures.is_empty());
+        assert!(registration.chord_bindings.is_empty());
+        assert_eq!(registration.toggle_vk, None, "Ctrl+Alt+T has modifiers");
+        let enabled = HOTKEY_ACTIONS
+            .into_iter()
+            .filter(|action| *action != HotkeyAction::TransformSelection)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            host.calls(),
+            enabled
+                .iter()
+                .map(|action| HostCall::RegisterShortcut(plugin_shortcut(
+                    action.shortcut(&hotkeys)
+                )))
+                .collect::<Vec<_>>()
+        );
+        for action in enabled {
+            let shortcut = plugin_shortcut(action.shortcut(&hotkeys));
+            assert_eq!(runtime.action_for(&shortcut), Some(action));
+        }
+        assert_eq!(
+            runtime.trigger_for(HotkeyAction::ToggleDictation),
+            hotkeys.toggle_dictation_trigger
+        );
+        assert!(host.events().is_empty());
+
+        // With Local AI on, Transform Selection is registered last.
+        swap_transform_enabled(&runtime, true);
+        let host = recording_host();
+        register_bindings(&host, &runtime, &hotkeys);
+        assert_eq!(
+            host.calls().last(),
+            Some(&HostCall::RegisterShortcut(plugin_shortcut(
+                &hotkeys.transform_selection
+            )))
+        );
+    }
+
+    /// A host that refuses every shortcut: each binding fails with today's
+    /// message (not the host's error text), the failures are kept for the
+    /// Hotkeys page, and announcing them sends one event.
+    #[test]
+    fn a_refused_registration_fails_with_todays_message() {
+        let host = recording_host();
+        host.fail(Failing::RegisterShortcut);
+        let runtime = HotkeyRuntime::default();
+        let hotkeys = keyed_hotkeys();
+
+        let registration = register_bindings(&host, &runtime, &hotkeys);
+
+        let failed = registration
+            .failures
+            .iter()
+            .map(|failure| failure.action)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            failed,
+            [
+                HotkeyAction::HoldToTalk,
+                HotkeyAction::ToggleDictation,
+                HotkeyAction::PasteLastTranscript,
+                HotkeyAction::OpenDashboard,
+                HotkeyAction::DiscardDictation,
+            ]
+        );
+        for failure in &registration.failures {
+            assert_eq!(failure.shortcut, failure.action.shortcut(&hotkeys));
+            assert_eq!(
+                failure.message,
+                CommandError::hotkey_registration_failed(&failure.shortcut).message
+            );
+            let shortcut = plugin_shortcut(&failure.shortcut);
+            assert_eq!(runtime.action_for(&shortcut), None);
+        }
+        assert!(host.events().is_empty(), "registering sends nothing");
+
+        let status = status_in(&host, &runtime, &hotkeys);
+        let toggle = binding(&status, HotkeyAction::ToggleDictation);
+        assert!(!toggle.registered);
+        assert_eq!(
+            toggle.error,
+            Some(CommandError::hotkey_registration_failed(&hotkeys.toggle_dictation).message)
+        );
+
+        emit_registration_failures_with(&host, &registration.failures);
+        let events = host.events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].payload(),
+            serde_json::to_value(RegistrationFailedEvent {
+                failures: &registration.failures,
+            })
+            .unwrap()
+        );
+    }
+
+    /// A shortcut another registration already holds fails alone; the other
+    /// bindings stay registered.
+    #[test]
+    fn a_taken_shortcut_fails_alone() {
+        let host = recording_host();
+        let runtime = HotkeyRuntime::default();
+        let hotkeys = keyed_hotkeys();
+        let taken = plugin_shortcut(&hotkeys.paste_last_transcript);
+        host.register_shortcut(taken).unwrap();
+
+        let registration = register_bindings(&host, &runtime, &hotkeys);
+
+        assert_eq!(registration.failures.len(), 1);
+        assert_eq!(
+            registration.failures[0].action,
+            HotkeyAction::PasteLastTranscript
+        );
+        let status = status_in(&host, &runtime, &hotkeys);
+        assert!(binding(&status, HotkeyAction::ToggleDictation).registered);
+        assert!(binding(&status, HotkeyAction::HoldToTalk).registered);
+    }
+
+    /// A modifier-only chord never reaches the host: the Windows chord
+    /// watcher takes it, and elsewhere it fails with the platform's reason.
+    #[test]
+    fn modifier_only_chords_never_reach_the_host() {
+        let host = recording_host();
+        let runtime = HotkeyRuntime::default();
+        let hotkeys = HotkeySettings {
+            hold_to_talk: "Ctrl+Shift".to_string(),
+            ..keyed_hotkeys()
+        };
+
+        let registration = register_bindings(&host, &runtime, &hotkeys);
+
+        let keyed = [
+            HotkeyAction::ToggleDictation,
+            HotkeyAction::PasteLastTranscript,
+            HotkeyAction::OpenDashboard,
+            HotkeyAction::DiscardDictation,
+        ];
+        assert_eq!(
+            host.calls(),
+            keyed
+                .iter()
+                .map(|action| HostCall::RegisterShortcut(plugin_shortcut(
+                    action.shortcut(&hotkeys)
+                )))
+                .collect::<Vec<_>>()
+        );
+        if cfg!(windows) {
+            assert!(registration.failures.is_empty());
+            assert_eq!(
+                registration.chord_bindings,
+                [(expect_chord("Ctrl+Shift"), HotkeyAction::HoldToTalk)]
+            );
+        } else {
+            assert!(registration.chord_bindings.is_empty());
+            assert_eq!(registration.failures.len(), 1);
+            assert_eq!(
+                registration.failures[0].message,
+                format!(
+                    "Could not register Ctrl+Shift. {}",
+                    modifier_only_unsupported()
+                )
+            );
+        }
+    }
+
+    /// While the desktop's portal owns the hotkeys nothing is grabbed, the
+    /// bindings are cleared, and the watchers get nothing to poll.
+    #[test]
+    fn a_portal_owned_set_grabs_nothing() {
+        let host = recording_host();
+        let runtime = HotkeyRuntime::default();
+        let hotkeys = keyed_hotkeys();
+        register_bindings(&host, &runtime, &hotkeys);
+        runtime.portal_owns_hotkeys.store(true, Ordering::SeqCst);
+        let host = recording_host();
+
+        let registration = register_bindings(&host, &runtime, &hotkeys);
+
+        assert!(host.calls().is_empty());
+        assert!(registration.failures.is_empty());
+        assert!(registration.chord_bindings.is_empty());
+        assert_eq!(registration.toggle_vk, None);
+        let toggle = plugin_shortcut(&hotkeys.toggle_dictation);
+        assert_eq!(runtime.action_for(&toggle), None);
+    }
+
+    /// Replacing a set releases only what the host holds (it asks first,
+    /// since the plugin may refuse an unheld shortcut), then registers the
+    /// next set.
+    #[test]
+    fn replacing_releases_only_held_shortcuts_then_registers_the_next_set() {
+        let host = recording_host();
+        let runtime = HotkeyRuntime::default();
+        let previous = keyed_hotkeys();
+        let taken = plugin_shortcut(&previous.open_dashboard);
+        host.register_shortcut(taken).unwrap();
+        register_bindings(&host, &runtime, &previous);
+        // Something else let go of Open Dashboard's keys meanwhile.
+        host.unregister_shortcut(taken).unwrap();
+        let next = HotkeySettings {
+            toggle_dictation: "Ctrl+Alt+Y".to_string(),
+            ..previous.clone()
+        };
+        let before = host.calls().len();
+
+        unregister_hotkey_set(&host, &previous);
+        let registration = register_bindings(&host, &runtime, &next);
+
+        let calls = host.calls()[before..].to_vec();
+        let released = [
+            HotkeyAction::HoldToTalk,
+            HotkeyAction::ToggleDictation,
+            HotkeyAction::PasteLastTranscript,
+            HotkeyAction::DiscardDictation,
+        ];
+        let registered = [
+            HotkeyAction::HoldToTalk,
+            HotkeyAction::ToggleDictation,
+            HotkeyAction::PasteLastTranscript,
+            HotkeyAction::OpenDashboard,
+            HotkeyAction::DiscardDictation,
+        ];
+        let expected = released
+            .iter()
+            .map(|action| HostCall::UnregisterShortcut(plugin_shortcut(action.shortcut(&previous))))
+            .chain(
+                registered.iter().map(|action| {
+                    HostCall::RegisterShortcut(plugin_shortcut(action.shortcut(&next)))
+                }),
+            )
+            .collect::<Vec<_>>();
+        assert_eq!(calls, expected);
+        assert!(registration.failures.is_empty());
+        assert_eq!(
+            runtime.action_for(&plugin_shortcut("Ctrl+Alt+Y")),
+            Some(HotkeyAction::ToggleDictation)
+        );
+        assert!(host.events().is_empty());
+    }
+
+    /// A release the host refuses is skipped; the others still happen.
+    #[test]
+    fn a_refused_release_does_not_stop_the_others() {
+        let host = recording_host();
+        let runtime = HotkeyRuntime::default();
+        let hotkeys = keyed_hotkeys();
+        register_bindings(&host, &runtime, &hotkeys);
+        host.fail(Failing::UnregisterShortcut);
+        let before = host.calls().len();
+
+        unregister_hotkey_set(&host, &hotkeys);
+
+        let released = host.calls()[before..]
+            .iter()
+            .filter(|call| matches!(call, HostCall::UnregisterShortcut(_)))
+            .count();
+        assert_eq!(released, 5, "every held shortcut was asked for");
+    }
+
+    /// The Hotkeys page asks the host what it holds.
+    #[test]
+    fn the_status_asks_the_host_what_it_holds() {
+        let host = recording_host();
+        let runtime = HotkeyRuntime::default();
+        let hotkeys = keyed_hotkeys();
+        let status = status_in(&host, &runtime, &hotkeys);
+        assert!(!binding(&status, HotkeyAction::ToggleDictation).registered);
+
+        register_bindings(&host, &runtime, &hotkeys);
+        let status = status_in(&host, &runtime, &hotkeys);
+        assert!(binding(&status, HotkeyAction::ToggleDictation).registered);
+        assert_eq!(binding(&status, HotkeyAction::ToggleDictation).error, None);
+        assert!(host.events().is_empty());
+    }
+
+    // The note chord's grab of Q.
+
+    fn note_key() -> HotKey {
+        HotKey::new(None, Code::KeyQ)
+    }
+
+    /// During a toggle hold Q is grabbed and kept as the note key.
+    #[test]
+    fn the_note_chord_grabs_q_during_a_hold() {
+        let host = recording_host();
+        let runtime = HotkeyRuntime::default();
+        runtime.toggle_held.store(true, Ordering::SeqCst);
+
+        arm_note_chord_in(&host, &runtime);
+
+        assert_eq!(host.calls(), [HostCall::RegisterShortcut(note_key())]);
+        assert!(runtime.is_note_key(note_key().id()));
+        assert!(host.is_shortcut_registered(note_key()));
+        assert!(host.events().is_empty());
+    }
+
+    /// A tap that ended before the grab finished lets Q go at once.
+    #[test]
+    fn the_note_chord_lets_q_go_when_the_hold_already_ended() {
+        let host = recording_host();
+        let runtime = HotkeyRuntime::default();
+
+        arm_note_chord_in(&host, &runtime);
+
+        assert_eq!(
+            host.calls(),
+            [
+                HostCall::RegisterShortcut(note_key()),
+                HostCall::UnregisterShortcut(note_key())
+            ]
+        );
+        assert!(!runtime.is_note_key(note_key().id()));
+        assert!(!host.is_shortcut_registered(note_key()));
+    }
+
+    /// Q taken by another app: the note chord is unavailable for this hold,
+    /// nothing is kept and nothing is sent.
+    #[test]
+    fn a_refused_note_grab_leaves_no_note_key() {
+        let host = recording_host();
+        host.fail(Failing::RegisterShortcut);
+        let runtime = HotkeyRuntime::default();
+        runtime.toggle_held.store(true, Ordering::SeqCst);
+
+        arm_note_chord_in(&host, &runtime);
+
+        assert_eq!(host.calls(), [HostCall::RegisterShortcut(note_key())]);
+        assert!(!runtime.is_note_key(note_key().id()));
+        assert!(host.events().is_empty());
+    }
+
+    /// Releasing Q asks the host once, and a refusal is only logged.
+    #[test]
+    fn releasing_the_note_key_asks_the_host_once() {
+        let host = recording_host();
+        host.fail(Failing::UnregisterShortcut);
+        release_note_key(&host, note_key());
+        assert_eq!(host.calls(), [HostCall::UnregisterShortcut(note_key())]);
+        assert!(host.events().is_empty());
     }
 }

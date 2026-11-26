@@ -123,4 +123,48 @@ mod tests {
         );
         assert_eq!(RemoteCommand::parse::<&str>(&[]), None);
     }
+
+    /// Each command acts as its hotkey: the same `scribe:hotkey-action`
+    /// event (none for hold-stop), then the same queued intent.
+    #[test]
+    fn each_command_acts_as_its_hotkey() {
+        use crate::{dictation_worker::Intent, hotkeys::test_target::Recorder};
+
+        let cases: [(RemoteCommand, &[&str], Intent); 5] = [
+            (RemoteCommand::Toggle, &["toggle_dictation"], Intent::Toggle),
+            (
+                RemoteCommand::HoldStart,
+                &["hold_to_talk"],
+                Intent::StartHold,
+            ),
+            (RemoteCommand::HoldStop, &[], Intent::Stop),
+            (
+                RemoteCommand::PasteLast,
+                &["paste_last_transcript"],
+                Intent::PasteLast,
+            ),
+            (
+                RemoteCommand::Cancel,
+                &["discard_dictation"],
+                Intent::Cancel,
+            ),
+        ];
+        for (command, events, intent) in cases {
+            let target = Recorder::new();
+            command.run_on(&target);
+            assert_eq!(target.event_names(), events, "{command:?}");
+            assert_eq!(target.submitted(), [(intent, events.len())], "{command:?}");
+            assert!(target.host.calls().is_empty());
+        }
+    }
+
+    /// `dashboard` only opens the main window: no event, no dictation work,
+    /// and a missing window is only logged.
+    #[test]
+    fn the_dashboard_command_only_opens_the_window() {
+        let target = crate::hotkeys::test_target::Recorder::new();
+        RemoteCommand::Dashboard.run_on(&target);
+        assert!(target.host.events().is_empty());
+        assert!(target.submitted().is_empty());
+    }
 }
