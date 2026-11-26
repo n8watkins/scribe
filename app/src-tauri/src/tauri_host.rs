@@ -29,6 +29,19 @@ pub struct TauriHost {
 impl TauriHost {
     pub fn new(app: AppHandle, paths: Paths) -> Self {
         let flavor = Flavor::from_identifier(&app.config().identifier);
+        // The startup entry is written under the product name (the autostart
+        // plugin uses `package_info().name`) but read under the flavour's
+        // (`autostart::read_registration`, from the identifier); they must
+        // be the same name. Checked in every build, like the folders.
+        let product_name = &app.package_info().name;
+        if product_name != flavor.product_name() {
+            log::error!(
+                "The app's product name {:?} differs from its flavour's {:?}",
+                product_name,
+                flavor.product_name()
+            );
+        }
+        debug_assert_eq!(product_name, flavor.product_name());
         Self { app, paths, flavor }
     }
 }
@@ -227,5 +240,35 @@ mod tests {
                 "a Tauri config overrides the app folders"
             );
         }
+    }
+
+    /// Only the two base configs name the product and the identifier, so
+    /// every build's product name is its flavour's (`TauriHost::new` checks
+    /// it at run time). Reads the folder, so a new overlay is checked too.
+    #[test]
+    fn only_the_base_configs_set_the_product_name_and_identifier() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut overlays = 0;
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if !(name.starts_with("tauri") && name.ends_with(".json")) {
+                continue;
+            }
+            let config: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            if name == "tauri.conf.json" || name == "tauri.dev-flavor.conf.json" {
+                assert!(config["productName"].is_string(), "{name}");
+                assert!(config["identifier"].is_string(), "{name}");
+                continue;
+            }
+            overlays += 1;
+            assert!(
+                config.get("productName").is_none(),
+                "{name} sets productName"
+            );
+            assert!(config.get("identifier").is_none(), "{name} sets identifier");
+        }
+        assert!(overlays >= 4, "found only {overlays} config overlays");
     }
 }
