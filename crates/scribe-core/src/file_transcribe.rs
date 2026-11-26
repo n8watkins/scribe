@@ -13,7 +13,6 @@ use crate::{
     core::Core,
     error::CommandError,
     model_manager,
-    output::core_for,
     whisper::{self, WhisperRequest},
 };
 
@@ -34,16 +33,11 @@ pub struct TranscribeFileResult {
 /// Transcribes a user-provided audio/video file with whisper-cli directly
 /// (never the warm server, which is tuned for short dictation segments).
 /// Long files are expected; the caller runs this on a worker thread.
-pub fn transcribe_file(app: &AppHandle, path: &str) -> Result<TranscribeFileResult, CommandError> {
-    let core = core_for(app, "transcribe the file")?;
-    transcribe_file_with(app, &core, path)
-}
-
-/// [`transcribe_file`] on the engine. Still takes the app for
-/// `whisper::transcribe_with_output_prefix` (models): that lane offers
-/// `transcribe_with_output_prefix_with`, but its `pub(crate)` wrapper has no
-/// other caller, so switching here would leave the wrapper unused in a file
-/// this lane may not change.
+///
+/// Still takes the app for `whisper::transcribe_with_output_prefix` (models):
+/// switching to its `_with` version would leave that `pub(crate)` wrapper
+/// without a caller in a file this lane may not change, so the switch and
+/// the wrapper's deletion wait for P1-4 step 4.
 pub fn transcribe_file_with(
     app: &AppHandle,
     core: &Core,
