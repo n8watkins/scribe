@@ -883,23 +883,6 @@ class FakeLocalAi:
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
 
-# The arguments wry gives WebView2 when the app sets none (wry's webview2
-# module); the debugging port is added to them, not put in their place.
-WRY_DEFAULT_BROWSER_ARGS = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
-WEBVIEW2_ARGS_POLICY = r"Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments"
-
-
-def set_webview2_browser_args(exe_name: str, args: str) -> None:
-    """WebView2's loader override for one executable's browser arguments (the
-    per-user policy key, read before the app's own arguments). The
-    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS variable alone is not used when the
-    app passes arguments itself, which wry always does."""
-    import winreg
-
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, WEBVIEW2_ARGS_POLICY) as key:
-        winreg.SetValueEx(key, exe_name, 0, winreg.REG_SZ, args)
-
-
 def webview2_command_lines() -> str:
     """The running WebView2 browser processes' command lines, for a failure."""
     try:
@@ -919,16 +902,11 @@ def webview2_command_lines() -> str:
         return f"(could not list them: {error})"
 
 
-def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-
-
 class AppCommands:
     """Calls the app's own commands (the ones the Hotkeys page calls) inside
     its main WebView2 window, through WebView2's remote debugging port and the
-    Chrome DevTools Protocol. A minimal WebSocket client, standard library
+    Chrome DevTools Protocol. The port is opened by the test build's config
+    (webview_debug_config.py). A minimal WebSocket client, standard library
     only."""
 
     def __init__(self, port: int) -> None:
@@ -1142,13 +1120,13 @@ class StateStream:
 
 
 class Scribe:
-    def __init__(self, exe: Path, clip_path: Path, out: Path) -> None:
+    def __init__(self, exe: Path, clip_path: Path, out: Path, debug_port: int) -> None:
         self.exe = exe
         self.clip_path = clip_path
         self.out = out
         self.process: subprocess.Popen | None = None
         self.monitor: SpeechProcessMonitor | None = None
-        self.debug_port = 0
+        self.debug_port = debug_port
 
     def self_test(self, clip: Path) -> dict:
         """The release smoke test's mode on a fresh profile: downloads the
@@ -1163,16 +1141,7 @@ class Scribe:
         return result
 
     def launch(self) -> None:
-        # WebView2's remote debugging port, so the runner can call the app's
-        # own commands (AppCommands) the way the dashboard does.
-        self.debug_port = free_port()
-        browser_args = f"{WRY_DEFAULT_BROWSER_ARGS} --remote-debugging-port={self.debug_port}"
-        set_webview2_browser_args(self.exe.name, browser_args)
-        env = dict(
-            os.environ,
-            SCRIBE_E2E_AUDIO_WAV=str(self.clip_path),
-            WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=browser_args,
-        )
+        env = dict(os.environ, SCRIBE_E2E_AUDIO_WAV=str(self.clip_path))
         self.process = subprocess.Popen([str(self.exe)], env=env)
         pid = self.process.pid
         if self.monitor is not None:
@@ -1313,7 +1282,7 @@ class Run:
         self.work.mkdir(exist_ok=True)
         self.fixtures = Path(args.fixtures)
         self.clip_path = self.work / "current.wav"
-        self.app = Scribe(Path(args.exe), self.clip_path, self.out)
+        self.app = Scribe(Path(args.exe), self.clip_path, self.out, args.webview_debug_port)
         self.clipboard = Clipboard()
         self.ai = FakeLocalAi()
         self.results: list[tuple[str, bool, str, float]] = []
@@ -2237,6 +2206,12 @@ def main() -> int:
     parser.add_argument("--exe", required=True, help="the Scribe Dev executable built with --features e2e-audio")
     parser.add_argument("--fixtures", required=True, help="app/src-tauri/tests/fixtures")
     parser.add_argument("--out", required=True, help="where results, screenshots and work files go")
+    parser.add_argument(
+        "--webview-debug-port",
+        type=int,
+        default=9222,
+        help="the WebView2 remote debugging port the test build opens (webview_debug_config.py)",
+    )
     return Run(parser.parse_args()).run()
 
 

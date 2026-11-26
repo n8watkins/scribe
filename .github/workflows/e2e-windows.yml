@@ -38,6 +38,7 @@ env:
   WHISPER_CPP_VERSION: v1.9.1
   WHISPER_CPP_COMMIT: f049fff95a089aa9969deb009cdd4892b3e74916
   E2E_OUT: ${{ github.workspace }}\e2e-out
+  E2E_WEBVIEW2_DEBUG_PORT: "9222"
 
 jobs:
   e2e:
@@ -170,9 +171,16 @@ jobs:
         working-directory: app
         shell: pwsh
         run: |
+          # WebView2's remote debugging port, so run.py can call the app's own
+          # hotkey commands inside the dashboard (webview_debug_config.py says why
+          # this has to be in the build).
+          $debugConfig = "$env:RUNNER_TEMP\tauri.e2e-webview-debug.conf.json"
+          python e2e/windows/webview_debug_config.py --conf src-tauri/tauri.conf.json --port $env:E2E_WEBVIEW2_DEBUG_PORT --out $debugConfig
+          if ($LASTEXITCODE -ne 0) { throw "Writing the WebView2 debugging config failed" }
           npm run tauri -- build --no-bundle --features e2e-audio `
             --config src-tauri/tauri.dev-flavor.conf.json `
-            --config src-tauri/tauri.e2e.conf.json
+            --config src-tauri/tauri.e2e.conf.json `
+            --config $debugConfig
           if ($LASTEXITCODE -ne 0) { throw "The test build failed" }
           $exe = Get-Item "../target/release/Scribe Dev.exe"
           # The release workflow proves shipped builds lack the test input by
@@ -190,7 +198,7 @@ jobs:
         run: |
           python --version
           $env:SCRIBE_MODEL_DIR = "$env:RUNNER_TEMP\parakeet-model"
-          python app/e2e/windows/run.py --exe "$env:SCRIBE_EXE" --fixtures app/src-tauri/tests/fixtures --out "$env:E2E_OUT"
+          python app/e2e/windows/run.py --exe "$env:SCRIBE_EXE" --fixtures app/src-tauri/tests/fixtures --out "$env:E2E_OUT" --webview-debug-port $env:E2E_WEBVIEW2_DEBUG_PORT
           if ($LASTEXITCODE -ne 0) { throw "End-to-end scenarios failed" }
 
       - name: Collect app logs
