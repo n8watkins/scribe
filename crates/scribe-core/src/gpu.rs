@@ -20,6 +20,8 @@
 use serde::Serialize;
 use tauri::AppHandle;
 
+use crate::host::Host;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VulkanDevice {
@@ -147,18 +149,31 @@ static PROBE_CACHE: std::sync::Mutex<Option<GpuProbe>> = std::sync::Mutex::new(N
 /// Probe the Vulkan GPUs, using the session cache. Blocking (loads a model);
 /// callers should run it off the main thread.
 pub fn probe(app: &AppHandle) -> GpuProbe {
+    match tauri::Manager::try_state::<crate::core::Core>(app) {
+        Some(core) => probe_with(core.host().as_ref(), Some(core.warm_transcriber())),
+        None => {
+            log::warn!("gpu::probe ran before the engine was ready");
+            probe_from_stderr("", false)
+        }
+    }
+}
+
+/// [`probe`] with the resources and models of `host`. On Windows the probe
+/// loads a model in whisper-cli, so it runs through `warm` (when given) to
+/// never sit next to the resident one.
+pub fn probe_with(
+    host: &dyn Host,
+    warm: Option<&crate::whisper_server::WarmTranscriber>,
+) -> GpuProbe {
     if let Ok(guard) = PROBE_CACHE.lock() {
         if let Some(cached) = guard.as_ref() {
             return cached.clone();
         }
     }
-    // On Windows the probe loads a model in whisper-cli: never next to the
-    // resident one.
-    let warm = tauri::Manager::try_state::<crate::whisper_server::WarmTranscriber>(app)
-        .filter(|_| cfg!(windows));
+    let warm = warm.filter(|_| cfg!(windows));
     let result = match warm {
-        Some(warm) => warm.run_exclusive(|| probe_uncached(app)),
-        None => probe_uncached(app),
+        Some(warm) => warm.run_exclusive(|| probe_uncached(host)),
+        None => probe_uncached(host),
     };
     if result.probed {
         if let Ok(mut guard) = PROBE_CACHE.lock() {
@@ -172,14 +187,15 @@ pub fn probe(app: &AppHandle) -> GpuProbe {
 /// Vulkan device listing from its stderr. Windows-only (the bundled binaries are
 /// Windows); elsewhere it reports "not probed".
 #[cfg(windows)]
-fn probe_uncached(app: &AppHandle) -> GpuProbe {
+fn probe_uncached(host: &dyn Host) -> GpuProbe {
     use std::process::Command;
 
-    let model_path = match crate::model_manager::smallest_downloaded_model_path(app) {
+    let model_path = match crate::model_manager::smallest_downloaded_model_path_with(host) {
         Some(path) => path,
         None => return probe_from_stderr("", false),
     };
-    let executable = match crate::whisper::resolve_bundled_executable(app, "whisper-cli.exe") {
+    let executable = match crate::whisper::resolve_bundled_executable_with(host, "whisper-cli.exe")
+    {
         Ok(path) => path,
         Err(_) => return probe_from_stderr("", false),
     };
@@ -211,7 +227,7 @@ fn probe_uncached(app: &AppHandle) -> GpuProbe {
 }
 
 #[cfg(not(windows))]
-fn probe_uncached(_app: &AppHandle) -> GpuProbe {
+fn probe_uncached(_host: &dyn Host) -> GpuProbe {
     // The bundled whisper binaries are Windows-only, so there's nothing to probe
     // on other platforms (dev/CI on Linux).
     probe_from_stderr("", false)
