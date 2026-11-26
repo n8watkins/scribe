@@ -7,11 +7,12 @@ use std::{
     },
 };
 
+use global_hotkey::{
+    hotkey::{Code, HotKey},
+    GlobalHotKeyEvent, HotKeyState,
+};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
-#[cfg(windows)]
-use tauri_plugin_global_shortcut::Code;
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 
 use crate::{
     audio,
@@ -220,16 +221,7 @@ pub(crate) struct RegistrationFailedEvent<'a> {
 }
 
 /// Notifies the frontend that one or more hotkey bindings could not be
-/// registered. No-op when `failures` is empty. Before the shell has
-/// installed its host it only logs.
-pub fn emit_registration_failures(_app: &AppHandle, failures: &[HotkeyRegistrationFailure]) {
-    match crate::shell::host() {
-        Some(host) => emit_registration_failures_with(host.as_ref(), failures),
-        None => log::warn!("Could not report hotkey registration failures: no host yet"),
-    }
-}
-
-/// [`emit_registration_failures`] through the host.
+/// registered. No-op when `failures` is empty.
 pub fn emit_registration_failures_with(host: &dyn Host, failures: &[HotkeyRegistrationFailure]) {
     if failures.is_empty() {
         return;
@@ -296,7 +288,7 @@ impl ModifierChord {
 /// modifier-only chord handled by the Windows chord watcher.
 #[derive(Debug, Clone, Copy)]
 pub enum ParsedShortcut {
-    Plugin(Shortcut),
+    Plugin(HotKey),
     ModifierChord(ModifierChord),
 }
 
@@ -348,7 +340,7 @@ pub struct HotkeyRuntime {
     registration_errors: Mutex<HashMap<HotkeyAction, String>>,
     /// The note-chord key (Q), registered only while the toggle key is
     /// physically held so it never interferes with normal typing.
-    note_key: Mutex<Option<Shortcut>>,
+    note_key: Mutex<Option<HotKey>>,
     /// Whether Q fired during the current toggle hold; a fired chord
     /// suppresses the release-toggle.
     note_chord_fired: AtomicBool,
@@ -385,7 +377,7 @@ impl HotkeyRuntime {
         }
     }
 
-    fn action_for(&self, shortcut: &Shortcut) -> Option<HotkeyAction> {
+    fn action_for(&self, shortcut: &HotKey) -> Option<HotkeyAction> {
         self.actions_by_id
             .lock()
             .ok()
@@ -453,7 +445,7 @@ impl HotkeyRuntime {
 
     /// Stores the registered note key, unless the toggle hold already ended;
     /// returns false in that case so the caller unregisters it again.
-    fn arm_note_key(&self, shortcut: Shortcut) -> bool {
+    fn arm_note_key(&self, shortcut: HotKey) -> bool {
         if let Ok(mut guard) = self.note_key.lock() {
             if self.toggle_held.load(Ordering::SeqCst) {
                 *guard = Some(shortcut);
@@ -463,7 +455,7 @@ impl HotkeyRuntime {
         false
     }
 
-    fn disarm_note_key(&self) -> Option<Shortcut> {
+    fn disarm_note_key(&self) -> Option<HotKey> {
         self.note_key.lock().ok().and_then(|mut guard| guard.take())
     }
 
@@ -512,13 +504,13 @@ pub fn setup(
         Arc::ptr_eq(&runtime.0, &core.hotkey_runtime().0),
         "setup must fill in the Core's own hotkey runtime"
     );
-    setup_with(app, core.inner(), hotkeys, transform_enabled)
+    setup_with(core.inner(), hotkeys, transform_enabled)
 }
 
-/// [`setup`] on the engine handle; fills in `core`'s hotkey runtime.
-/// Transitional: the global-shortcut plugin needs the app.
+/// [`setup`] on the engine handle; fills in `core`'s hotkey runtime and
+/// registers the hotkeys through the host. The shell calls it on its main
+/// thread before the event loop starts (the one registration allowed there).
 pub fn setup_with(
-    app: &AppHandle,
     core: &Core,
     hotkeys: &HotkeySettings,
     transform_enabled: bool,
@@ -529,9 +521,9 @@ pub fn setup_with(
         .store(transform_enabled, Ordering::SeqCst);
     validate_hotkeys(hotkeys)?;
     #[cfg(target_os = "linux")]
-    wayland::start_portal(app, core, hotkeys);
+    wayland::start_portal(core, hotkeys);
 
-    let failures = register_hotkey_set_with(app, core, hotkeys);
+    let failures = register_hotkey_set_with(core, hotkeys);
     if portal_owns_hotkeys(runtime) {
         log::info!("Hotkeys are delivered by the desktop's GlobalShortcuts portal");
         return Ok(());
@@ -552,28 +544,22 @@ pub fn setup_with(
 
 /// A global-shortcut plugin event. Ignored until the `Core` exists (the
 /// shell's handler already drops events before then).
-pub fn handle_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
+pub fn handle_shortcut(app: &AppHandle, shortcut: &HotKey, event: GlobalHotKeyEvent) {
     let Some(core) = app.try_state::<Core>() else {
         log::warn!("Ignored a hotkey: the engine is not ready yet");
         return;
     };
-    handle_shortcut_with(app, core.inner(), shortcut, event);
+    handle_shortcut_with(core.inner(), shortcut, event);
 }
 
-/// [`handle_shortcut`] on the engine handle. Transitional: the press and
-/// release edges queue dictation work with the app.
-pub fn handle_shortcut_with(
-    app: &AppHandle,
-    core: &Core,
-    shortcut: &Shortcut,
-    event: ShortcutEvent,
-) {
+/// [`handle_shortcut`] on the engine handle.
+pub fn handle_shortcut_with(core: &Core, shortcut: &HotKey, event: GlobalHotKeyEvent) {
     let runtime = core.hotkey_runtime();
 
     if runtime.is_note_key(shortcut.id()) {
         #[cfg(windows)]
-        if event.state == ShortcutState::Pressed && runtime.mark_note_chord_fired() {
-            handle_note_chord_with(app, core);
+        if event.state == HotKeyState::Pressed && runtime.mark_note_chord_fired() {
+            handle_note_chord_with(core);
         }
         return;
     }
@@ -590,17 +576,17 @@ pub fn handle_shortcut_with(
     }
 
     match event.state {
-        ShortcutState::Pressed => {
+        HotKeyState::Pressed => {
             if !runtime.mark_pressed_once(action) {
                 return;
             }
-            handle_press_edge_with(app, core, action);
+            handle_press_edge_with(core, action);
         }
-        ShortcutState::Released => {
+        HotKeyState::Released => {
             if !runtime.mark_released_once(action) {
                 return;
             }
-            handle_release_edge_with(app, core, action);
+            handle_release_edge_with(core, action);
         }
     }
 }
@@ -610,13 +596,7 @@ pub fn handle_shortcut_with(
 /// keys deliver no plugin events). In Release mode the watcher arms the Q note
 /// chord on key down and runs the toggle on key up (unless Q fired). In Press
 /// mode it runs the toggle on key down and skips the note chord entirely.
-/// Transitional: the watcher thread queues dictation work with the app.
-fn configure_toggle_watcher_with(
-    app: &AppHandle,
-    core: &Core,
-    vk: Option<i32>,
-    trigger: TriggerEdge,
-) {
+fn configure_toggle_watcher_with(core: &Core, vk: Option<i32>, trigger: TriggerEdge) {
     let runtime = core.hotkey_runtime();
 
     if let Ok(mut guard) = runtime.toggle_watcher.lock() {
@@ -631,11 +611,10 @@ fn configure_toggle_watcher_with(
     if let Some(vk) = vk {
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
-        let app_handle = app.clone();
         let thread_core = core.clone();
         let spawned = std::thread::Builder::new()
             .name("scribe-toggle-watcher".to_string())
-            .spawn(move || run_toggle_watcher(app_handle, thread_core, vk, trigger, thread_stop));
+            .spawn(move || run_toggle_watcher(thread_core, vk, trigger, thread_stop));
         match spawned {
             Ok(thread) => {
                 runtime.toggle_watched.store(true, Ordering::SeqCst);
@@ -656,19 +635,13 @@ fn configure_toggle_watcher_with(
 
     #[cfg(not(windows))]
     {
-        let _ = (app, vk, trigger);
+        let _ = (vk, trigger);
     }
 }
 
-/// Polls the toggle key. A lasting thread, so it owns its handles.
+/// Polls the toggle key. A lasting thread, so it owns its handle.
 #[cfg(windows)]
-fn run_toggle_watcher(
-    app: AppHandle,
-    core: Core,
-    vk: i32,
-    trigger: TriggerEdge,
-    stop: Arc<AtomicBool>,
-) {
+fn run_toggle_watcher(core: Core, vk: i32, trigger: TriggerEdge, stop: Arc<AtomicBool>) {
     use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 
     let mut was_down = false;
@@ -676,11 +649,11 @@ fn run_toggle_watcher(
         let down = (unsafe { GetAsyncKeyState(vk) } as u16) & 0x8000 != 0;
         if down && !was_down {
             match trigger {
-                TriggerEdge::Release => on_toggle_key_down_with(&app, &core),
-                TriggerEdge::Press => on_toggle_key_press_with(&app, &core),
+                TriggerEdge::Release => on_toggle_key_down_with(&core),
+                TriggerEdge::Press => on_toggle_key_press_with(&core),
             }
         } else if !down && was_down && trigger == TriggerEdge::Release {
-            on_toggle_key_up_with(&app, &core);
+            on_toggle_key_up_with(&core);
         }
         was_down = down;
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -688,46 +661,44 @@ fn run_toggle_watcher(
     // Never leave a Q grab behind when the watcher is being replaced (only the
     // Release path ever arms it).
     if was_down && trigger == TriggerEdge::Release {
-        disarm_note_chord_with(&app, &core);
+        disarm_note_chord_with(&core);
     }
 }
 
 /// Release-mode key down: arm the Q note chord and signal the frontend. The
 /// actual toggle waits for key up so a hold-and-tap-Q makes a note instead.
-/// Transitional: arming the note chord uses the global-shortcut plugin.
 #[cfg(windows)]
-fn on_toggle_key_down_with(app: &AppHandle, core: &Core) {
+fn on_toggle_key_down_with(core: &Core) {
     let runtime = core.hotkey_runtime();
     core.emit(hotkey_action_event(
         HotkeyAction::ToggleDictation.event_name(),
     ));
     runtime.toggle_held.store(true, Ordering::SeqCst);
     runtime.note_chord_fired.store(false, Ordering::SeqCst);
-    let app = app.clone();
     let core = core.clone();
-    std::thread::spawn(move || arm_note_chord_with(&app, &core));
+    std::thread::spawn(move || arm_note_chord_with(&core));
 }
 
-/// Transitional: `dictation_worker::submit` (audio) takes the app.
 #[cfg(windows)]
-fn on_toggle_key_up_with(app: &AppHandle, core: &Core) {
-    let fired = disarm_note_chord_with(app, core);
+fn on_toggle_key_up_with(core: &Core) {
+    let fired = disarm_note_chord_with(core);
     log::info!("Toggle key released (note chord fired: {})", fired);
     if !fired {
-        dictation_worker::submit(app, Intent::Toggle);
+        dictation_worker::submit_with(core, Intent::Toggle);
     }
 }
 
 /// Press-mode key down: toggle immediately. No note chord (there is no hold
-/// window when the toggle fires on press). Transitional:
-/// `dictation_worker::submit` (audio) takes the app.
-#[cfg(windows)]
-fn on_toggle_key_press_with(app: &AppHandle, core: &Core) {
+/// window when the toggle fires on press).
+/// Compiled everywhere so its tests run on every platform; only the Windows
+/// toggle watcher calls it.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn on_toggle_key_press_with(target: &(impl ActionTarget + ?Sized)) {
     log::info!("Toggle key pressed (trigger Press)");
-    core.emit(hotkey_action_event(
+    target.host().emit(hotkey_action_event(
         HotkeyAction::ToggleDictation.event_name(),
     ));
-    dictation_worker::submit(app, Intent::Toggle);
+    target.submit(Intent::Toggle);
 }
 
 /// Maps a shortcut key code to the Windows virtual key the toggle watcher
@@ -834,19 +805,7 @@ fn transform_enabled(runtime: &HotkeyRuntime) -> bool {
 
 /// Records whether Local AI is on, which decides whether Transform Selection
 /// gets registered. Returns the previous value. Callers re-register the hotkey
-/// set (`replace_hotkeys`) afterwards for the change to take effect. Without
-/// the `Core` nothing is recorded and false comes back.
-pub fn set_transform_enabled(app: &AppHandle, enabled: bool) -> bool {
-    match app.try_state::<Core>() {
-        Some(core) => set_transform_enabled_with(core.inner(), enabled),
-        None => {
-            log::warn!("Could not switch Transform Selection: the engine is not ready yet");
-            false
-        }
-    }
-}
-
-/// [`set_transform_enabled`] on the engine handle.
+/// set (`replace_hotkeys_with`) afterwards for the change to take effect.
 pub fn set_transform_enabled_with(core: &Core, enabled: bool) -> bool {
     swap_transform_enabled(core.hotkey_runtime(), enabled)
 }
@@ -858,48 +817,64 @@ fn swap_transform_enabled(runtime: &HotkeyRuntime, enabled: bool) -> bool {
 /// Swaps the registered hotkey set. Registration is best-effort per binding:
 /// the returned vector lists the bindings in `next` that could not be
 /// registered (working bindings stay registered). Returns Err only when
-/// `next` fails validation, in which case nothing is changed. Without the
-/// `Core` nothing is changed and the no-engine error comes back.
-pub fn replace_hotkeys(
-    app: &AppHandle,
-    previous: &HotkeySettings,
-    next: &HotkeySettings,
-) -> Result<Vec<HotkeyRegistrationFailure>, CommandError> {
-    match app.try_state::<Core>() {
-        Some(core) => replace_hotkeys_with(app, core.inner(), previous, next),
-        None => {
-            log::warn!("Could not change the hotkeys: the engine is not ready yet");
-            Err(crate::host::no_main_window())
-        }
-    }
-}
-
-/// [`replace_hotkeys`] on the engine handle. Transitional: the
-/// global-shortcut plugin needs the app.
+/// `next` fails validation, in which case nothing is changed. Runs on an
+/// engine thread, never the shell's main thread (see [`Host::register_shortcut`]).
+///
+/// `_app` is unused: `settings_store` (the `data` lane) still passes it, and
+/// P1-4 step 4 removes it with that caller.
 pub fn replace_hotkeys_with(
-    app: &AppHandle,
+    _app: &AppHandle,
     core: &Core,
     previous: &HotkeySettings,
     next: &HotkeySettings,
 ) -> Result<Vec<HotkeyRegistrationFailure>, CommandError> {
     validate_hotkeys(next)?;
 
-    unregister_hotkey_set(app, previous);
+    unregister_hotkey_set(core.host().as_ref(), previous);
 
-    Ok(register_hotkey_set_with(app, core, next))
+    Ok(register_hotkey_set_with(core, next))
 }
 
-/// Registers every binding in `hotkeys`: plugin shortcuts through the
-/// global-shortcut plugin, modifier-only chords through the Windows chord
-/// watcher. Each binding is attempted independently; failures are collected
-/// and returned while every binding that did register stays registered.
-/// Transitional: the global-shortcut plugin needs the app.
+/// What [`register_bindings`] registered and what the watchers need.
+struct Registration {
+    failures: Vec<HotkeyRegistrationFailure>,
+    chord_bindings: Vec<(ModifierChord, HotkeyAction)>,
+    toggle_vk: Option<i32>,
+}
+
+/// Registers every binding in `hotkeys`: shortcuts with a key through the
+/// host, modifier-only chords through the Windows chord watcher. Each binding
+/// is attempted independently; failures are collected and returned while
+/// every binding that did register stays registered.
 fn register_hotkey_set_with(
-    app: &AppHandle,
     core: &Core,
     hotkeys: &HotkeySettings,
 ) -> Vec<HotkeyRegistrationFailure> {
-    let runtime = core.hotkey_runtime();
+    let registration = register_bindings(core.host().as_ref(), core.hotkey_runtime(), hotkeys);
+
+    configure_chord_watcher_with(core, registration.chord_bindings);
+
+    // The toggle key gets a native press/release watcher whenever its binding
+    // maps to a pollable virtual key (see configure_toggle_watcher) - needed in
+    // both modes, since modifier-less keys deliver no plugin events at all. The
+    // watcher fires on the edge the toggle trigger selects.
+    configure_toggle_watcher_with(
+        core,
+        registration.toggle_vk,
+        hotkeys.toggle_dictation_trigger,
+    );
+
+    registration.failures
+}
+
+/// The host and runtime half of [`register_hotkey_set_with`]: registers the
+/// shortcuts with a key and records the bindings, and says which chords and
+/// toggle key the watchers must poll.
+fn register_bindings(
+    host: &dyn Host,
+    runtime: &HotkeyRuntime,
+    hotkeys: &HotkeySettings,
+) -> Registration {
     let mut actions_by_id = HashMap::<u32, HotkeyAction>::new();
     let mut chord_bindings = Vec::<(ModifierChord, HotkeyAction)>::new();
     let mut failures = Vec::<HotkeyRegistrationFailure>::new();
@@ -914,11 +889,14 @@ fn register_hotkey_set_with(
     if portal_owns_hotkeys(runtime) {
         // The desktop owns the keys; nothing to grab. Bindings changed here
         // only become the suggestion for the next time the desktop asks.
+        // The watchers are stopped (no chords, no toggle key).
         runtime.replace_bindings(HashMap::new());
         runtime.store_registration_errors(&[]);
-        configure_chord_watcher_with(app, core, Vec::new());
-        configure_toggle_watcher_with(app, core, None, hotkeys.toggle_dictation_trigger);
-        return failures;
+        return Registration {
+            failures,
+            chord_bindings,
+            toggle_vk: None,
+        };
     }
 
     let transform_enabled = transform_enabled(runtime);
@@ -929,33 +907,31 @@ fn register_hotkey_set_with(
         let shortcut_text = action.shortcut(hotkeys);
 
         match parse_shortcut(shortcut_text) {
-            Ok(ParsedShortcut::Plugin(shortcut)) => {
-                match app.global_shortcut().register(shortcut) {
-                    Ok(()) => {
-                        log::debug!(
-                            "Registered {:?} as shortcut id={} key={:?} mods={:?}",
-                            action,
-                            shortcut.id(),
-                            shortcut.key,
-                            shortcut.mods
-                        );
-                        actions_by_id.insert(shortcut.id(), action);
-                    }
-                    Err(error) => {
-                        log::warn!(
-                            "Registering {:?} ({}) failed: {}",
-                            action,
-                            shortcut_text,
-                            error
-                        );
-                        record_failure(
-                            action,
-                            shortcut_text,
-                            CommandError::hotkey_registration_failed(shortcut_text).message,
-                        )
-                    }
+            Ok(ParsedShortcut::Plugin(shortcut)) => match host.register_shortcut(shortcut) {
+                Ok(()) => {
+                    log::debug!(
+                        "Registered {:?} as shortcut id={} key={:?} mods={:?}",
+                        action,
+                        shortcut.id(),
+                        shortcut.key,
+                        shortcut.mods
+                    );
+                    actions_by_id.insert(shortcut.id(), action);
                 }
-            }
+                Err(error) => {
+                    log::warn!(
+                        "Registering {:?} ({}) failed: {}",
+                        action,
+                        shortcut_text,
+                        error
+                    );
+                    record_failure(
+                        action,
+                        shortcut_text,
+                        CommandError::hotkey_registration_failed(shortcut_text).message,
+                    )
+                }
+            },
             Ok(ParsedShortcut::ModifierChord(chord)) => {
                 if cfg!(windows) {
                     chord_bindings.push((chord, action));
@@ -984,23 +960,20 @@ fn register_hotkey_set_with(
     runtime.store_registration_errors(&failures);
     runtime.store_triggers(triggers);
 
-    configure_chord_watcher_with(app, core, chord_bindings);
-
-    // The toggle key gets a native press/release watcher whenever its binding
-    // maps to a pollable virtual key (see configure_toggle_watcher) — needed in
-    // both modes, since modifier-less keys deliver no plugin events at all. The
-    // watcher fires on the edge the toggle trigger selects.
     let toggle_vk = match parse_shortcut(HotkeyAction::ToggleDictation.shortcut(hotkeys)) {
         Ok(ParsedShortcut::Plugin(shortcut)) => toggle_vk_for(shortcut),
         _ => None,
     };
-    configure_toggle_watcher_with(app, core, toggle_vk, hotkeys.toggle_dictation_trigger);
 
-    failures
+    Registration {
+        failures,
+        chord_bindings,
+        toggle_vk,
+    }
 }
 
 #[cfg(windows)]
-fn toggle_vk_for(shortcut: Shortcut) -> Option<i32> {
+fn toggle_vk_for(shortcut: HotKey) -> Option<i32> {
     // Only modifier-less bindings can be polled as a single key.
     if !shortcut.mods.is_empty() {
         return None;
@@ -1009,20 +982,15 @@ fn toggle_vk_for(shortcut: Shortcut) -> Option<i32> {
 }
 
 #[cfg(not(windows))]
-fn toggle_vk_for(_shortcut: Shortcut) -> Option<i32> {
+fn toggle_vk_for(_shortcut: HotKey) -> Option<i32> {
     None
 }
 
 /// Stops any running chord watcher thread, stores the new chord bindings (so
 /// status() can report them as registered), and starts a fresh watcher thread
 /// when there is at least one chord to monitor. Called on initial
-/// registration and on every rebind/reset/replace. Transitional: the watcher
-/// thread queues dictation work with the app.
-fn configure_chord_watcher_with(
-    app: &AppHandle,
-    core: &Core,
-    bindings: Vec<(ModifierChord, HotkeyAction)>,
-) {
+/// registration and on every rebind/reset/replace.
+fn configure_chord_watcher_with(core: &Core, bindings: Vec<(ModifierChord, HotkeyAction)>) {
     let runtime = core.hotkey_runtime();
 
     if let Some(watcher) = runtime.take_watcher() {
@@ -1040,13 +1008,10 @@ fn configure_chord_watcher_with(
     {
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
-        let app_handle = app.clone();
         let thread_core = core.clone();
         let spawned = std::thread::Builder::new()
             .name("scribe-chord-watcher".to_string())
-            .spawn(move || {
-                windows_chord::run_watcher(app_handle, thread_core, bindings, thread_stop)
-            });
+            .spawn(move || windows_chord::run_watcher(thread_core, bindings, thread_stop));
 
         match spawned {
             Ok(thread) => {
@@ -1065,46 +1030,37 @@ fn configure_chord_watcher_with(
     {
         // Modifier-only chords are rejected during registration on
         // non-Windows platforms, so this branch never sees a non-empty set.
-        let _ = app;
         runtime.store_chord_bindings(Vec::new());
     }
 }
 
-/// Where each hotkey stands, for the Hotkeys page. Without the `Core` the
-/// no-engine error comes back.
-pub fn status(app: &AppHandle, hotkeys: &HotkeySettings) -> Result<HotkeyStatus, CommandError> {
-    match app.try_state::<Core>() {
-        Some(core) => status_with(app, core.inner(), hotkeys),
-        None => {
-            log::warn!("Could not read the hotkey status: the engine is not ready yet");
-            Err(crate::host::no_main_window())
-        }
-    }
+/// Where each hotkey stands, for the Hotkeys page.
+pub fn status_with(core: &Core, hotkeys: &HotkeySettings) -> Result<HotkeyStatus, CommandError> {
+    Ok(status_in(
+        core.host().as_ref(),
+        core.hotkey_runtime(),
+        hotkeys,
+    ))
 }
 
-/// [`status`] on the engine handle. Transitional: whether a shortcut is
-/// registered is asked of the global-shortcut plugin.
-pub fn status_with(
-    app: &AppHandle,
-    core: &Core,
-    hotkeys: &HotkeySettings,
-) -> Result<HotkeyStatus, CommandError> {
-    let runtime = core.hotkey_runtime();
+/// [`status_with`] over the parts it reads: the portal's status when the
+/// portal owns the hotkeys, else what the host holds.
+fn status_in(host: &dyn Host, runtime: &HotkeyRuntime, hotkeys: &HotkeySettings) -> HotkeyStatus {
     #[cfg(target_os = "linux")]
     if portal_owns_hotkeys(runtime) {
-        return Ok(wayland::status(runtime, hotkeys));
+        return wayland::status(runtime, hotkeys);
     }
-    Ok(native_status(runtime, hotkeys, |shortcut| {
-        app.global_shortcut().is_registered(shortcut)
-    }))
+    native_status(runtime, hotkeys, |shortcut| {
+        host.is_shortcut_registered(shortcut)
+    })
 }
 
 /// The status of hotkeys the app grabs itself (not the portal's), given
-/// whether the global-shortcut plugin holds a shortcut.
+/// whether the host holds a shortcut.
 fn native_status(
     runtime: &HotkeyRuntime,
     hotkeys: &HotkeySettings,
-    is_registered: impl Fn(Shortcut) -> bool,
+    is_registered: impl Fn(HotKey) -> bool,
 ) -> HotkeyStatus {
     let transform_enabled = transform_enabled(runtime);
     let mut bindings = Vec::new();
@@ -1218,77 +1174,107 @@ fn note_chord_active(hotkeys: &HotkeySettings) -> bool {
         )
 }
 
+/// What a hotkey edge acts through: the engine's [`Core`] in the app, and a
+/// recorder in the tests (no test can build a `Core` yet).
+pub(crate) trait ActionTarget {
+    /// Where the events go and the main window is.
+    fn host(&self) -> &dyn Host;
+    /// The registered hotkeys' live state.
+    fn runtime(&self) -> &HotkeyRuntime;
+    /// Queues dictation work on the dictation worker and returns.
+    fn submit(&self, intent: Intent);
+    /// Whether the Open Dashboard hotkey hides a dashboard already in front
+    /// (the setting; true when it can't be read).
+    fn dashboard_hotkey_toggles(&self) -> bool;
+}
+
+impl ActionTarget for Core {
+    fn host(&self) -> &dyn Host {
+        Core::host(self).as_ref()
+    }
+
+    fn runtime(&self) -> &HotkeyRuntime {
+        self.hotkey_runtime()
+    }
+
+    fn submit(&self, intent: Intent) {
+        dictation_worker::submit_with(self, intent);
+    }
+
+    fn dashboard_hotkey_toggles(&self) -> bool {
+        self.backend()
+            .db()
+            .and_then(|db| db.get_settings())
+            .map(|settings| settings.dashboard_hotkey_toggles)
+            .unwrap_or(true)
+    }
+}
+
 /// Press edge of a binding. Hold-to-talk always starts here (it is push-to-talk
 /// and uses both edges); single-shot actions fire only when their configured
 /// trigger is Press. Reached by the plugin shortcut handler (on the main
 /// thread) and the modifier-chord watcher, so dictation actions only queue
-/// work on the dictation worker and return. Transitional:
-/// `dictation_worker::submit` (audio) takes the app.
-pub(crate) fn handle_press_edge_with(app: &AppHandle, core: &Core, action: HotkeyAction) {
+/// work on the dictation worker and return.
+pub(crate) fn handle_press_edge_with(target: &(impl ActionTarget + ?Sized), action: HotkeyAction) {
     if action == HotkeyAction::HoldToTalk {
-        core.emit(hotkey_action_event(action.event_name()));
-        dictation_worker::submit(app, Intent::StartHold);
+        target.host().emit(hotkey_action_event(action.event_name()));
+        target.submit(Intent::StartHold);
         return;
     }
 
-    if core.hotkey_runtime().trigger_for(action) == TriggerEdge::Press {
-        run_action_with(app, core, action);
+    if target.runtime().trigger_for(action) == TriggerEdge::Press {
+        run_action_with(target, action);
     }
 }
 
 /// Release edge of a binding. Hold-to-talk always stops here; single-shot
 /// actions fire only when their configured trigger is Release.
-/// Transitional: `dictation_worker::submit` (audio) takes the app.
-pub(crate) fn handle_release_edge_with(app: &AppHandle, core: &Core, action: HotkeyAction) {
+pub(crate) fn handle_release_edge_with(
+    target: &(impl ActionTarget + ?Sized),
+    action: HotkeyAction,
+) {
     if action == HotkeyAction::HoldToTalk {
-        dictation_worker::submit(app, Intent::Stop);
+        target.submit(Intent::Stop);
         return;
     }
 
-    if core.hotkey_runtime().trigger_for(action) == TriggerEdge::Release {
-        run_action_with(app, core, action);
+    if target.runtime().trigger_for(action) == TriggerEdge::Release {
+        run_action_with(target, action);
     }
 }
 
 /// Performs a single-shot action (toggle / paste / open dashboard) and emits
 /// the frontend hotkey-action event. Called on whichever edge the action's
 /// trigger selects. Hold-to-talk is not a single-shot action and is ignored.
-/// Transitional: `dictation_worker::submit` and `audio::emit_recording_error`
-/// (audio) take the app.
-pub(crate) fn run_action_with(app: &AppHandle, core: &Core, action: HotkeyAction) {
-    core.emit(hotkey_action_event(action.event_name()));
+pub(crate) fn run_action_with(target: &(impl ActionTarget + ?Sized), action: HotkeyAction) {
+    target.host().emit(hotkey_action_event(action.event_name()));
 
     let result = match action {
         HotkeyAction::ToggleDictation => {
             // Clear the pressed mark so a toggle bound to a key that delivers
             // no Released event (modifier-less keys, modifier chords) still
             // re-fires on the next press.
-            core.hotkey_runtime()
+            target
+                .runtime()
                 .mark_released_once(HotkeyAction::ToggleDictation);
-            dictation_worker::submit(app, Intent::Toggle);
+            target.submit(Intent::Toggle);
             Ok(())
         }
         HotkeyAction::PasteLastTranscript => {
-            dictation_worker::submit(app, Intent::PasteLast);
+            target.submit(Intent::PasteLast);
             Ok(())
         }
         HotkeyAction::OpenDashboard => {
-            let toggles = core
-                .backend()
-                .db()
-                .and_then(|db| db.get_settings())
-                .map(|settings| settings.dashboard_hotkey_toggles)
-                .unwrap_or(true);
-            if toggles {
-                core.host().toggle_dashboard()
+            if target.dashboard_hotkey_toggles() {
+                target.host().toggle_dashboard()
             } else {
-                core.host().open_dashboard(None)
+                target.host().open_dashboard(None)
             }
         }
         // Discards the in-progress recording without transcribing. A no-op when
         // nothing is recording, so a stray press is harmless.
         HotkeyAction::DiscardDictation => {
-            dictation_worker::submit(app, Intent::Cancel);
+            target.submit(Intent::Cancel);
             Ok(())
         }
         // Voice Transform Selection (tap to start, tap again, or let silence
@@ -1300,36 +1286,41 @@ pub(crate) fn run_action_with(app: &AppHandle, core: &Core, action: HotkeyAction
         // saved or pasted as dictation. The typed-instruction Dashboard panel
         // remains as an alternative.
         HotkeyAction::TransformSelection => {
-            dictation_worker::submit(app, Intent::ToggleTransform);
+            target.submit(Intent::ToggleTransform);
             Ok(())
         }
         HotkeyAction::HoldToTalk => return,
     };
 
     if let Err(error) = result {
-        audio::emit_recording_error(app, error);
+        audio::emit_recording_error_with(target.host(), error);
     }
 }
 
 /// The key grabbed while the toggle key is held; pressing it starts (or
 /// stops) a note dictation instead of the normal toggle.
-#[cfg(windows)]
+#[cfg_attr(not(windows), allow(dead_code))]
 const NOTE_CHORD_CODE: Code = Code::KeyQ;
 
-/// Transitional: the global-shortcut plugin needs the app.
+/// Grabs Q for the current toggle hold. Runs on its own thread (the host may
+/// wait for the shell's main thread to register).
 #[cfg(windows)]
-fn arm_note_chord_with(app: &AppHandle, core: &Core) {
-    let runtime = core.hotkey_runtime();
-    let shortcut = Shortcut::new(None, NOTE_CHORD_CODE);
-    match app.global_shortcut().register(shortcut) {
+fn arm_note_chord_with(core: &Core) {
+    arm_note_chord_in(core.host().as_ref(), core.hotkey_runtime());
+}
+
+/// [`arm_note_chord_with`] over the parts it uses. Compiled everywhere so its
+/// tests run on every platform; only Windows calls it.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn arm_note_chord_in(host: &dyn Host, runtime: &HotkeyRuntime) {
+    let shortcut = HotKey::new(None, NOTE_CHORD_CODE);
+    match host.register_shortcut(shortcut) {
         Ok(()) => {
             log::debug!("Note chord key grabbed");
             if !runtime.arm_note_key(shortcut) {
                 // The tap ended before registration finished: release the
                 // grab immediately so Q keeps typing normally.
-                if let Err(error) = app.global_shortcut().unregister(shortcut) {
-                    log::error!("Could not release the note-chord key grab: {}", error);
-                }
+                release_note_key(host, shortcut);
             }
         }
         Err(error) => log::warn!(
@@ -1339,32 +1330,36 @@ fn arm_note_chord_with(app: &AppHandle, core: &Core) {
     }
 }
 
+/// Releases the Q grab, logging when the host refuses.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn release_note_key(host: &dyn Host, shortcut: HotKey) {
+    if let Err(error) = host.unregister_shortcut(shortcut) {
+        log::error!("Could not release the note-chord key grab: {}", error);
+    }
+}
+
 /// Ends the toggle hold and releases the Q grab on a background thread
 /// (plugin register/unregister deadlocks when run on the main thread, but
 /// is fine from worker threads - the rebind command path proves it);
-/// returns whether the note chord fired. Transitional: the global-shortcut
-/// plugin needs the app.
+/// returns whether the note chord fired.
 #[cfg(windows)]
-fn disarm_note_chord_with(app: &AppHandle, core: &Core) -> bool {
+fn disarm_note_chord_with(core: &Core) -> bool {
     let runtime = core.hotkey_runtime();
     runtime.toggle_held.store(false, Ordering::SeqCst);
     if let Some(shortcut) = runtime.disarm_note_key() {
-        let app = app.clone();
-        std::thread::spawn(move || {
-            if let Err(error) = app.global_shortcut().unregister(shortcut) {
-                log::error!("Could not release the note-chord key grab: {}", error);
-            }
-        });
+        let host = Arc::clone(core.host());
+        std::thread::spawn(move || release_note_key(host.as_ref(), shortcut));
     }
     runtime.note_chord_fired()
 }
 
-/// Transitional: `dictation_worker::submit` (audio) takes the app.
-#[cfg(windows)]
-fn handle_note_chord_with(app: &AppHandle, core: &Core) {
+/// The note chord fired: start (or stop) a note dictation. Compiled
+/// everywhere so its tests run on every platform; only Windows calls it.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn handle_note_chord_with(target: &(impl ActionTarget + ?Sized)) {
     log::info!("Note chord (Q) pressed during toggle hold");
-    core.emit(hotkey_action_event("note_dictation"));
-    dictation_worker::submit(app, Intent::ToggleNote);
+    target.host().emit(hotkey_action_event("note_dictation"));
+    target.submit(Intent::ToggleNote);
 }
 
 /// Captures the focused app's current selection and starts a transform
@@ -1374,7 +1369,7 @@ fn handle_note_chord_with(app: &AppHandle, core: &Core) {
 /// Without the `Core` nothing is captured and the no-engine error comes back.
 pub(crate) fn start_transform(app: &AppHandle) -> Result<(), CommandError> {
     match app.try_state::<Core>() {
-        Some(core) => start_transform_with(app, core.inner()),
+        Some(core) => start_transform_with(core.inner()),
         None => {
             log::warn!("Could not start Transform Selection: the engine is not ready yet");
             Err(crate::host::no_main_window())
@@ -1382,9 +1377,8 @@ pub(crate) fn start_transform(app: &AppHandle) -> Result<(), CommandError> {
     }
 }
 
-/// [`start_transform`] on the engine handle. Transitional:
-/// `audio::start_recording_for_app` (audio) takes the app.
-pub(crate) fn start_transform_with(app: &AppHandle, core: &Core) -> Result<(), CommandError> {
+/// [`start_transform`] on the engine handle.
+pub(crate) fn start_transform_with(core: &Core) -> Result<(), CommandError> {
     // Second guard behind registration: never copy a selection while Local AI
     // is off.
     let settings = core.backend().db()?.get_settings()?;
@@ -1410,12 +1404,14 @@ pub(crate) fn start_transform_with(app: &AppHandle, core: &Core) -> Result<(), C
     };
     // If the recording can't start, `captured` drops here and the clipboard
     // is put back.
-    audio::start_recording_for_app(app, Some(request), true)?;
+    audio::start_recording_with(core, Some(request), true)?;
     core.backend().set_pending_transform(captured);
     Ok(())
 }
 
-fn unregister_hotkey_set(app: &AppHandle, hotkeys: &HotkeySettings) {
+/// Releases every shortcut with a key in `hotkeys` that the host holds. Runs
+/// on an engine thread (see [`Host::unregister_shortcut`]).
+fn unregister_hotkey_set(host: &dyn Host, hotkeys: &HotkeySettings) {
     let shortcuts = HOTKEY_ACTIONS
         .into_iter()
         .filter_map(|action| match parse_shortcut(action.shortcut(hotkeys)) {
@@ -1424,13 +1420,14 @@ fn unregister_hotkey_set(app: &AppHandle, hotkeys: &HotkeySettings) {
         })
         .collect::<Vec<_>>();
 
-    unregister_shortcuts(app, &shortcuts);
+    unregister_shortcuts(host, &shortcuts);
 }
 
-fn unregister_shortcuts(app: &AppHandle, shortcuts: &[Shortcut]) {
+/// Asks first: the plugin may refuse to release a shortcut it does not hold.
+fn unregister_shortcuts(host: &dyn Host, shortcuts: &[HotKey]) {
     for shortcut in shortcuts {
-        if app.global_shortcut().is_registered(*shortcut) {
-            let _ = app.global_shortcut().unregister(*shortcut);
+        if host.is_shortcut_registered(*shortcut) {
+            let _ = host.unregister_shortcut(*shortcut);
         }
     }
 }
@@ -1441,7 +1438,7 @@ pub fn parse_shortcut(shortcut: &str) -> Result<ParsedShortcut, CommandError> {
     }
 
     let normalized = normalize_shortcut(shortcut);
-    Shortcut::from_str(&normalized)
+    HotKey::from_str(&normalized)
         .map(ParsedShortcut::Plugin)
         .map_err(|error| CommandError::invalid_hotkey(shortcut, error))
 }
@@ -1487,22 +1484,20 @@ fn normalize_shortcut(shortcut: &str) -> String {
         .join("+")
 }
 
-/// Transitional: the press edge queues dictation work with the app.
 #[cfg(windows)]
-fn dispatch_chord_pressed_with(app: &AppHandle, core: &Core, action: HotkeyAction) {
+fn dispatch_chord_pressed_with(core: &Core, action: HotkeyAction) {
     if !core.hotkey_runtime().mark_pressed_once(action) {
         return;
     }
-    handle_press_edge_with(app, core, action);
+    handle_press_edge_with(core, action);
 }
 
-/// Transitional: the release edge queues dictation work with the app.
 #[cfg(windows)]
-fn dispatch_chord_released_with(app: &AppHandle, core: &Core, action: HotkeyAction) {
+fn dispatch_chord_released_with(core: &Core, action: HotkeyAction) {
     if !core.hotkey_runtime().mark_released_once(action) {
         return;
     }
-    handle_release_edge_with(app, core, action);
+    handle_release_edge_with(core, action);
 }
 
 #[cfg(windows)]
@@ -1516,7 +1511,6 @@ mod windows_chord {
         time::{Duration, Instant},
     };
 
-    use tauri::AppHandle;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU,
         VK_PACKET, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
@@ -1546,9 +1540,8 @@ mod windows_chord {
         Suppressed,
     }
 
-    /// Polls the modifier chords. A lasting thread, so it owns its handles.
+    /// Polls the modifier chords. A lasting thread, so it owns its handle.
     pub(super) fn run_watcher(
-        app: AppHandle,
         core: Core,
         bindings: Vec<(ModifierChord, HotkeyAction)>,
         stop: Arc<AtomicBool>,
@@ -1559,7 +1552,7 @@ mod windows_chord {
             let snapshot = ModifierSnapshot::capture();
 
             for (index, (chord, action)) in bindings.iter().enumerate() {
-                states[index] = step(&app, &core, *chord, *action, states[index], snapshot);
+                states[index] = step(&core, *chord, *action, states[index], snapshot);
             }
 
             thread::sleep(POLL_INTERVAL);
@@ -1567,7 +1560,6 @@ mod windows_chord {
     }
 
     fn step(
-        app: &AppHandle,
         core: &Core,
         chord: ModifierChord,
         action: HotkeyAction,
@@ -1593,7 +1585,7 @@ mod windows_chord {
                     // The user was typing a normal shortcut like Ctrl+Shift+T.
                     ChordState::Suppressed
                 } else if Instant::now() >= deadline {
-                    dispatch_chord_pressed_with(app, core, action);
+                    dispatch_chord_pressed_with(core, action);
                     ChordState::Active
                 } else {
                     ChordState::Arming(deadline)
@@ -1601,7 +1593,7 @@ mod windows_chord {
             }
             ChordState::Active => {
                 if !snapshot.holds_all(chord) {
-                    dispatch_chord_released_with(app, core, action);
+                    dispatch_chord_released_with(core, action);
                     ChordState::Suppressed
                 } else {
                     ChordState::Active
@@ -1704,8 +1696,6 @@ mod windows_chord {
 mod wayland {
     use std::sync::{atomic::Ordering, Arc};
 
-    use tauri::AppHandle;
-
     use super::{
         action_enabled, handle_press_edge_with, handle_release_edge_with, run_action_with,
         transform_enabled, HotkeyAction, HotkeyBindingStatus, HotkeyRuntime, HotkeyStatus,
@@ -1747,19 +1737,15 @@ mod wayland {
     /// when the desktop has one. Without it, the X11 grabs stay (they fire
     /// while an X11 app has focus) and the Hotkeys page explains how to bind
     /// Scribe's command in the desktop's keyboard settings. The portal keeps
-    /// its event callback for good, so the callback owns its handles.
-    /// Transitional: portal events queue dictation work with the app.
-    pub(super) fn start_portal(app: &AppHandle, core: &Core, hotkeys: &HotkeySettings) {
+    /// its event callback for good, so the callback owns its handle.
+    pub(super) fn start_portal(core: &Core, hotkeys: &HotkeySettings) {
         if crate::platform::session_kind() != SessionKind::Wayland {
             return;
         }
-        let handle = app.clone();
         let callback_core = core.clone();
         let owns = shortcuts::start(
             specs(hotkeys),
-            Arc::new(move |id: &str, down: bool| {
-                on_portal_event(&handle, &callback_core, id, down)
-            }),
+            Arc::new(move |id: &str, down: bool| on_portal_event(&callback_core, id, down)),
         );
         log::info!(
             "Wayland session: hotkeys through {}",
@@ -1777,8 +1763,7 @@ mod wayland {
     /// A portal shortcut went down or up. Hold to talk uses both edges; the
     /// other actions act on press, since the desktop, not Scribe, decides
     /// the keys there and some desktops don't report releases reliably.
-    /// Transitional: the edges queue dictation work with the app.
-    fn on_portal_event(app: &AppHandle, core: &Core, id: &str, down: bool) {
+    fn on_portal_event(core: &Core, id: &str, down: bool) {
         let Ok(action) = HotkeyAction::parse(id) else {
             log::debug!("Ignoring unknown portal shortcut {id}");
             return;
@@ -1797,12 +1782,12 @@ mod wayland {
                 return;
             }
             if action == HotkeyAction::HoldToTalk {
-                handle_press_edge_with(app, core, action);
+                handle_press_edge_with(core, action);
             } else {
-                run_action_with(app, core, action);
+                run_action_with(core, action);
             }
         } else if runtime.mark_released_once(action) && action == HotkeyAction::HoldToTalk {
-            handle_release_edge_with(app, core, action);
+            handle_release_edge_with(core, action);
         }
     }
 
@@ -1998,7 +1983,7 @@ mod tests {
         assert_eq!(binding(&status, HotkeyAction::ToggleDictation).error, None);
     }
 
-    fn expect_plugin(shortcut: &str) -> Shortcut {
+    fn expect_plugin(shortcut: &str) -> HotKey {
         match parse_shortcut(shortcut).unwrap() {
             ParsedShortcut::Plugin(parsed) => parsed,
             other => panic!(
