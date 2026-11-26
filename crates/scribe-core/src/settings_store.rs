@@ -21,8 +21,8 @@ use crate::{
     error::CommandError,
     events::CoreEvent,
     host::{no_main_window, Host},
-    hotkeys,
-    settings::AppSettings,
+    hotkeys::{self, HotkeyRegistrationFailure},
+    settings::{AppSettings, HotkeySettings},
 };
 
 /// Emitted with the full stored settings after every settings write.
@@ -204,16 +204,80 @@ pub fn set_launch_at_startup(app: &AppHandle, enabled: bool) -> Result<AppSettin
 /// side effects back when the save fails. The caller holds the settings write
 /// lock.
 ///
-/// Still takes the `AppHandle` for the hotkeys lane's `set_transform_enabled`,
-/// `replace_hotkeys` and `emit_registration_failures`, and for
-/// `autostart::apply`.
+/// Still takes the `AppHandle` for the hotkeys lane's `replace_hotkeys_with`
+/// (the global-shortcut plugin) and for `autostart::apply`.
 fn apply_settings_change_with(
     app: &AppHandle,
     core: &Core,
     previous: &AppSettings,
     settings: AppSettings,
 ) -> Result<AppSettings, CommandError> {
-    let state = core.backend();
+    apply_settings_change_in(
+        core.backend(),
+        core.host().as_ref(),
+        &AppEffects { app, core },
+        previous,
+        settings,
+    )
+}
+
+/// What a settings change does outside the database and the windows: the
+/// startup entry, the hotkeys and the speech engine. [`AppEffects`] is the
+/// real one; tests record the calls.
+trait SettingsEffects {
+    fn apply_autostart(&self, enabled: bool) -> Result<(), CommandError>;
+    fn set_transform_enabled(&self, enabled: bool);
+    fn replace_hotkeys(
+        &self,
+        previous: &HotkeySettings,
+        next: &HotkeySettings,
+    ) -> Result<Vec<HotkeyRegistrationFailure>, CommandError>;
+    fn sync_speech_engine(&self, settings: &AppSettings);
+    fn report_hotkey_failures(&self, failures: &[HotkeyRegistrationFailure]);
+}
+
+/// The settings side effects in the running app.
+struct AppEffects<'a> {
+    app: &'a AppHandle,
+    core: &'a Core,
+}
+
+impl SettingsEffects for AppEffects<'_> {
+    fn apply_autostart(&self, enabled: bool) -> Result<(), CommandError> {
+        crate::autostart::apply(self.app, enabled)
+    }
+
+    fn set_transform_enabled(&self, enabled: bool) {
+        hotkeys::set_transform_enabled_with(self.core, enabled);
+    }
+
+    fn replace_hotkeys(
+        &self,
+        previous: &HotkeySettings,
+        next: &HotkeySettings,
+    ) -> Result<Vec<HotkeyRegistrationFailure>, CommandError> {
+        hotkeys::replace_hotkeys_with(self.app, self.core, previous, next)
+    }
+
+    fn sync_speech_engine(&self, settings: &AppSettings) {
+        // Load, reload or unload the speech model to match (model, language,
+        // GPU and "Keep the speech model loaded").
+        self.core.warm_transcriber().sync_with_settings(settings);
+    }
+
+    fn report_hotkey_failures(&self, failures: &[HotkeyRegistrationFailure]) {
+        hotkeys::emit_registration_failures_with(self.core.host().as_ref(), failures);
+    }
+}
+
+/// The body of [`apply_settings_change_with`], over the parts it uses.
+fn apply_settings_change_in(
+    state: &BackendState,
+    host: &dyn Host,
+    effects: &dyn SettingsEffects,
+    previous: &AppSettings,
+    settings: AppSettings,
+) -> Result<AppSettings, CommandError> {
     settings
         .validate()
         .map_err(CommandError::invalid_settings)?;
@@ -221,7 +285,7 @@ fn apply_settings_change_with(
     // Apply launch-at-startup first: when the OS registration fails the new
     // value is never saved, so the UI toggle reverts.
     if previous.launch_at_startup != settings.launch_at_startup {
-        crate::autostart::apply(app, settings.launch_at_startup)?;
+        effects.apply_autostart(settings.launch_at_startup)?;
     }
 
     // Transform Selection is only bound while Local AI is on, so turning it on
@@ -230,12 +294,11 @@ fn apply_settings_change_with(
     let rebind = previous.hotkeys != settings.hotkeys || transform_toggled;
     let mut hotkey_failures = Vec::new();
     if rebind {
-        hotkeys::set_transform_enabled(app, settings.notes_analysis_enabled);
-        hotkey_failures = match hotkeys::replace_hotkeys(app, &previous.hotkeys, &settings.hotkeys)
-        {
+        effects.set_transform_enabled(settings.notes_analysis_enabled);
+        hotkey_failures = match effects.replace_hotkeys(&previous.hotkeys, &settings.hotkeys) {
             Ok(failures) => failures,
             Err(error) => {
-                hotkeys::set_transform_enabled(app, previous.notes_analysis_enabled);
+                effects.set_transform_enabled(previous.notes_analysis_enabled);
                 return Err(error);
             }
         };
@@ -243,11 +306,11 @@ fn apply_settings_change_with(
 
     if let Err(error) = save_settings_change(state, previous, &settings) {
         if rebind {
-            hotkeys::set_transform_enabled(app, previous.notes_analysis_enabled);
-            let _ = hotkeys::replace_hotkeys(app, &settings.hotkeys, &previous.hotkeys);
+            effects.set_transform_enabled(previous.notes_analysis_enabled);
+            let _ = effects.replace_hotkeys(&settings.hotkeys, &previous.hotkeys);
         }
         if previous.launch_at_startup != settings.launch_at_startup {
-            let _ = crate::autostart::apply(app, previous.launch_at_startup);
+            let _ = effects.apply_autostart(previous.launch_at_startup);
         }
 
         return Err(error);
@@ -255,11 +318,9 @@ fn apply_settings_change_with(
 
     // Every window updates from this event, so it goes out as soon as the
     // new settings are stored.
-    emit_changed_with(core.host().as_ref(), &settings);
-    // Load, reload or unload the speech model to match (model, language,
-    // GPU and "Keep the speech model loaded").
-    core.warm_transcriber().sync_with_settings(&settings);
-    hotkeys::emit_registration_failures(app, &hotkey_failures);
+    emit_changed_with(host, &settings);
+    effects.sync_speech_engine(&settings);
+    effects.report_hotkey_failures(&hotkey_failures);
 
     enforce_retention_change(state, previous, &settings)?;
 
@@ -400,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unchanged_startup_switch_saves_and_announces_nothing() {
+    fn an_unchanged_startup_switch_keeps_the_settings_and_announces_nothing() {
         let root = tempfile::tempdir().unwrap();
         let host = host_in(root.path());
         let state = state_in(root.path());
@@ -413,25 +474,263 @@ mod tests {
         assert!(host.events().is_empty());
     }
 
+    /// Records every side effect a settings change asks for, in order.
+    #[derive(Default)]
+    struct FakeEffects {
+        calls: std::cell::RefCell<Vec<String>>,
+        failures: Vec<HotkeyRegistrationFailure>,
+    }
+
+    impl FakeEffects {
+        fn calls(&self) -> Vec<String> {
+            self.calls.borrow().clone()
+        }
+
+        fn record(&self, call: String) {
+            self.calls.borrow_mut().push(call);
+        }
+    }
+
+    impl SettingsEffects for FakeEffects {
+        fn apply_autostart(&self, enabled: bool) -> Result<(), CommandError> {
+            self.record(format!("autostart {enabled}"));
+            Ok(())
+        }
+
+        fn set_transform_enabled(&self, enabled: bool) {
+            self.record(format!("transform {enabled}"));
+        }
+
+        fn replace_hotkeys(
+            &self,
+            previous: &HotkeySettings,
+            next: &HotkeySettings,
+        ) -> Result<Vec<HotkeyRegistrationFailure>, CommandError> {
+            self.record(format!(
+                "hotkeys {} -> {}",
+                previous.paste_last_transcript, next.paste_last_transcript
+            ));
+            Ok(self.failures.clone())
+        }
+
+        fn sync_speech_engine(&self, settings: &AppSettings) {
+            self.record(format!("speech engine {:?}", settings.selected_model_id));
+        }
+
+        fn report_hotkey_failures(&self, failures: &[HotkeyRegistrationFailure]) {
+            self.record(format!("hotkey failures {}", failures.len()));
+        }
+    }
+
+    /// Settings that flip launch at startup and rebind a hotkey.
+    fn startup_and_hotkey_change(previous: &AppSettings) -> AppSettings {
+        let mut next = previous.clone();
+        next.launch_at_startup = !previous.launch_at_startup;
+        next.hotkeys.paste_last_transcript = "Ctrl+Alt+P".into();
+        next
+    }
+
     #[test]
-    fn a_settings_change_is_saved() {
+    fn a_settings_change_applies_saves_and_announces_once_in_order() {
+        let root = tempfile::tempdir().unwrap();
+        let host = host_in(root.path());
+        let state = state_in(root.path());
+        let previous = state.db().unwrap().get_settings().unwrap();
+        let next = startup_and_hotkey_change(&previous);
+        let effects = FakeEffects::default();
+
+        let saved =
+            apply_settings_change_in(&state, &host, &effects, &previous, next.clone()).unwrap();
+
+        assert_eq!(saved, next);
+        assert_eq!(state.db().unwrap().get_settings().unwrap(), next);
+        assert_eq!(
+            effects.calls(),
+            [
+                format!("autostart {}", next.launch_at_startup),
+                format!("transform {}", next.notes_analysis_enabled),
+                format!(
+                    "hotkeys {} -> Ctrl+Alt+P",
+                    previous.hotkeys.paste_last_transcript
+                ),
+                format!("speech engine {:?}", next.selected_model_id),
+                "hotkey failures 0".to_string(),
+            ]
+        );
+        assert_eq!(
+            sent(&host),
+            [(
+                "scribe:settings-changed",
+                serde_json::to_value(&next).unwrap()
+            )]
+        );
+    }
+
+    /// When the save fails (here the database lock is poisoned), the
+    /// hotkeys and the startup entry go back and nothing is announced.
+    #[test]
+    fn a_failed_save_rolls_back_the_hotkeys_and_the_startup_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let host = host_in(root.path());
+        let state = state_in(root.path());
+        let previous = state.db().unwrap().get_settings().unwrap();
+        let next = startup_and_hotkey_change(&previous);
+        let poisoner = state.clone();
+        let _ = thread::spawn(move || {
+            let _db = poisoner.db().unwrap();
+            panic!("poison the database lock");
+        })
+        .join();
+        let effects = FakeEffects::default();
+
+        let error =
+            apply_settings_change_in(&state, &host, &effects, &previous, next.clone()).unwrap_err();
+
+        assert_eq!(error.code, "database_lock_poisoned");
+        assert_eq!(
+            effects.calls(),
+            [
+                format!("autostart {}", next.launch_at_startup),
+                format!("transform {}", next.notes_analysis_enabled),
+                format!(
+                    "hotkeys {} -> Ctrl+Alt+P",
+                    previous.hotkeys.paste_last_transcript
+                ),
+                format!("transform {}", previous.notes_analysis_enabled),
+                format!(
+                    "hotkeys Ctrl+Alt+P -> {}",
+                    previous.hotkeys.paste_last_transcript
+                ),
+                format!("autostart {}", previous.launch_at_startup),
+            ]
+        );
+        assert!(host.events().is_empty());
+    }
+
+    fn github_activity(repo: &str) -> crate::sync_history::GitHubSyncActivity {
+        crate::sync_history::GitHubSyncActivity {
+            completed_at: chrono::Utc::now(),
+            outcome: crate::sync_history::SyncOutcome::Success,
+            source: crate::sync_history::SyncSource::Manual,
+            repo: repo.into(),
+            synced_items: 1,
+            files_written: 1,
+            error_code: None,
+            error_message: None,
+        }
+    }
+
+    /// A new repository starts with no GitHub activity; any other change
+    /// keeps it.
+    #[test]
+    fn changing_the_repository_clears_the_github_activity() {
         let root = tempfile::tempdir().unwrap();
         let state = state_in(root.path());
-        let previous = AppSettings::default();
-        for next in [
-            AppSettings {
-                pill_x: Some(3),
-                ..previous.clone()
-            },
-            AppSettings {
-                github_repo: "someone/notes".into(),
-                ..previous.clone()
-            },
-        ] {
-            save_settings_change(&state, &previous, &next).unwrap();
-            assert_eq!(state.db().unwrap().get_settings().unwrap(), next);
-            enforce_retention_change(&state, &previous, &next).unwrap();
+        let previous = AppSettings {
+            github_repo: "someone/notes".into(),
+            ..AppSettings::default()
+        };
+        state.db().unwrap().save_settings(&previous).unwrap();
+        let activity = github_activity("someone/notes");
+        state
+            .db()
+            .unwrap()
+            .save_github_sync_activity(&activity)
+            .unwrap();
+
+        let moved = AppSettings {
+            pill_x: Some(3),
+            ..previous.clone()
+        };
+        save_settings_change(&state, &previous, &moved).unwrap();
+        assert_eq!(state.db().unwrap().get_settings().unwrap(), moved);
+        assert_eq!(
+            state.db().unwrap().get_github_sync_activity().unwrap(),
+            Some(activity)
+        );
+
+        let other_repo = AppSettings {
+            github_repo: "someone/journal".into(),
+            ..moved.clone()
+        };
+        save_settings_change(&state, &moved, &other_repo).unwrap();
+        assert_eq!(state.db().unwrap().get_settings().unwrap(), other_repo);
+        assert_eq!(
+            state.db().unwrap().get_github_sync_activity().unwrap(),
+            None
+        );
+    }
+
+    /// Saves a transcript (a note when `is_note`) made `days` ago.
+    fn transcript_made(state: &BackendState, text: &str, is_note: bool, days: i64) -> String {
+        let mut transcript =
+            crate::transcript::Transcript::new_last_buffer(text, None, None, None).unwrap();
+        transcript.is_note = is_note;
+        transcript.created_at = chrono::Utc::now() - chrono::Duration::days(days);
+        state
+            .db()
+            .unwrap()
+            .save_last_transcript(&transcript)
+            .unwrap();
+        transcript.id
+    }
+
+    fn exists(state: &BackendState, id: &str) -> bool {
+        state
+            .db()
+            .unwrap()
+            .get_transcript_by_id(id)
+            .unwrap()
+            .is_some()
+    }
+
+    /// Shortening a retention window deletes what is now past it, at once;
+    /// an unchanged window deletes nothing.
+    #[test]
+    fn a_shorter_retention_window_deletes_what_is_past_it() {
+        let root = tempfile::tempdir().unwrap();
+        let host = host_in(root.path());
+        let state = state_in(root.path());
+        let previous = AppSettings {
+            history_retention_days: Some(30),
+            notes_retention_days: None,
+            ..AppSettings::default()
+        };
+        state.db().unwrap().save_settings(&previous).unwrap();
+        let old_dictation = transcript_made(&state, "old dictation", false, 20);
+        let new_dictation = transcript_made(&state, "new dictation", false, 2);
+        let old_note = transcript_made(&state, "old note", true, 20);
+        let new_note = transcript_made(&state, "new note", true, 2);
+        let effects = FakeEffects::default();
+
+        // A change that leaves the windows alone deletes nothing.
+        let moved = AppSettings {
+            pill_x: Some(3),
+            ..previous.clone()
+        };
+        apply_settings_change_in(&state, &host, &effects, &previous, moved.clone()).unwrap();
+        for id in [&old_dictation, &new_dictation, &old_note, &new_note] {
+            assert!(exists(&state, id));
         }
+
+        let shorter = AppSettings {
+            history_retention_days: Some(7),
+            ..moved.clone()
+        };
+        apply_settings_change_in(&state, &host, &effects, &moved, shorter.clone()).unwrap();
+        assert!(!exists(&state, &old_dictation));
+        assert!(exists(&state, &new_dictation));
+        assert!(exists(&state, &old_note), "history retention keeps notes");
+        assert!(exists(&state, &new_note));
+
+        let notes_window = AppSettings {
+            notes_retention_days: Some(7),
+            ..shorter.clone()
+        };
+        apply_settings_change_in(&state, &host, &effects, &shorter, notes_window).unwrap();
+        assert!(!exists(&state, &old_note));
+        assert!(exists(&state, &new_note));
+        assert!(exists(&state, &new_dictation));
     }
 
     #[test]
