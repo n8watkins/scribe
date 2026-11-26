@@ -3,7 +3,7 @@
 //! transcription.
 //!
 //! Design notes:
-//! - `WarmTranscriber::transcribe` is a stateless, serialized primitive:
+//! - `WarmTranscriber::transcribe_with` is a stateless, serialized primitive:
 //!   request in (WAV + model + language + prompt), text out. Nothing assumes
 //!   "one transcription per recording", so incremental/segment transcription
 //!   can reuse it as-is.
@@ -646,16 +646,6 @@ impl WarmTranscriber {
             self.shared.after_unload();
             self.publish(None);
         }
-    }
-
-    /// [`Self::transcribe_with`]; the transcriber already knows its host, so
-    /// `app` is not used.
-    pub fn transcribe(
-        &self,
-        _app: &AppHandle,
-        request: WhisperRequest,
-    ) -> Result<WhisperTranscription, CommandError> {
-        self.transcribe_with(request)
     }
 
     /// Transcribes one WAV. Tries the resident engine first and transparently

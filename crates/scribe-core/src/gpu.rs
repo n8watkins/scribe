@@ -18,7 +18,6 @@
 //! dictation.
 
 use serde::Serialize;
-use tauri::AppHandle;
 
 use crate::host::Host;
 
@@ -187,25 +186,10 @@ fn probe_inputs(host: &dyn Host) -> Option<ProbeInputs> {
     Some(ProbeInputs { model, executable })
 }
 
-/// Probe the Vulkan GPUs, using the session cache. Blocking (loads a model);
-/// callers should run it off the main thread.
-pub fn probe(app: &AppHandle) -> GpuProbe {
-    match tauri::Manager::try_state::<crate::core::Core>(app) {
-        Some(core) => probe_with(
-            core.host().as_ref(),
-            cfg!(windows).then_some(core.warm_transcriber()),
-        ),
-        None => {
-            log::warn!("gpu::probe ran before the engine was ready");
-            probe_from_stderr("", false)
-        }
-    }
-}
-
-/// [`probe`] with the resources and models of `host`. The probe loads a model
-/// in whisper-cli (on Windows), so it runs through `warm` (when given) to
-/// never sit next to the resident one; callers pass `warm` only where the
-/// probe really runs.
+/// Probes the Vulkan GPUs, using the session cache, with the resources and models of `host`.
+/// Blocking (loads a model); callers should run it off the main thread.
+/// The probe loads a model in whisper-cli (on Windows), so it runs through `warm` (when given) to never sit next to the resident one.
+/// Callers pass `warm` only where the probe really runs.
 pub fn probe_with(
     host: &dyn Host,
     warm: Option<&crate::whisper_server::WarmTranscriber>,
