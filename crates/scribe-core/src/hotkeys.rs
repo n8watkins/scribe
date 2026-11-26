@@ -1852,17 +1852,139 @@ mod wayland {
 /// when it was queued (so a test can pin an event before its intent).
 #[cfg(test)]
 pub(crate) mod test_target {
-    use std::sync::Mutex;
+    use std::{path::Path, sync::Mutex};
+
+    use global_hotkey::hotkey::HotKey;
 
     use super::{ActionTarget, HotkeyRuntime};
     use crate::{
+        app_state::AppStatus,
         dictation_worker::Intent,
+        error::CommandError,
+        events::CoreEvent,
         host::{Flavor, Host, RecordingHost},
         paths::Paths,
+        settings::AppSettings,
     };
 
+    /// A main-window call [`DashboardHost`] saw.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) enum DashboardCall {
+        Open(Option<String>),
+        Toggle,
+    }
+
+    /// A [`RecordingHost`] that also records the main-window calls, which
+    /// `RecordingHost` answers (no main window) but does not record. Every
+    /// call goes on to the `RecordingHost`; it derefs to it for its records.
+    pub(crate) struct DashboardHost {
+        inner: RecordingHost,
+        dashboard_calls: Mutex<Vec<DashboardCall>>,
+    }
+
+    impl DashboardHost {
+        /// The main-window calls so far, oldest first.
+        pub(crate) fn dashboard_calls(&self) -> Vec<DashboardCall> {
+            self.dashboard_calls.lock().unwrap().clone()
+        }
+    }
+
+    impl std::ops::Deref for DashboardHost {
+        type Target = RecordingHost;
+
+        fn deref(&self) -> &RecordingHost {
+            &self.inner
+        }
+    }
+
+    impl Host for DashboardHost {
+        fn emit(&self, event: CoreEvent) {
+            self.inner.emit(event)
+        }
+
+        fn paths(&self) -> &Paths {
+            self.inner.paths()
+        }
+
+        fn flavor(&self) -> Flavor {
+            self.inner.flavor()
+        }
+
+        fn update_tray_status(&self, status: AppStatus) {
+            self.inner.update_tray_status(status)
+        }
+
+        fn update_engine_summary(&self, summary: String) {
+            self.inner.update_engine_summary(summary)
+        }
+
+        fn sync_settings(&self, settings: &AppSettings) {
+            self.inner.sync_settings(settings)
+        }
+
+        fn open_dashboard(&self, route: Option<&str>) -> Result<(), CommandError> {
+            self.dashboard_calls
+                .lock()
+                .unwrap()
+                .push(DashboardCall::Open(route.map(str::to_string)));
+            self.inner.open_dashboard(route)
+        }
+
+        fn toggle_dashboard(&self) -> Result<(), CommandError> {
+            self.dashboard_calls
+                .lock()
+                .unwrap()
+                .push(DashboardCall::Toggle);
+            self.inner.toggle_dashboard()
+        }
+
+        fn main_window_logical_size(&self) -> Option<(u32, u32)> {
+            self.inner.main_window_logical_size()
+        }
+
+        fn app_version(&self) -> String {
+            self.inner.app_version()
+        }
+
+        fn exit(&self, code: i32) {
+            self.inner.exit(code)
+        }
+
+        fn open_path(&self, path: &Path) -> Result<(), String> {
+            self.inner.open_path(path)
+        }
+
+        fn open_url(&self, url: &str) -> Result<(), String> {
+            self.inner.open_url(url)
+        }
+
+        fn notify(&self, title: &str, body: &str) -> Result<(), String> {
+            self.inner.notify(title, body)
+        }
+
+        fn register_shortcut(&self, shortcut: HotKey) -> Result<(), String> {
+            self.inner.register_shortcut(shortcut)
+        }
+
+        fn unregister_shortcut(&self, shortcut: HotKey) -> Result<(), String> {
+            self.inner.unregister_shortcut(shortcut)
+        }
+
+        fn is_shortcut_registered(&self, shortcut: HotKey) -> bool {
+            self.inner.is_shortcut_registered(shortcut)
+        }
+
+        fn launch_at_login(&self) -> Result<bool, String> {
+            self.inner.launch_at_login()
+        }
+
+        fn set_launch_at_login(&self, enabled: bool) -> Result<(), String> {
+            self.inner.set_launch_at_login(enabled)
+        }
+    }
+
     pub(crate) struct Recorder {
-        pub(crate) host: RecordingHost,
+        pub(crate) host: DashboardHost,
         pub(crate) runtime: HotkeyRuntime,
         pub(crate) dashboard_toggles: bool,
         submitted: Mutex<Vec<(Intent, usize)>>,
@@ -1871,10 +1993,13 @@ pub(crate) mod test_target {
     impl Recorder {
         pub(crate) fn new() -> Self {
             Self {
-                host: RecordingHost::new(
-                    Paths::from_parts("/d".into(), "/c".into(), "/l".into(), None, None),
-                    Flavor::Stable,
-                ),
+                host: DashboardHost {
+                    inner: RecordingHost::new(
+                        Paths::from_parts("/d".into(), "/c".into(), "/l".into(), None, None),
+                        Flavor::Stable,
+                    ),
+                    dashboard_calls: Mutex::new(Vec::new()),
+                },
                 runtime: HotkeyRuntime::default(),
                 dashboard_toggles: true,
                 submitted: Mutex::new(Vec::new()),
@@ -2367,6 +2492,13 @@ mod tests {
                 .unwrap()
             );
             assert!(target.submitted().is_empty());
+            // The setting picks the window call, made exactly once.
+            let expected = if toggles {
+                test_target::DashboardCall::Toggle
+            } else {
+                test_target::DashboardCall::Open(None)
+            };
+            assert_eq!(target.host.dashboard_calls(), [expected]);
         }
     }
 

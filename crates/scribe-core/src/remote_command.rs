@@ -155,16 +155,22 @@ mod tests {
             assert_eq!(target.event_names(), events, "{command:?}");
             assert_eq!(target.submitted(), [(intent, events.len())], "{command:?}");
             assert!(target.host.calls().is_empty());
+            assert!(target.host.dashboard_calls().is_empty());
         }
     }
 
-    /// `dashboard` only opens the main window: no event, no dictation work,
-    /// and a missing window is only logged.
+    /// `dashboard` only opens the main window, exactly once, on its default
+    /// route (it never toggles): no event, no dictation work, and a missing
+    /// window is only logged.
     #[test]
     fn the_dashboard_command_only_opens_the_window() {
-        let target = crate::hotkeys::test_target::Recorder::new();
+        use crate::hotkeys::test_target::{DashboardCall, Recorder};
+
+        let target = Recorder::new();
         RemoteCommand::Dashboard.run_on(&target);
+        assert_eq!(target.host.dashboard_calls(), [DashboardCall::Open(None)]);
         assert!(target.host.events().is_empty());
         assert!(target.submitted().is_empty());
+        assert!(target.host.calls().is_empty());
     }
 }
