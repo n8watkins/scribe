@@ -177,7 +177,7 @@ pub fn probe(app: &AppHandle) -> GpuProbe {
     match tauri::Manager::try_state::<crate::core::Core>(app) {
         Some(core) => probe_with(
             core.host().as_ref(),
-            Some(core.warm_transcriber()).filter(|_| cfg!(windows)),
+            cfg!(windows).then_some(core.warm_transcriber()),
         ),
         None => {
             log::warn!("gpu::probe ran before the engine was ready");

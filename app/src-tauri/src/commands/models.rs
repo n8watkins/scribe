@@ -144,7 +144,7 @@ pub async fn probe_gpu_devices(core: tauri::State<'_, Core>) -> Result<GpuProbe,
         // Only Windows runs a probe (the bundled whisper-cli loads a model).
         crate::gpu::probe_with(
             core.host().as_ref(),
-            Some(core.warm_transcriber()).filter(|_| cfg!(windows)),
+            cfg!(windows).then_some(core.warm_transcriber()),
         )
     })
     .await
