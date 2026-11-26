@@ -1705,6 +1705,50 @@ mod tests {
         fn main_window_logical_size(&self) -> Option<(u32, u32)> {
             None
         }
+
+        fn app_version(&self) -> String {
+            crate::host::RECORDING_HOST_VERSION.to_string()
+        }
+
+        fn exit(&self, _code: i32) {}
+
+        fn open_path(&self, _path: &std::path::Path) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn open_url(&self, _url: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn notify(&self, _title: &str, _body: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn register_shortcut(
+            &self,
+            _shortcut: global_hotkey::hotkey::HotKey,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn unregister_shortcut(
+            &self,
+            _shortcut: global_hotkey::hotkey::HotKey,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn is_shortcut_registered(&self, _shortcut: global_hotkey::hotkey::HotKey) -> bool {
+            false
+        }
+
+        fn launch_at_login(&self) -> Result<bool, String> {
+            Ok(false)
+        }
+
+        fn set_launch_at_login(&self, _enabled: bool) -> Result<(), String> {
+            Ok(())
+        }
     }
 
     /// The Windows end-to-end hang: the app quit (the main thread waiting in
@@ -2248,6 +2292,49 @@ mod tests {
 
         fn main_window_logical_size(&self) -> Option<(u32, u32)> {
             None
+        }
+
+        fn app_version(&self) -> String {
+            self.inner.app_version()
+        }
+
+        fn exit(&self, code: i32) {
+            self.inner.exit(code);
+        }
+
+        fn open_path(&self, path: &std::path::Path) -> Result<(), String> {
+            self.inner.open_path(path)
+        }
+
+        fn open_url(&self, url: &str) -> Result<(), String> {
+            self.inner.open_url(url)
+        }
+
+        fn notify(&self, title: &str, body: &str) -> Result<(), String> {
+            self.inner.notify(title, body)
+        }
+
+        fn register_shortcut(&self, shortcut: global_hotkey::hotkey::HotKey) -> Result<(), String> {
+            self.inner.register_shortcut(shortcut)
+        }
+
+        fn unregister_shortcut(
+            &self,
+            shortcut: global_hotkey::hotkey::HotKey,
+        ) -> Result<(), String> {
+            self.inner.unregister_shortcut(shortcut)
+        }
+
+        fn is_shortcut_registered(&self, shortcut: global_hotkey::hotkey::HotKey) -> bool {
+            self.inner.is_shortcut_registered(shortcut)
+        }
+
+        fn launch_at_login(&self) -> Result<bool, String> {
+            self.inner.launch_at_login()
+        }
+
+        fn set_launch_at_login(&self, enabled: bool) -> Result<(), String> {
+            self.inner.set_launch_at_login(enabled)
         }
     }
 

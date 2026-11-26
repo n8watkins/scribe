@@ -19,6 +19,10 @@ e2e-audio = []
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"
+# The global-shortcut types the engine names (HotKey, Code, the press
+# events) without Tauri: the plugin above re-exports them from this crate, so
+# both name the same types (Host::register_shortcut, src/host.rs).
+global-hotkey = "0.8"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-log = "2"

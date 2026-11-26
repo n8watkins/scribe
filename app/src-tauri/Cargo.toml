@@ -33,6 +33,9 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-log = "2"
+# The startup entry behind TauriHost's launch-at-login calls, and the plugin
+# the shell registers (tauri_host::autostart_plugin).
+tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-notification = "2"

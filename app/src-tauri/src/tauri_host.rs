@@ -2,6 +2,8 @@
 //! [`Host`] on top of Tauri, and the folders Tauri resolves, checked against
 //! the engine's own [`Paths`].
 
+use std::path::Path;
+
 use scribe_core::{
     app_state::AppStatus,
     error::CommandError,
@@ -10,7 +12,11 @@ use scribe_core::{
     paths::Paths,
     settings::AppSettings,
 };
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{plugin::TauriPlugin, AppHandle, Emitter, Manager, Runtime};
+use tauri_plugin_autostart::ManagerExt as _;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt as _, Shortcut};
+use tauri_plugin_notification::NotificationExt as _;
+use tauri_plugin_opener::OpenerExt as _;
 
 /// The engine's host in the Tauri shell: events go to every webview through
 /// `app.emit`, the tray and the main window are the shell's own.
@@ -65,6 +71,91 @@ impl Host for TauriHost {
     fn main_window_logical_size(&self) -> Option<(u32, u32)> {
         crate::window_size::current_logical(&self.app)
     }
+
+    fn app_version(&self) -> String {
+        app_version(&self.app)
+    }
+
+    /// `AppHandle::exit` only asks the event loop to exit, so it is safe from
+    /// any thread; the exit path in `lib.rs` then stops the engine.
+    fn exit(&self, code: i32) {
+        self.app.exit(code);
+    }
+
+    fn open_path(&self, path: &Path) -> Result<(), String> {
+        self.app
+            .opener()
+            .open_path(path.to_string_lossy(), None::<&str>)
+            .map_err(|error| error.to_string())
+    }
+
+    fn open_url(&self, url: &str) -> Result<(), String> {
+        self.app
+            .opener()
+            .open_url(url, None::<&str>)
+            .map_err(|error| error.to_string())
+    }
+
+    fn notify(&self, title: &str, body: &str) -> Result<(), String> {
+        self.app
+            .notification()
+            .builder()
+            .title(title)
+            .body(body)
+            .show()
+            .map_err(|error| error.to_string())
+    }
+
+    fn register_shortcut(&self, shortcut: Shortcut) -> Result<(), String> {
+        self.app
+            .global_shortcut()
+            .register(shortcut)
+            .map_err(|error| error.to_string())
+    }
+
+    fn unregister_shortcut(&self, shortcut: Shortcut) -> Result<(), String> {
+        self.app
+            .global_shortcut()
+            .unregister(shortcut)
+            .map_err(|error| error.to_string())
+    }
+
+    fn is_shortcut_registered(&self, shortcut: Shortcut) -> bool {
+        self.app.global_shortcut().is_registered(shortcut)
+    }
+
+    fn launch_at_login(&self) -> Result<bool, String> {
+        self.app
+            .autolaunch()
+            .is_enabled()
+            .map_err(|error| error.to_string())
+    }
+
+    fn set_launch_at_login(&self, enabled: bool) -> Result<(), String> {
+        let autolaunch = self.app.autolaunch();
+        let result = if enabled {
+            autolaunch.enable()
+        } else {
+            autolaunch.disable()
+        };
+        result.map_err(|error| error.to_string())
+    }
+}
+
+/// The running app's version (`package_info().version`): the configs' version,
+/// or the one a Dev or installer-upgrade build overrides it with.
+pub fn app_version<R: Runtime, M: Manager<R>>(app: &M) -> String {
+    app.package_info().version.to_string()
+}
+
+/// The autostart plugin behind [`TauriHost`]'s launch-at-login calls. It names
+/// the entry after the product ("Scribe", "Scribe Dev"); on Windows the entry
+/// starts Scribe with [`scribe_core::autostart::SIGN_IN_FLAG`].
+pub fn autostart_plugin<R: Runtime>() -> TauriPlugin<R> {
+    let builder = tauri_plugin_autostart::Builder::new();
+    #[cfg(windows)]
+    let builder = builder.arg(scribe_core::autostart::SIGN_IN_FLAG);
+    builder.build()
 }
 
 /// Resolves the engine's folders for this app (its identifier and product
