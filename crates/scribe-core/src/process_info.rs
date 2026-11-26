@@ -348,51 +348,55 @@ mod tests {
         let pid = child.id();
         let recorded = identity(pid).expect("the child is readable");
 
-        // A helper thread blocks in `wait()` (no polling window to run out on
-        // a busy machine) and sends the exit status. `exited` records that the
-        // child was reaped, so the guard below only kills one that still runs.
-        let exited = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // A helper thread owns the `Child` and sends its exit status as soon as
+        // it is gone; the 30 s deadline is on the receiving side, so a busy
+        // machine cannot run a window out.
         let (tx, exit) = std::sync::mpsc::channel();
-        let waiter = {
-            let exited = exited.clone();
-            std::thread::spawn(move || {
-                let mut child = child;
-                let status = child.wait();
-                exited.store(true, std::sync::atomic::Ordering::SeqCst);
-                let _ = tx.send(status);
-            })
-        };
-        // Kills and reaps the child on every exit path, a failed assertion
-        // included, so a failure cannot leave a ten minute process behind.
+        let (kill, kill_rx) = std::sync::mpsc::channel::<()>();
+        let waiter = std::thread::spawn(move || {
+            let mut child = child;
+            loop {
+                match child.try_wait() {
+                    Ok(None) => {}
+                    Ok(Some(status)) => {
+                        let _ = tx.send(Ok(status));
+                        return;
+                    }
+                    Err(error) => {
+                        let _ = tx.send(Err(error));
+                        return;
+                    }
+                }
+                // A timeout means keep waiting; a message or a dropped sender
+                // means the test is over, so stop the child.
+                if !matches!(
+                    kill_rx.recv_timeout(std::time::Duration::from_millis(10)),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                ) {
+                    let _ = child.kill();
+                    let _ = tx.send(child.wait());
+                    return;
+                }
+            }
+        });
+        // Stops and reaps the child on every exit path, a failed assertion
+        // included, so a failure cannot leave a ten minute process behind. The
+        // helper kills through its own `Child` handle (never a raw pid, which
+        // could be reused after a reap), or has already returned.
         struct Guard {
-            pid: u32,
-            exited: std::sync::Arc<std::sync::atomic::AtomicBool>,
+            kill: Option<std::sync::mpsc::Sender<()>>,
             waiter: Option<std::thread::JoinHandle<()>>,
         }
         impl Drop for Guard {
             fn drop(&mut self) {
-                if !self.exited.load(std::sync::atomic::Ordering::SeqCst) {
-                    #[cfg(unix)]
-                    // SAFETY: plain signal to a child that has not been reaped
-                    // yet, so the pid is still ours.
-                    unsafe {
-                        libc::kill(self.pid as libc::pid_t, libc::SIGKILL);
-                    }
-                    #[cfg(windows)]
-                    let _ = std::process::Command::new("taskkill")
-                        .args(["/F", "/PID", &self.pid.to_string()])
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status();
-                }
+                drop(self.kill.take());
                 if let Some(waiter) = self.waiter.take() {
                     let _ = waiter.join();
                 }
             }
         }
         let _guard = Guard {
-            pid,
-            exited,
+            kill: Some(kill),
             waiter: Some(waiter),
         };
 

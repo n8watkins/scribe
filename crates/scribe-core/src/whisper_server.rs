@@ -2180,15 +2180,18 @@ mod tests {
     }
 
     /// A child that runs for ten minutes and does nothing, so it cannot end
-    /// by itself during a test. A helper thread blocks in `wait()` and sends
-    /// the exit status, so there is no polling window to run out on a busy
-    /// machine. Dropping it kills and reaps the child, so a failed assertion
-    /// cannot leave the process behind.
+    /// by itself during a test. A helper thread owns the `Child` and sends its
+    /// exit status as soon as it is gone; the test's deadline is on the
+    /// receiving side, so a busy machine cannot run a window out. Dropping
+    /// this tells the helper to kill and reap the child through that `Child`
+    /// handle (never through a raw pid, which could be reused after a reap),
+    /// so a failed assertion cannot leave the process behind.
     struct LongRunningProcess {
         pid: u32,
         exit: std::sync::mpsc::Receiver<std::io::Result<std::process::ExitStatus>>,
+        /// Dropping this sender is the "kill now" signal for the helper.
+        kill: Option<std::sync::mpsc::Sender<()>>,
         waiter: Option<std::thread::JoinHandle<()>>,
-        exited: bool,
     }
 
     impl LongRunningProcess {
@@ -2210,45 +2213,52 @@ mod tests {
                 .unwrap();
             let pid = child.id();
             let (tx, exit) = std::sync::mpsc::channel();
-            let waiter = std::thread::spawn(move || {
-                let _ = tx.send(child.wait());
+            let (kill, kill_rx) = std::sync::mpsc::channel::<()>();
+            let waiter = std::thread::spawn(move || loop {
+                match child.try_wait() {
+                    Ok(None) => {}
+                    Ok(Some(status)) => {
+                        let _ = tx.send(Ok(status));
+                        return;
+                    }
+                    Err(error) => {
+                        let _ = tx.send(Err(error));
+                        return;
+                    }
+                }
+                // A timeout means keep waiting; a message or a dropped sender
+                // means the owner is gone or finished, so stop the child.
+                if !matches!(
+                    kill_rx.recv_timeout(Duration::from_millis(10)),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                ) {
+                    let _ = child.kill();
+                    let _ = tx.send(child.wait());
+                    return;
+                }
             });
             Self {
                 pid,
                 exit,
+                kill: Some(kill),
                 waiter: Some(waiter),
-                exited: false,
             }
         }
 
         /// Blocks until the child is gone (up to `limit`) and returns how.
         fn wait_for_exit(&mut self, limit: Duration) -> std::process::ExitStatus {
-            let status = self
-                .exit
+            self.exit
                 .recv_timeout(limit)
                 .unwrap_or_else(|_| panic!("the engine process was not stopped within {limit:?}"))
-                .unwrap();
-            self.exited = true;
-            status
+                .unwrap()
         }
     }
 
     impl Drop for LongRunningProcess {
         fn drop(&mut self) {
-            if !self.exited {
-                #[cfg(unix)]
-                // SAFETY: plain signal to a child that this struct has not
-                // yet seen exit, so the pid is still ours.
-                unsafe {
-                    libc::kill(self.pid as libc::pid_t, libc::SIGKILL);
-                }
-                #[cfg(windows)]
-                let _ = std::process::Command::new("taskkill")
-                    .args(["/F", "/PID", &self.pid.to_string()])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-            }
+            // The helper kills the child through its own `Child` handle, or has
+            // already reaped it and returned, in which case nothing is signaled.
+            drop(self.kill.take());
             if let Some(waiter) = self.waiter.take() {
                 let _ = waiter.join();
             }
