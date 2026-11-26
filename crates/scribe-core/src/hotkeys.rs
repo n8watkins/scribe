@@ -723,6 +723,7 @@ fn on_toggle_key_up_with(app: &AppHandle, core: &Core) {
 /// `dictation_worker::submit` (audio) takes the app.
 #[cfg(windows)]
 fn on_toggle_key_press_with(app: &AppHandle, core: &Core) {
+    log::info!("Toggle key pressed (trigger Press)");
     core.emit(hotkey_action_event(
         HotkeyAction::ToggleDictation.event_name(),
     ));

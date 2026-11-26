@@ -18,11 +18,13 @@ Python standard library only. Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import ctypes
 import json
 import os
 import re
 import shutil
+import socket
 import sqlite3
 import struct
 import subprocess
@@ -30,6 +32,8 @@ import sys
 import threading
 import time
 import traceback
+import urllib.parse
+import urllib.request
 import zlib
 from ctypes import wintypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -69,7 +73,31 @@ CLIPS = {
     "instruction": "Make this text uppercase, please.",
     "slow_app": "The busy spreadsheet finally opened after lunch.",
     "ignored_paste": "Nobody reads the clipboard in this window today.",
+    # The default-style hotkey group.
+    "dev_hold": "Bring a warm jacket because the evening gets cold.",
+    "bare_toggle": "Please book a table for four people tonight.",
+    "note_chord": "Buy fresh bread and green apples on the way home.",
+    "chord_hold": "The train leaves the station at half past seven.",
+    "press_trigger": "Our garden needs more sunflowers next spring.",
+    "rebind_key": "Call the plumber about the leaking kitchen sink.",
 }
+# Log lines of the Windows toggle-key watcher and the note chord
+# (crates/scribe-core/src/hotkeys.rs); the chord watcher logs nothing.
+TOGGLE_WATCHER_PREFIX = "Toggle key watcher active"
+TOGGLE_WATCHER_LOG = TOGGLE_WATCHER_PREFIX + " (vk 0x{vk:X}, trigger {trigger})"
+TOGGLE_PRESSED_LOG = "Toggle key pressed (trigger Press)"
+TOGGLE_RELEASED_LOG = "Toggle key released (note chord fired: {fired})"
+NOTE_CHORD_LOG = "Note chord (Q) pressed during toggle hold"
+NOTE_CHORD_UNAVAILABLE_LOG = "Note chord unavailable"
+# The chord watcher's arming delay (windows_chord::ARMING_DELAY): a
+# modifier-only chord released sooner starts nothing.
+CHORD_ARMING_DELAY = 0.150
+# When the runner probes whether Scribe holds Q (wait_q_grabbed says why).
+Q_PROBE_FIRST_DELAY = 0.05
+Q_PROBE_INTERVAL = 0.1
+# How long a held toggle key on Release is watched for a recording that
+# must not start before the key comes up: a start takes well under this.
+RELEASE_HOLD_OBSERVATION = 0.5
 # How long the slow stand-in app is busy before it reads the clipboard on
 # Ctrl+V (target.ps1 -PasteDelayMs); well past Scribe's old fixed 180 ms wait.
 SLOW_APP_PASTE_DELAY_MS = 1000
@@ -256,6 +284,10 @@ gdi32.GetDIBits.argtypes = [
 ]
 gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
 gdi32.DeleteDC.argtypes = [wintypes.HDC]
+user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
+user32.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
+user32.MapVirtualKeyW.argtypes = [wintypes.UINT, wintypes.UINT]
+user32.MapVirtualKeyW.restype = wintypes.UINT
 
 user32.SetProcessDPIAware()
 
@@ -290,6 +322,175 @@ def press(action: str) -> None:
     chord_down(action)
     time.sleep(0.05)
     chord_up(action)
+
+
+# Keys as a hardware keyboard sends them, for the default-style hotkeys. Scribe's
+# Windows watchers poll GetAsyncKeyState (the chord watcher every 30 ms, the
+# toggle-key watcher every 10 ms) and the global-shortcut plugin uses
+# RegisterHotKey. SendInput with scan codes goes through the same raw input
+# path as a keyboard: it updates the async key state, trips RegisterHotKey and
+# low-level hooks, and the focused window types the character through its
+# keyboard layout. Messages posted to a window would reach none of these.
+KEYEVENTF_EXTENDEDKEY, KEYEVENTF_SCANCODE = 0x1, 0x8
+MAPVK_VK_TO_VSC = 0
+VK_LSHIFT, VK_LCONTROL, VK_LMENU, VK_LWIN = 0xA0, 0xA2, 0xA4, 0x5B
+VK_Q, VK_OEM_3 = 0x51, 0xC0
+# Keys whose scan code carries the E0 prefix.
+EXTENDED_VKS = {0x5B, 0x5C, 0xA3, 0xA5, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E, 0x6F}
+MODIFIER_NAMES = {
+    "ctrl": VK_LCONTROL,
+    "control": VK_LCONTROL,
+    "shift": VK_LSHIFT,
+    "alt": VK_LMENU,
+    "option": VK_LMENU,
+    "win": VK_LWIN,
+    "windows": VK_LWIN,
+    "super": VK_LWIN,
+    "meta": VK_LWIN,
+    "cmd": VK_LWIN,
+    "command": VK_LWIN,
+}
+# RegisterHotKey's modifier flags for each modifier key.
+MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, MOD_NOREPEAT = 0x1, 0x2, 0x4, 0x8, 0x4000
+HOTKEY_MOD_FLAGS = {VK_LCONTROL: MOD_CONTROL, VK_LSHIFT: MOD_SHIFT, VK_LMENU: MOD_ALT, VK_LWIN: MOD_WIN}
+KEY_NAMES = {
+    "backquote": VK_OEM_3,
+    "`": VK_OEM_3,
+    "~": VK_OEM_3,
+    "tilde": VK_OEM_3,
+    "space": 0x20,
+    "minus": 0xBD,
+    "equal": 0xBB,
+    "bracketleft": 0xDB,
+    "bracketright": 0xDD,
+    "backslash": 0xDC,
+    "semicolon": 0xBA,
+    "quote": 0xDE,
+    "comma": 0xBC,
+    "period": 0xBE,
+    "slash": 0xBF,
+    **{chr(c).lower(): c for c in range(ord("A"), ord("Z") + 1)},
+    **{f"key{chr(c).lower()}": c for c in range(ord("A"), ord("Z") + 1)},
+    **{str(d): 0x30 + d for d in range(10)},
+    **{f"digit{d}": 0x30 + d for d in range(10)},
+    **{f"f{n}": 0x6F + n for n in range(1, 25)},
+}
+
+
+class Chord:
+    """A hotkey as Scribe stores it ("Ctrl+Win", "Backquote", "Ctrl+Alt+F"),
+    as the keys that press it."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.modifiers: list[int] = []
+        self.key: int | None = None
+        for token in (part.strip().lower() for part in text.split("+")):
+            if token in MODIFIER_NAMES:
+                self.modifiers.append(MODIFIER_NAMES[token])
+            elif token in KEY_NAMES and self.key is None:
+                self.key = KEY_NAMES[token]
+            else:
+                raise CheckFailed(f"The runner cannot press {text!r} (no key for {token!r})")
+
+    @property
+    def modifier_only(self) -> bool:
+        return self.key is None and bool(self.modifiers)
+
+    @property
+    def bare_key(self) -> bool:
+        return self.key is not None and not self.modifiers
+
+    def __repr__(self) -> str:
+        return self.text
+
+
+def key_input(vk: int, up: bool) -> INPUT:
+    flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if up else 0)
+    if vk in EXTENDED_VKS:
+        flags |= KEYEVENTF_EXTENDEDKEY
+    event = INPUT(type=INPUT_KEYBOARD)
+    event.u.ki = KEYBDINPUT(wVk=0, wScan=user32.MapVirtualKeyW(vk, MAPVK_VK_TO_VSC), dwFlags=flags)
+    return event
+
+
+class Keyboard:
+    """Sends keys by scan code and remembers which are down, so a failed
+    scenario can let go of every key it held."""
+
+    def __init__(self) -> None:
+        self.held: list[int] = []
+
+    def send(self, vks: list[int], up: bool) -> None:
+        # A key counts as held before its down event is sent, so a SendInput
+        # that fails part-way still gets every key it may have pressed let go;
+        # it stops counting only once its up event went through.
+        if not up:
+            self.held += [vk for vk in vks if vk not in self.held]
+        send_inputs([key_input(vk, up) for vk in vks])
+        if up:
+            self.held = [vk for vk in self.held if vk not in vks]
+
+    def down(self, vk: int) -> None:
+        self.send([vk], False)
+
+    def up(self, vk: int) -> None:
+        self.send([vk], True)
+
+    def tap(self, vk: int) -> None:
+        self.down(vk)
+        time.sleep(0.03)
+        self.up(vk)
+
+    def hold(self, chord: Chord) -> None:
+        """Presses a chord the way a hand does: modifiers first, a beat apart."""
+        for vk in chord.modifiers + ([chord.key] if chord.key is not None else []):
+            self.down(vk)
+            time.sleep(0.03)
+
+    def release(self, chord: Chord) -> None:
+        for vk in ([chord.key] if chord.key is not None else []) + chord.modifiers[::-1]:
+            self.up(vk)
+            time.sleep(0.03)
+
+    def press(self, chord: Chord) -> None:
+        self.hold(chord)
+        time.sleep(0.05)
+        self.release(chord)
+
+    def release_all(self) -> list[int]:
+        held = list(self.held)
+        for vk in held[::-1]:
+            try:
+                self.up(vk)
+            except OSError as error:
+                print(f"Could not release key 0x{vk:X}: {error}")
+        return held
+
+
+PROBE_HOTKEY_ID = 0xB0E2
+
+
+def hotkey_grabbed(chord: Chord) -> bool:
+    """Whether some program holds `chord` as a global hotkey (RegisterHotKey).
+    The runner tries to register the same keys itself: Windows refuses with
+    ERROR_HOTKEY_ALREADY_REGISTERED while Scribe holds them, and a successful
+    probe is released again at once."""
+    if chord.key is None:
+        raise CheckFailed(f"{chord} has no key to probe")
+    mods = MOD_NOREPEAT
+    for vk in chord.modifiers:
+        mods |= HOTKEY_MOD_FLAGS[vk]
+    if user32.RegisterHotKey(None, PROBE_HOTKEY_ID, mods, chord.key):
+        user32.UnregisterHotKey(None, PROBE_HOTKEY_ID)
+        return False
+    error = ctypes.get_last_error()
+    if error == 1409:  # ERROR_HOTKEY_ALREADY_REGISTERED
+        return True
+    raise OSError(f"Probing {chord} with RegisterHotKey failed: {error}")
+
+
+Q_KEY = Chord("Q")
 
 
 def click(x: int, y: int) -> None:
@@ -560,6 +761,17 @@ def transcript_count() -> int:
         return connection.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0]
 
 
+def notes() -> dict[str, str]:
+    """Saved notes (dictations made with the note chord), by id."""
+    with db() as connection:
+        rows = connection.execute("SELECT id, text FROM transcripts WHERE is_note = 1").fetchall()
+    return dict(rows)
+
+
+def log_lines(*markers: str) -> list[str]:
+    return [line for line in log_text().splitlines() if any(marker in line for marker in markers)]
+
+
 # --------------------------------------------------------------------------
 # Stand-in apps and the local AI server
 # --------------------------------------------------------------------------
@@ -679,18 +891,250 @@ class FakeLocalAi:
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
 
+def webview2_command_lines() -> str:
+    """The running WebView2 browser processes' command lines, for a failure."""
+    try:
+        return subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-Command",
+                "Get-CimInstance Win32_Process -Filter \"Name='msedgewebview2.exe'\" | "
+                "Where-Object { $_.CommandLine -notmatch '--type=' } | ForEach-Object { $_.CommandLine }",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as error:
+        return f"(could not list them: {error})"
+
+
+class AppCommands:
+    """Calls the app's own commands (the ones the Hotkeys page calls) inside
+    its main WebView2 window, through WebView2's remote debugging port and the
+    Chrome DevTools Protocol. The port is opened by the test build's config
+    (webview_debug_config.py). A minimal WebSocket client, standard library
+    only."""
+
+    def __init__(self, port: int) -> None:
+        self.port = port
+        try:
+            pages = wait_until(f"the dashboard's WebView2 debugging port {port}", self._pages, 30, 0.25)
+        except CheckFailed as error:
+            raise CheckFailed(f"{error}. WebView2 browser processes: {webview2_command_lines()}") from None
+        errors = []
+        for page in pages:
+            try:
+                self._open(page["webSocketDebuggerUrl"])
+                label = self.evaluate("window.__TAURI_INTERNALS__?.metadata?.currentWindow?.label ?? null")
+                if label == "main":
+                    print(f"App commands through WebView2 page {page.get('url')}")
+                    return
+                errors.append(f"{page.get('url')}: window {label!r}")
+            except (OSError, CheckFailed) as error:
+                errors.append(f"{page.get('url')}: {error}")
+            self.close()
+        raise CheckFailed(f"No WebView2 page is Scribe's main window: {errors}")
+
+    def _pages(self) -> list[dict] | None:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/json/list", timeout=2) as response:
+                pages = json.loads(response.read())
+        except (OSError, ValueError):
+            return None
+        return [page for page in pages if page.get("type") == "page" and page.get("webSocketDebuggerUrl")] or None
+
+    def _open(self, url: str) -> None:
+        parts = urllib.parse.urlparse(url)
+        self.sock = socket.create_connection((parts.hostname, parts.port), timeout=30)
+        key = base64.b64encode(os.urandom(16)).decode()
+        self.sock.sendall(
+            (
+                f"GET {parts.path} HTTP/1.1\r\nHost: {parts.hostname}:{parts.port}\r\n"
+                f"Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
+                "Sec-WebSocket-Version: 13\r\n\r\n"
+            ).encode()
+        )
+        reply = b""
+        while b"\r\n\r\n" not in reply:
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise OSError("The debugging port closed the WebSocket handshake")
+            reply += chunk
+        head, self.buffer = reply.split(b"\r\n\r\n", 1)
+        if b" 101 " not in head.split(b"\r\n", 1)[0]:
+            raise OSError(f"WebSocket handshake refused: {head[:200]!r}")
+        self.next_id = 0
+
+    def close(self) -> None:
+        sock = getattr(self, "sock", None)
+        if sock:
+            sock.close()
+            self.sock = None
+
+    def _send(self, text: str) -> None:
+        data = text.encode()
+        mask = os.urandom(4)
+        if len(data) < 126:
+            head = bytes([0x81, 0x80 | len(data)])
+        elif len(data) < 65536:
+            head = bytes([0x81, 0x80 | 126]) + struct.pack(">H", len(data))
+        else:
+            head = bytes([0x81, 0x80 | 127]) + struct.pack(">Q", len(data))
+        self.sock.sendall(head + mask + bytes(byte ^ mask[i % 4] for i, byte in enumerate(data)))
+
+    def _read(self, size: int) -> bytes:
+        while len(self.buffer) < size:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                raise OSError("The WebView2 debugging connection closed")
+            self.buffer += chunk
+        data, self.buffer = self.buffer[:size], self.buffer[size:]
+        return data
+
+    def _message(self) -> str:
+        parts = []
+        while True:
+            first, second = self._read(2)
+            size = second & 0x7F
+            if size == 126:
+                size = struct.unpack(">H", self._read(2))[0]
+            elif size == 127:
+                size = struct.unpack(">Q", self._read(8))[0]
+            payload = self._read(size)
+            opcode = first & 0x0F
+            if opcode == 0x8:
+                raise OSError("The WebView2 debugging connection was closed")
+            if opcode == 0x9:  # ping: answer with a masked pong
+                mask = os.urandom(4)
+                self.sock.sendall(bytes([0x8A, 0x80 | len(payload)]) + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
+                continue
+            if opcode in (0x0, 0x1):
+                parts.append(payload)
+                if first & 0x80:
+                    return b"".join(parts).decode()
+
+    def evaluate(self, expression: str, timeout: float = 60):
+        self.next_id += 1
+        call_id = self.next_id
+        self._send(
+            json.dumps(
+                {
+                    "id": call_id,
+                    "method": "Runtime.evaluate",
+                    "params": {"expression": expression, "awaitPromise": True, "returnByValue": True},
+                }
+            )
+        )
+        self.sock.settimeout(timeout)
+        while True:
+            message = json.loads(self._message())
+            if message.get("id") != call_id:
+                continue
+            if "error" in message:
+                raise CheckFailed(f"DevTools refused the call: {message['error']}")
+            result = message["result"]
+            if "exceptionDetails" in result:
+                raise CheckFailed(f"The page threw: {result['exceptionDetails']}")
+            return result["result"].get("value")
+
+    def invoke(self, command: str, args: dict | None = None):
+        """Runs a Tauri command as the dashboard does; a command error fails the check."""
+        expression = (
+            "(async () => { try { return { ok: true, value: await window.__TAURI_INTERNALS__.invoke("
+            f"{json.dumps(command)}, {json.dumps(args or {})}) }}; }} catch (error) {{ return {{ ok: false, "
+            "error: typeof error === 'string' ? error : JSON.stringify(error) }; } })()"
+        )
+        reply = self.evaluate(expression)
+        if not reply or not reply.get("ok"):
+            raise CheckFailed(f"The app's {command} command failed: {(reply or {}).get('error')}")
+        return reply.get("value")
+
+
+class StateStream:
+    """Every dictation state Scribe publishes, in order, from its state server
+    (`/v1/events`, docs/integrations/dictation-state-contract.md). Unlike
+    polling status.json it cannot miss a short-lived state, so "nothing
+    started" is checked against the full sequence."""
+
+    def __init__(self, pid: int) -> None:
+        self.events: list[tuple[float, str]] = []
+        self.error: str | None = None
+        discovery = Path(os.environ.get("USERPROFILE", "")) / ".scribe" / "control.dev.json"
+
+        def current():
+            try:
+                data = json.loads(discovery.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+            return data if data.get("pid") == pid else None
+
+        info = wait_until(f"the state server's discovery file {discovery}", current, 30, 0.2)
+        parts = urllib.parse.urlparse(info["baseUrl"])
+        self.sock = socket.create_connection((parts.hostname, parts.port), timeout=10)
+        self.sock.sendall(
+            (
+                f"GET {info['endpoints']['events']} HTTP/1.1\r\nHost: {parts.netloc}\r\n"
+                f"Authorization: Bearer {info['readToken']}\r\nAccept: text/event-stream\r\n\r\n"
+            ).encode()
+        )
+        self.sock.settimeout(None)
+        threading.Thread(target=self._read, daemon=True).start()
+        wait_until("the state stream's first snapshot", lambda: self.events or self.error, 10)
+        check(not self.error, f"The state stream failed: {self.error}")
+
+    def _read(self) -> None:
+        buffer = b""
+        event = None
+        try:
+            while True:
+                chunk = self.sock.recv(4096)
+                if not chunk:
+                    self.error = "the state server closed the stream"
+                    return
+                buffer += chunk
+                while b"\n" in buffer:
+                    raw, buffer = buffer.split(b"\n", 1)
+                    line = raw.decode("utf-8", "replace").rstrip("\r")
+                    if line.startswith("HTTP/") and " 200 " not in line + " ":
+                        self.error = line
+                        return
+                    if line.startswith("event:"):
+                        event = line[6:].strip()
+                    elif line.startswith("data:") and event == "state":
+                        self.events.append((time.monotonic(), json.loads(line[5:])["status"]))
+                    elif not line:
+                        event = None
+        except OSError as error:
+            if self.sock is not None:
+                self.error = str(error)
+
+    def mark(self) -> int:
+        return len(self.events)
+
+    def since(self, mark: int) -> list[str]:
+        return [state for _, state in self.events[mark:]]
+
+    def close(self) -> None:
+        sock, self.sock = self.sock, None
+        if sock:
+            sock.close()
+
+
 # --------------------------------------------------------------------------
 # The app
 # --------------------------------------------------------------------------
 
 
 class Scribe:
-    def __init__(self, exe: Path, clip_path: Path, out: Path) -> None:
+    def __init__(self, exe: Path, clip_path: Path, out: Path, debug_port: int) -> None:
         self.exe = exe
         self.clip_path = clip_path
         self.out = out
         self.process: subprocess.Popen | None = None
         self.monitor: SpeechProcessMonitor | None = None
+        self.debug_port = debug_port
 
     def self_test(self, clip: Path) -> dict:
         """The release smoke test's mode on a fresh profile: downloads the
@@ -846,7 +1290,7 @@ class Run:
         self.work.mkdir(exist_ok=True)
         self.fixtures = Path(args.fixtures)
         self.clip_path = self.work / "current.wav"
-        self.app = Scribe(Path(args.exe), self.clip_path, self.out)
+        self.app = Scribe(Path(args.exe), self.clip_path, self.out, args.webview_debug_port)
         self.clipboard = Clipboard()
         self.ai = FakeLocalAi()
         self.results: list[tuple[str, bool, str, float]] = []
@@ -854,6 +1298,14 @@ class Run:
         self.clips: dict[str, Path] = {"jfk": self.fixtures / "jfk.wav"}
         self.monitor = SpeechProcessMonitor()
         self.app.monitor = self.monitor
+        # The default-style hotkey group.
+        self.keys = Keyboard()
+        self.commands: AppCommands | None = None
+        self.states: StateStream | None = None
+        self.hotkey_status: dict = {}
+        self.bindings: dict[str, dict] = {}
+        self.test_hotkeys: dict | None = None
+        self.state_mark = 0
 
     # -- setup -------------------------------------------------------------
 
@@ -1226,20 +1678,541 @@ class Run:
         )
         print(f"Speech engine gone {time.monotonic() - killed_at:.1f} s after the kill")
 
+    # -- default-style hotkeys: the Windows watcher paths ------------------
+    #
+    # The scenarios above bind every action to Ctrl+Alt+F7..F12, which the
+    # global-shortcut plugin handles. The bindings Windows users get by default
+    # go through three other mechanisms (crates/scribe-core/src/hotkeys.rs):
+    # the chord watcher for a modifier-only hold to talk, the toggle-key
+    # watcher for a bare toggle key, and the note chord it arms. This group
+    # loads the build's own default bindings through the app's commands and
+    # drives those paths with scan-code input, then puts the test bindings back.
+
+    def hotkeys_connect(self) -> None:
+        """Reaches the app's hotkey commands (as the Hotkeys page calls them)
+        and its state stream, and keeps the test bindings to put back later."""
+        self.test_hotkeys = json.loads(setting_value("app_settings"))["hotkeys"]
+        self.commands = AppCommands(self.app.debug_port)
+        self.states = StateStream(self.app.process.pid)
+        self.use_bindings("get_hotkey_status")
+        for action, (chord, _) in HOTKEYS.items():
+            check(
+                self.bindings[action]["shortcut"] == chord,
+                f"get_hotkey_status reports {action} as {self.bindings[action]['shortcut']}, the runner set {chord}",
+            )
+        print(f"Hotkey backend: {self.hotkey_status.get('backend')}; state stream: {self.states.since(0)}")
+
+    def use_bindings(self, command: str, args: dict | None = None) -> dict:
+        """Runs a hotkey command that answers with the hotkey status, and
+        checks every binding it reports is registered."""
+        status = self.commands.invoke(command, args)
+        self.hotkey_status = status
+        self.bindings = {binding["action"]: binding for binding in status["bindings"]}
+        summary = ", ".join(
+            f"{b['action']}={b['shortcut']}" + (f" on {b['trigger']}" if b.get("trigger") else "")
+            for b in status["bindings"]
+        )
+        print(f"{command}: {summary}; note chord active: {status.get('noteChordActive')}")
+        missing = [
+            f"{b['action']} {b['shortcut']}: {b.get('error')}"
+            for b in status["bindings"]
+            if not b["registered"] and not b.get("disabledReason")
+        ]
+        check(not missing, f"After {command} these hotkeys are not registered: {missing}")
+        return status
+
+    def chord(self, action: str) -> Chord:
+        return Chord(self.bindings[action]["shortcut"])
+
+    def ready(self, target: Target, sentinel: str, text: str = "") -> None:
+        """prepare() for bindings that change: waits for idle instead of
+        pressing the discard hotkey, and marks the state stream."""
+        wait_idle()
+        target.focus()
+        target.set_text(text)
+        self.clipboard.write(sentinel)
+        check(self.clipboard.read() == sentinel, "Could not set the clipboard")
+        self.state_mark = self.states.mark()
+
+    def states_seen(self) -> list[str]:
+        return self.states.since(self.state_mark) if self.states else []
+
+    @staticmethod
+    def watcher_starts() -> int:
+        return log_text().count(TOGGLE_WATCHER_PREFIX)
+
+    def wait_toggle_watcher(self, before: int, toggle: Chord, trigger: str) -> None:
+        """Waits for the toggle-key watcher to (re)start after a hotkey command:
+        a new start line after the `before` count, the newest naming `toggle`
+        and `trigger`. A line left from an earlier start never counts."""
+        line = TOGGLE_WATCHER_LOG.format(vk=toggle.key, trigger=trigger)
+        wait_until(f"a new toggle-key watcher start ({line!r})", lambda: self.watcher_starts() > before, 10, 0.1)
+        newest = log_lines(TOGGLE_WATCHER_PREFIX)[-1]
+        check(line in newest, f"The toggle-key watcher restarted as {newest!r}, expected {line!r}")
+
+    def wait_q_grabbed(self) -> None:
+        """Waits until Scribe holds Q, which the toggle-key watcher grabs for
+        the note chord as soon as it sees the toggle key go down (Release
+        trigger). This is how the runner knows the 10 ms watcher saw the press.
+
+        The probe registers Q itself for a few microseconds when Q is free,
+        and Scribe's own registration would fail if it landed in that window
+        ("Note chord unavailable"). So the first probe waits until Scribe has
+        normally long finished (a few milliseconds after the key goes down),
+        and later ones are 100 ms apart: Scribe is then almost always already
+        holding Q, the probe fails to register and holds nothing. A collision
+        is still reported as one, not as a product failure."""
+        unavailable = log_text().count(NOTE_CHORD_UNAVAILABLE_LOG)
+        free_probes = 0
+
+        def grabbed() -> bool:
+            nonlocal free_probes
+            if hotkey_grabbed(Q_KEY):
+                return True
+            free_probes += 1
+            return False
+
+        time.sleep(Q_PROBE_FIRST_DELAY)
+        try:
+            wait_until("Scribe to grab Q while the toggle key is down", grabbed, 5, Q_PROBE_INTERVAL)
+        except CheckFailed as error:
+            if log_text().count(NOTE_CHORD_UNAVAILABLE_LOG) > unavailable:
+                cause = (
+                    f" The runner's own probe found Q free {free_probes} times and may have held it at the moment"
+                    " Scribe registered it."
+                    if free_probes
+                    else ""
+                )
+                raise CheckFailed(f"{error}. Scribe logged: {log_lines(NOTE_CHORD_UNAVAILABLE_LOG)[-1]}.{cause}") from None
+            raise CheckFailed(f"{error}. The toggle-key watcher never armed the note chord") from None
+
+    def tap_watched_toggle(self, toggle: Chord, starts: bool = False) -> None:
+        """Taps a bare toggle key bound on Release, as a person does: down,
+        held until the watcher has seen it, up (the release toggles). With
+        `starts`, also checks that nothing starts while the key is still down:
+        on Release the toggle must wait for the key to come up."""
+        released = log_text().count("Toggle key released")
+        mark = self.states.mark()
+        self.keys.down(toggle.key)
+        try:
+            self.wait_q_grabbed()
+            if starts:
+                stays(
+                    "no recording while the toggle key is still down (Release trigger)",
+                    lambda: "Recording" not in self.states.since(mark) and status() != "Recording",
+                    RELEASE_HOLD_OBSERVATION,
+                )
+        finally:
+            self.keys.up(toggle.key)
+        wait_until(
+            "the toggle-key watcher to see the key released",
+            lambda: log_text().count("Toggle key released") > released,
+            5,
+            0.05,
+        )
+
+    def press_note_chord(self, toggle: Chord) -> None:
+        """Holds the toggle key, taps Q, lets go of the toggle key."""
+        fired = log_text().count(NOTE_CHORD_LOG)
+        skipped = log_text().count(TOGGLE_RELEASED_LOG.format(fired="true"))
+        self.keys.down(toggle.key)
+        try:
+            self.wait_q_grabbed()
+            self.keys.tap(VK_Q)
+            wait_until("Scribe to see Q during the toggle hold", lambda: log_text().count(NOTE_CHORD_LOG) > fired, 5, 0.05)
+        finally:
+            self.keys.release_all()
+        wait_until(
+            "the toggle key's release to skip the toggle after the note chord",
+            lambda: log_text().count(TOGGLE_RELEASED_LOG.format(fired="true")) > skipped,
+            5,
+            0.05,
+        )
+
+    def wait_q_free(self) -> None:
+        wait_until("Scribe to let go of Q (it is grabbed only while the toggle key is down)", lambda: not hotkey_grabbed(Q_KEY), 5, 0.05)
+
+    def nothing_started(self, describe: str, count: int, seconds: float = 1.0) -> None:
+        try:
+            stays(
+                f"{describe} to start nothing",
+                lambda: "Recording" not in self.states_seen() and transcript_count() == count,
+                seconds,
+            )
+        except CheckFailed as error:
+            raise CheckFailed(f"{error}; states seen: {self.states_seen()}") from None
+
+    def short_chord_tap(self, chord: Chord) -> None:
+        """A tap of a modifier-only chord shorter than the chord watcher's
+        150 ms arming delay starts nothing. The keys go down and up as one
+        batch each, and the tap is measured: one the runner itself stretched
+        past the delay is tried again instead of being judged."""
+        for attempt in range(1, 4):
+            # Read per attempt: a stretched tap may have dictated something.
+            count = transcript_count()
+            self.state_mark = self.states.mark()
+            self.keys.send(chord.modifiers, False)
+            pressed = time.monotonic()
+            time.sleep(CHORD_ARMING_DELAY / 3)
+            self.keys.send(chord.modifiers[::-1], True)
+            held = time.monotonic() - pressed
+            if held < CHORD_ARMING_DELAY * 0.7:
+                break
+            print(f"Tap {attempt} of {chord} took {held * 1000:.0f} ms on this runner; trying again")
+            wait_idle()
+        else:
+            raise CheckFailed(f"The runner could not tap {chord} in under {CHORD_ARMING_DELAY * 700:.0f} ms")
+        self.nothing_started(f"a {held * 1000:.0f} ms tap of {chord}", count)
+        print(f"A {held * 1000:.0f} ms tap of {chord} started nothing")
+
+    def chord_hold_dictation(self, hold: Chord, clip: str) -> None:
+        """Hold to talk on a modifier-only chord (the chord watcher): a short
+        tap starts nothing; held past the arming delay it records until the
+        keys are let go, and the dictation is pasted where the user was."""
+        check(hold.modifier_only, f"Expected a modifier-only hold to talk, the binding is {hold}")
+        target = self.targets["A"]
+        sentinel = f"clipboard before holding {hold}"
+        self.ready(target, sentinel)
+        self.short_chord_tap(hold)
+        self.use_clip(clip)
+        previous, played = last_transcript(), clips_finished()
+        self.state_mark = self.states.mark()
+        self.keys.hold(hold)
+        try:
+            wait_recording()
+            wait_clip_played(played)
+            check(status() == "Recording", f"Recording stopped while {hold} was still held")
+        finally:
+            self.keys.release(hold)
+        transcript = wait_new_transcript(previous)
+        check_words(transcript["text"], key_words(CLIPS[clip]), "The transcript")
+        wait_until("the transcript in the focused box", lambda: target.text.strip() == transcript["text"].strip(), 5)
+        wait_until("the clipboard to be restored", lambda: self.clipboard.read() == sentinel, 5)
+        stays(f"the target to keep the focus after {hold} is let go", target.has_focus, 1.0)
+        print(f"Hold {hold}: states {self.states_seen()}")
+
+    def dev_default_hotkeys(self) -> None:
+        """The build's own defaults, as the Hotkeys page's Reset sets them
+        (Scribe Dev: a modifier-only hold to talk and a toggle with modifiers):
+        hold to talk through the chord watcher, the toggle through the plugin
+        on its trigger edge, discarded with the default discard hotkey."""
+        self.use_bindings("reset_hotkeys_to_defaults")
+        self.chord_hold_dictation(self.chord("holdToTalk"), "dev_hold")
+        toggle, discard = self.chord("toggleDictation"), self.chord("discardDictation")
+        target = self.targets["A"]
+        sentinel = "clipboard before the default toggle"
+        self.ready(target, sentinel)
+        self.use_clip("discard")
+        previous, count = last_transcript(), transcript_count()
+        if toggle.bare_key and self.bindings["toggleDictation"]["trigger"] == "release":
+            self.tap_watched_toggle(toggle)
+        else:
+            self.keys.press(toggle)
+        wait_recording()
+        self.keys.press(discard)
+        wait_until("the recording to be discarded", lambda: status() == "Idle", 10)
+        stays(
+            "nothing typed, pasted, saved or copied",
+            lambda: target.text == ""
+            and transcript_count() == count
+            and (last_transcript() or {}).get("id") == (previous or {}).get("id")
+            and self.clipboard.read() == sentinel,
+        )
+        print(f"Toggle {toggle} then discard {discard}: states {self.states_seen()}")
+
+    def production_default_hotkeys(self) -> None:
+        """Loads the shipped Windows defaults (Hotkeys page, Developer panel:
+        "Load my production defaults"): a modifier-only hold to talk and a
+        bare toggle key on Release, which starts the toggle-key watcher."""
+        starts = self.watcher_starts()
+        self.use_bindings("load_production_hotkey_defaults")
+        hold, toggle = self.chord("holdToTalk"), self.chord("toggleDictation")
+        trigger = self.bindings["toggleDictation"]["trigger"]
+        check(hold.modifier_only, f"The shipped hold to talk {hold} is not modifier-only")
+        check(toggle.bare_key and trigger == "release", f"The shipped toggle is {toggle} on {trigger}, not a bare key on release")
+        check(self.hotkey_status.get("noteChordActive"), "The note chord is not active with the shipped defaults")
+        self.wait_toggle_watcher(starts, toggle, "Release")
+        check(hotkey_grabbed(toggle), f"Nothing holds {toggle} as a global hotkey, so it would type into apps")
+        check(not hotkey_grabbed(Q_KEY), "Q is grabbed while the toggle key is up")
+
+    def bare_key_toggle(self) -> None:
+        """Toggle on a bare key, Release trigger (the toggle-key watcher): tap
+        to start, tap to stop, the dictation is pasted and the key's own
+        character never reaches the app."""
+        toggle = self.chord("toggleDictation")
+        target = self.targets["A"]
+        sentinel = "clipboard before the bare toggle key"
+        self.ready(target, sentinel)
+        self.use_clip("bare_toggle")
+        previous, played = last_transcript(), clips_finished()
+        self.tap_watched_toggle(toggle, starts=True)
+        wait_recording()
+        check(target.text == "", f"The toggle key typed {target.text!r} into the app")
+        wait_clip_played(played)
+        self.tap_watched_toggle(toggle)
+        transcript = wait_new_transcript(previous)
+        check_words(transcript["text"], key_words(CLIPS["bare_toggle"]), "The transcript")
+        wait_until("the transcript in the focused box", lambda: target.text.strip() == transcript["text"].strip(), 5)
+        wait_until("the clipboard to be restored", lambda: self.clipboard.read() == sentinel, 5)
+        self.wait_q_free()
+        print(f"Bare toggle {toggle}: states {self.states_seen()}")
+
+    def note_chord(self) -> None:
+        """Hold the toggle key and tap Q: a note starts instead of a dictation,
+        neither key types, Q is let go with the toggle key and types again,
+        and the same chord ends the note, which is saved as a note and never
+        pasted."""
+        toggle = self.chord("toggleDictation")
+        target = self.targets["A"]
+        sentinel = "clipboard before the note chord"
+        self.ready(target, sentinel)
+        self.use_clip("note_chord")
+        previous, played, before = last_transcript(), clips_finished(), notes()
+        self.press_note_chord(toggle)
+        wait_recording()
+        check(target.text == "", f"The note chord typed {target.text!r} into the app")
+        self.wait_q_free()
+        wait_clip_played(played)
+        self.press_note_chord(toggle)
+
+        def saved_note():
+            added = {key: text for key, text in notes().items() if key not in before}
+            return next(iter(added.values()), None)
+
+        note = wait_until("the note to be saved", saved_note, 120, 0.1)
+        wait_idle()
+        check_words(note, key_words(CLIPS["note_chord"]), "The note")
+        check(
+            (last_transcript() or {}).get("id") == (previous or {}).get("id"),
+            "The note was also saved as the last dictation",
+        )
+        check(target.text == "", f"The note was typed or pasted into the app: {target.text!r}")
+        check(self.clipboard.read() == sentinel, "The note changed the clipboard")
+        self.wait_q_free()
+        count = transcript_count()
+        self.state_mark = self.states.mark()
+        self.keys.tap(VK_Q)
+        wait_until("Q to type normally after the note chord", lambda: target.text == "q", 5)
+        self.nothing_started("typing Q", count)
+        print(f"Note chord: note {note!r}")
+
+    def production_chord_hold(self) -> None:
+        self.chord_hold_dictation(self.chord("holdToTalk"), "chord_hold")
+
+    def press_trigger_toggle(self) -> None:
+        """The toggle set to act on Press: the watcher restarts on the press
+        edge, the recording starts while the key is still down, and no Q grab
+        is made (the note chord needs Release). Each press must show up as the
+        watcher's own "Toggle key pressed" line, so the toggle is proven to come
+        from the watcher's press edge and not from some other path."""
+        starts = self.watcher_starts()
+        self.use_bindings("set_hotkey_trigger", {"action": "toggleDictation", "trigger": "press"})
+        try:
+            toggle = self.chord("toggleDictation")
+            check(toggle.bare_key, f"The toggle is {toggle}, not a bare key")
+            check(not self.hotkey_status.get("noteChordActive"), "The note chord is still active on Press")
+            self.wait_toggle_watcher(starts, toggle, "Press")
+            target = self.targets["A"]
+            sentinel = "clipboard before the press trigger"
+            self.ready(target, sentinel)
+            self.use_clip("press_trigger")
+            previous, played = last_transcript(), clips_finished()
+            presses = log_text().count(TOGGLE_PRESSED_LOG)
+            self.keys.down(toggle.key)
+            try:
+                wait_until(
+                    f"the watcher's {TOGGLE_PRESSED_LOG!r} line while the key is down",
+                    lambda: log_text().count(TOGGLE_PRESSED_LOG) > presses,
+                    5,
+                    0.05,
+                )
+                wait_recording()
+                check(not hotkey_grabbed(Q_KEY), "Q was grabbed with the toggle on Press")
+            finally:
+                self.keys.up(toggle.key)
+            check(target.text == "", f"The toggle key typed {target.text!r} into the app")
+            wait_clip_played(played)
+            presses = log_text().count(TOGGLE_PRESSED_LOG)
+            self.keys.down(toggle.key)
+            try:
+                wait_until(
+                    f"the watcher's {TOGGLE_PRESSED_LOG!r} line for the second press",
+                    lambda: log_text().count(TOGGLE_PRESSED_LOG) > presses,
+                    5,
+                    0.05,
+                )
+                wait_until("the press to stop the recording", lambda: status() != "Recording", 10)
+            finally:
+                self.keys.up(toggle.key)
+            transcript = wait_new_transcript(previous)
+            check_words(transcript["text"], key_words(CLIPS["press_trigger"]), "The transcript")
+            wait_until("the transcript in the focused box", lambda: target.text.strip() == transcript["text"].strip(), 5)
+            wait_until("the clipboard to be restored", lambda: self.clipboard.read() == sentinel, 5)
+            print(f"Press trigger: states {self.states_seen()}; {log_lines(TOGGLE_PRESSED_LOG)[-2:]}")
+        finally:
+            starts = self.watcher_starts()
+            self.use_bindings("set_hotkey_trigger", {"action": "toggleDictation", "trigger": "release"})
+        self.wait_toggle_watcher(starts, self.chord("toggleDictation"), "Release")
+
+    def rebind_while_watching(self) -> None:
+        """Rebinding the toggle while its watcher runs: to another bare key
+        (the old key types again and starts nothing, the new key toggles),
+        then to a combination with modifiers (no watcher, the new bare key
+        types again, the plugin toggles)."""
+        old = self.chord("toggleDictation")
+        check(old.bare_key, f"The toggle is {old}, not a bare key")
+        new_text = "K" if old.key != KEY_NAMES["k"] else "J"
+        starts = self.watcher_starts()
+        self.use_bindings("rebind_hotkey", {"action": "toggleDictation", "shortcut": new_text})
+        new = self.chord("toggleDictation")
+        self.wait_toggle_watcher(starts, new, "Release")
+        check(not hotkey_grabbed(old), f"{old} is still grabbed after rebinding the toggle to {new}")
+        target = self.targets["A"]
+        self.ready(target, "clipboard before rebinding")
+        count = transcript_count()
+        self.keys.tap(old.key)
+        wait_until(f"the old toggle key {old} to type normally", lambda: target.text != "", 5)
+        check(target.text == "`" or old.key != VK_OEM_3, f"The old toggle key typed {target.text!r}")
+        self.nothing_started(f"the old toggle key {old}", count)
+
+        sentinel = "clipboard before the new toggle key"
+        self.ready(target, sentinel)
+        self.use_clip("rebind_key")
+        previous, played = last_transcript(), clips_finished()
+        self.tap_watched_toggle(new)
+        wait_recording()
+        check(target.text == "", f"The new toggle key typed {target.text!r} into the app")
+        wait_clip_played(played)
+        self.tap_watched_toggle(new)
+        transcript = wait_new_transcript(previous)
+        check_words(transcript["text"], key_words(CLIPS["rebind_key"]), "The transcript")
+        wait_until("the transcript in the focused box", lambda: target.text.strip() == transcript["text"].strip(), 5)
+        self.wait_q_free()
+
+        combo_text = f"Ctrl+Alt+Shift+{new_text}"
+        watchers = self.watcher_starts()
+        self.use_bindings("rebind_hotkey", {"action": "toggleDictation", "shortcut": combo_text})
+        combo = self.chord("toggleDictation")
+        check(not self.hotkey_status.get("noteChordActive"), f"The note chord is still active with {combo}")
+        check(hotkey_grabbed(combo), f"The plugin does not hold {combo}")
+        check(not hotkey_grabbed(new), f"{new} is still grabbed after rebinding the toggle to {combo}")
+        check(not hotkey_grabbed(old), f"{old} is grabbed again after rebinding the toggle to {combo}")
+        stays(
+            "no toggle-key watcher started for a combination",
+            lambda: self.watcher_starts() == watchers,
+            0.5,
+        )
+        self.ready(target, "clipboard before the combination")
+        count = transcript_count()
+        self.keys.tap(new.key)
+        wait_until(f"the former toggle key {new} to type normally", lambda: target.text == new_text.lower(), 5)
+        self.nothing_started(f"the former toggle key {new}", count)
+
+        sentinel = "clipboard before the combination toggle"
+        self.ready(target, sentinel)
+        self.use_clip("discard")
+        previous, count = last_transcript(), transcript_count()
+        self.keys.press(combo)
+        wait_recording()
+        self.keys.press(self.chord("discardDictation"))
+        wait_until("the recording to be discarded", lambda: status() == "Idle", 10)
+        stays(
+            "nothing typed, pasted or saved",
+            lambda: target.text == "" and transcript_count() == count and self.clipboard.read() == sentinel,
+        )
+        check(not hotkey_grabbed(Q_KEY), "Q is grabbed after the combination toggle")
+        print(f"Combination toggle {combo}: states {self.states_seen()}")
+
+    def open_dashboard_hotkey(self) -> None:
+        """The Open Dashboard hotkey opens the dashboard hidden in the tray and
+        focuses it; pressed again it hides it (dashboardHotkeyToggles)."""
+        chord = self.chord("openDashboard")
+        hwnd = self.dashboard
+        if user32.IsWindowVisible(hwnd):
+            self.close_to_tray()
+        self.keys.press(chord)
+        wait_until(
+            f"{chord} to open and focus the dashboard",
+            lambda: user32.IsWindowVisible(hwnd) and user32.GetForegroundWindow() == hwnd,
+            10,
+        )
+        self.shot("dashboard-hotkey-open")
+        toggles = json.loads(setting_value("app_settings")).get("dashboardHotkeyToggles", True)
+        self.keys.press(chord)
+        if toggles:
+            wait_until(f"{chord} to hide the focused dashboard again", lambda: not user32.IsWindowVisible(hwnd), 10)
+        else:
+            stays("the dashboard to stay open", lambda: user32.IsWindowVisible(hwnd))
+            self.close_to_tray()
+
+    def restore_test_hotkeys(self) -> None:
+        """Puts the test bindings back through the settings path, so the
+        scenarios after this group drive the plugin path as before."""
+        check(self.test_hotkeys is not None, "The test bindings were never read")
+        self.keys.release_all()
+        wait_idle()
+        self.commands.invoke("patch_settings", {"patch": {"hotkeys": self.test_hotkeys}})
+        self.use_bindings("get_hotkey_status")
+        for action, (chord, _) in HOTKEYS.items():
+            check(self.bindings[action]["shortcut"] == chord, f"{action} is {self.bindings[action]['shortcut']}, not {chord}")
+        check(not hotkey_grabbed(Q_KEY), "Q is still grabbed")
+        evidence = log_lines("Toggle key watcher", "Toggle key pressed", "Toggle key released", "Note chord")
+        (self.out / "hotkey-watcher-log.txt").write_text("\n".join(evidence) + "\n", encoding="utf-8")
+        print(f"Watcher log lines ({len(evidence)}), also in hotkey-watcher-log.txt:")
+        for line in evidence:
+            print(f"  {line}")
+
+    def hotkey_evidence(self, held: list[int]) -> str:
+        """What a failed hotkey scenario saw, for its report."""
+        lines = [f"Keys held at the failure (now released): {[f'0x{vk:X}' for vk in held]}"]
+        for name, target in self.targets.items():
+            try:
+                lines.append(f"Target {name} text: {target.text!r}")
+            except OSError as error:
+                lines.append(f"Target {name} text unreadable: {error}")
+        lines.append(f"States since the scenario's last mark: {self.states_seen()}")
+        lines.append(f"Status: {read_status()}")
+        lines.append("Log tail:")
+        lines += [f"  {line}" for line in log_text().splitlines()[-25:]]
+        return "\n".join(lines)
+
     # -- driver ------------------------------------------------------------
 
-    def scenario(self, name: str, body) -> None:
+    def scenario(self, name: str, body, evidence: bool = False) -> bool:
         started = time.monotonic()
         try:
             body()
             self.results.append((name, True, "", time.monotonic() - started))
             print(f"PASS {name} ({time.monotonic() - started:.1f} s)", flush=True)
+            return True
         except Exception as error:
+            held = self.keys.release_all()
             detail = f"{type(error).__name__}: {error}"
             self.results.append((name, False, detail, time.monotonic() - started))
             print(f"FAIL {name}: {detail}", flush=True)
             traceback.print_exc()
+            if evidence:
+                print(self.hotkey_evidence(held), flush=True)
             self.shot(f"failed-{re.sub(r'[^a-z0-9]+', '-', name.lower())}")
+            return False
+        finally:
+            self.keys.release_all()
+
+    def default_hotkey_group(self) -> None:
+        if not self.scenario("Default hotkeys: the app's hotkey commands and state stream", self.hotkeys_connect, True):
+            return
+        for name, body in [
+            ("Default hotkeys (this build's own): modifier-only hold to talk, toggle and discard", self.dev_default_hotkeys),
+            ("Default hotkeys (shipped): load them, the toggle-key watcher starts", self.production_default_hotkeys),
+            ("Default hotkeys: bare toggle key on Release types nothing and pastes the dictation", self.bare_key_toggle),
+            ("Default hotkeys: hold the toggle key and tap Q for a note", self.note_chord),
+            ("Default hotkeys: modifier-only hold to talk, a short tap starts nothing", self.production_chord_hold),
+            ("Default hotkeys: toggle on the Press trigger", self.press_trigger_toggle),
+            ("Default hotkeys: rebind the watched toggle to a bare key, then a combination", self.rebind_while_watching),
+            ("Default hotkeys: Open Dashboard opens and hides the dashboard", self.open_dashboard_hotkey),
+        ]:
+            self.scenario(name, body, True)
+        self.scenario("Default hotkeys: put the test bindings back", self.restore_test_hotkeys, True)
 
     def run(self) -> int:
         try:
@@ -1260,6 +2233,10 @@ class Run:
                     ("Paste last transcript", self.paste_last),
                     ("Discard a dictation", self.discard),
                     ("Transform Selection with a local AI server", self.transform_selection),
+                ]:
+                    self.scenario(name, body)
+                self.default_hotkey_group()
+                for name, body in [
                     ("Keep the speech model loaded off: loads on dictation, unloads after a minute", self.keep_loaded_off),
                     ("Parakeet v3: switch engines, dictate, never both loaded", self.parakeet_engine),
                     ("Never two speech models in memory at once", self.never_two_models),
@@ -1268,6 +2245,11 @@ class Run:
                 ]:
                     self.scenario(name, body)
         finally:
+            self.keys.release_all()
+            if self.states:
+                self.states.close()
+            if self.commands:
+                self.commands.close()
             self.monitor.stop()
             self.app.stop()
             for target in self.targets.values():
@@ -1294,7 +2276,28 @@ def main() -> int:
     parser.add_argument("--exe", required=True, help="the Scribe Dev executable built with --features e2e-audio")
     parser.add_argument("--fixtures", required=True, help="app/src-tauri/tests/fixtures")
     parser.add_argument("--out", required=True, help="where results, screenshots and work files go")
-    return Run(parser.parse_args()).run()
+    parser.add_argument(
+        "--webview-debug-port",
+        type=int,
+        default=9222,
+        help="the WebView2 remote debugging port the test build opens (webview_debug_config.py)",
+    )
+    parser.add_argument(
+        "--overwrite-scribe-dev-profile",
+        action="store_true",
+        help="run outside GitHub Actions, accepting that this machine's Scribe Dev settings, history and hotkeys are overwritten",
+    )
+    args = parser.parse_args()
+    if not os.environ.get("GITHUB_ACTIONS") and not args.overwrite_scribe_dev_profile:
+        print(
+            "Refusing to run: this test uses the real Scribe Dev profile on this machine "
+            f"({DATA_DIR} and {CACHE_DIR}). It rewrites its settings and hotkeys, adds dictations and notes "
+            "to its history, and kills Scribe Dev. It is meant for a disposable GitHub Actions runner. "
+            "Pass --overwrite-scribe-dev-profile to run it here anyway.",
+            file=sys.stderr,
+        )
+        return 2
+    return Run(args).run()
 
 
 if __name__ == "__main__":
