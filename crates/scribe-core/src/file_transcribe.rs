@@ -69,7 +69,7 @@ pub fn transcribe_file_with(
         (settings, model_id, model_path)
     };
 
-    let work_dir = work_dir(core.paths().cache_dir())?;
+    let work_dir = work_dir(&core.backend().dirs().cache_dir)?;
     let started = Instant::now();
 
     // Owns the converted temp WAV (when one exists) for the whole

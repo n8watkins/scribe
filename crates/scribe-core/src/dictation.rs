@@ -136,7 +136,7 @@ fn transcribe_recording_checked(
             // quarantine problem fall back to the normal delete, so we never
             // leak temp files and never change the result.
             if !quarantine_failed_recording(
-                core.paths().data_dir(),
+                &core.backend().dirs().data_dir,
                 &wav_path,
                 &recording.session_id,
                 &error.message,
@@ -355,7 +355,7 @@ fn transcribe_recording_inner(
     // source, so the cleanup's remove becomes a no-op. A clip failure must
     // never fail the dictation itself.
     if settings.save_audio_clips {
-        match save_audio_clip(core.paths().data_dir(), &wav_path, &transcript.id) {
+        match save_audio_clip(&core.backend().dirs().data_dir, &wav_path, &transcript.id) {
             Ok(clip_path) => transcript.audio_path = Some(clip_path.to_string_lossy().into_owned()),
             Err(error) => log::warn!(
                 "Could not save audio clip for transcript {}: {}",
@@ -992,5 +992,62 @@ mod engine_tests {
         assert_eq!(woken.get(), 1);
         assert_eq!(fixture.sent().len(), 2);
         assert_eq!(fixture.sent()[1].0, "scribe:dictation-transcribed");
+    }
+
+    #[test]
+    fn a_dictation_that_could_not_be_saved_says_so_and_stays_for_paste_last() {
+        let fixture = Fixture::new();
+        // A poisoned database lock makes every save fail.
+        let backend = fixture.backend.clone();
+        let _ = std::thread::spawn(move || {
+            let _db = backend.db().unwrap();
+            panic!("poison the database lock for this test");
+        })
+        .join();
+        assert!(fixture.backend.db().is_err());
+
+        let settings = AppSettings {
+            github_sync_all_transcripts: true,
+            ..AppSettings::default()
+        };
+        let clip = fixture.root.join("clip.wav");
+        fs::create_dir_all(&fixture.root).unwrap();
+        fs::write(&clip, b"RIFF").unwrap();
+        let mut unsaved = transcript("hello there", false);
+        unsaved.audio_path = Some(clip.to_string_lossy().into_owned());
+        let id = unsaved.id.clone();
+        let woken = Cell::new(0);
+
+        let result = save_and_announce(
+            &fixture.backend,
+            fixture.host.as_ref(),
+            || woken.set(woken.get() + 1),
+            &settings,
+            &recording(false),
+            unsaved,
+            "base.en".to_string(),
+            321,
+        );
+
+        assert!(matches!(result.status, DictationStatus::NotSaved));
+        assert_eq!(result.transcript.audio_path, None);
+        // The clip of a transcript that was never saved is not kept.
+        assert!(!clip.exists());
+        // No backup wake and no dictation-transcribed: only the save failure.
+        assert_eq!(woken.get(), 0);
+        assert_eq!(
+            fixture.sent(),
+            [(
+                "scribe:dictation-save-failed",
+                json!({
+                    "transcriptId": id,
+                    "message": "Scribe couldn't save this dictation to History. Paste last still has it until you close Scribe.",
+                })
+            )]
+        );
+        // Paste last still has it.
+        let last = fixture.backend.last_transcript().unwrap().unwrap();
+        assert_eq!(last.id, id);
+        assert_eq!(last.text, "hello there");
     }
 }
