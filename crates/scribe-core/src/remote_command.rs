@@ -9,9 +9,12 @@
 //! `hold-start` and `hold-stop` drive hold to talk from desktops that can
 //! run a command on key release too (sway and Hyprland `bindr`).
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
-use crate::hotkeys::{self, HotkeyAction};
+use crate::{
+    core::Core,
+    hotkeys::{self, HotkeyAction},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteCommand {
@@ -39,16 +42,33 @@ impl RemoteCommand {
         }
     }
 
+    /// Acts as the matching hotkey would. Ignored until the `Core` exists
+    /// (the shell's single-instance handler already drops it before then).
     pub fn run(self, app: &AppHandle) {
+        match app.try_state::<Core>() {
+            Some(core) => self.run_with(app, core.inner()),
+            None => {
+                log::warn!("Ignored {self:?} from the command line: the engine is not ready yet")
+            }
+        }
+    }
+
+    /// [`RemoteCommand::run`] on the engine handle. Transitional: the hotkey
+    /// actions queue dictation work with the app.
+    pub fn run_with(self, app: &AppHandle, core: &Core) {
         log::info!("Running {self:?} from the command line");
         match self {
-            Self::Toggle => hotkeys::run_action(app, HotkeyAction::ToggleDictation),
-            Self::HoldStart => hotkeys::handle_press_edge(app, HotkeyAction::HoldToTalk),
-            Self::HoldStop => hotkeys::handle_release_edge(app, HotkeyAction::HoldToTalk),
-            Self::PasteLast => hotkeys::run_action(app, HotkeyAction::PasteLastTranscript),
-            Self::Cancel => hotkeys::run_action(app, HotkeyAction::DiscardDictation),
+            Self::Toggle => hotkeys::run_action_with(app, core, HotkeyAction::ToggleDictation),
+            Self::HoldStart => hotkeys::handle_press_edge_with(app, core, HotkeyAction::HoldToTalk),
+            Self::HoldStop => {
+                hotkeys::handle_release_edge_with(app, core, HotkeyAction::HoldToTalk)
+            }
+            Self::PasteLast => {
+                hotkeys::run_action_with(app, core, HotkeyAction::PasteLastTranscript)
+            }
+            Self::Cancel => hotkeys::run_action_with(app, core, HotkeyAction::DiscardDictation),
             Self::Dashboard => {
-                if let Err(error) = crate::shell::open_dashboard(app, None) {
+                if let Err(error) = core.host().open_dashboard(None) {
                     log::warn!("Could not open the dashboard: {}", error.message);
                 }
             }
