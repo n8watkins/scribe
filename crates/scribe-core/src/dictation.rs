@@ -20,7 +20,7 @@ use crate::{
     host::Host,
     incremental::{self, SessionHandle},
     model_manager,
-    output::{self, core_for, OutputResult},
+    output::{self, OutputResult},
     selection_transform::CapturedSelection,
     settings::{AppSettings, Language},
     transcript::Transcript,
@@ -65,16 +65,9 @@ pub struct DictationResult {
 /// Idle and "scribe:dictation-empty" is emitted, no transcript is
 /// saved). On any error, the state machine is never left stranded in
 /// Transcribing: it fails over to Error, which self-heals to Idle.
-pub fn transcribe_recording_for_app(
-    app: &AppHandle,
-    recording: RecordingResult,
-) -> Result<Option<DictationResult>, CommandError> {
-    let core = core_for(app, "transcribe the recording")?;
-    transcribe_recording_with(app, &core, recording)
-}
-
-/// [`transcribe_recording_for_app`] on the engine. Still takes the app for
-/// the output lane (pasting the text, the transform's paste).
+///
+/// Still takes the app for the output lane (pasting the text, the
+/// transform's paste).
 pub fn transcribe_recording_with(
     app: &AppHandle,
     core: &Core,
@@ -295,7 +288,7 @@ fn transcribe_recording_inner(
                 model_id,
                 error.message
             );
-            // The Err propagates to transcribe_recording_for_app, which
+            // The Err propagates to transcribe_recording_with, which
             // performs the Transcribing -> Error failover.
             return Err(error);
         }

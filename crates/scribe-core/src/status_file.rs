@@ -32,8 +32,9 @@ struct StatusFile {
     schema_version: u32,
     /// Constant `"scribe"`, so a reader can confirm which producer wrote this.
     app: &'static str,
-    /// Scribe's semver, for reader diagnostics / feature-gating.
-    app_version: &'static str,
+    /// Scribe's semver, for reader diagnostics / feature-gating: the running
+    /// app's version as the host reports it (a Dev build's own pre-release).
+    app_version: String,
     /// Current state-machine status, serialized exactly as the webview sees it
     /// (PascalCase: "Idle", "Recording", ...).
     status: AppStatus,
@@ -55,13 +56,19 @@ struct StatusFile {
 }
 
 /// Build the on-disk payload from a state snapshot. `now` is the file's write
-/// time; `since` comes from the snapshot's `updated_at`.
-fn build(snapshot: &AppStateSnapshot, now: DateTime<Utc>, pid: u32) -> StatusFile {
+/// time; `since` comes from the snapshot's `updated_at`; `app_version` is the
+/// host's [`Host::app_version`].
+fn build(
+    snapshot: &AppStateSnapshot,
+    now: DateTime<Utc>,
+    pid: u32,
+    app_version: String,
+) -> StatusFile {
     let dictating = dictation_state::is_dictating(&snapshot.status);
     StatusFile {
         schema_version: SCHEMA_VERSION,
         app: dictation_state::APP_NAME,
-        app_version: dictation_state::app_version(),
+        app_version,
         status: snapshot.status.clone(),
         dictating,
         busy: dictation_state::is_busy(&snapshot.status),
@@ -104,7 +111,7 @@ pub fn publish_with(host: &dyn Host, snapshot: &AppStateSnapshot) {
         log::warn!("Could not create cache dir for status file: {}", error);
         return;
     }
-    let payload = build(snapshot, Utc::now(), std::process::id());
+    let payload = build(snapshot, Utc::now(), std::process::id(), host.app_version());
     if let Err(error) = write_atomic(dir, &payload) {
         log::warn!("Could not write status file: {}", error);
     }
@@ -142,6 +149,13 @@ pub fn publish_idle(_app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Dev build's version: not the engine crate's `CARGO_PKG_VERSION`.
+    const DEV_VERSION: &str = "0.16.4-57";
+
+    fn build(snapshot: &AppStateSnapshot, now: DateTime<Utc>, pid: u32) -> StatusFile {
+        super::build(snapshot, now, pid, DEV_VERSION.to_string())
+    }
 
     fn snapshot(status: AppStatus) -> AppStateSnapshot {
         AppStateSnapshot {
@@ -189,10 +203,7 @@ mod tests {
         let value: serde_json::Value = serde_json::to_value(&payload).unwrap();
         assert_eq!(value["schemaVersion"], 1);
         assert_eq!(value["app"], "scribe");
-        assert!(
-            value.get("appVersion").is_some(),
-            "appVersion must be present"
-        );
+        assert_eq!(value["appVersion"], DEV_VERSION);
         assert_eq!(value["status"], "Recording");
         assert_eq!(value["dictating"], true);
         assert_eq!(value["busy"], true);
@@ -265,6 +276,50 @@ mod tests {
         // Publishing sends no event; the interface hears about state through
         // `scribe:app-state`, not the status file.
         assert!(host.events().is_empty());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// `appVersion` is the host's answer: the running app's own version,
+    /// which a Dev or installer-upgrade build overrides, never the engine
+    /// crate's `CARGO_PKG_VERSION`. Reading it is a query, so the host
+    /// records no call.
+    #[test]
+    fn the_status_file_reports_the_hosts_app_version() {
+        use crate::host::{Flavor, RecordingHost};
+        use crate::paths::Paths;
+
+        let root = std::env::temp_dir().join(format!(
+            "scribe-status-version-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let cache = root.join("cache");
+        let host = RecordingHost::new(
+            Paths::from_parts(
+                root.join("data"),
+                cache.clone(),
+                root.join("logs"),
+                None,
+                None,
+            ),
+            Flavor::Dev,
+        )
+        .with_app_version(DEV_VERSION);
+
+        let written_version = || {
+            let value: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(cache.join("status.json")).unwrap())
+                    .unwrap();
+            value["appVersion"].clone()
+        };
+        publish_idle_with(&host);
+        assert_eq!(written_version(), DEV_VERSION);
+        publish_with(&host, &snapshot(AppStatus::Recording));
+        assert_eq!(written_version(), DEV_VERSION);
+        assert_ne!(written_version(), env!("CARGO_PKG_VERSION"));
+        assert!(host.events().is_empty());
+        assert!(host.calls().is_empty());
 
         std::fs::remove_dir_all(&root).unwrap();
     }

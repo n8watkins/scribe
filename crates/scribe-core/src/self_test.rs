@@ -8,7 +8,10 @@
 //! exits. Nothing else changes: without the flag the app never enters this
 //! module.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
@@ -68,27 +71,45 @@ pub fn spawn(app: &AppHandle, request: SelfTestRequest) {
     spawn_with(app, &core, request);
 }
 
-/// [`spawn`] on the engine. Still takes the app to exit it when done, and for
-/// the app's version: Dev and installer-upgrade builds override it with
-/// `--config`, so it is not the engine crate's `CARGO_PKG_VERSION`.
+/// [`spawn`] on the engine. The app's version and the exit go through the
+/// host: Dev and installer-upgrade builds override the version with
+/// `--config`, so it is not the engine crate's `CARGO_PKG_VERSION`. Still
+/// takes the app, only to pass it on to `file_transcribe::transcribe_file_with`
+/// (until P1-4 step 4).
 pub fn spawn_with(app: &AppHandle, core: &Core, request: SelfTestRequest) {
-    let handle = app.clone();
-    let core = core.clone();
-    let app_version = app.package_info().version.to_string();
+    let worker_app = app.clone();
+    let worker_core = core.clone();
+    start(core.host().clone(), request, move |app_version, audio| {
+        run(&worker_app, &worker_core, app_version, audio)
+    });
+}
+
+/// The body of [`spawn_with`] over the host and the run itself, so tests can
+/// drive it without a `Core`. Reads the version on the calling thread, runs
+/// the self-test on its own thread, writes the result, and exits through the
+/// host with 0 on success and 1 otherwise (and 1 when the thread cannot
+/// start).
+fn start(
+    host: Arc<dyn Host>,
+    request: SelfTestRequest,
+    run: impl FnOnce(String, &Path) -> SelfTestResult + Send + 'static,
+) {
+    let app_version = host.app_version();
+    let exit_host = host.clone();
     let spawned = std::thread::Builder::new()
         .name("self-test".into())
         .spawn(move || {
-            let outcome = run(&handle, &core, app_version, &request.audio);
+            let outcome = run(app_version, &request.audio);
             let ok = outcome.ok;
             if let Err(error) = write_result(&request.result, &outcome) {
                 log::error!("Self-test could not write its result. {}", error);
             }
             log::info!("Self-test finished (ok: {})", ok);
-            handle.exit(if ok { 0 } else { 1 });
+            exit_host.exit(if ok { 0 } else { 1 });
         });
     if let Err(error) = spawned {
         log::error!("Could not start the self-test thread. {}", error);
-        app.exit(1);
+        host.exit(1);
     }
 }
 
@@ -174,5 +195,92 @@ mod tests {
         assert_eq!(parse_args(["Scribe.exe"]), None);
         assert_eq!(parse_args(["Scribe.exe", FLAG, "jfk.wav"]), None);
         assert_eq!(parse_args(["Scribe.exe", FLAG, "--autostart", "x"]), None);
+    }
+
+    use crate::host::{Flavor, HostCall, RecordingHost};
+    use crate::paths::Paths;
+
+    /// A Dev build's version: not the engine crate's `CARGO_PKG_VERSION`.
+    const DEV_VERSION: &str = "0.16.4-57";
+
+    /// Runs [`start`] with `run` on a [`RecordingHost`] that answers
+    /// [`DEV_VERSION`], waits for the self-test to exit, and returns the
+    /// host's calls, the version `run` was handed, and the result file.
+    fn self_test(ok: bool) -> (Vec<HostCall>, String, serde_json::Value, tempfile::TempDir) {
+        let root = tempfile::tempdir().unwrap();
+        let recorder = Arc::new(
+            RecordingHost::new(
+                Paths::from_parts(
+                    root.path().join("data"),
+                    root.path().join("cache"),
+                    root.path().join("logs"),
+                    None,
+                    None,
+                ),
+                Flavor::Dev,
+            )
+            .with_app_version(DEV_VERSION),
+        );
+        let request = SelfTestRequest {
+            audio: root.path().join("jfk.wav"),
+            result: root.path().join("result.json"),
+        };
+        let audio_path = request.audio.clone();
+        let (handed, handed_rx) = std::sync::mpsc::channel();
+        start(recorder.clone(), request, move |app_version, audio| {
+            handed.send(app_version.clone()).unwrap();
+            assert_eq!(audio, audio_path);
+            SelfTestResult {
+                ok,
+                app_version,
+                model_id: Some("base.en".to_string()),
+                text: ok.then(|| "ask not what your country can do".to_string()),
+                latency_ms: Some(12),
+                error: (!ok).then(|| "The transcript was empty.".to_string()),
+            }
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while recorder.calls().is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the self-test never exited"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // Read the result file as soon as the exit is recorded. A complete
+        // file here shows it was written by the time the exit was asked for;
+        // it does not prove the write came first on the self-test thread
+        // (only a host that checked the file inside `exit` could), but the
+        // write is the statement before the exit in `start`.
+        let written = std::fs::read_to_string(root.path().join("result.json"))
+            .expect("the result file exists once the self-test exits");
+        let result = serde_json::from_str(&written)
+            .expect("the result file is complete once the self-test exits");
+        let handed = handed_rx.recv().unwrap();
+        // The self-test sends no event of its own.
+        assert!(recorder.events().is_empty());
+        (recorder.calls(), handed, result, root)
+    }
+
+    #[test]
+    fn a_passing_self_test_reports_the_hosts_version_and_exits_with_0() {
+        let (calls, handed, result, _root) = self_test(true);
+        assert_eq!(calls, [HostCall::Exit(0)]);
+        assert_eq!(handed, DEV_VERSION);
+        assert_eq!(result["ok"], true);
+        // What the smoke tests compare with the version they installed.
+        assert_eq!(result["appVersion"], DEV_VERSION);
+        assert_ne!(result["appVersion"], env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn a_failing_self_test_exits_with_1_once() {
+        let (calls, handed, result, _root) = self_test(false);
+        assert_eq!(calls, [HostCall::Exit(1)]);
+        assert_eq!(handed, DEV_VERSION);
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["appVersion"], DEV_VERSION);
+        assert_eq!(result["error"], "The transcript was empty.");
     }
 }
