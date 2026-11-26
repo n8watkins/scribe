@@ -3,24 +3,16 @@
 //!
 //! Converted to the engine handle: commands here take the managed [`Core`]
 //! (docs/CORE-SPLIT.md). `open_models_folder`, `delete_model` and
-//! `select_model` also keep the `AppHandle`, for the `data` lane's
-//! `data_hygiene::open_folder` and `settings_store::emit_changed`.
+//! `select_model` announce settings through the host (`emit_changed_with`)
+//! and open the folder through it (`open_folder_with`).
 
-use super::{off_main, off_main_core};
-use crate::{
-    data_hygiene::open_folder, error::CommandError, gpu::GpuProbe, model_manager,
-    models::ModelInfo, settings_store, Core,
-};
+use super::off_main_core;
+use crate::{error::CommandError, gpu::GpuProbe, model_manager, models::ModelInfo, Core};
 
 #[tauri::command]
-pub async fn open_models_folder(
-    app: tauri::AppHandle,
-    core: tauri::State<'_, Core>,
-) -> Result<(), CommandError> {
-    let core = core.inner().clone();
-    off_main(app, move |app| {
-        let dir = model_manager::models_dir_with(core.host().as_ref());
-        open_folder(app, dir)
+pub async fn open_models_folder(core: tauri::State<'_, Core>) -> Result<(), CommandError> {
+    off_main_core(core.inner().clone(), move |core| {
+        model_manager::open_models_folder_with(core.host().as_ref())
     })
     .await
 }
@@ -76,47 +68,34 @@ pub async fn retry_model_download(
 
 #[tauri::command]
 pub async fn delete_model(
-    app: tauri::AppHandle,
     core: tauri::State<'_, Core>,
     model_id: String,
 ) -> Result<ModelInfo, CommandError> {
-    let core = core.inner().clone();
-    off_main(app, move |app| {
-        let state = core.backend();
-        let _writes = settings_store::lock(state.settings_writes());
-        let (info, settings) = {
-            let db = state.db()?;
-            let before = db.get_settings()?;
-            let info = model_manager::delete_model_with(core.host().as_ref(), &db, &model_id)?;
-            let after = db.get_settings()?;
-            (info, (after != before).then_some(after))
-        };
-        // Deleting the selected model clears the selection.
-        if let Some(settings) = settings {
-            settings_store::emit_changed(app, &settings);
-            core.warm_transcriber().sync_with_settings(&settings);
-        }
-        Ok(info)
+    off_main_core(core.inner().clone(), move |core| {
+        model_manager::delete_model_announced_with(
+            core.host().as_ref(),
+            core.backend(),
+            &model_id,
+            // Deleting the selected model clears the selection.
+            |settings| core.warm_transcriber().sync_with_settings(settings),
+        )
     })
     .await
 }
 
 #[tauri::command]
 pub async fn select_model(
-    app: tauri::AppHandle,
     core: tauri::State<'_, Core>,
     model_id: String,
 ) -> Result<ModelInfo, CommandError> {
-    let core = core.inner().clone();
-    off_main(app, move |app| {
-        let state = core.backend();
-        let _writes = settings_store::lock(state.settings_writes());
-        let info = model_manager::select_model_with(core.host().as_ref(), state, &model_id)?;
-        let settings = state.db()?.get_settings()?;
-        settings_store::emit_changed(app, &settings);
-        // Switching models unloads the old one before the new one loads.
-        core.warm_transcriber().sync_with_settings(&settings);
-        Ok(info)
+    off_main_core(core.inner().clone(), move |core| {
+        model_manager::select_model_announced_with(
+            core.host().as_ref(),
+            core.backend(),
+            &model_id,
+            // Switching models unloads the old one before the new one loads.
+            |settings| core.warm_transcriber().sync_with_settings(settings),
+        )
     })
     .await
 }

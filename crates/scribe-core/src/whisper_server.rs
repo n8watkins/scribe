@@ -648,16 +648,6 @@ impl WarmTranscriber {
         }
     }
 
-    /// [`Self::transcribe_with`]; the transcriber already knows its host, so
-    /// `app` is not used.
-    pub fn transcribe(
-        &self,
-        _app: &AppHandle,
-        request: WhisperRequest,
-    ) -> Result<WhisperTranscription, CommandError> {
-        self.transcribe_with(request)
-    }
-
     /// Transcribes one WAV. Tries the resident engine first and transparently
     /// falls back to the `whisper-cli.exe` path on any server failure.
     pub fn transcribe_with(

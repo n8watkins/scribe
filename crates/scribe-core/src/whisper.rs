@@ -87,14 +87,6 @@ fn host_of(app: &AppHandle, function: &str) -> Option<std::sync::Arc<dyn Host>> 
     }
 }
 
-pub fn transcribe(
-    app: &AppHandle,
-    request: WhisperRequest,
-) -> Result<WhisperTranscription, CommandError> {
-    let host = host_of(app, "transcribe").ok_or_else(no_main_window)?;
-    transcribe_with(host.as_ref(), request)
-}
-
 /// Transcribes one WAV with the bundled whisper-cli from the resources of
 /// `host`.
 pub fn transcribe_with(

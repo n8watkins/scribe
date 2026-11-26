@@ -13,33 +13,19 @@ use std::{
 use chrono::Utc;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Manager};
 
 use crate::{
     commands::BackendState,
-    core::Core,
     db::Database,
     error::CommandError,
     events::CoreEvent,
-    host::{no_main_window, Host},
+    host::Host,
     models::{
         self, CatalogModel, ModelInfo, ModelRecord, ModelSource, ModelStatus, DEFAULT_MODEL_ID,
     },
     paths::Paths,
     settings::AppSettings,
 };
-
-/// The engine's host, for the `AppHandle` wrappers below: found through the
-/// managed [`Core`]. None (logged) before the `Core` is managed.
-fn host_of(app: &AppHandle, function: &str) -> Option<std::sync::Arc<dyn Host>> {
-    match app.try_state::<Core>() {
-        Some(core) => Some(core.host().clone()),
-        None => {
-            log::warn!("model_manager::{function} ran before the engine was ready");
-            None
-        }
-    }
-}
 
 #[derive(Default)]
 pub struct DownloadRegistry {
@@ -121,15 +107,6 @@ pub struct ModelDownloadProgress {
     pub status: ModelStatus,
 }
 
-pub fn list_models(
-    app: &AppHandle,
-    db: &Database,
-    downloads: &DownloadRegistry,
-) -> Result<Vec<ModelInfo>, CommandError> {
-    let host = host_of(app, "list_models").ok_or_else(no_main_window)?;
-    list_models_with(host.as_ref(), db, downloads)
-}
-
 /// Every catalog model with its status, from the models folder of `host`.
 pub fn list_models_with(
     host: &dyn Host,
@@ -165,15 +142,6 @@ fn list_models_in(
         .collect()
 }
 
-pub fn download_model(
-    app: &AppHandle,
-    state: &BackendState,
-    model_id: &str,
-) -> Result<ModelInfo, CommandError> {
-    let host = host_of(app, "download_model").ok_or_else(no_main_window)?;
-    download_model_with(host.as_ref(), state, model_id)
-}
-
 /// Downloads a model into the models folder of `host`, sending its progress
 /// to `host`. Blocks for the whole download, so it takes the database lock
 /// only for each short read or write, never across the network transfer:
@@ -188,15 +156,6 @@ pub fn download_model_with(
     let result = download_model_inner(host, state, cancel_flag, model_id);
     downloads.finish(model_id);
     result
-}
-
-pub fn retry_model_download(
-    app: &AppHandle,
-    state: &BackendState,
-    model_id: &str,
-) -> Result<ModelInfo, CommandError> {
-    let host = host_of(app, "retry_model_download").ok_or_else(no_main_window)?;
-    retry_model_download_with(host.as_ref(), state, model_id)
 }
 
 /// Throws away a partial download, then downloads the model again.
@@ -227,15 +186,6 @@ pub fn cancel_model_download(
     }
 
     Ok(())
-}
-
-pub fn delete_model(
-    app: &AppHandle,
-    db: &Database,
-    model_id: &str,
-) -> Result<ModelInfo, CommandError> {
-    let host = host_of(app, "delete_model").ok_or_else(no_main_window)?;
-    delete_model_with(host.as_ref(), db, model_id)
 }
 
 /// Deletes a model (and any partial download of it) from the models folder of
@@ -293,15 +243,6 @@ fn delete_model_in(
 
     let registry = DownloadRegistry::default();
     model_info_for_catalog(folders, catalog_model, Some(&record), &settings, &registry)
-}
-
-pub fn select_model(
-    app: &AppHandle,
-    state: &BackendState,
-    model_id: &str,
-) -> Result<ModelInfo, CommandError> {
-    let host = host_of(app, "select_model").ok_or_else(no_main_window)?;
-    select_model_with(host.as_ref(), state, model_id)
 }
 
 /// Selects a downloaded model. The checksum of a large model takes seconds, so
@@ -362,14 +303,6 @@ pub fn select_model_with(
     model_info_for_catalog(&folders, catalog_model, Some(&record), &settings, &registry)
 }
 
-pub fn selected_model_path(
-    app: &AppHandle,
-    db: &Database,
-) -> Result<(String, PathBuf), CommandError> {
-    let host = host_of(app, "selected_model_path").ok_or_else(no_main_window)?;
-    selected_model_path_with(host.as_ref(), db)
-}
-
 /// The selected model (the default one when none is selected) and its file.
 pub fn selected_model_path_with(
     host: &dyn Host,
@@ -405,15 +338,7 @@ fn selected_model_path_in(
 
 /// The file of a catalog model by id: the model a dictation started with,
 /// when it differs from the one selected now.
-pub fn model_path_for_id(
-    app: &AppHandle,
-    model_id: &str,
-) -> Result<(String, PathBuf), CommandError> {
-    let host = host_of(app, "model_path_for_id").ok_or_else(no_main_window)?;
-    model_path_for_id_with(host.as_ref(), model_id)
-}
-
-/// [`model_path_for_id`] in the models folder of `host`.
+/// In the models folder of `host`.
 pub fn model_path_for_id_with(
     host: &dyn Host,
     model_id: &str,
@@ -439,16 +364,7 @@ fn model_path_for_id_in(
 }
 
 /// The model a dictation uses: the one it started with, else the selected one.
-pub fn session_model_path(
-    app: &AppHandle,
-    db: &Database,
-    session_id: &str,
-) -> Result<(String, PathBuf), CommandError> {
-    let host = host_of(app, "session_model_path").ok_or_else(no_main_window)?;
-    session_model_path_with(host.as_ref(), db, session_id)
-}
-
-/// [`session_model_path`] in the models folder of `host`.
+/// In the models folder of `host`.
 pub fn session_model_path_with(
     host: &dyn Host,
     db: &Database,
@@ -854,9 +770,67 @@ fn model_info_for_catalog(
     })
 }
 
-pub fn models_dir(app: &AppHandle) -> Result<PathBuf, CommandError> {
-    let host = host_of(app, "models_dir").ok_or_else(no_main_window)?;
-    Ok(models_dir_with(host.as_ref()))
+/// Opens the models folder of `host` in the system's file manager, creating it
+/// first when it is missing.
+pub fn open_models_folder_with(host: &dyn Host) -> Result<(), CommandError> {
+    crate::data_hygiene::open_folder_with(host, models_dir_with(host))
+}
+
+/// The `delete_model` command: deletes the model, and when that cleared the
+/// selection announces the new settings (`scribe:settings-changed`, then the
+/// tray menu) and then runs `after` (the speech engine follows the settings).
+/// Holds the settings write lock from the read to the announcement, so
+/// announcements go out in the order the writes happened. Nothing is sent
+/// when the settings did not change.
+pub fn delete_model_announced_with(
+    host: &dyn Host,
+    state: &BackendState,
+    model_id: &str,
+    after: impl FnOnce(&AppSettings),
+) -> Result<ModelInfo, CommandError> {
+    delete_model_announced_in(&ModelFolders::of(host), host, state, model_id, after)
+}
+
+fn delete_model_announced_in(
+    folders: &ModelFolders,
+    host: &dyn Host,
+    state: &BackendState,
+    model_id: &str,
+    after: impl FnOnce(&AppSettings),
+) -> Result<ModelInfo, CommandError> {
+    let _writes = crate::settings_store::lock(state.settings_writes());
+    let (info, settings) = {
+        let db = state.db()?;
+        let before = db.get_settings()?;
+        let info = delete_model_in(folders, &db, model_id)?;
+        let now = db.get_settings()?;
+        (info, (now != before).then_some(now))
+    };
+    // Deleting the selected model clears the selection.
+    if let Some(settings) = settings {
+        crate::settings_store::emit_changed_with(host, &settings);
+        after(&settings);
+    }
+    Ok(info)
+}
+
+/// The `select_model` command: selects the model, announces the new settings
+/// (`scribe:settings-changed`, then the tray menu) and runs `after` (the
+/// speech engine unloads the old model before the new one loads). Holds the
+/// settings write lock from the write to the announcement. Sends nothing when
+/// the selection fails.
+pub fn select_model_announced_with(
+    host: &dyn Host,
+    state: &BackendState,
+    model_id: &str,
+    after: impl FnOnce(&AppSettings),
+) -> Result<ModelInfo, CommandError> {
+    let _writes = crate::settings_store::lock(state.settings_writes());
+    let info = select_model_with(host, state, model_id)?;
+    let settings = state.db()?.get_settings()?;
+    crate::settings_store::emit_changed_with(host, &settings);
+    after(&settings);
+    Ok(info)
 }
 
 /// The folder Scribe downloads models into: `models` in the app data folder
@@ -917,11 +891,6 @@ fn resolve_model_file(
     }
 
     None
-}
-
-pub fn smallest_downloaded_model_path(app: &AppHandle) -> Option<PathBuf> {
-    let host = host_of(app, "smallest_downloaded_model_path")?;
-    smallest_downloaded_model_path_with(host.as_ref())
 }
 
 /// Path of the smallest downloaded model, for cheap operations that only need
@@ -1172,6 +1141,129 @@ mod tests {
             serde_json::to_value(&events[1]).unwrap()["percent"],
             serde_json::Value::Null
         );
+    }
+
+    fn backend_in(root: &Path) -> BackendState {
+        BackendState::new(
+            Database::in_memory().unwrap(),
+            root.join("cache").join("recordings"),
+            crate::data_hygiene::DataDirs {
+                data_dir: root.join("data"),
+                cache_dir: root.join("cache"),
+            },
+        )
+    }
+
+    #[test]
+    fn opening_the_models_folder_creates_it_and_opens_it_through_the_host() {
+        use crate::host::HostCall;
+        let (host, root) = temp_host("open");
+        let models = root.join("data").join("models");
+        assert!(!models.exists());
+
+        open_models_folder_with(&host).unwrap();
+
+        assert!(models.is_dir());
+        assert_eq!(host.calls(), vec![HostCall::OpenPath(models)]);
+        assert!(host.events().is_empty());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_failed_open_of_the_models_folder_keeps_its_error_code() {
+        use crate::host::Failing;
+        let (host, root) = temp_host("open-fails");
+        host.fail(Failing::OpenPath);
+
+        let error = open_models_folder_with(&host).unwrap_err();
+
+        assert_eq!(error.code, "open_folder_failed");
+        assert!(error.message.contains(&Failing::OpenPath.message()));
+        assert!(host.events().is_empty());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn deleting_the_selected_model_announces_the_cleared_selection_once() {
+        let (host, root) = temp_host("delete-selected");
+        let folders = hosts_folders_only(&host);
+        let state = backend_in(&root);
+        let tiny = models::catalog_model("tiny.en").unwrap();
+        place(&root.join("data").join("models").join(tiny.filename));
+        {
+            let db = state.db().unwrap();
+            let mut settings = db.get_settings().unwrap();
+            settings.selected_model_id = Some("tiny.en".to_string());
+            db.save_settings(&settings).unwrap();
+        }
+
+        let mut followed = Vec::new();
+        let info = delete_model_announced_in(&folders, &host, &state, "tiny.en", |settings| {
+            // The announcement is already out when the engine follows.
+            followed.push((host.events().len(), settings.selected_model_id.clone()));
+        })
+        .unwrap();
+
+        assert_eq!(info.id, "tiny.en");
+        assert_eq!(followed, vec![(1, None)]);
+        let events = host.events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].name(), "scribe:settings-changed");
+        assert_eq!(
+            serde_json::to_value(&events[0]).unwrap()["selectedModelId"],
+            serde_json::Value::Null
+        );
+        assert!(host.calls().is_empty());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn deleting_a_model_that_was_not_selected_sends_nothing() {
+        let (host, root) = temp_host("delete-other");
+        let folders = hosts_folders_only(&host);
+        let state = backend_in(&root);
+        let tiny = models::catalog_model("tiny.en").unwrap();
+        place(&root.join("data").join("models").join(tiny.filename));
+
+        let mut followed = 0;
+        delete_model_announced_in(&folders, &host, &state, "tiny.en", |_| followed += 1).unwrap();
+
+        assert_eq!(followed, 0);
+        assert!(host.events().is_empty());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn deleting_an_unknown_model_fails_and_sends_nothing() {
+        let (host, root) = temp_host("delete-unknown");
+        let folders = hosts_folders_only(&host);
+        let state = backend_in(&root);
+
+        let mut followed = 0;
+        let error =
+            delete_model_announced_in(&folders, &host, &state, "no-such-model", |_| followed += 1)
+                .unwrap_err();
+
+        assert_eq!(error.code, "unknown_model");
+        assert_eq!(followed, 0);
+        assert!(host.events().is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn selecting_a_model_that_is_not_downloaded_fails_and_sends_nothing() {
+        let (host, root) = temp_host("select-missing");
+        let state = backend_in(&root);
+
+        let mut followed = 0;
+        let error = select_model_announced_with(&host, &state, "tiny.en", |_| followed += 1);
+
+        // A developer's SCRIBE_MODEL_DIR may hold the model; then the checksum
+        // of a real file decides, and still nothing is announced on failure.
+        assert!(error.is_err());
+        assert_eq!(followed, 0);
+        assert!(host.events().is_empty());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
