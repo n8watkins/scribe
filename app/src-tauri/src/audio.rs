@@ -378,9 +378,7 @@ impl AudioService {
         }
         drop(session.stream);
         let _ = session.control_tx.send(WorkerControl::Stop(reason));
-        let result = session.worker.join().map_err(|_| {
-            CommandError::new("recording_failed", "Audio worker thread panicked.")
-        })??;
+        let result = finished_recording(session.worker.join())?;
         self.last_result = Some(result.clone());
         Ok(Some(result))
     }
@@ -561,6 +559,22 @@ pub fn record_test_clip_for_app(
 /// Tells the UI a recording started and plays the start cue. Called once
 /// capture is already running; the cue is only queued (it plays on its own
 /// thread), so it never delays the recording.
+/// The result of a stopped session's worker. When the worker failed (it
+/// panicked, or the WAV could not be written), no recording-stopped event
+/// and no stop cue follow, as before; the sound player is told the
+/// recording is over so it stops holding the output open for it.
+fn finished_recording(
+    joined: thread::Result<Result<RecordingResult, CommandError>>,
+) -> Result<RecordingResult, CommandError> {
+    let result = joined
+        .map_err(|_| CommandError::new("recording_failed", "Audio worker thread panicked."))
+        .and_then(|result| result);
+    if result.is_err() {
+        crate::sounds::recording_ended();
+    }
+    result
+}
+
 fn emit_recording_started(app: &AppHandle, info: &RecordingSessionInfo) {
     let _ = app.emit("audio://recording-started", info);
     crate::sounds::play(app, crate::sounds::Cue::Start);
@@ -1920,6 +1934,21 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_failed_stop_tells_the_sound_player_the_recording_ended() {
+        let notices = || {
+            crate::sounds::tests::RECORDING_ENDED_NOTICES.load(std::sync::atomic::Ordering::SeqCst)
+        };
+        let before = notices();
+        let failed = finished_recording(Ok(Err(CommandError::new("disk_full", "Disk full."))));
+        assert_eq!(failed.unwrap_err().code, "disk_full");
+        assert_eq!(notices(), before + 1);
+
+        let panicked = finished_recording(Err(Box::new("worker panic")));
+        assert_eq!(panicked.unwrap_err().code, "recording_failed");
+        assert_eq!(notices(), before + 2);
+    }
 
     #[test]
     fn resamples_to_target_rate() {
