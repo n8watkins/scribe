@@ -5,7 +5,13 @@
 //! used before this feature existed has no record yet, so it sees the card
 //! once; a brand-new install records its version silently and shows nothing.
 
-use crate::{db::Database, error::CommandError};
+use crate::{core::Core, db::Database, error::CommandError};
+
+/// [`pending_version`] for the running version (the `whats_new_pending`
+/// command).
+pub fn pending_version_with(core: &Core) -> Result<Option<String>, CommandError> {
+    pending_version(&*core.backend().db()?, env!("CARGO_PKG_VERSION"))
+}
 
 /// The version whose card should show now, or `None`.
 pub fn pending_version(db: &Database, current: &str) -> Result<Option<String>, CommandError> {

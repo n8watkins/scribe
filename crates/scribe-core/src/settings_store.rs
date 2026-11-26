@@ -13,9 +13,17 @@
 use std::sync::{Mutex, MutexGuard};
 
 use serde_json::{Map, Value};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
-use crate::{backend::BackendState, error::CommandError, hotkeys, settings::AppSettings};
+use crate::{
+    backend::BackendState,
+    core::Core,
+    error::CommandError,
+    events::CoreEvent,
+    host::{no_main_window, Host},
+    hotkeys,
+    settings::AppSettings,
+};
 
 /// Emitted with the full stored settings after every settings write.
 pub const SETTINGS_CHANGED_EVENT: &str = "scribe:settings-changed";
@@ -31,10 +39,30 @@ pub fn lock(writes: &Mutex<()>) -> MutexGuard<'_, ()> {
 }
 
 /// Tells every window, and the tray menu, the stored settings changed.
-pub fn emit_changed(app: &AppHandle, settings: &AppSettings) {
-    let _ = app.emit(SETTINGS_CHANGED_EVENT, settings);
+pub fn emit_changed_with(host: &dyn Host, settings: &AppSettings) {
+    host.emit(CoreEvent::SettingsChanged(settings.clone()));
     // The tray menu's "Launch at startup" check mark shows the stored value.
-    crate::shell::sync_settings(app, settings);
+    host.sync_settings(settings);
+}
+
+/// [`emit_changed_with`] for callers that still hold an `AppHandle`. Needs
+/// only the host, which the shell installs before anything else.
+pub fn emit_changed(_app: &AppHandle, settings: &AppSettings) {
+    match crate::shell::host() {
+        Some(host) => emit_changed_with(host.as_ref(), settings),
+        None => log::warn!("Could not announce the settings change: no host yet"),
+    }
+}
+
+/// The `Core`, for the wrappers below that still take an `AppHandle`.
+fn core_of(app: &AppHandle) -> Result<Core, CommandError> {
+    match app.try_state::<Core>() {
+        Some(core) => Ok(core.inner().clone()),
+        None => {
+            log::warn!("Could not reach the settings: the engine is not running yet");
+            Err(no_main_window())
+        }
+    }
 }
 
 /// Returns `current` with the fields named in `patch` replaced. Keys are the
@@ -87,17 +115,30 @@ where
 /// Applies a settings patch from the backend (the tray, Windows' Startup apps
 /// switch) exactly as a window's patch is applied. Blocks; call it off the
 /// main thread.
-pub fn patch_settings_now(
-    app: &tauri::AppHandle,
+///
+/// Still takes the `AppHandle` for the hotkeys and the startup entry (see
+/// [`apply_settings_change_with`]).
+pub fn patch_settings_now_with(
+    app: &AppHandle,
+    core: &Core,
     patch: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<AppSettings, CommandError> {
-    let state = app.state::<BackendState>().inner();
+    let state = core.backend();
     patch_locked(
         state.settings_writes(),
         patch,
         || state.db()?.get_settings(),
-        |previous, next| apply_settings_change(app, state, previous, next),
+        |previous, next| apply_settings_change_with(app, core, previous, next),
     )
+}
+
+/// [`patch_settings_now_with`] for callers that still hold only an
+/// `AppHandle`.
+pub fn patch_settings_now(
+    app: &AppHandle,
+    patch: &serde_json::Map<String, serde_json::Value>,
+) -> Result<AppSettings, CommandError> {
+    patch_settings_now_with(app, &core_of(app)?, patch)
 }
 
 /// Shows the switch the user may have flipped in Windows' Startup apps list
@@ -105,39 +146,74 @@ pub fn patch_settings_now(
 /// the startup entry. Holds the settings write lock from read to save, so it
 /// cannot undo a flip the user is making in Scribe at the same moment.
 /// Blocks; call it off the main thread.
-pub fn sync_launch_at_startup(app: &tauri::AppHandle) -> Result<AppSettings, CommandError> {
-    let state = app.state::<BackendState>().inner();
+///
+/// Still takes the `AppHandle` for `autostart::follow_windows_switch`.
+pub fn sync_launch_at_startup_with(
+    app: &AppHandle,
+    core: &Core,
+) -> Result<AppSettings, CommandError> {
+    follow_launch_switch(core.backend(), core.host().as_ref(), |stored| {
+        crate::autostart::follow_windows_switch(app, stored)
+    })
+}
+
+/// [`sync_launch_at_startup_with`] for callers that still hold only an
+/// `AppHandle`.
+pub fn sync_launch_at_startup(app: &AppHandle) -> Result<AppSettings, CommandError> {
+    sync_launch_at_startup_with(app, &core_of(app)?)
+}
+
+/// The body of [`sync_launch_at_startup_with`]: `follow` gets the stored
+/// "Launch at startup" and answers the value to store instead, or None to
+/// leave it.
+fn follow_launch_switch(
+    state: &BackendState,
+    host: &dyn Host,
+    follow: impl FnOnce(bool) -> Option<bool>,
+) -> Result<AppSettings, CommandError> {
     let _guard = lock(state.settings_writes());
     let mut settings = state.db()?.get_settings()?;
-    if let Some(value) = crate::autostart::follow_windows_switch(app, settings.launch_at_startup) {
+    if let Some(value) = follow(settings.launch_at_startup) {
         log::info!("Launch at startup follows Windows' Startup apps switch: {value}");
         settings.launch_at_startup = value;
         state.db()?.save_settings(&settings)?;
-        emit_changed(app, &settings);
+        emit_changed_with(host, &settings);
     }
     Ok(settings)
 }
 
 /// Turns "Launch at startup" on or off, as the settings toggle does.
-pub fn set_launch_at_startup(
-    app: &tauri::AppHandle,
+pub fn set_launch_at_startup_with(
+    app: &AppHandle,
+    core: &Core,
     enabled: bool,
 ) -> Result<AppSettings, CommandError> {
     let mut patch = serde_json::Map::new();
     patch.insert("launchAtStartup".into(), serde_json::Value::Bool(enabled));
-    patch_settings_now(app, &patch)
+    patch_settings_now_with(app, core, &patch)
+}
+
+/// [`set_launch_at_startup_with`] for callers that still hold only an
+/// `AppHandle`.
+pub fn set_launch_at_startup(app: &AppHandle, enabled: bool) -> Result<AppSettings, CommandError> {
+    set_launch_at_startup_with(app, &core_of(app)?, enabled)
 }
 
 /// Stores `settings` over `previous` and applies what changed: launch at
 /// startup, hotkey registration, GitHub activity, and retention. Rolls the
 /// side effects back when the save fails. The caller holds the settings write
 /// lock.
-fn apply_settings_change(
-    app: &tauri::AppHandle,
-    state: &BackendState,
+///
+/// Still takes the `AppHandle` for the hotkeys lane's `set_transform_enabled`,
+/// `replace_hotkeys` and `emit_registration_failures`, and for
+/// `autostart::apply`.
+fn apply_settings_change_with(
+    app: &AppHandle,
+    core: &Core,
     previous: &AppSettings,
     settings: AppSettings,
 ) -> Result<AppSettings, CommandError> {
+    let state = core.backend();
     settings
         .validate()
         .map_err(CommandError::invalid_settings)?;
@@ -165,14 +241,7 @@ fn apply_settings_change(
         };
     }
 
-    let save_result = if previous.github_repo != settings.github_repo {
-        state
-            .db()?
-            .save_settings_and_clear_github_activity(&settings)
-    } else {
-        state.db()?.save_settings(&settings)
-    };
-    if let Err(error) = save_result {
+    if let Err(error) = save_settings_change(state, previous, &settings) {
         if rebind {
             hotkeys::set_transform_enabled(app, previous.notes_analysis_enabled);
             let _ = hotkeys::replace_hotkeys(app, &settings.hotkeys, &previous.hotkeys);
@@ -186,13 +255,40 @@ fn apply_settings_change(
 
     // Every window updates from this event, so it goes out as soon as the
     // new settings are stored.
-    emit_changed(app, &settings);
+    emit_changed_with(core.host().as_ref(), &settings);
     // Load, reload or unload the speech model to match (model, language,
     // GPU and "Keep the speech model loaded").
-    app.state::<crate::whisper_server::WarmTranscriber>()
-        .sync_with_settings(&settings);
+    core.warm_transcriber().sync_with_settings(&settings);
     hotkeys::emit_registration_failures(app, &hotkey_failures);
 
+    enforce_retention_change(state, previous, &settings)?;
+
+    Ok(settings)
+}
+
+/// Saves `settings`, clearing the GitHub activity in the same transaction
+/// when they name a different repository than `previous`.
+fn save_settings_change(
+    state: &BackendState,
+    previous: &AppSettings,
+    settings: &AppSettings,
+) -> Result<(), CommandError> {
+    if previous.github_repo != settings.github_repo {
+        state
+            .db()?
+            .save_settings_and_clear_github_activity(settings)
+    } else {
+        state.db()?.save_settings(settings)
+    }
+}
+
+/// Applies a changed retention window (or history being turned back on) to
+/// what is already stored.
+fn enforce_retention_change(
+    state: &BackendState,
+    previous: &AppSettings,
+    settings: &AppSettings,
+) -> Result<(), CommandError> {
     if previous.history_retention_days != settings.history_retention_days
         || (!previous.history_enabled && settings.history_enabled)
     {
@@ -206,15 +302,18 @@ fn apply_settings_change(
             .db()?
             .enforce_notes_retention(settings.notes_retention_days)?;
     }
-
-    Ok(settings)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data_hygiene::DataDirs;
     use crate::db::Database;
+    use crate::host::{Flavor, RecordingHost};
+    use crate::paths::Paths;
     use serde_json::json;
+    use std::path::Path;
     use std::sync::{Arc, Barrier};
     use std::thread;
 
@@ -222,6 +321,114 @@ mod tests {
         match value {
             Value::Object(map) => map,
             _ => panic!("patch must be an object"),
+        }
+    }
+
+    fn host_in(root: &Path) -> RecordingHost {
+        RecordingHost::new(
+            Paths::from_parts(
+                root.join("data"),
+                root.join("cache"),
+                root.join("logs"),
+                None,
+                None,
+            ),
+            Flavor::Stable,
+        )
+    }
+
+    fn state_in(root: &Path) -> BackendState {
+        BackendState::new(
+            Database::in_memory().unwrap(),
+            root.join("cache").join("recordings"),
+            DataDirs {
+                data_dir: root.join("data"),
+                cache_dir: root.join("cache"),
+            },
+        )
+    }
+
+    /// The events a host was sent, as (name, payload) pairs.
+    fn sent(host: &RecordingHost) -> Vec<(&'static str, Value)> {
+        host.events()
+            .iter()
+            .map(|event| (event.name(), serde_json::to_value(event).unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn emit_changed_sends_one_settings_changed_event_with_the_settings() {
+        let root = tempfile::tempdir().unwrap();
+        let host = host_in(root.path());
+        let settings = AppSettings {
+            pill_x: Some(12),
+            ..AppSettings::default()
+        };
+        emit_changed_with(&host, &settings);
+        assert_eq!(
+            sent(&host),
+            [(
+                "scribe:settings-changed",
+                serde_json::to_value(&settings).unwrap()
+            )]
+        );
+    }
+
+    #[test]
+    fn following_the_startup_switch_saves_and_announces_once() {
+        let root = tempfile::tempdir().unwrap();
+        let host = host_in(root.path());
+        let state = state_in(root.path());
+        let stored = state.db().unwrap().get_settings().unwrap();
+
+        let mut asked = None;
+        let settings = follow_launch_switch(&state, &host, |current| {
+            asked = Some(current);
+            Some(!current)
+        })
+        .unwrap();
+        assert_eq!(asked, Some(stored.launch_at_startup));
+        assert_eq!(settings.launch_at_startup, !stored.launch_at_startup);
+        assert_eq!(state.db().unwrap().get_settings().unwrap(), settings);
+        assert_eq!(
+            sent(&host),
+            [(
+                "scribe:settings-changed",
+                serde_json::to_value(&settings).unwrap()
+            )]
+        );
+    }
+
+    #[test]
+    fn an_unchanged_startup_switch_saves_and_announces_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let host = host_in(root.path());
+        let state = state_in(root.path());
+
+        let settings = follow_launch_switch(&state, &host, |_| None).unwrap();
+        assert_eq!(settings, AppSettings::default());
+        assert!(!state.db().unwrap().has_saved_settings().unwrap());
+        assert!(host.events().is_empty());
+    }
+
+    #[test]
+    fn a_settings_change_is_saved() {
+        let root = tempfile::tempdir().unwrap();
+        let state = state_in(root.path());
+        let previous = AppSettings::default();
+        for next in [
+            AppSettings {
+                pill_x: Some(3),
+                ..previous.clone()
+            },
+            AppSettings {
+                github_repo: "someone/notes".into(),
+                ..previous.clone()
+            },
+        ] {
+            save_settings_change(&state, &previous, &next).unwrap();
+            assert_eq!(state.db().unwrap().get_settings().unwrap(), next);
+            enforce_retention_change(&state, &previous, &next).unwrap();
         }
     }
 

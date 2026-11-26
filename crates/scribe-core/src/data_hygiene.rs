@@ -21,7 +21,13 @@ use std::{
 
 use tauri::Manager;
 
-use crate::{commands::BackendState, db::Database, error::CommandError};
+use crate::{
+    commands::BackendState,
+    core::Core,
+    db::Database,
+    error::CommandError,
+    host::{no_main_window, Host},
+};
 
 /// Temp recordings and segment WAVs older than this are leftovers from a
 /// crash or an interrupted session.
@@ -201,17 +207,16 @@ pub fn clear_files(dir: &Path) -> SweepReport {
 /// Runs once per launch on a background thread: rebrand repair, failed
 /// recordings past the retention window, orphaned clips, stale temp
 /// recordings and leftover editor copies.
-pub fn run_startup_maintenance(
-    app: &tauri::AppHandle,
+pub fn run_startup_maintenance_with(
+    state: &BackendState,
     pre_rebrand_dir: Option<PathBuf>,
     migration_complete: bool,
 ) {
-    let state = app.state::<BackendState>();
     let dirs = state.dirs().clone();
 
     if let Some(old_dir) = pre_rebrand_dir {
         if let Err(error) =
-            repair_rebrand_paths(&state, &old_dir, &dirs.data_dir, migration_complete)
+            repair_rebrand_paths(state, &old_dir, &dirs.data_dir, migration_complete)
         {
             log::warn!("Could not repair pre-rename paths: {}", error.message);
         }
@@ -253,6 +258,20 @@ pub fn run_startup_maintenance(
             removed.files,
             removed.bytes / 1_000_000
         );
+    }
+}
+
+/// [`run_startup_maintenance_with`] for the shell's setup, which starts it
+/// on its own thread before the `Core` exists. It needs only the backend,
+/// which setup manages before starting that thread.
+pub fn run_startup_maintenance(
+    app: &tauri::AppHandle,
+    pre_rebrand_dir: Option<PathBuf>,
+    migration_complete: bool,
+) {
+    match app.try_state::<BackendState>() {
+        Some(state) => run_startup_maintenance_with(&state, pre_rebrand_dir, migration_complete),
+        None => log::warn!("Skipping the startup cleanup: the database is not open"),
     }
 }
 
@@ -366,9 +385,25 @@ fn files_identical(a: &Path, b: &Path) -> bool {
 /// The directory Scribe treats as its data root: the user-chosen `data_dir`
 /// when set, otherwise the OS app-data directory. Existing data is never moved
 /// when this changes; only future data lands in the new location.
+pub fn effective_data_dir_with(core: &Core) -> PathBuf {
+    effective_data_dir_from(core.backend(), core.paths().data_dir())
+}
+
+/// [`effective_data_dir_with`] for callers that still hold an `AppHandle`.
 pub fn effective_data_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandError> {
-    if let Some(custom) = app
-        .state::<BackendState>()
+    match app.try_state::<Core>() {
+        Some(core) => Ok(effective_data_dir_with(&core)),
+        None => {
+            log::warn!("Could not find the data folder: the engine is not running yet");
+            Err(no_main_window())
+        }
+    }
+}
+
+/// The user-chosen data folder stored in `state`'s settings when set (and
+/// not blank), otherwise `app_data_dir` (`Paths::data_dir`).
+fn effective_data_dir_from(state: &BackendState, app_data_dir: &Path) -> PathBuf {
+    if let Some(custom) = state
         .db()
         .ok()
         .and_then(|db| db.get_settings().ok())
@@ -376,28 +411,28 @@ pub fn effective_data_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, 
     {
         let trimmed = custom.trim();
         if !trimmed.is_empty() {
-            return Ok(std::path::PathBuf::from(trimmed));
+            return PathBuf::from(trimmed);
         }
     }
-
-    app.path().app_data_dir().map_err(|error| {
-        CommandError::new(
-            "app_data_dir_unavailable",
-            format!("Could not locate Scribe app data directory. {}", error),
-        )
-    })
+    app_data_dir.to_path_buf()
 }
 
 /// The directory tauri-plugin-log writes rotating log files to (TargetKind::
 /// LogDir resolves to app_log_dir()). Unlike the data/models folders this is
 /// always the OS log dir and is not affected by the custom data_dir setting.
-pub fn logs_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandError> {
-    app.path().app_log_dir().map_err(|error| {
-        CommandError::new(
-            "app_log_dir_unavailable",
-            format!("Could not locate the Scribe logs directory. {}", error),
-        )
-    })
+pub fn logs_dir_with(host: &dyn Host) -> PathBuf {
+    host.paths().log_dir().to_path_buf()
+}
+
+/// [`logs_dir_with`] for callers that still hold an `AppHandle`.
+pub fn logs_dir(_app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandError> {
+    match crate::shell::host() {
+        Some(host) => Ok(logs_dir_with(host.as_ref())),
+        None => {
+            log::warn!("Could not find the logs folder: no host yet");
+            Err(no_main_window())
+        }
+    }
 }
 
 /// The folder where audio from a dictation whose transcription failed is
@@ -405,19 +440,25 @@ pub fn logs_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandErr
 /// dictation::quarantine_failed_recording — the OS app-data dir's `failed/`
 /// subfolder, *not* the custom data_dir — so "Open" always lands on the real
 /// quarantine folder rather than an empty one.
-pub fn failed_recordings_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandError> {
-    app.path()
-        .app_data_dir()
-        .map(|dir| dir.join("failed"))
-        .map_err(|error| {
-            CommandError::new(
-                "app_data_dir_unavailable",
-                format!("Could not locate the Scribe app data directory. {}", error),
-            )
-        })
+pub fn failed_recordings_dir_with(host: &dyn Host) -> PathBuf {
+    host.paths().data_dir().join("failed")
+}
+
+/// [`failed_recordings_dir_with`] for callers that still hold an
+/// `AppHandle`.
+pub fn failed_recordings_dir(_app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandError> {
+    match crate::shell::host() {
+        Some(host) => Ok(failed_recordings_dir_with(host.as_ref())),
+        None => {
+            log::warn!("Could not find the failed recordings folder: no host yet");
+            Err(no_main_window())
+        }
+    }
 }
 
 /// Creates `dir` when missing and opens it in the system file manager.
+///
+/// Still takes the `AppHandle` for the opener plugin.
 pub fn open_folder(app: &tauri::AppHandle, dir: std::path::PathBuf) -> Result<(), CommandError> {
     use tauri_plugin_opener::OpenerExt;
 
@@ -666,5 +707,77 @@ mod tests {
         assert!(files_identical(&a, &b));
         assert!(!files_identical(&a, &c));
         assert!(!files_identical(&a, &root.path().join("missing")));
+    }
+
+    fn host_in(root: &Path) -> crate::host::RecordingHost {
+        crate::host::RecordingHost::new(
+            crate::paths::Paths::from_parts(
+                root.join("app-data"),
+                root.join("app-cache"),
+                root.join("app-logs"),
+                None,
+                None,
+            ),
+            crate::host::Flavor::Stable,
+        )
+    }
+
+    #[test]
+    fn the_data_folder_is_the_chosen_one_when_set_else_the_app_data_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let state = state_with(Database::in_memory().unwrap(), root.path());
+        let app_data = root.path().join("app-data");
+        assert_eq!(effective_data_dir_from(&state, &app_data), app_data);
+
+        for blank in ["", "   "] {
+            let mut settings = state.db().unwrap().get_settings().unwrap();
+            settings.data_dir = Some(blank.into());
+            state.db().unwrap().save_settings(&settings).unwrap();
+            assert_eq!(effective_data_dir_from(&state, &app_data), app_data);
+        }
+
+        let chosen = root.path().join("chosen");
+        let mut settings = state.db().unwrap().get_settings().unwrap();
+        settings.data_dir = Some(format!(" {} ", chosen.display()));
+        state.db().unwrap().save_settings(&settings).unwrap();
+        assert_eq!(effective_data_dir_from(&state, &app_data), chosen);
+    }
+
+    /// The logs and failed-recordings folders come from the host's folders
+    /// and never follow the data folder the user chose.
+    #[test]
+    fn logs_and_failed_recordings_ignore_the_chosen_data_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let host = host_in(root.path());
+        assert_eq!(logs_dir_with(&host), root.path().join("app-logs"));
+        assert_eq!(
+            failed_recordings_dir_with(&host),
+            root.path().join("app-data").join("failed")
+        );
+    }
+
+    #[test]
+    fn startup_maintenance_clears_editor_copies_and_stale_temp_recordings() {
+        let root = tempfile::tempdir().unwrap();
+        let state = state_with(Database::in_memory().unwrap(), root.path());
+        let dirs = state.dirs().clone();
+        write(&dirs.editor_copy("t1"), b"text");
+        let stale = dirs.temp_recordings().join("old.wav");
+        write(&stale, b"x");
+        let day_ago = SystemTime::now() - STALE_TEMP_AGE - Duration::from_secs(60);
+        fs::File::options()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(day_ago)
+            .unwrap();
+        let fresh = dirs.temp_recordings().join("new.wav");
+        write(&fresh, b"x");
+
+        run_startup_maintenance_with(&state, None, false);
+
+        assert!(!dirs.editor_copy("t1").exists());
+        assert!(!stale.exists());
+        assert!(fresh.exists());
     }
 }

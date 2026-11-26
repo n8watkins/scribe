@@ -16,9 +16,15 @@ use std::{
 
 use chrono::Utc;
 use serde_json::Value;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
-use crate::{commands::BackendState, error::CommandError, settings::AppSettings};
+use crate::{
+    commands::BackendState,
+    core::Core,
+    error::CommandError,
+    host::{no_main_window, Host},
+    settings::AppSettings,
+};
 
 /// How much of the newest log file is read (its end).
 const LOG_READ_BYTES: u64 = 256 * 1024;
@@ -73,17 +79,36 @@ const SETTINGS_ALLOW_LIST: &[&str] = &[
 ];
 
 /// Builds the diagnostics report (the `collect_diagnostics` command).
-pub fn collect(app: &AppHandle, state: &BackendState) -> Result<String, CommandError> {
+pub fn collect_with(core: &Core) -> Result<String, CommandError> {
+    collect_from(core.backend(), core.host().as_ref())
+}
+
+/// [`collect_with`] for callers that still hold an `AppHandle`. Needs only
+/// `state` and the host, which the shell installs before anything else.
+pub fn collect(_app: &AppHandle, state: &BackendState) -> Result<String, CommandError> {
+    match crate::shell::host() {
+        Some(host) => collect_from(state, host.as_ref()),
+        None => {
+            log::warn!("Could not build the diagnostics report: no host yet");
+            Err(no_main_window())
+        }
+    }
+}
+
+/// The report for the engine `state` runs under `host`: the host names the
+/// app (its flavour), the home folder to mask and the log folder.
+fn collect_from(state: &BackendState, host: &dyn Host) -> Result<String, CommandError> {
     let (settings, models) = {
         let db = state.db()?;
         (db.get_settings()?, db.list_model_records()?)
     };
     let snapshot = state.app_state()?.snapshot();
-    let home = app.path().home_dir().ok();
+    let home = host.paths().home_dir();
     let user = std::env::var("USERNAME")
         .or_else(|_| std::env::var("USER"))
         .ok();
-    let redactor = Redactor::new(home.as_deref(), user.as_deref());
+    let redactor = Redactor::new(home, user.as_deref());
+    let flavor = host.flavor();
 
     let mut out = String::new();
     let mut line = |text: String| {
@@ -98,9 +123,9 @@ pub fn collect(app: &AppHandle, state: &BackendState) -> Result<String, CommandE
     ));
     line(format!(
         "App: {} {} ({})",
-        crate::display_name(app),
-        app.package_info().version,
-        app.config().identifier
+        flavor.display_name(),
+        env!("CARGO_PKG_VERSION"),
+        flavor.identifier()
     ));
     line(format!(
         "OS: {} ({} {})",
@@ -132,7 +157,7 @@ pub fn collect(app: &AppHandle, state: &BackendState) -> Result<String, CommandE
         line(format!("  {key}: {value}"));
     }
 
-    let log = read_newest_log(app);
+    let log = read_newest_log(host.paths().log_dir());
     let lines: Vec<String> = log
         .as_deref()
         .unwrap_or("")
@@ -266,9 +291,8 @@ fn tail<T>(items: &[T], count: usize) -> &[T] {
 }
 
 /// The end of the most recently written `.log` file in the app's log folder.
-fn read_newest_log(app: &AppHandle) -> Option<String> {
-    let dir = app.path().app_log_dir().ok()?;
-    let newest = newest_log_file(&dir)?;
+fn read_newest_log(dir: &Path) -> Option<String> {
+    let newest = newest_log_file(dir)?;
     let mut file = fs::File::open(newest).ok()?;
     let length = file.metadata().ok()?.len();
     let start = length.saturating_sub(LOG_READ_BYTES);
@@ -483,5 +507,63 @@ mod tests {
             .map(|line| line.to_string())
             .collect();
         assert_eq!(recent_problems(&lines, 2), vec!["[ERROR] c", "[WARN] e"]);
+    }
+
+    /// The report names the host's flavour and the engine's version, and
+    /// reads the newest log in the host's log folder with the home folder
+    /// masked.
+    #[test]
+    fn the_report_follows_the_hosts_flavour_and_folders() {
+        use crate::{
+            data_hygiene::DataDirs,
+            db::Database,
+            host::{Flavor, RecordingHost},
+            paths::Paths,
+        };
+
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home").join("someone-home");
+        let logs = root.path().join("logs");
+        fs::create_dir_all(&logs).unwrap();
+        fs::write(
+            logs.join("Scribe Dev.log"),
+            format!(
+                "[INFO] started\n[WARN] Could not read {}\n",
+                home.join("clip.wav").display()
+            ),
+        )
+        .unwrap();
+        let host = RecordingHost::new(
+            Paths::from_parts(
+                root.path().join("data"),
+                root.path().join("cache"),
+                logs,
+                None,
+                Some(home.clone()),
+            ),
+            Flavor::Dev,
+        );
+        let state = BackendState::new(
+            Database::in_memory().unwrap(),
+            root.path().join("cache").join("recordings"),
+            DataDirs {
+                data_dir: root.path().join("data"),
+                cache_dir: root.path().join("cache"),
+            },
+        );
+
+        let report = collect_from(&state, &host).unwrap();
+
+        assert!(
+            report.contains(&format!(
+                "App: Scribe Dev {} (com.natkins.scribe.dev)",
+                env!("CARGO_PKG_VERSION")
+            )),
+            "{report}"
+        );
+        assert!(report.contains("  [WARN] Could not read ~"), "{report}");
+        assert!(report.contains("  [INFO] started"), "{report}");
+        assert!(!report.contains("someone-home"), "{report}");
+        assert!(!report.contains("no log file found"), "{report}");
     }
 }
