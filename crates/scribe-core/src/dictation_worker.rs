@@ -593,7 +593,9 @@ fn stop_and_transcribe(app: &AppHandle, core: &Core) -> Result<(), CommandError>
 
 /// Where the system can't copy the selection out of another app, the
 /// typed-instruction panel on the dashboard stands in for it. Still takes the
-/// app for `hotkeys::start_transform` (hotkeys).
+/// app for `hotkeys::start_transform` (hotkeys). That is the hotkeys lane's
+/// wrapper: its `start_transform_with` exists, but switching to it here would
+/// leave the `pub(crate)` wrapper, whose only caller this is, unused.
 fn start_transform(app: &AppHandle, core: &Core) -> Result<(), CommandError> {
     if crate::platform::can_capture_selection() {
         crate::hotkeys::start_transform(app)
