@@ -308,6 +308,25 @@ fn probe_editor() {
     after(1500, || round(5, Vec::new()));
 }
 
+/// Records every main-window frame from 3 s to 23 s after start, while real
+/// input (mouse wheel, typing) drives the window, and logs the frame stats.
+fn probe_frames() {
+    after(3000, || probe::record(true));
+    after(23_000, || {
+        probe::record(false);
+        let s = probe::stats();
+        log(
+            "probe-frames",
+            &[
+                ("frames", s.frames.to_string()),
+                ("maxDrawMs", format!("{:.1}", s.max_draw)),
+                ("p95DrawMs", format!("{:.1}", s.p95_draw)),
+                ("drawsOver50", s.draws_over_50.to_string()),
+            ],
+        );
+    });
+}
+
 /// Opens and closes the main window five times, timing open to first frame.
 fn probe_open() {
     fn round(n: u32, mut times: Vec<f64>) {
@@ -531,6 +550,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some("scroll") => probe_scroll(),
         Some("editor") => probe_editor(),
         Some("open") => probe_open(),
+        Some("frames") => probe_frames(),
         _ => {}
     }
 
