@@ -1,28 +1,34 @@
 //! Commands of the `data` domain (db, settings_store, data_hygiene, export,
 //! import, stats, release_notes, diagnostics, replacements_file).
+//!
+//! Converted to the engine handle: commands take the managed [`Core`]. The
+//! ones that still take the `AppHandle` need it for the opener plugin, for
+//! the settings side effects of other domains (see
+//! `settings_store::patch_settings_now_with`), or for `on_dialog_thread`.
 
-use tauri::{Manager, State};
+use tauri::State;
 use tauri_plugin_opener::OpenerExt;
 
-use super::{off_main, on_dialog_thread};
+use super::{off_main_core, on_dialog_thread};
 use crate::{
-    commands::BackendState,
-    data_hygiene::{effective_data_dir, failed_recordings_dir, logs_dir, open_folder},
+    data_hygiene::{
+        effective_data_dir_with, failed_recordings_dir_with, logs_dir_with, open_folder,
+    },
     db::transcript_audio_missing,
     error::CommandError,
     import::{load_transcript_import, ImportReport, TranscriptImportPreview},
-    replacements_file::{notify_backup, replacements_error, Replacements},
+    replacements_file::{notify_backup_with, replacements_error},
     settings::AppSettings,
-    settings_store::patch_settings_now,
+    settings_store::patch_settings_now_with,
     stats::BasicStats,
     transcript::{Transcript, TranscriptSearchResult, TranscriptSort},
+    Core,
 };
 
 #[tauri::command]
-pub async fn get_settings(app: tauri::AppHandle) -> Result<AppSettings, CommandError> {
-    off_main(app, move |app| {
-        let state = app.state::<BackendState>().inner();
-        state.db()?.get_settings()
+pub async fn get_settings(core: State<'_, Core>) -> Result<AppSettings, CommandError> {
+    off_main_core(core.inner().clone(), move |core| {
+        core.backend().db()?.get_settings()
     })
     .await
 }
@@ -34,26 +40,29 @@ pub async fn get_settings(app: tauri::AppHandle) -> Result<AppSettings, CommandE
 #[tauri::command]
 pub async fn patch_settings(
     app: tauri::AppHandle,
+    core: State<'_, Core>,
     patch: serde_json::Map<String, serde_json::Value>,
 ) -> Result<AppSettings, CommandError> {
-    off_main(app, move |app| patch_settings_now(app, &patch)).await
-}
-
-#[tauri::command]
-pub async fn get_last_transcript(
-    app: tauri::AppHandle,
-) -> Result<Option<Transcript>, CommandError> {
-    off_main(app, move |app| {
-        let state = app.state::<BackendState>().inner();
-        state.last_transcript()
+    off_main_core(core.inner().clone(), move |core| {
+        patch_settings_now_with(&app, core, &patch)
     })
     .await
 }
 
 #[tauri::command]
-pub async fn clear_last_transcript(app: tauri::AppHandle) -> Result<(), CommandError> {
-    off_main(app, move |app| {
-        let state = app.state::<BackendState>().inner();
+pub async fn get_last_transcript(
+    core: State<'_, Core>,
+) -> Result<Option<Transcript>, CommandError> {
+    off_main_core(core.inner().clone(), move |core| {
+        core.backend().last_transcript()
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn clear_last_transcript(core: State<'_, Core>) -> Result<(), CommandError> {
+    off_main_core(core.inner().clone(), move |core| {
+        let state = core.backend();
         state.set_unsaved_last_transcript(None);
         state.db()?.clear_last_transcript()
     })
@@ -62,13 +71,12 @@ pub async fn clear_last_transcript(app: tauri::AppHandle) -> Result<(), CommandE
 
 #[tauri::command]
 pub async fn list_recent_transcripts(
-    app: tauri::AppHandle,
+    core: State<'_, Core>,
     limit: Option<u32>,
 ) -> Result<Vec<Transcript>, CommandError> {
-    off_main(app, move |app| {
-        let state = app.state::<BackendState>().inner();
+    off_main_core(core.inner().clone(), move |core| {
         let limit = limit.unwrap_or(20).clamp(1, 100);
-        state.db()?.list_recent_transcripts(limit)
+        core.backend().db()?.list_recent_transcripts(limit)
     })
     .await
 }
@@ -78,7 +86,7 @@ pub async fn list_recent_transcripts(
 // payload, so grouping them would be a breaking IPC contract change.
 #[allow(clippy::too_many_arguments)]
 pub async fn search_transcripts(
-    app: tauri::AppHandle,
+    core: State<'_, Core>,
     query: Option<String>,
     notes_only: Option<bool>,
     from: Option<String>,
@@ -87,11 +95,10 @@ pub async fn search_transcripts(
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<TranscriptSearchResult, CommandError> {
-    off_main(app, move |app| {
-        let state = app.state::<BackendState>().inner();
+    off_main_core(core.inner().clone(), move |core| {
         let limit = limit.unwrap_or(20).clamp(1, 100);
         let offset = offset.unwrap_or_default();
-        state.db()?.search_transcripts(
+        core.backend().db()?.search_transcripts(
             query.as_deref(),
             notes_only.unwrap_or(false),
             from.as_deref(),
@@ -106,33 +113,31 @@ pub async fn search_transcripts(
 
 #[tauri::command]
 pub async fn get_transcript(
-    app: tauri::AppHandle,
+    core: State<'_, Core>,
     id: String,
 ) -> Result<Option<Transcript>, CommandError> {
-    off_main(app, move |app| {
-        let state = app.state::<BackendState>().inner();
-        state.db()?.get_transcript_by_id(&id)
+    off_main_core(core.inner().clone(), move |core| {
+        core.backend().db()?.get_transcript_by_id(&id)
     })
     .await
 }
 
 #[tauri::command]
 pub async fn update_transcript(
-    app: tauri::AppHandle,
+    core: State<'_, Core>,
     id: String,
     text: String,
 ) -> Result<Transcript, CommandError> {
-    off_main(app, move |app| {
-        let state = app.state::<BackendState>().inner();
-        state.db()?.update_transcript(&id, &text)
+    off_main_core(core.inner().clone(), move |core| {
+        core.backend().db()?.update_transcript(&id, &text)
     })
     .await
 }
 
 #[tauri::command]
-pub async fn delete_transcript(app: tauri::AppHandle, id: String) -> Result<(), CommandError> {
-    off_main(app, move |app| {
-        let state = app.state::<BackendState>().inner();
+pub async fn delete_transcript(core: State<'_, Core>, id: String) -> Result<(), CommandError> {
+    off_main_core(core.inner().clone(), move |core| {
+        let state = core.backend();
         state.db()?.delete_transcript(&id)?;
         // "Open in editor" may have left a plain-text copy; it goes with the
         // transcript.
@@ -146,9 +151,9 @@ pub async fn delete_transcript(app: tauri::AppHandle, id: String) -> Result<(), 
 /// the Last Transcript Buffer, failed recordings and editor copies. Notes are
 /// kept.
 #[tauri::command]
-pub async fn clear_transcript_history(app: tauri::AppHandle) -> Result<(), CommandError> {
-    off_main(app, move |app| {
-        let state = app.state::<BackendState>().inner();
+pub async fn clear_transcript_history(core: State<'_, Core>) -> Result<(), CommandError> {
+    off_main_core(core.inner().clone(), move |core| {
+        let state = core.backend();
         state.set_unsaved_last_transcript(None);
         let db = state.db()?;
         db.clear_transcript_history()?;
@@ -158,10 +163,9 @@ pub async fn clear_transcript_history(app: tauri::AppHandle) -> Result<(), Comma
 }
 
 #[tauri::command]
-pub async fn clear_notes(app: tauri::AppHandle) -> Result<(), CommandError> {
-    off_main(app, move |app| {
-        let state = app.state::<BackendState>().inner();
-        let db = state.db()?;
+pub async fn clear_notes(core: State<'_, Core>) -> Result<(), CommandError> {
+    off_main_core(core.inner().clone(), move |core| {
+        let db = core.backend().db()?;
         db.clear_notes()?;
         db.vacuum()
     })
@@ -172,14 +176,13 @@ pub async fn clear_notes(app: tauri::AppHandle) -> Result<(), CommandError> {
 /// with `separator` (default "\n\n"). Ids that don't resolve are skipped.
 #[tauri::command]
 pub async fn combine_transcripts(
-    app: tauri::AppHandle,
+    core: State<'_, Core>,
     ids: Vec<String>,
     separator: Option<String>,
 ) -> Result<String, CommandError> {
-    off_main(app, move |app| {
-        let state = app.state::<BackendState>().inner();
+    off_main_core(core.inner().clone(), move |core| {
         let separator = separator.unwrap_or_else(|| "\n\n".to_string());
-        state.db()?.combine_transcripts(&ids, &separator)
+        core.backend().db()?.combine_transcripts(&ids, &separator)
     })
     .await
 }
@@ -189,18 +192,17 @@ pub async fn combine_transcripts(
 /// transcript.
 #[tauri::command]
 pub async fn save_combined_transcript(
-    app: tauri::AppHandle,
+    core: State<'_, Core>,
     text: String,
 ) -> Result<Transcript, CommandError> {
-    off_main(app, move |app| {
-        let state = app.state::<BackendState>().inner();
+    off_main_core(core.inner().clone(), move |core| {
         let transcript = Transcript::new_last_buffer(text, None, None, None).ok_or_else(|| {
             CommandError::new(
                 "empty_transcript",
                 "Cannot save an empty combined transcript.",
             )
         })?;
-        let db = state.db()?;
+        let db = core.backend().db()?;
         let history_enabled = db.get_settings()?.history_enabled;
         db.save_last_transcript_with_history(&transcript, history_enabled)?;
         Ok(transcript)
@@ -209,14 +211,16 @@ pub async fn save_combined_transcript(
 }
 
 /// Writes a transcript's text to a temp `.txt` file under the app cache dir and
-/// opens it with the OS default text app.
+/// opens it with the OS default text app. Takes the `AppHandle` for the
+/// opener plugin.
 #[tauri::command]
 pub async fn open_transcript_externally(
     app: tauri::AppHandle,
+    core: State<'_, Core>,
     id: String,
 ) -> Result<(), CommandError> {
-    off_main(app, move |app| {
-        let state = app.state::<BackendState>().inner();
+    off_main_core(core.inner().clone(), move |core| {
+        let state = core.backend();
         let transcript = state.db()?.get_transcript_by_id(&id)?.ok_or_else(|| {
             CommandError::new("transcript_not_found", "Transcript was not found.")
         })?;
@@ -266,14 +270,13 @@ pub async fn open_transcript_externally(
 /// transcript has no clip or the file is gone.
 #[tauri::command]
 pub async fn get_transcript_audio(
-    app: tauri::AppHandle,
+    core: State<'_, Core>,
     id: String,
 ) -> Result<String, CommandError> {
-    off_main(app, move |app| {
-        let state = app.state::<BackendState>().inner();
+    off_main_core(core.inner().clone(), move |core| {
         use base64::{engine::general_purpose::STANDARD, Engine as _};
 
-        let db = state.db()?;
+        let db = core.backend().db()?;
         let transcript = match db.get_transcript_by_id(&id)? {
             Some(transcript) => Some(transcript),
             // With history disabled the dictation only lives in the Last
@@ -291,34 +294,40 @@ pub async fn get_transcript_audio(
 }
 
 #[tauri::command]
-pub async fn get_basic_stats(app: tauri::AppHandle) -> Result<BasicStats, CommandError> {
-    off_main(app, move |app| {
-        let state = app.state::<BackendState>().inner();
-        state.db()?.get_basic_stats()
+pub async fn get_basic_stats(core: State<'_, Core>) -> Result<BasicStats, CommandError> {
+    off_main_core(core.inner().clone(), move |core| {
+        core.backend().db()?.get_basic_stats()
     })
     .await
 }
 
 #[tauri::command]
-pub async fn refresh_basic_stats(app: tauri::AppHandle) -> Result<BasicStats, CommandError> {
-    off_main(app, move |app| {
-        let state = app.state::<BackendState>().inner();
-        state.db()?.get_basic_stats()
+pub async fn refresh_basic_stats(core: State<'_, Core>) -> Result<BasicStats, CommandError> {
+    off_main_core(core.inner().clone(), move |core| {
+        core.backend().db()?.get_basic_stats()
     })
     .await
 }
 
+/// Opens the data folder (the one the user chose, else the app data folder).
+/// Takes the `AppHandle` for the opener plugin.
 #[tauri::command]
-pub async fn open_data_folder(app: tauri::AppHandle) -> Result<(), CommandError> {
-    off_main(app, move |app| open_folder(app, effective_data_dir(app)?)).await
+pub async fn open_data_folder(
+    app: tauri::AppHandle,
+    core: State<'_, Core>,
+) -> Result<(), CommandError> {
+    off_main_core(core.inner().clone(), move |core| {
+        open_folder(&app, effective_data_dir_with(core))
+    })
+    .await
 }
 
 /// Returns the current effective data directory as a display string, so the
 /// Data & Privacy view can show the path prominently.
 #[tauri::command]
-pub async fn get_data_dir(app: tauri::AppHandle) -> Result<String, CommandError> {
-    off_main(app, move |app| {
-        Ok(effective_data_dir(app)?.to_string_lossy().into_owned())
+pub async fn get_data_dir(core: State<'_, Core>) -> Result<String, CommandError> {
+    off_main_core(core.inner().clone(), move |core| {
+        Ok(effective_data_dir_with(core).to_string_lossy().into_owned())
     })
     .await
 }
@@ -326,13 +335,18 @@ pub async fn get_data_dir(app: tauri::AppHandle) -> Result<String, CommandError>
 /// Opens a native folder picker so the user can choose a new data directory.
 /// Returns the chosen absolute path, or None when the user cancels. Saving the
 /// choice is the frontend's job (it writes `dataDir` via update_settings),
-/// matching how the pill persists its position.
+/// matching how the pill persists its position. Takes the `AppHandle` for
+/// `on_dialog_thread`.
 #[tauri::command]
-pub async fn pick_data_dir(app: tauri::AppHandle) -> Result<Option<String>, CommandError> {
-    on_dialog_thread(app, move |app| {
+pub async fn pick_data_dir(
+    app: tauri::AppHandle,
+    core: State<'_, Core>,
+) -> Result<Option<String>, CommandError> {
+    let core = core.inner().clone();
+    on_dialog_thread(app, move |_app| {
         #[cfg(windows)]
         {
-            let start = effective_data_dir(app).unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let start = effective_data_dir_with(&core);
             let picked = rfd::FileDialog::new()
                 .set_title("Choose Scribe data folder")
                 .set_directory(&start)
@@ -342,7 +356,7 @@ pub async fn pick_data_dir(app: tauri::AppHandle) -> Result<Option<String>, Comm
 
         #[cfg(not(windows))]
         {
-            let _ = app;
+            let _ = core;
             Err(CommandError::new(
                 "folder_picker_unsupported",
                 "The folder picker is only available in the Windows build.",
@@ -353,12 +367,15 @@ pub async fn pick_data_dir(app: tauri::AppHandle) -> Result<Option<String>, Comm
 }
 
 /// Opens the folder that holds Scribe's rotating local log files, so a user can
-/// find and attach them to a bug report.
+/// find and attach them to a bug report. Takes the `AppHandle` for the
+/// opener plugin.
 #[tauri::command]
-pub async fn open_logs_folder(app: tauri::AppHandle) -> Result<(), CommandError> {
-    off_main(app, move |app| {
-        let dir = logs_dir(app)?;
-        open_folder(app, dir)
+pub async fn open_logs_folder(
+    app: tauri::AppHandle,
+    core: State<'_, Core>,
+) -> Result<(), CommandError> {
+    off_main_core(core.inner().clone(), move |core| {
+        open_folder(&app, logs_dir_with(core.host().as_ref()))
     })
     .await
 }
@@ -366,17 +383,22 @@ pub async fn open_logs_folder(app: tauri::AppHandle) -> Result<(), CommandError>
 /// Returns the logs directory as a display string for the Data & Privacy view,
 /// mirroring get_data_dir.
 #[tauri::command]
-pub fn get_logs_dir(app: tauri::AppHandle) -> Result<String, CommandError> {
-    Ok(logs_dir(&app)?.to_string_lossy().into_owned())
+pub fn get_logs_dir(core: State<'_, Core>) -> Result<String, CommandError> {
+    Ok(logs_dir_with(core.host().as_ref())
+        .to_string_lossy()
+        .into_owned())
 }
 
 /// Opens the folder that holds audio from dictations whose transcription failed,
 /// so a user can recover the recording from disk (risk R2 follow-up to Fix E).
+/// Takes the `AppHandle` for the opener plugin.
 #[tauri::command]
-pub async fn open_failed_recordings_folder(app: tauri::AppHandle) -> Result<(), CommandError> {
-    off_main(app, move |app| {
-        let dir = failed_recordings_dir(app)?;
-        open_folder(app, dir)
+pub async fn open_failed_recordings_folder(
+    app: tauri::AppHandle,
+    core: State<'_, Core>,
+) -> Result<(), CommandError> {
+    off_main_core(core.inner().clone(), move |core| {
+        open_folder(&app, failed_recordings_dir_with(core))
     })
     .await
 }
@@ -384,27 +406,31 @@ pub async fn open_failed_recordings_folder(app: tauri::AppHandle) -> Result<(), 
 /// Returns the failed-recordings directory as a display string for the Data &
 /// Privacy view, mirroring get_logs_dir.
 #[tauri::command]
-pub fn get_failed_recordings_dir(app: tauri::AppHandle) -> Result<String, CommandError> {
-    Ok(failed_recordings_dir(&app)?.to_string_lossy().into_owned())
+pub fn get_failed_recordings_dir(core: State<'_, Core>) -> Result<String, CommandError> {
+    Ok(failed_recordings_dir_with(&core)
+        .to_string_lossy()
+        .into_owned())
 }
 
 /// Exports transcripts to a local file the user picks via a native save dialog.
 /// `scope` selects which rows ("all" | "notes" | "dictation"); `format` selects
 /// the renderer ("markdown" | "csv" | "json"). Returns the saved absolute path,
 /// or None when the user cancels the dialog. Unlike the GitHub backup this needs
-/// no connected account — it is a purely local save.
+/// no connected account — it is a purely local save. Takes the `AppHandle` for
+/// `on_dialog_thread`.
 #[tauri::command]
 pub async fn export_transcripts(
     app: tauri::AppHandle,
+    core: State<'_, Core>,
     scope: String,
     format: String,
 ) -> Result<Option<String>, CommandError> {
-    on_dialog_thread(app, move |app| {
-        let state = app.state::<BackendState>().inner();
+    let core = core.inner().clone();
+    on_dialog_thread(app, move |_app| {
         // Fetch the rows for the scope. A large cap so a normal history exports in
         // one pass; notes/dictation reuse the same filtered queries the rest of the
         // app uses.
-        let db = state.db()?;
+        let db = core.backend().db()?;
         let transcripts = match scope.as_str() {
             "all" => {
                 db.search_transcripts(
@@ -466,7 +492,7 @@ pub async fn export_transcripts(
 
         #[cfg(windows)]
         {
-            let start = effective_data_dir(app).unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let start = effective_data_dir_with(&core);
             let picked = rfd::FileDialog::new()
                 .set_title("Export transcripts")
                 .set_directory(&start)
@@ -486,7 +512,7 @@ pub async fn export_transcripts(
 
         #[cfg(not(windows))]
         {
-            let _ = (app, contents, default_name);
+            let _ = (core, contents, default_name);
             Err(CommandError::new(
                 "save_dialog_unsupported",
                 "The export save dialog is only available in the Windows build.",
@@ -498,15 +524,17 @@ pub async fn export_transcripts(
 
 /// Opens a native picker and validates a Scribe JSON export without changing
 /// the database. The returned counts drive the explicit confirmation UI.
+/// Takes the `AppHandle` for `on_dialog_thread`.
 #[tauri::command]
 pub async fn preview_transcript_import(
     app: tauri::AppHandle,
+    core: State<'_, Core>,
 ) -> Result<Option<TranscriptImportPreview>, CommandError> {
-    on_dialog_thread(app, move |app| {
-        let state = app.state::<BackendState>().inner();
+    let core = core.inner().clone();
+    on_dialog_thread(app, move |_app| {
         #[cfg(windows)]
         {
-            let start = effective_data_dir(app).unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let start = effective_data_dir_with(&core);
             let picked = rfd::FileDialog::new()
                 .set_title("Restore Scribe backup")
                 .set_directory(&start)
@@ -516,7 +544,8 @@ pub async fn preview_transcript_import(
                 return Ok(None);
             };
             let loaded = load_transcript_import(&path)?;
-            let conflicts = state
+            let conflicts = core
+                .backend()
                 .db()?
                 .count_existing_transcripts(&loaded.prepared.transcripts)?;
             Ok(Some(TranscriptImportPreview {
@@ -538,7 +567,7 @@ pub async fn preview_transcript_import(
 
         #[cfg(not(windows))]
         {
-            let _ = (app, state);
+            let _ = core;
             Err(CommandError::new(
                 "open_dialog_unsupported",
                 "The restore file picker is only available in the Windows build.",
@@ -553,16 +582,15 @@ pub async fn preview_transcript_import(
 /// bypassing validation if the source file changed while the dialog was open.
 #[tauri::command]
 pub async fn restore_transcript_import(
-    app: tauri::AppHandle,
+    core: State<'_, Core>,
     path: String,
     replace_existing: bool,
     expected_fingerprint: String,
 ) -> Result<ImportReport, CommandError> {
-    off_main(app, move |app| {
-        let state = app.state::<BackendState>().inner();
+    off_main_core(core.inner().clone(), move |core| {
         let loaded = load_transcript_import(std::path::Path::new(&path))?;
         crate::import::verify_fingerprint(&loaded.fingerprint, &expected_fingerprint)?;
-        state
+        core.backend()
             .db()?
             .restore_transcripts(&loaded.prepared.transcripts, replace_existing)
     })
@@ -572,23 +600,23 @@ pub async fn restore_transcript_import(
 /// The replacements in replacements.txt, and any lines that couldn't be read.
 #[tauri::command]
 pub async fn get_replacements(
-    app: tauri::AppHandle,
+    core: State<'_, Core>,
 ) -> Result<crate::replacements_file::ReplacementsInfo, CommandError> {
-    off_main(app, move |app| Ok(app.state::<Replacements>().current())).await
+    off_main_core(core.inner().clone(), move |core| {
+        Ok(core.replacements().current())
+    })
+    .await
 }
 
 /// Appends replacements whose heard phrase isn't in the file yet.
 #[tauri::command]
 pub async fn add_replacements(
-    app: tauri::AppHandle,
+    core: State<'_, Core>,
     rows: Vec<crate::text_replace::TextReplacement>,
 ) -> Result<crate::replacements_file::AddReport, CommandError> {
-    off_main(app, move |app| {
-        let report = app
-            .state::<Replacements>()
-            .add(&rows)
-            .map_err(replacements_error)?;
-        notify_backup(app);
+    off_main_core(core.inner().clone(), move |core| {
+        let report = core.replacements().add(&rows).map_err(replacements_error)?;
+        notify_backup_with(core);
         Ok(report)
     })
     .await
@@ -597,25 +625,29 @@ pub async fn add_replacements(
 /// Removes the first line holding this replacement.
 #[tauri::command]
 pub async fn remove_replacement(
-    app: tauri::AppHandle,
+    core: State<'_, Core>,
     row: crate::text_replace::TextReplacement,
 ) -> Result<crate::replacements_file::ReplacementsInfo, CommandError> {
-    off_main(app, move |app| {
-        let info = app
-            .state::<Replacements>()
+    off_main_core(core.inner().clone(), move |core| {
+        let info = core
+            .replacements()
             .remove(&row)
             .map_err(replacements_error)?;
-        notify_backup(app);
+        notify_backup_with(core);
         Ok(info)
     })
     .await
 }
 
-/// Opens replacements.txt in the default text editor.
+/// Opens replacements.txt in the default text editor. Takes the `AppHandle`
+/// for the opener plugin.
 #[tauri::command]
-pub async fn open_replacements_file(app: tauri::AppHandle) -> Result<(), CommandError> {
-    off_main(app, move |app| {
-        let path = app.state::<Replacements>().path().to_path_buf();
+pub async fn open_replacements_file(
+    app: tauri::AppHandle,
+    core: State<'_, Core>,
+) -> Result<(), CommandError> {
+    off_main_core(core.inner().clone(), move |core| {
+        let path = core.replacements().path().to_path_buf();
         app.opener()
             .open_path(path.to_string_lossy(), None::<&str>)
             .map_err(|error| {
@@ -629,33 +661,31 @@ pub async fn open_replacements_file(app: tauri::AppHandle) -> Result<(), Command
 }
 
 /// The running version when its "What's new" card has not been dismissed yet.
+/// Takes the `AppHandle` for the app's version, which Dev builds override.
 #[tauri::command]
 pub fn whats_new_pending(
     app: tauri::AppHandle,
-    state: State<'_, BackendState>,
+    core: State<'_, Core>,
 ) -> Result<Option<String>, CommandError> {
-    let db = state.db()?;
-    crate::release_notes::pending_version(&db, &app.package_info().version.to_string())
+    crate::release_notes::pending_version_with(&core, &app.package_info().version.to_string())
 }
 
 /// Remembers that the card for `version` was dismissed.
 #[tauri::command]
-pub fn dismiss_whats_new(
-    state: State<'_, BackendState>,
-    version: String,
-) -> Result<(), CommandError> {
+pub fn dismiss_whats_new(core: State<'_, Core>, version: String) -> Result<(), CommandError> {
     let version = version.trim();
     if version.is_empty() || version.len() > 64 {
         return Err(CommandError::new("invalid_version", "Invalid app version."));
     }
-    state.db()?.set_whats_new_seen_version(version)
+    core.backend().db()?.set_whats_new_seen_version(version)
 }
 
-/// Builds the diagnostics report.
+/// Builds the diagnostics report. Takes the `AppHandle` for the app's
+/// version, which Dev builds override.
 #[tauri::command]
 pub fn collect_diagnostics(
     app: tauri::AppHandle,
-    state: State<'_, BackendState>,
+    core: State<'_, Core>,
 ) -> Result<String, CommandError> {
-    crate::diagnostics::collect(&app, &state)
+    crate::diagnostics::collect_with(&core, &app.package_info().version.to_string())
 }
