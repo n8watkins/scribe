@@ -313,7 +313,8 @@ mod tests {
         };
         let mut process =
             ParakeetProcess::launch_executable(Path::new(&bin), &config, 4).expect("sidecar loads");
-        let jfk = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jfk.wav");
+        let jfk = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../app/src-tauri/tests/fixtures/jfk.wav");
         let result = process.transcribe(&jfk).expect("sidecar transcribes");
         let lower = result.text.to_lowercase();
         for word in ["fellow", "americans", "country"] {

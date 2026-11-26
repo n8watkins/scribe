@@ -41,7 +41,7 @@ use crate::{
     dictation,
     error::CommandError,
     output::{self, OutputResult},
-    tray,
+    shell,
 };
 
 /// What a hotkey, tray item, or button asks for, before it is checked against
@@ -465,7 +465,7 @@ fn refresh_tray(app: &AppHandle) {
     if let Ok(machine) = app.state::<BackendState>().app_state() {
         let status = machine.status().clone();
         drop(machine);
-        tray::update_tray_status(app, status);
+        shell::update_tray_status(app, status);
     }
 }
 
@@ -493,7 +493,7 @@ fn start_transform(app: &AppHandle) -> Result<(), CommandError> {
     if crate::platform::can_capture_selection() {
         crate::hotkeys::start_transform(app)
     } else {
-        tray::open_dashboard(app, Some("dashboard"))
+        shell::open_dashboard(app, Some("dashboard"))
     }
 }
 

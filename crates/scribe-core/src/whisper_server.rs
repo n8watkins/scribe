@@ -918,7 +918,7 @@ impl Shared {
         }
         live.published = Some(status.clone());
         let _ = self.app.emit(ENGINE_STATUS_EVENT, &status);
-        crate::tray::update_engine_summary(&self.app, status.summary());
+        crate::shell::update_engine_summary(&self.app, status.summary());
     }
 }
 

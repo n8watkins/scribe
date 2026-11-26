@@ -1,0 +1,29 @@
+[workspace]
+# The desktop app (the Tauri shell in app/src-tauri) and the crates it is
+# built from: crates/scribe-core is Scribe's engine, with no window of its own.
+members = ["app/src-tauri", "crates/*"]
+# The CLI is a standalone client of the dictation-state interface with its own
+# lock file, and every spike carries its own [workspace].
+exclude = ["cli", "spikes"]
+resolver = "2"
+
+# Profiles apply to the whole workspace, so they live here rather than in a
+# member's Cargo.toml (where Cargo ignores them).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = "none"
+
+[profile.test]
+debug = "line-tables-only"
+
+[profile.test.package."*"]
+debug = "none"
+
+[profile.full-debug]
+inherits = "dev"
+debug = "full"
+
+[profile.full-debug.package."*"]
+debug = "full"

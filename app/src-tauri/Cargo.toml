@@ -17,144 +17,32 @@ crate-type = ["rlib"]
 
 [features]
 # Test only: the Windows end-to-end job (.github/workflows/e2e-windows.yml)
-# records a WAV file in place of the microphone (src/test_audio.rs). Shipped
-# builds never turn it on.
-e2e-audio = []
+# records a WAV file in place of the microphone
+# (crates/scribe-core/src/test_audio.rs). Shipped builds never turn it on.
+e2e-audio = ["scribe-core/e2e-audio"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+# The shell: the Tauri app, its plugins, windows and tray. Everything else is
+# in the engine, crates/scribe-core.
 [dependencies]
+scribe-core = { path = "../../crates/scribe-core" }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-log = "2"
-tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-notification = "2"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-chrono = { version = "0.4", features = ["serde"] }
-rusqlite = { version = "0.41", features = ["bundled"] }
-uuid = { version = "1", features = ["v4", "serde"] }
-crossbeam-channel = "0.5"
-hound = "3.5"
-# Microphone capture: WASAPI on Windows, ALSA on Linux (which reaches
-# PulseAudio and PipeWire through their ALSA plugins), Core Audio on macOS.
-cpal = "0.15"
-rubato = "0.15"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "multipart"] }
-sha2 = "0.10"
-arboard = "3.4"
-base64 = "0.22"
-keyring = { version = "3", features = ["windows-native"] }
-# Small synchronous HTTP server for the in-process dictation-state interface
-# (GET /v1/status + the /v1/events SSE stream). Chosen over axum/hyper because
-# the app is std::thread/blocking throughout and has no tokio runtime of its
-# own; tiny_http fits that model on a dedicated thread with hand-written SSE
-# framing, and pulls in almost no transitive dependencies.
-tiny_http = "0.12"
 
 [target.'cfg(windows)'.dependencies]
-# Native folder picker for choosing the data directory. Windows-only (the app
-# ships for Windows); the picker command errors elsewhere. xdg-portal feature
-# disabled so no GTK/portal system libs are pulled in.
-rfd = { version = "0.15", default-features = false }
-# Reads the sign-in entry and Windows' Startup apps switch for it
-# (src/autostart.rs); the autostart plugin, which writes the entry, already
-# uses it.
-windows-registry = "0.6"
+# Colors the native title bar (style_native_titlebar in src/lib.rs).
 windows = { version = "0.58", features = [
-    "Win32_Devices_FunctionDiscovery",
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
-    "Win32_Graphics_Gdi",
-    "Win32_Media_Audio",
-    "Win32_Security",
-    "Win32_Security_Authorization",
-    "Win32_UI_Shell_PropertiesSystem",
-    "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_UI_WindowsAndMessaging",
-    "Win32_System_Com",
-    "Win32_System_Com_StructuredStorage",
-    "Win32_System_DataExchange",
-    "Win32_System_JobObjects",
-    "Win32_System_LibraryLoader",
-    "Win32_System_Memory",
-    "Win32_System_ProcessStatus",
-    "Win32_System_Threading",
 ] }
-
-[target.'cfg(unix)'.dependencies]
-# Parent-death signal for speech engine processes on Linux, and process
-# start times and memory on Linux and macOS (src/process_info.rs). Already in
-# the tree through many crates.
-libc = "0.2"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-# The app in front (NSWorkspace), window order (CGWindowList), synthetic
-# keystrokes (CGEvent) and the full clipboard (NSPasteboard). Already in the
-# tree through Tauri and arboard.
-objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "libc", "NSPasteboard", "NSPasteboardItem", "NSRunningApplication", "NSWorkspace"] }
-objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFArray", "CFDictionary", "CFNumber", "CFString"] }
-objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGEvent", "CGEventSource", "CGEventTypes", "CGRemoteOperation", "CGWindow"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSString", "NSURL"] }
-# Keeps the GitHub token in the login Keychain. Without a backend keyring
-# falls back to a mock store and the token is lost on restart.
-keyring = { version = "3", features = ["apple-native"] }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-# Window identity, focus and synthetic keystrokes (XTEST) on X11 and
-# XWayland; XFIXES tells when the clipboard changes. Already in the tree
-# through arboard.
-x11rb = { version = "0.13", features = ["xtest", "xfixes"] }
-# The GitHub token store: the freedesktop Secret Service (GNOME Keyring,
-# KWallet, KeePassXC) over D-Bus. libdbus is already linked through tao;
-# crypto-rust encrypts the session without needing OpenSSL.
-keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
-# Native Wayland: the XDG desktop portals send the paste keystroke
-# (RemoteDesktop, keyboard only, permission remembered with a restore token)
-# and deliver global hotkeys (GlobalShortcuts). async-io matches the zbus 5
-# runtime already in the tree through the single-instance plugin, so no
-# second D-Bus stack or tokio-bound connection is pulled in. ashpd's
-# remote_desktop module needs its screencast types to compile; Scribe opens
-# no screen cast.
-ashpd = { version = "0.13", default-features = false, features = ["async-io", "remote_desktop", "screencast", "global_shortcuts"] }
-# The Wayland clipboard (wlr/ext data-control, KDE and wlroots desktops);
-# arboard falls back to X11 (XWayland) where the compositor lacks it (GNOME).
-arboard = { version = "3.4", features = ["wayland-data-control"] }
-# Drive the portal futures on Scribe's own threads (the app has no async
-# runtime of its own); both already in the tree through zbus.
-async-io = "2"
-futures-util = { version = "0.3", default-features = false, features = ["std"] }
-
-[dev-dependencies]
-tempfile = "3"
-
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-# A stand-in desktop portal on a private session bus, for the portal client
-# tests (src/platform/linux/portal_dbus_tests.rs). Same zbus 5 as the tree.
-zbus = "5"
-
-[profile.dev]
-debug = "line-tables-only"
-
-[profile.dev.package."*"]
-debug = "none"
-
-[profile.test]
-debug = "line-tables-only"
-
-[profile.test.package."*"]
-debug = "none"
-
-[profile.full-debug]
-inherits = "dev"
-debug = "full"
-
-[profile.full-debug.package."*"]
-debug = "full"
