@@ -49,7 +49,9 @@ function Uuid-V5-Dns([string] $name) {
 
 function Clean-Msi {
   Stop-Scribe
-  foreach ($e in Installed-Entries) {
+  # Assigned first: Installed-Entries returns its list as one object.
+  $entries = Installed-Entries
+  foreach ($e in $entries) {
     if ($e.UninstallString -match '(\{[0-9A-Fa-f-]+\})') {
       Run-Wait $msiexec "/x $($Matches[1]) /quiet /norestart" | Out-Null
     } elseif ($e.UninstallString -match '"([^"]+uninstall\.exe)"') {
@@ -87,7 +89,7 @@ if (Test-Path $msiExe) {
   Check "0.16.3 MSI created the Start menu shortcut" (Test-Path -LiteralPath $msiStartLnk)
   $runBefore = Run-Value
   $dataBefore = Data-Fingerprint
-  $markersBefore = (Marker-Lines).Count
+  $markersBefore = @(Marker-Lines).Count
 
   # The plugin passes the path unquoted; this one has no spaces.
   $code = Run-Wait $msiexec "/i $Candidate /quiet /promptrestart AUTOLAUNCHAPP=True LAUNCHAPPARGS=`"--minimized`" /l*v $env:RUNNER_TEMP\msi-new.log"

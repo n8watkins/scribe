@@ -137,11 +137,10 @@ function Run-Value-Exe($value) {
   return ($value -split ' ')[0]
 }
 
-# The leading comma keeps a one-line log an array (PowerShell would unroll
-# it to a string, and indexing a string gives its first character).
+# Callers wrap this in @(): PowerShell unrolls a one-line log to a plain
+# string, and indexing a string gives its first character.
 function Marker-Lines {
-  if (-not (Test-Path $markerLog)) { return ,@() }
-  return ,@(Get-Content $markerLog)
+  if (Test-Path $markerLog) { Get-Content $markerLog }
 }
 
 # Waits for a new marker line (a launch of the stub) after $before lines.

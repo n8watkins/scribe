@@ -54,7 +54,7 @@ function Bridge([string] $tag, [string] $formName, [string] $folder, [string] $s
   Check "$tag created the Start menu shortcut" (Test-Path -LiteralPath $startLnk)
   $runBefore = Run-Value
   $dataBefore = Data-Fingerprint
-  $markersBefore = (Marker-Lines).Count
+  $markersBefore = @(Marker-Lines).Count
 
   $code = Run-Wait $setup $form.Args
   Check "native setup exit code is 0" ($code -eq 0) "(was $code)"
@@ -114,7 +114,7 @@ function Bridge([string] $tag, [string] $formName, [string] $folder, [string] $s
       Where-Object { $_ -notin @("Scribe.exe", "uninstall.exe") })
   Note "files left from the Tauri build after the update: $(if ($leftovers.Count) { $leftovers -join ', ' } else { 'none' })"
   Stop-Scribe
-  $markersBefore = (Marker-Lines).Count
+  $markersBefore = @(Marker-Lines).Count
   Start-Process $exe -ArgumentList "--minimized" | Out-Null
   $line = Wait-Launch $markersBefore 15
   Check "the native exe starts from the Run value command with the leftovers present" ($null -ne $line)
