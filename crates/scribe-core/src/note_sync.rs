@@ -365,7 +365,14 @@ impl NoteSyncWorker {
         // worker), so it finds the Core through the app each time it syncs.
         let _ = thread::Builder::new()
             .name("scribe-note-sync".into())
-            .spawn(move || worker_loop(|| app.try_state::<Core>().map(|c| c.inner().clone()), rx));
+            .spawn(move || {
+                worker_loop(
+                    || app.try_state::<Core>().map(|core| core.inner().clone()),
+                    sync_automatically,
+                    DEBOUNCE,
+                    rx,
+                )
+            });
         Self { tx }
     }
 
@@ -376,7 +383,31 @@ impl NoteSyncWorker {
     }
 }
 
-fn worker_loop(find_core: impl Fn() -> Option<Core>, rx: Receiver<()>) {
+/// How often the worker looks for the engine while it is not managed yet.
+const CORE_POLL: Duration = Duration::from_millis(50);
+
+/// Waits for the engine, which the shell builds after it starts this worker.
+/// Returns `None` only when the channel disconnects (the app is shutting
+/// down), so a note-saved signal is never dropped whatever the startup timing.
+fn wait_for_core<C>(find_core: &impl Fn() -> Option<C>, rx: &Receiver<()>) -> Option<C> {
+    loop {
+        if let Some(core) = find_core() {
+            return Some(core);
+        }
+        match rx.recv_timeout(CORE_POLL) {
+            // More saves while waiting: the sync that follows covers them.
+            Ok(()) | Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return None,
+        }
+    }
+}
+
+fn worker_loop<C>(
+    find_core: impl Fn() -> Option<C>,
+    sync: impl Fn(&C),
+    debounce: Duration,
+    rx: Receiver<()>,
+) {
     loop {
         // Block until at least one note-saved signal arrives.
         if rx.recv().is_err() {
@@ -384,41 +415,44 @@ fn worker_loop(find_core: impl Fn() -> Option<Core>, rx: Receiver<()>) {
         }
         // Debounce: keep waiting while more saves keep coming in.
         loop {
-            match rx.recv_timeout(DEBOUNCE) {
+            match rx.recv_timeout(debounce) {
                 Ok(()) => continue,
                 Err(RecvTimeoutError::Timeout) => break,
                 Err(RecvTimeoutError::Disconnected) => return,
             }
         }
-        // Serialize this whole sync against a manual "Sync now" so the same
-        // daily file is never PUT concurrently. Acquired once here (not inside
-        // the collect_* helpers) to stay re-entrancy-/deadlock-free, and held
-        // across both collect calls below. Dropped at the end of the iteration.
-        let Some(core) = find_core() else {
-            log::warn!("Skipped an automatic GitHub backup: the engine is not ready yet");
-            continue;
+        let Some(core) = wait_for_core(&find_core, &rx) else {
+            return;
         };
-        let _guard = core.backend().github_sync_lock();
+        sync(&core);
+    }
+}
 
-        // A github_unauthorized error has already cleared the dead token inside
-        // collect_*, so by the time we record this attempt connection state is
-        // clean. Both configured paths run even if one fails.
-        let attempt = collect_sync_attempt_with(&core);
-        record_sync_attempt_with(&core, SyncSource::Automatic, &attempt);
-        if let Some(error) = &attempt.error {
-            log::warn!(
-                "Automatic GitHub backup failed after syncing {} item(s) into {} file(s): {}",
-                attempt.report.synced_notes,
-                attempt.report.files_written,
-                error.message
-            );
-        } else {
-            log::info!(
-                "Automatically backed up {} item(s) into {} GitHub file(s)",
-                attempt.report.synced_notes,
-                attempt.report.files_written
-            );
-        }
+fn sync_automatically(core: &Core) {
+    // Serialize this whole sync against a manual "Sync now" so the same
+    // daily file is never PUT concurrently. Acquired once here (not inside
+    // the collect_* helpers) to stay re-entrancy-/deadlock-free, and held
+    // across both collect calls below. Dropped at the end of the sync.
+    let _guard = core.backend().github_sync_lock();
+
+    // A github_unauthorized error has already cleared the dead token inside
+    // collect_*, so by the time we record this attempt connection state is
+    // clean. Both configured paths run even if one fails.
+    let attempt = collect_sync_attempt_with(core);
+    record_sync_attempt_with(core, SyncSource::Automatic, &attempt);
+    if let Some(error) = &attempt.error {
+        log::warn!(
+            "Automatic GitHub backup failed after syncing {} item(s) into {} file(s): {}",
+            attempt.report.synced_notes,
+            attempt.report.files_written,
+            error.message
+        );
+    } else {
+        log::info!(
+            "Automatically backed up {} item(s) into {} GitHub file(s)",
+            attempt.report.synced_notes,
+            attempt.report.files_written
+        );
     }
 }
 
@@ -449,7 +483,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = state(dir.path());
         let store = ReplacementStore::open(dir.path().join("replacements.txt"), &[]);
-        // Off by default: neither path reaches the keychain or the network.
+        // Both off explicitly, whatever the defaults are, so neither path can
+        // reach the keychain or the network.
+        let mut settings = state.db().unwrap().get_settings().unwrap();
+        settings.github_sync_enabled = false;
+        settings.github_sync_all_transcripts = false;
+        state.db().unwrap().save_settings(&settings).unwrap();
         let notes = collect_notes(&state, &store, "test.scribe.sync").unwrap();
         assert_eq!((notes.synced_notes, notes.files_written), (0, 0));
         let all = collect_transcripts(&state, "test.scribe.sync").unwrap();
@@ -483,6 +522,89 @@ mod tests {
         let empty = ReplacementStore::open(dir.path().join("replacements.txt"), &[]);
         std::fs::write(empty.path(), "  \n").unwrap();
         assert!(pending_replacements(&empty).is_none());
+    }
+
+    #[test]
+    fn replacements_are_pending_until_their_hash_is_uploaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ReplacementStore::open(dir.path().join("replacements.txt"), &[]);
+        std::fs::write(store.path(), "teh => the\n").unwrap();
+        // Only this test touches the uploaded hash.
+        *lock_uploaded() = None;
+
+        let (text, hash) = pending_replacements(&store).expect("new text is pending");
+        assert_eq!(text, "teh => the\n");
+
+        // Once that text is uploaded it is no longer pending ...
+        *lock_uploaded() = Some(hash);
+        assert!(pending_replacements(&store).is_none());
+
+        // ... until the file changes.
+        std::fs::write(store.path(), "teh => the\nadn => and\n").unwrap();
+        assert!(pending_replacements(&store).is_some());
+        *lock_uploaded() = None;
+    }
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    fn wait_until(what: &str, done: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !done() {
+            assert!(std::time::Instant::now() < deadline, "timed out: {what}");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn the_worker_keeps_waiting_for_an_engine_that_never_comes() {
+        let (tx, rx) = crossbeam_channel::unbounded::<()>();
+        let polls = Arc::new(AtomicUsize::new(0));
+        let syncs = Arc::new(AtomicUsize::new(0));
+        let (seen_polls, seen_syncs) = (polls.clone(), syncs.clone());
+        let worker = thread::spawn(move || {
+            worker_loop(
+                move || {
+                    seen_polls.fetch_add(1, Ordering::SeqCst);
+                    None::<u32>
+                },
+                move |_| {
+                    seen_syncs.fetch_add(1, Ordering::SeqCst);
+                },
+                Duration::from_millis(5),
+                rx,
+            )
+        });
+        tx.send(()).unwrap();
+        // It polls past the debounce instead of giving up on the signal.
+        wait_until("the worker polling for the engine", || {
+            polls.load(Ordering::SeqCst) >= 3
+        });
+        assert!(!worker.is_finished());
+        drop(tx);
+        worker.join().unwrap();
+        assert_eq!(syncs.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn the_worker_syncs_once_when_the_engine_appears_late() {
+        let (tx, rx) = crossbeam_channel::unbounded::<()>();
+        let polls = Arc::new(AtomicUsize::new(0));
+        let synced = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (seen_polls, seen_synced) = (polls.clone(), synced.clone());
+        let worker = thread::spawn(move || {
+            worker_loop(
+                move || (seen_polls.fetch_add(1, Ordering::SeqCst) >= 3).then_some(7u32),
+                move |core| seen_synced.lock().unwrap().push(*core),
+                Duration::from_millis(5),
+                rx,
+            )
+        });
+        tx.send(()).unwrap();
+        wait_until("the sync", || !synced.lock().unwrap().is_empty());
+        drop(tx);
+        worker.join().unwrap();
+        assert_eq!(*synced.lock().unwrap(), vec![7]);
     }
 
     #[test]
