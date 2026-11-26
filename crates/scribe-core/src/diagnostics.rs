@@ -16,14 +16,9 @@ use std::{
 
 use chrono::Utc;
 use serde_json::Value;
-use tauri::AppHandle;
 
 use crate::{
-    commands::BackendState,
-    core::Core,
-    error::CommandError,
-    host::{no_main_window, Host},
-    settings::AppSettings,
+    commands::BackendState, core::Core, error::CommandError, host::Host, settings::AppSettings,
 };
 
 /// How much of the newest log file is read (its end).
@@ -78,38 +73,17 @@ const SETTINGS_ALLOW_LIST: &[&str] = &[
     "hotkeys",
 ];
 
-/// Builds the diagnostics report (the `collect_diagnostics` command) for the
-/// running app's `version`. The shell passes the app's own version: Dev and
-/// test builds override it, so it can differ from this crate's.
-pub fn collect_with(core: &Core, version: &str) -> Result<String, CommandError> {
-    collect_from(core.backend(), core.host().as_ref(), version)
+/// Builds the diagnostics report (the `collect_diagnostics` command).
+pub fn collect_with(core: &Core) -> Result<String, CommandError> {
+    collect_from(core.backend(), core.host().as_ref())
 }
 
-/// [`collect_with`] for callers that still hold an `AppHandle`. Needs only
-/// `state`, the host (which the shell installs before anything else) and the
-/// app's version.
-pub fn collect(app: &AppHandle, state: &BackendState) -> Result<String, CommandError> {
-    match crate::shell::host() {
-        Some(host) => collect_from(
-            state,
-            host.as_ref(),
-            &app.package_info().version.to_string(),
-        ),
-        None => {
-            log::warn!("Could not build the diagnostics report: no host yet");
-            Err(no_main_window())
-        }
-    }
-}
-
-/// The report for the engine `state` runs under `host` as app `version`: the
-/// host names the app (its flavour), the home folder to mask and the log
+/// The report for the engine `state` runs under `host`: the host names the
+/// app (its flavour and its version, which Dev and test builds override, so
+/// it can differ from this crate's), the home folder to mask and the log
 /// folder.
-fn collect_from(
-    state: &BackendState,
-    host: &dyn Host,
-    version: &str,
-) -> Result<String, CommandError> {
+fn collect_from(state: &BackendState, host: &dyn Host) -> Result<String, CommandError> {
+    let version = host.app_version();
     let (settings, models) = {
         let db = state.db()?;
         (db.get_settings()?, db.list_model_records()?)
@@ -521,9 +495,8 @@ mod tests {
         assert_eq!(recent_problems(&lines, 2), vec!["[ERROR] c", "[WARN] e"]);
     }
 
-    /// The report names the host's flavour and the version passed in, and
-    /// reads the newest log in the host's log folder with the home folder
-    /// masked.
+    /// The report names the host's flavour and the host's version, and reads
+    /// the newest log in the host's log folder with the home folder masked.
     #[test]
     fn the_report_follows_the_hosts_flavour_and_folders() {
         use crate::{
@@ -554,7 +527,9 @@ mod tests {
                 Some(home.clone()),
             ),
             Flavor::Dev,
-        );
+        )
+        // A Dev build's version, which differs from this crate's.
+        .with_app_version("0.16.4-123");
         let state = BackendState::new(
             Database::in_memory().unwrap(),
             root.path().join("cache").join("recordings"),
@@ -564,13 +539,15 @@ mod tests {
             },
         );
 
-        // A Dev build's version, which differs from this crate's.
-        let report = collect_from(&state, &host, "0.16.4-123").unwrap();
+        let report = collect_from(&state, &host).unwrap();
 
         assert!(
             report.contains("App: Scribe Dev 0.16.4-123 (com.natkins.scribe.dev)"),
             "{report}"
         );
+        // Reading the version and the folders is all it asks of the host.
+        assert!(host.calls().is_empty());
+        assert!(host.events().is_empty());
         assert!(report.contains("  [WARN] Could not read ~"), "{report}");
         assert!(report.contains("  [INFO] started"), "{report}");
         assert!(!report.contains("someone-home"), "{report}");
