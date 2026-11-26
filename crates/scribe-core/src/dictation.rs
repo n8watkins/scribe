@@ -376,11 +376,8 @@ fn transcribe_recording_inner(
     // hallucinations into the focused app. It's in History; Paste-Last can
     // recover it if the user really did say something before the drop.
     if !transcript.is_note && !recording.disconnected {
-        if let Err(error) =
-            output::handle_transcription_output_with(app, core, &transcript, &settings)
-        {
-            output::emit_output_failed_with(host, transcript.id.clone(), &error);
-        }
+        let outcome = output::handle_transcription_output_with(app, core, &transcript, &settings);
+        settle_output(host, &transcript, outcome);
     }
 
     Ok(Some(save_and_announce(
@@ -393,6 +390,18 @@ fn transcribe_recording_inner(
         model_id,
         whisper_result.latency_ms,
     )))
+}
+
+/// Closes the output step of a dictation. A failed output is never fatal to
+/// the dictation (the save still follows).
+fn settle_output(
+    host: &dyn Host,
+    transcript: &Transcript,
+    outcome: Result<Option<OutputResult>, CommandError>,
+) {
+    if let Err(error) = outcome {
+        output::emit_output_failed_with(host, transcript.id.clone(), &error);
+    }
 }
 
 /// Saves a finished dictation (to History, or as a note) and tells the
@@ -893,6 +902,19 @@ mod engine_tests {
                 json!({"message": EMPTY_DICTATION_MESSAGE})
             )]
         );
+    }
+
+    /// The output functions announce their own failures, so the dictation
+    /// must not announce a failed output a second time (two identical toasts).
+    #[test]
+    fn a_failed_output_is_not_announced_again_by_the_dictation() {
+        let fixture = Fixture::new();
+        settle_output(
+            fixture.host.as_ref(),
+            &transcript("hello there", false),
+            Err(CommandError::new("paste_failed", "could not paste")),
+        );
+        assert_eq!(fixture.sent(), []);
     }
 
     #[test]
