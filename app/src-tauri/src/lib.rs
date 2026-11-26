@@ -36,6 +36,7 @@ pub mod self_test;
 pub mod session_model;
 pub mod settings;
 pub mod settings_store;
+pub mod sounds;
 pub mod speech_engine;
 pub mod state_server;
 pub mod stats;

@@ -356,7 +356,7 @@ impl AudioService {
             is_test_clip,
             limits
         );
-        let _ = app.emit("audio://recording-started", &info);
+        emit_recording_started(app, &info);
         Ok(StartOutcome {
             info,
             started: true,
@@ -378,9 +378,7 @@ impl AudioService {
         }
         drop(session.stream);
         let _ = session.control_tx.send(WorkerControl::Stop(reason));
-        let result = session.worker.join().map_err(|_| {
-            CommandError::new("recording_failed", "Audio worker thread panicked.")
-        })??;
+        let result = finished_recording(session.worker.join())?;
         self.last_result = Some(result.clone());
         Ok(Some(result))
     }
@@ -503,7 +501,7 @@ pub fn cancel_recording_for_app(app: &AppHandle) -> Result<(), CommandError> {
         if result.is_transform {
             state.discard_pending_transform();
         }
-        let _ = app.emit("audio://recording-stopped", &result);
+        emit_recording_stopped(app, &result);
     }
 
     let snapshot = state.app_state()?.snapshot();
@@ -554,8 +552,40 @@ pub fn record_test_clip_for_app(
         state.audio()?.set_last_test_clip(PathBuf::from(wav_path));
     }
 
-    let _ = app.emit("audio://recording-stopped", &result);
+    emit_recording_stopped(app, &result);
     Ok(result)
+}
+
+/// The result of a stopped session's worker. When the worker failed (it
+/// panicked, or the WAV could not be written), no recording-stopped event
+/// and no stop cue follow, as before; the sound player is told the
+/// recording is over so it stops holding the output open for it.
+fn finished_recording(
+    joined: thread::Result<Result<RecordingResult, CommandError>>,
+) -> Result<RecordingResult, CommandError> {
+    let result = joined
+        .map_err(|_| CommandError::new("recording_failed", "Audio worker thread panicked."))
+        .and_then(|result| result);
+    if result.is_err() {
+        crate::sounds::recording_ended();
+    }
+    result
+}
+
+/// Tells the UI a recording started and plays the start cue. Called once
+/// capture is already running; the cue is only queued (it plays on its own
+/// thread), so it never delays the recording.
+fn emit_recording_started(app: &AppHandle, info: &RecordingSessionInfo) {
+    let _ = app.emit("audio://recording-started", info);
+    crate::sounds::play(app, crate::sounds::Cue::Start);
+}
+
+/// Tells the UI a recording ended and plays the stop cue. Every way a
+/// recording ends (stop, cancel, too short, timeout, disconnect, test clip)
+/// goes through here, matching where the stop sound always played.
+fn emit_recording_stopped(app: &AppHandle, result: &RecordingResult) {
+    let _ = app.emit("audio://recording-stopped", result);
+    crate::sounds::play(app, crate::sounds::Cue::Stop);
 }
 
 /// Returns the most recent test clip WAV as a base64 string for in-app
@@ -726,7 +756,7 @@ fn stop_recording_with_reason(
             state.discard_pending_transform();
         }
     }
-    let _ = app.emit("audio://recording-stopped", &result);
+    emit_recording_stopped(app, &result);
 
     let snapshot = state.app_state()?.snapshot();
     if snapshot.status == AppStatus::Stopping {
@@ -1904,6 +1934,21 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_failed_stop_tells_the_sound_player_the_recording_ended() {
+        let notices = || {
+            crate::sounds::tests::RECORDING_ENDED_NOTICES.load(std::sync::atomic::Ordering::SeqCst)
+        };
+        let before = notices();
+        let failed = finished_recording(Ok(Err(CommandError::new("disk_full", "Disk full."))));
+        assert_eq!(failed.unwrap_err().code, "disk_full");
+        assert_eq!(notices(), before + 1);
+
+        let panicked = finished_recording(Err(Box::new("worker panic")));
+        assert_eq!(panicked.unwrap_err().code, "recording_failed");
+        assert_eq!(notices(), before + 2);
+    }
 
     #[test]
     fn resamples_to_target_rate() {
