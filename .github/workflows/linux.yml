@@ -19,6 +19,9 @@ on:
       - ".github/workflows/linux.yml"
       - ".github/scripts/smoke-linux.sh"
       - "app/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
 
 permissions:
   contents: read
@@ -63,26 +66,23 @@ jobs:
 
       - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
-          workspaces: app/src-tauri
+          workspaces: ". -> target"
           key: backend
 
       - name: Run clippy
-        working-directory: app/src-tauri
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Run backend tests
-        working-directory: app/src-tauri
-        run: cargo test --locked
+        run: cargo test --locked --workspace
 
       # The GitHub token lives in the Secret Service on Linux. A private
       # session bus with an unlocked GNOME Keyring lets the ignored round-trip
       # test prove a credential is really stored, read back and deleted.
       - name: Run the Secret Service round trip
-        working-directory: app/src-tauri
         run: |
           dbus-run-session -- sh -c '
             printf ci | gnome-keyring-daemon --unlock --components=secrets --daemonize > /dev/null
-            cargo test --locked --lib secret_service_round_trips_a_credential -- --ignored
+            cargo test --locked --workspace --lib secret_service_round_trips_a_credential -- --ignored
           '
 
       # The Wayland portal clients against a stand-in
@@ -91,8 +91,7 @@ jobs:
       # keyboard-only persistent grants, keysyms, shortcut binding and
       # activation) without a desktop.
       - name: Run the Wayland portal round trip
-        working-directory: app/src-tauri
-        run: dbus-run-session -- cargo test --locked --lib portal_dbus -- --ignored
+        run: dbus-run-session -- cargo test --locked --workspace --lib portal_dbus -- --ignored
 
   build-linux:
     name: Build Linux bundles
@@ -129,7 +128,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
-          workspaces: app/src-tauri
+          workspaces: ". -> target"
 
       # CPU only and statically linked, so the two binaries need no shared
       # whisper or ggml libraries next to them and no OpenMP runtime. The
@@ -222,7 +221,7 @@ jobs:
       - name: Verify and stage bundles
         run: |
           set -euo pipefail
-          bundle=app/src-tauri/target/release/bundle
+          bundle=target/release/bundle
           appimage=("$bundle"/appimage/*.AppImage)
           deb=("$bundle"/deb/*.deb)
           if [ "${#appimage[@]}" -ne 1 ] || [ ! -f "${appimage[0]}" ]; then
@@ -241,7 +240,7 @@ jobs:
             fi
           done
           # The end-to-end test input (the e2e-audio feature) must never ship.
-          mapfile -t exes < <(find app/src-tauri/target/release -maxdepth 1 -type f -perm -u+x)
+          mapfile -t exes < <(find target/release -maxdepth 1 -type f -perm -u+x)
           if [ "${#exes[@]}" -eq 0 ]; then
             echo "No executable was built" >&2
             exit 1

@@ -34,7 +34,7 @@ pub fn lock(writes: &Mutex<()>) -> MutexGuard<'_, ()> {
 pub fn emit_changed(app: &AppHandle, settings: &AppSettings) {
     let _ = app.emit(SETTINGS_CHANGED_EVENT, settings);
     // The tray menu's "Launch at startup" check mark shows the stored value.
-    crate::tray::sync_settings(app, settings);
+    crate::shell::sync_settings(app, settings);
 }
 
 /// Returns `current` with the fields named in `patch` replaced. Keys are the

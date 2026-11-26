@@ -7,7 +7,7 @@ Everything under "Historical record" further down describes the 0.5.x and 0.6.0 
 
 ### What Scribe is and where it lives
 
-Scribe is a free, open-source (MIT), Windows-only desktop app for private, on-device dictation, built with Tauri v2 (Rust backend in `app/src-tauri/src`, React and TypeScript front end in `app/src`), with local Whisper transcription.
+Scribe is a free, open-source (MIT), Windows-only desktop app for private, on-device dictation, built with Tauri v2 (Rust backend in `crates/scribe-core/src` for the engine and `app/src-tauri/src` for the Tauri shell, React and TypeScript front end in `app/src`), with local Whisper transcription.
 
 - Repository: https://github.com/n8watkins/scribe, cloned at `~/projects/desktop/scribe/scribe-app`.
 - Releases: GitHub Releases (NSIS and MSI installers plus a signed updater `latest.json`); installed copies auto-update from the latest release.
@@ -39,10 +39,10 @@ Current product and operations docs are listed in the [documentation index](READ
    Users on v0.8.0 still run the vulnerable dependency versions until a new release ships.
    A release auto-updates every installed copy, so cutting one needs the owner's go-ahead.
 2. **The "type it out" paste fallback has no setting** (to confirm in the assessment).
-   The paste method (`PasteMethod` in `app/src-tauri/src/settings.rs`, applied in `app/src-tauri/src/output.rs`, including `DirectInsert`, which types the text) appears to have no control in the Settings view.
+   The paste method (`PasteMethod` in `crates/scribe-core/src/settings.rs`, applied in `crates/scribe-core/src/output.rs`, including `DirectInsert`, which types the text) appears to have no control in the Settings view.
    Reproduce: open Settings in the installed app and look for a way to choose between pasting and typing.
 3. **Ctrl+Alt+R (rewrite selection) is bound even when the AI tools are off** (to confirm in the assessment).
-   The default chord is in `app/src-tauri/src/settings.rs`; registration is in `app/src-tauri/src/hotkeys.rs` (`TransformSelection`).
+   The default chord is in `crates/scribe-core/src/settings.rs`; registration is in `crates/scribe-core/src/hotkeys.rs` (`TransformSelection`).
    Reproduce: turn the AI features off, select text in another app and press Ctrl+Alt+R.
 4. **Dependabot PRs sat open for months.**
    #38 is the one left; merge it, and decide how Dependabot PRs get handled so they don't pile up again.
@@ -237,7 +237,7 @@ build` clean. The maintainer is running 0.5.22 (installed via WSL→Windows).
 
 ### Verification & parallel-work commands
 
-- **Backend:** `cd app/src-tauri && cargo test` (171 tests).
+- **Backend:** `cargo test --workspace` from the repository root (171 tests then; the shell and the engine crate today).
 - **Frontend:** `cd app && npx tsc --noEmit && npm run build`.
 - **Parallel feature work:** `git worktree add -b feat/X ../scribe-wt-X HEAD` then
   `ln -sfn /home/natkins/n8builds/public/scribe/app/node_modules

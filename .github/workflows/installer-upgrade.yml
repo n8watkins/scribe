@@ -49,14 +49,16 @@ jobs:
 
       - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
-          workspaces: app/src-tauri
+          workspaces: ". -> target"
           cache-on-failure: true
 
       - name: Install application dependencies
         working-directory: app
         run: |
           npm ci --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
           npm rebuild esbuild
+          if ($LASTEXITCODE -ne 0) { throw "npm rebuild esbuild failed" }
 
       # Same command as the release build, with the version raised and no
       # updater artifacts (so no signing key is needed).
@@ -70,7 +72,7 @@ jobs:
           @{ version = $env:TEST_VERSION } | ConvertTo-Json | Set-Content $version -Encoding utf8
           npm run tauri -- build --bundles nsis --config src-tauri/tauri.unsigned-build.conf.json --config $version
           if ($LASTEXITCODE -ne 0) { throw "tauri build failed" }
-          $setup = @(Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe")
+          $setup = @(Get-ChildItem "../target/release/bundle/nsis" -Filter "*-setup.exe")
           if ($setup.Count -ne 1) { throw "Expected one NSIS installer, found $($setup.Count)" }
           Copy-Item $setup[0].FullName "$env:RUNNER_TEMP\candidate-setup.exe"
 

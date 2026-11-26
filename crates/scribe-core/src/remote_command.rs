@@ -48,7 +48,7 @@ impl RemoteCommand {
             Self::PasteLast => hotkeys::run_action(app, HotkeyAction::PasteLastTranscript),
             Self::Cancel => hotkeys::run_action(app, HotkeyAction::DiscardDictation),
             Self::Dashboard => {
-                if let Err(error) = crate::tray::open_dashboard(app, None) {
+                if let Err(error) = crate::shell::open_dashboard(app, None) {
                     log::warn!("Could not open the dashboard: {}", error.message);
                 }
             }

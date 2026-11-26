@@ -18,8 +18,8 @@ use crate::{
     incremental::{self, SessionHandle},
     model_manager, output,
     settings::Language,
+    shell,
     transcript::Transcript,
-    tray,
     whisper::{WhisperRequest, WhisperTranscription},
     whisper_server::WarmTranscriber,
 };
@@ -674,7 +674,7 @@ fn schedule_error_recovery(app: &AppHandle, entered_at: DateTime<Utc>) {
             ERROR_RECOVERY_DELAY
         );
         emit_state_snapshot(&app, &snapshot);
-        tray::update_tray_status(&app, snapshot.status.clone());
+        shell::update_tray_status(&app, snapshot.status.clone());
     });
 }
 

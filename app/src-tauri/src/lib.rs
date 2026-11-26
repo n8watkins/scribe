@@ -1,73 +1,36 @@
-pub mod app_state;
-pub mod audio;
-pub mod autostart;
-pub mod child_guard;
-pub mod commands;
-pub mod data_hygiene;
-pub mod db;
-pub mod diagnostics;
-pub mod dictation;
-pub mod dictation_state;
-pub mod dictation_worker;
-pub mod error;
-pub mod export;
-pub mod file_transcribe;
-pub mod filler;
-pub mod github_backup;
-pub mod github_oauth;
-pub mod gpu;
-pub mod hotkeys;
-pub mod import;
-pub mod incremental;
-pub mod model_manager;
-pub mod models;
-pub mod note_analysis;
-pub mod note_sync;
-pub mod output;
-pub mod parakeet;
-pub mod platform;
-pub mod process_info;
-pub mod prompt_budget;
-pub mod release_notes;
-pub mod remote_command;
-pub mod replacements_file;
-pub mod selection_transform;
-pub mod self_test;
-pub mod session_model;
-pub mod settings;
-pub mod settings_store;
-pub mod sounds;
-pub mod speech_engine;
-pub mod state_server;
-pub mod stats;
-pub mod status_file;
-pub mod sync_history;
-#[cfg(feature = "e2e-audio")]
-pub mod test_audio;
-pub mod text_replace;
-pub mod transcript;
+//! The desktop shell: builds the Tauri app (plugins, windows, tray, commands,
+//! run loop) on Scribe's engine, crates/scribe-core. The engine's modules are
+//! re-exported here under their old `app_lib::` paths.
+
 pub mod tray;
-pub mod update_check;
-pub mod whisper;
-pub mod whisper_server;
 pub mod window_size;
+
+#[cfg(feature = "e2e-audio")]
+pub use scribe_core::test_audio;
+pub use scribe_core::{
+    app_state, audio, autostart, child_guard, commands, data_hygiene, db, diagnostics, dictation,
+    dictation_state, dictation_worker, display_name, error, export, file_transcribe, filler,
+    github_backup, github_oauth, gpu, hotkeys, import, incremental, is_dev_flavor, model_manager,
+    models, note_analysis, note_sync, output, parakeet, platform, process_info, prompt_budget,
+    release_notes, remote_command, replacements_file, selection_transform, self_test,
+    session_model, settings, settings_store, shell, sounds, speech_engine, state_server, stats,
+    status_file, sync_history, text_replace, transcript, update_check, whisper, whisper_server,
+};
 
 use commands::BackendState;
 use db::Database;
 use tauri::Manager;
 
-/// True when running the Scribe Dev flavor (identifier baked at build
-/// time by `tauri.dev-flavor.conf.json`).
-pub fn is_dev_flavor(app: &tauri::AppHandle) -> bool {
-    app.config().identifier.ends_with(".dev")
-}
-
-/// The flavored display name, used everywhere the UI says "Scribe".
-pub fn display_name(app: &tauri::AppHandle) -> &'static str {
-    if is_dev_flavor(app) {
-        "Scribe Dev"
-    } else {
-        "Scribe"
+/// The tray and main-window functions the engine calls (see
+/// `scribe_core::shell`).
+fn shell_hooks() -> shell::ShellHooks {
+    shell::ShellHooks {
+        update_tray_status: tray::update_tray_status,
+        update_engine_summary: tray::update_engine_summary,
+        sync_settings: tray::sync_settings,
+        open_dashboard: tray::open_dashboard,
+        toggle_dashboard: tray::toggle_dashboard,
+        main_window_logical_size: window_size::current_logical,
     }
 }
 
@@ -328,6 +291,8 @@ fn create_config_windows(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     install_panic_logger();
+    // Before anything can run engine code that touches the tray or a window.
+    shell::install(shell_hooks());
     tauri::Builder::default()
         // The single-instance plugin must be the first plugin registered so
         // it can take over before anything else initializes.
@@ -366,6 +331,7 @@ pub fn run() {
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
                 .level_for("app_lib", log::LevelFilter::Debug)
+                .level_for("scribe_core", log::LevelFilter::Debug)
                 // The plugin defaults (40 KB max, KeepOne) self-delete the log
                 // every ~40 KB, so under normal dictation the file churns past
                 // a few sessions within minutes and nothing older survives —
@@ -794,6 +760,22 @@ mod install_identity_tests {
         assert_eq!(config["identifier"], "com.natkins.scribe");
         assert_eq!(config["productName"], "Scribe");
         assert_eq!(config["mainBinaryName"], "Scribe");
+    }
+
+    /// The engine reports its own CARGO_PKG_VERSION (the update check, user
+    /// agents, the dictation-state interface), so it must carry the app's.
+    #[test]
+    fn the_engine_carries_the_app_version() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(config["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            include_str!("../../../crates/scribe-core/Cargo.toml")
+                .lines()
+                .find_map(|line| line.strip_prefix("version = "))
+                .map(|version| version.trim_matches('"')),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
     }
 
     /// The installer records the install folder under

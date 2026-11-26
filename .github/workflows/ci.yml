@@ -26,26 +26,27 @@ jobs:
 
       - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
-          workspaces: app/src-tauri
+          workspaces: ". -> target"
 
+      # The whole Cargo workspace: the shell (app/src-tauri) and the engine
+      # (crates/scribe-core).
       - name: Check formatting
-        working-directory: app/src-tauri
-        run: cargo fmt --check
+        run: cargo fmt --all --check
 
       - name: Run clippy
-        working-directory: app/src-tauri
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Run backend tests
-        working-directory: app/src-tauri
-        run: cargo test --locked
+        run: cargo test --locked --workspace
 
       # The test-only audio input of the end-to-end build (e2e-windows.yml).
-      - name: Lint and test the e2e-audio feature
-        working-directory: app/src-tauri
-        run: |
-          cargo clippy --locked --all-targets --features e2e-audio -- -D warnings
-          cargo test --locked --features e2e-audio test_audio
+      # One command per step: a pwsh step fails only on its last command's
+      # exit code.
+      - name: Lint the e2e-audio feature
+        run: cargo clippy --locked --workspace --all-targets --features e2e-audio -- -D warnings
+
+      - name: Test the e2e-audio feature
+        run: cargo test --locked --workspace --features e2e-audio test_audio
 
   desktop-frontend:
     name: Desktop frontend
@@ -144,6 +145,34 @@ jobs:
         working-directory: integrations/mcp-server
         run: npm test && npm run typecheck && npm run build
 
+  # The release workflow's SBOM steps (release.yml, build-windows), run the
+  # same way here so a change that empties the SBOM fails on its pull request.
+  release-sbom:
+    name: Release SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Stage the SBOM source
+        shell: pwsh
+        run: ./.github/scripts/sbom-source.ps1 -Out "$env:RUNNER_TEMP/scribe"
+
+      - name: Generate source SBOM
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          path: ${{ runner.temp }}/scribe
+          format: cyclonedx-json
+          output-file: ${{ runner.temp }}/scribe.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+          dependency-snapshot: false
+
+      - name: Check the SBOM lists the Rust crates and npm packages
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./.github/scripts/check-sbom.ps1 -Sbom "$env:RUNNER_TEMP/scribe.cdx.json" -Repository "${{ github.repository }}"
+
   rust-security:
     name: Rust dependency audit
     runs-on: ubuntu-latest
@@ -155,5 +184,5 @@ jobs:
 
       - name: Audit Rust dependencies
         run: |
-          cargo audit --file app/src-tauri/Cargo.lock
+          cargo audit --file Cargo.lock
           cargo audit --file cli/Cargo.lock

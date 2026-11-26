@@ -187,9 +187,11 @@ Prerequisites: Windows 10/11 x64, [Rust](https://rustup.rs/) (stable, MSVC toolc
    npm run tauri build
    ```
 
-   Installers land in `app/src-tauri/target/release/bundle/nsis/` (and `bundle/msi/`).
+   Installers land in `target/release/bundle/nsis/` (and `bundle/msi/`) at the repository root.
 
-For development, `npm run tauri dev` gives hot reload. `cargo test` in `app/src-tauri/` runs the backend tests. Most of the audio, hotkey and paste code is `#[cfg(windows)]`-gated, so compiling on other hosts proves little about the Windows build.
+For development, `npm run tauri dev` gives hot reload.
+The backend is a Cargo workspace: the Tauri shell in `app/src-tauri` (windows, tray, plugins) and the engine in `crates/scribe-core` (everything else).
+`cargo test --workspace` at the repository root runs the backend tests. Most of the audio, hotkey and paste code is `#[cfg(windows)]`-gated, so compiling on other hosts proves little about the Windows build.
 
 The [documentation index](docs/README.md) separates current operating guidance from historical plans and reports.
 

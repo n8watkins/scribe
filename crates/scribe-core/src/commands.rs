@@ -294,7 +294,7 @@ pub(crate) fn patch_settings_now(
 /// the startup entry. Holds the settings write lock from read to save, so it
 /// cannot undo a flip the user is making in Scribe at the same moment.
 /// Blocks; call it off the main thread.
-pub(crate) fn sync_launch_at_startup(app: &tauri::AppHandle) -> Result<AppSettings, CommandError> {
+pub fn sync_launch_at_startup(app: &tauri::AppHandle) -> Result<AppSettings, CommandError> {
     let state = app.state::<BackendState>().inner();
     let _guard = settings_store::lock(state.settings_writes());
     let mut settings = state.db()?.get_settings()?;
@@ -308,7 +308,7 @@ pub(crate) fn sync_launch_at_startup(app: &tauri::AppHandle) -> Result<AppSettin
 }
 
 /// Turns "Launch at startup" on or off, as the settings toggle does.
-pub(crate) fn set_launch_at_startup(
+pub fn set_launch_at_startup(
     app: &tauri::AppHandle,
     enabled: bool,
 ) -> Result<AppSettings, CommandError> {
@@ -973,7 +973,7 @@ pub async fn load_production_hotkey_defaults(
 
 #[tauri::command]
 pub fn open_dashboard(app: tauri::AppHandle) -> Result<(), CommandError> {
-    crate::tray::open_dashboard(&app, None)
+    crate::shell::open_dashboard(&app, None)
 }
 
 #[tauri::command]
@@ -1185,7 +1185,7 @@ pub fn get_failed_recordings_dir(app: tauri::AppHandle) -> Result<String, Comman
 pub async fn save_window_size(app: tauri::AppHandle) -> Result<AppSettings, CommandError> {
     off_main(app, move |app| {
         let state = app.state::<BackendState>().inner();
-        let (width, height) = crate::window_size::current_logical(app).ok_or_else(|| {
+        let (width, height) = crate::shell::main_window_logical_size(app).ok_or_else(|| {
             CommandError::new("window_size_unavailable", "Could not read the window size.")
         })?;
 

@@ -4,5 +4,8 @@
 # Release tooling installed at the root (release-kit)
 node_modules/
 
+# Cargo build output of the workspace (Cargo.toml)
+/target/
+
 # Python bytecode from the end-to-end harness
 __pycache__/

@@ -19,7 +19,7 @@ use crate::{
     dictation_worker::{self, Intent},
     error::CommandError,
     settings::{HotkeySettings, TriggerEdge},
-    tray,
+    shell,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -1138,9 +1138,9 @@ pub(crate) fn run_action(app: &AppHandle, action: HotkeyAction) {
                 .map(|settings| settings.dashboard_hotkey_toggles)
                 .unwrap_or(true);
             if toggles {
-                tray::toggle_dashboard(app)
+                shell::toggle_dashboard(app)
             } else {
-                tray::open_dashboard(app, None)
+                shell::open_dashboard(app, None)
             }
         }
         // Discards the in-progress recording without transcribing. A no-op when

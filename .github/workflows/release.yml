@@ -49,8 +49,9 @@ jobs:
           $packageVersion = (Get-Content app/package.json -Raw | ConvertFrom-Json).version
           $tauriVersion = (Get-Content app/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
           $cargoVersion = (Select-String -Path app/src-tauri/Cargo.toml -Pattern '^version = "([^"]+)"$' | Select-Object -First 1).Matches.Groups[1].Value
-          if (-not $packageVersion -or $packageVersion -ne $tauriVersion -or $packageVersion -ne $cargoVersion) {
-            throw "Version mismatch: package=$packageVersion tauri=$tauriVersion cargo=$cargoVersion"
+          $coreVersion = (Select-String -Path crates/scribe-core/Cargo.toml -Pattern '^version = "([^"]+)"$' | Select-Object -First 1).Matches.Groups[1].Value
+          if (-not $packageVersion -or $packageVersion -ne $tauriVersion -or $packageVersion -ne $cargoVersion -or $packageVersion -ne $coreVersion) {
+            throw "Version mismatch: package=$packageVersion tauri=$tauriVersion cargo=$cargoVersion core=$coreVersion"
           }
           if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne "v$packageVersion") {
             throw "Tag ${{ github.ref_name }} does not match configured version v$packageVersion"
@@ -77,15 +78,28 @@ jobs:
           Set-Content -Path (Join-Path $stage "version.txt") -Value $version -NoNewline
           Set-Content -Path (Join-Path $stage "flavor.txt") -Value $flavor -NoNewline
 
+      # The SBOM covers what ships: the app's npm packages and the Rust crates
+      # of the workspace Cargo.lock (see sbom-source.ps1). CI's "Release SBOM"
+      # job runs the same three steps on every pull request.
+      - name: Stage the SBOM source
+        shell: pwsh
+        run: ./.github/scripts/sbom-source.ps1 -Out "$env:RUNNER_TEMP\scribe"
+
       - name: Generate source SBOM
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
-          path: app
+          path: ${{ runner.temp }}/scribe
           format: cyclonedx-json
           output-file: ${{ runner.temp }}/scribe-release/scribe-${{ steps.metadata.outputs.version }}.cdx.json
           upload-artifact: false
           upload-release-assets: false
           dependency-snapshot: false
+
+      - name: Check the SBOM lists the Rust crates and npm packages
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./.github/scripts/check-sbom.ps1 -Sbom "$env:RUNNER_TEMP\scribe-release\scribe-${{ steps.metadata.outputs.version }}.cdx.json" -Repository "${{ github.repository }}"
 
       - name: Add bundled whisper.cpp to SBOM
         shell: pwsh
@@ -132,7 +146,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
-          workspaces: app/src-tauri
+          workspaces: ". -> target"
 
       - name: Install Vulkan SDK
         uses: jakoch/install-vulkan-sdk-action@7fe84289ddbf750f7eff9f8e4588e600e1dd06c8 # v1.8.1
@@ -160,20 +174,32 @@ jobs:
       # esbuild's is the only one the Windows build needs, so it runs on its own.
       - name: Install and validate application dependencies
         working-directory: app
+        # pwsh fails a step only on its last command's exit code, so each
+        # command is checked.
         run: |
           npm ci --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
           npm rebuild esbuild
+          if ($LASTEXITCODE -ne 0) { throw "npm rebuild esbuild failed" }
           npm audit
+          if ($LASTEXITCODE -ne 0) { throw "npm audit failed" }
           npm run lint
+          if ($LASTEXITCODE -ne 0) { throw "npm run lint failed" }
           npm test
+          if ($LASTEXITCODE -ne 0) { throw "npm test failed" }
           npm run build
+          if ($LASTEXITCODE -ne 0) { throw "npm run build failed" }
 
-      - name: Validate Rust backend
-        working-directory: app/src-tauri
-        run: |
-          cargo fmt --check
-          cargo clippy --locked --all-targets -- -D warnings
-          cargo test --locked
+      # One command per step: a pwsh step fails only on its last command's
+      # exit code.
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+
+      - name: Run clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Run backend tests
+        run: cargo test --locked --workspace
 
       - name: Build reviewed whisper.cpp source with Vulkan
         shell: pwsh
@@ -195,7 +221,9 @@ jobs:
             -DWHISPER_BUILD_EXAMPLES=ON `
             -DWHISPER_BUILD_TESTS=OFF `
             -DWHISPER_BUILD_SERVER=ON
+          if ($LASTEXITCODE -ne 0) { throw "Configuring whisper.cpp failed" }
           cmake --build build -j
+          if ($LASTEXITCODE -ne 0) { throw "Building whisper.cpp failed" }
           Pop-Location
           $cli = Get-ChildItem -Path "$src\build" -Recurse -Filter whisper-cli.exe | Select-Object -First 1
           if (-not $cli) { throw "whisper-cli.exe not found after the Vulkan build" }
@@ -232,7 +260,7 @@ jobs:
       - name: Check the build has no test input
         shell: pwsh
         run: |
-          $exes = @(Get-ChildItem app/src-tauri/target/release -Filter *.exe -File)
+          $exes = @(Get-ChildItem target/release -Filter *.exe -File)
           if ($exes.Count -eq 0) { throw "No executable was built" }
           foreach ($exe in $exes) {
             $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($exe.FullName))
@@ -251,7 +279,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          $setup = @(Get-ChildItem -Path "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe")
+          $setup = @(Get-ChildItem -Path "../target/release/bundle/nsis" -Filter "*-setup.exe")
           if ($setup.Count -ne 1) { throw "Expected one NSIS installer to sign, found $($setup.Count)" }
           npx --no-install tauri signer sign $setup[0].FullName
           if ($LASTEXITCODE -ne 0) { throw "Signing the updater artifact failed" }
@@ -261,8 +289,8 @@ jobs:
         shell: pwsh
         run: |
           $stage = "$env:RUNNER_TEMP\scribe-release"
-          $nsisDir = "app/src-tauri/target/release/bundle/nsis"
-          $msiDir = "app/src-tauri/target/release/bundle/msi"
+          $nsisDir = "target/release/bundle/nsis"
+          $msiDir = "target/release/bundle/msi"
           $setup = @(Get-ChildItem -Path $nsisDir -Filter "*-setup.exe")
           $msi = @(Get-ChildItem -Path $msiDir -Filter "*.msi")
           if ($setup.Count -ne 1) { throw "Expected one NSIS installer, found $($setup.Count)" }
