@@ -9,7 +9,10 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
-use crate::error::CommandError;
+use crate::{
+    error::CommandError,
+    host::{no_main_window, Host},
+};
 
 #[derive(Debug, Clone)]
 pub struct WhisperRequest {
@@ -72,8 +75,30 @@ pub struct WhisperTranscription {
     pub latency_ms: u32,
 }
 
+/// The engine's host, for the `AppHandle` wrappers below: found through the
+/// managed [`Core`](crate::core::Core). None (logged) before it is managed.
+fn host_of(app: &AppHandle, function: &str) -> Option<std::sync::Arc<dyn Host>> {
+    match app.try_state::<crate::core::Core>() {
+        Some(core) => Some(core.host().clone()),
+        None => {
+            log::warn!("whisper::{function} ran before the engine was ready");
+            None
+        }
+    }
+}
+
 pub fn transcribe(
     app: &AppHandle,
+    request: WhisperRequest,
+) -> Result<WhisperTranscription, CommandError> {
+    let host = host_of(app, "transcribe").ok_or_else(no_main_window)?;
+    transcribe_with(host.as_ref(), request)
+}
+
+/// Transcribes one WAV with the bundled whisper-cli from the resources of
+/// `host`.
+pub fn transcribe_with(
+    host: &dyn Host,
     request: WhisperRequest,
 ) -> Result<WhisperTranscription, CommandError> {
     if !request.model_path.is_file() {
@@ -97,18 +122,27 @@ pub fn transcribe(
     }
 
     let output_prefix = output_prefix_for_wav(&request.wav_path);
-    transcribe_with_output_prefix(app, &request, &output_prefix)
+    transcribe_with_output_prefix_with(host, &request, &output_prefix)
 }
 
-/// Direct whisper-cli invocation with a caller-chosen output prefix, so the
-/// transient .txt never has to live next to the input file (file
-/// transcription may read from directories the app should not write to).
 pub(crate) fn transcribe_with_output_prefix(
     app: &AppHandle,
     request: &WhisperRequest,
     output_prefix: &Path,
 ) -> Result<WhisperTranscription, CommandError> {
-    let executable = resolve_bundled_executable(app, "whisper-cli.exe")?;
+    let host = host_of(app, "transcribe_with_output_prefix").ok_or_else(no_main_window)?;
+    transcribe_with_output_prefix_with(host.as_ref(), request, output_prefix)
+}
+
+/// Direct whisper-cli invocation with a caller-chosen output prefix, so the
+/// transient .txt never has to live next to the input file (file
+/// transcription may read from directories the app should not write to).
+pub(crate) fn transcribe_with_output_prefix_with(
+    host: &dyn Host,
+    request: &WhisperRequest,
+    output_prefix: &Path,
+) -> Result<WhisperTranscription, CommandError> {
+    let executable = resolve_bundled_executable_with(host, "whisper-cli.exe")?;
     let output_txt_path = output_prefix.with_extension("txt");
     let mut args = whisper_args(
         &request.model_path,
@@ -192,15 +226,22 @@ fn platform_executable_name(file_name: &str) -> &str {
 /// `whisper-server.exe`) under `$RESOURCE/bin/windows/`, or the same binary
 /// without the `.exe` under `$RESOURCE/bin/linux/` or `$RESOURCE/bin/macos/`
 /// on the experimental Linux and macOS builds.
-pub(crate) fn resolve_bundled_executable(
-    app: &AppHandle,
+pub(crate) fn resolve_bundled_executable_with(
+    host: &dyn Host,
+    file_name: &str,
+) -> Result<PathBuf, CommandError> {
+    resolve_bundled_executable_in(host.paths().resource_dir(), file_name)
+}
+
+fn resolve_bundled_executable_in(
+    resource_dir: Option<&Path>,
     file_name: &str,
 ) -> Result<PathBuf, CommandError> {
     let file_name = platform_executable_name(file_name);
-    let resource_dir = app.path().resource_dir().map_err(|error| {
+    let resource_dir = resource_dir.ok_or_else(|| {
         CommandError::new(
             "missing_whisper_executable",
-            format!("Could not locate bundled app resources. {}", error),
+            "Could not locate bundled app resources.",
         )
     })?;
     let executable = resource_dir
@@ -508,6 +549,72 @@ fn strip_noise_annotations(line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_engine_binaries_come_from_the_hosts_resources() {
+        use crate::host::{Flavor, RecordingHost};
+        use crate::paths::Paths;
+
+        let root =
+            std::env::temp_dir().join(format!("scribe-whisper-resources-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let host_with = |resource_dir: Option<PathBuf>| {
+            RecordingHost::new(
+                Paths::from_parts(
+                    root.join("data"),
+                    root.join("cache"),
+                    root.join("logs"),
+                    resource_dir,
+                    None,
+                ),
+                Flavor::Stable,
+            )
+        };
+
+        // No resources folder at all (Tauri's resolver failed).
+        let error =
+            resolve_bundled_executable_with(&host_with(None), "whisper-cli.exe").unwrap_err();
+        assert_eq!(error.code, "missing_whisper_executable");
+
+        // A resources folder without the binary.
+        let resources = root.join("resources");
+        let host = host_with(Some(resources.clone()));
+        let error = resolve_bundled_executable_with(&host, "whisper-cli.exe").unwrap_err();
+        assert_eq!(error.code, "missing_whisper_executable");
+
+        // The binary in this platform's folder, named for this platform.
+        let executable = resources
+            .join("bin")
+            .join(BUNDLED_BIN_DIR)
+            .join(platform_executable_name("whisper-cli.exe"));
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&executable, b"").unwrap();
+        assert_eq!(
+            resolve_bundled_executable_with(&host, "whisper-cli.exe").unwrap(),
+            executable
+        );
+
+        // A missing model is reported before any binary is looked for.
+        let request = WhisperRequest {
+            engine: crate::models::EngineKind::Whisper,
+            model_id: "tiny.en".into(),
+            model_path: root.join("missing.bin"),
+            wav_path: root.join("missing.wav"),
+            language: "en".into(),
+            translate: false,
+            vocabulary_prompt: String::new(),
+            filler: None,
+            gpu: crate::settings::GpuAcceleration::Off,
+            gpu_device_index: None,
+        };
+        assert_eq!(
+            transcribe_with(&host, request).unwrap_err().code,
+            "whisper_model_missing"
+        );
+        assert!(host.events().is_empty());
+
+        fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn bundled_executables_use_the_platform_file_name() {
