@@ -339,8 +339,12 @@ impl DictationWorker {
     /// job and drops the `Core` when that job ends. So the `Core`, which holds
     /// this worker's sender, can be dropped while the worker exists, and the
     /// worker thread then ends with the last sender. Before the cell is
-    /// filled, jobs wait in arrival order and none is dropped; once every
-    /// `Core` handle is gone, a job is answered `dictation_worker_unavailable`.
+    /// filled, jobs wait in arrival order and none is dropped. Once a job has
+    /// found the `Core` and every `Core` handle is gone, later jobs are
+    /// answered `dictation_worker_unavailable`. If every `Core` handle is
+    /// dropped before any job ran, the worker cannot tell that from "not
+    /// filled yet" ([`CoreCell::get`] answers `None` for both) and keeps
+    /// polling until its channel closes; step 3 lets it tell them apart.
     ///
     /// Still takes the app, only to pass it on to the other lanes' functions
     /// a job calls (see [`execute_with`]); P1-4 step 4 removes it.
@@ -1183,8 +1187,9 @@ mod tests {
             .unwrap()
         };
 
-        worker.call(start()).unwrap();
-        worker.call(DictationCommand::Stop).unwrap();
+        // Every wait has a deadline, so a regression fails instead of hanging.
+        call_within_deadline(&worker, start()).unwrap();
+        call_within_deadline(&worker, DictationCommand::Stop).unwrap();
         assert_eq!(engine.ran(), vec!["start", "stop"]);
         // Each job's handle is dropped right after the job.
         wait_until("the worker lets go of the engine", || {
@@ -1195,16 +1200,18 @@ mod tests {
         assert!(watch.upgrade().is_none(), "nothing else holds the engine");
 
         // A waiting caller hears the engine is gone instead of waiting.
-        let error = worker.call(start()).unwrap_err();
+        let error = call_within_deadline(&worker, start()).unwrap_err();
         assert_eq!(error.code, "dictation_worker_unavailable");
         let error = block_on(worker.call_async(DictationCommand::Stop)).unwrap_err();
         assert_eq!(error.code, "dictation_worker_unavailable");
         // A fire-and-forget start is dropped without leaving a start pending.
         worker.send(start());
-        worker.call(DictationCommand::Cancel).unwrap_err();
+        call_within_deadline(&worker, DictationCommand::Cancel).unwrap_err();
         assert_eq!(worker.pending_starts.load(Ordering::SeqCst), 0);
         assert!(!ended.load(Ordering::SeqCst));
 
+        // The helper threads' worker clones are gone once they replied, so
+        // dropping this last handle closes the channel.
         drop(worker);
         wait_until("the worker thread ends", || ended.load(Ordering::SeqCst));
     }
@@ -1221,12 +1228,32 @@ mod tests {
         let waker = Waker::from(Arc::new(Unpark(thread::current())));
         let mut context = Context::from_waker(&waker);
         let mut future = std::pin::pin!(future);
+        // A reply that never comes fails the test instead of hanging it.
+        let deadline = std::time::Instant::now() + TEST_DEADLINE;
         loop {
             if let Poll::Ready(output) = future.as_mut().poll(&mut context) {
                 return output;
             }
-            thread::park();
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            assert!(!left.is_zero(), "the reply never came");
+            thread::park_timeout(left);
         }
+    }
+
+    /// How long a test waits for the worker before it fails.
+    const TEST_DEADLINE: Duration = Duration::from_secs(10);
+
+    /// [`DictationWorker::call`] on a helper thread, failing the test when
+    /// no reply comes within [`TEST_DEADLINE`] instead of hanging it.
+    fn call_within_deadline(worker: &DictationWorker, command: DictationCommand) -> JobResult {
+        let worker = worker.clone();
+        let (done, result) = channel();
+        thread::spawn(move || {
+            let _ = done.send(worker.call(command));
+        });
+        result
+            .recv_timeout(TEST_DEADLINE)
+            .expect("the reply never came")
     }
 
     #[test]

@@ -248,11 +248,16 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        // Read the result file as soon as the exit is recorded. A complete
+        // file here shows it was written by the time the exit was asked for;
+        // it does not prove the write came first on the self-test thread
+        // (only a host that checked the file inside `exit` could), but the
+        // write is the statement before the exit in `start`.
+        let written = std::fs::read_to_string(root.path().join("result.json"))
+            .expect("the result file exists once the self-test exits");
+        let result = serde_json::from_str(&written)
+            .expect("the result file is complete once the self-test exits");
         let handed = handed_rx.recv().unwrap();
-        let result = serde_json::from_str(
-            &std::fs::read_to_string(root.path().join("result.json")).unwrap(),
-        )
-        .unwrap();
         // The self-test sends no event of its own.
         assert!(recorder.events().is_empty());
         (recorder.calls(), handed, result, root)
