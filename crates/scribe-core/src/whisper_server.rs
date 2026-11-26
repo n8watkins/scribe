@@ -292,8 +292,34 @@ struct Shared {
     /// The settings, the selected model and the dictation state. None only
     /// when the transcriber was built before the backend existed.
     backend: Option<BackendState>,
+    /// Takes each new status to the host on the "speech-engine-status"
+    /// thread, in order. The engine publishes while it holds its own locks,
+    /// and must never wait on its host there: the tray waits for the shell's
+    /// main thread, and at exit that thread waits for the engine lock in
+    /// [`WarmTranscriber::shutdown`]. None only when that thread could not
+    /// start; the host is then told directly.
+    status_out: Option<crossbeam_channel::Sender<EngineStatus>>,
     live: Mutex<Live>,
     prewarm_pending: AtomicBool,
+}
+
+/// Starts the thread that tells `host` each new engine status: the event
+/// (`scribe:engine-status`), then the tray line. It ends when the last
+/// sender is gone.
+fn spawn_status_publisher(host: Arc<dyn Host>) -> Option<crossbeam_channel::Sender<EngineStatus>> {
+    let (sender, receiver) = crossbeam_channel::unbounded::<EngineStatus>();
+    let spawned = spawn_named("speech-engine-status", move || {
+        for status in receiver {
+            tell_host(host.as_ref(), status);
+        }
+    });
+    spawned.then_some(sender)
+}
+
+fn tell_host(host: &dyn Host, status: EngineStatus) {
+    let summary = status.summary();
+    host.emit(CoreEvent::EngineStatus(status));
+    host.update_engine_summary(summary);
 }
 
 /// Tauri-managed warm transcription service. `Send + Sync`; the slot and its
@@ -385,6 +411,7 @@ impl WarmTranscriber {
             _stop_on_last_drop: Arc::new(StopOnDrop(inner.clone())),
             inner,
             shared: Arc::new(Shared {
+                status_out: host.clone().and_then(spawn_status_publisher),
                 host,
                 backend,
                 live: Mutex::new(Live::default()),
@@ -1003,11 +1030,16 @@ impl Shared {
             return;
         }
         live.published = Some(status.clone());
-        if let Some(host) = &self.host {
-            let summary = status.summary();
-            // `scribe:engine-status` (ENGINE_STATUS_EVENT), then the tray.
-            host.emit(CoreEvent::EngineStatus(status));
-            host.update_engine_summary(summary);
+        // `scribe:engine-status` (ENGINE_STATUS_EVENT), then the tray, from
+        // the status thread: the caller may hold the engine lock.
+        match (&self.status_out, &self.host) {
+            (Some(status_out), _) => {
+                if status_out.send(status).is_err() {
+                    log::warn!("The speech engine status thread has stopped");
+                }
+            }
+            (None, Some(host)) => tell_host(host.as_ref(), status),
+            (None, None) => {}
         }
     }
 }
@@ -1458,6 +1490,13 @@ mod tests {
         // The same settings again change nothing, so nothing new is sent.
         warm.sync_with_settings(&settings);
 
+        // The status thread tells the host; give it time to, and to send a
+        // second event if it (wrongly) would.
+        let started = Instant::now();
+        while host.events().is_empty() && started.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(200));
         let events = host.events();
         assert_eq!(events.len(), 1, "{events:?}");
         assert_eq!(events[0].name(), ENGINE_STATUS_EVENT);
@@ -1470,6 +1509,134 @@ mod tests {
         assert_eq!(&warm.status(), status);
 
         warm.shutdown();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A host whose tray, like Tauri's, does its work on the shell's main
+    /// thread and waits for it. The test plays that main thread: it is busy
+    /// (the tray call waits) until [`Self::free_main_thread`].
+    struct MainThreadHost {
+        paths: crate::paths::Paths,
+        main_free: Mutex<bool>,
+        main_freed: std::sync::Condvar,
+        tray_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl MainThreadHost {
+        fn free_main_thread(&self) {
+            *lock(&self.main_free) = true;
+            self.main_freed.notify_all();
+        }
+    }
+
+    impl Host for MainThreadHost {
+        fn emit(&self, _event: CoreEvent) {}
+
+        fn paths(&self) -> &crate::paths::Paths {
+            &self.paths
+        }
+
+        fn flavor(&self) -> crate::host::Flavor {
+            crate::host::Flavor::Stable
+        }
+
+        fn update_tray_status(&self, _status: AppStatus) {}
+
+        fn update_engine_summary(&self, _summary: String) {
+            self.tray_calls.fetch_add(1, Ordering::SeqCst);
+            // Bounded, so a regression fails the test instead of hanging it.
+            let free = lock(&self.main_free);
+            let _ = self
+                .main_freed
+                .wait_timeout_while(free, Duration::from_secs(10), |free| !*free);
+        }
+
+        fn sync_settings(&self, _settings: &AppSettings) {}
+
+        fn open_dashboard(&self, _route: Option<&str>) -> Result<(), CommandError> {
+            Err(no_main_window())
+        }
+
+        fn toggle_dashboard(&self) -> Result<(), CommandError> {
+            Err(no_main_window())
+        }
+
+        fn main_window_logical_size(&self) -> Option<(u32, u32)> {
+            None
+        }
+    }
+
+    /// The Windows end-to-end hang: the app quit (the main thread waiting in
+    /// `shutdown` for the engine) while a background load held the engine and
+    /// told the tray its new status (which waits for the main thread). The
+    /// engine must never wait on its host while holding its own lock, so
+    /// `shutdown` finishes while the main thread is still busy.
+    #[test]
+    fn shutdown_finishes_while_the_shells_main_thread_is_busy() {
+        let root = std::env::temp_dir().join(format!("scribe-warm-exit-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let host = Arc::new(MainThreadHost {
+            paths: crate::paths::Paths::from_parts(
+                root.join("data"),
+                root.join("cache"),
+                root.join("logs"),
+                None,
+                None,
+            ),
+            main_free: Mutex::new(false),
+            main_freed: std::sync::Condvar::new(),
+            tray_calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        // A Parakeet model on disk, so a load starts (and announces itself);
+        // with no resources folder the sidecar then fails to start, so no
+        // process ever runs. "Keep loaded" is off, so nothing reloads.
+        let parakeet = models::catalog_model(models::PARAKEET_V3_ID).unwrap();
+        let model = root.join("data").join("models").join(parakeet.filename);
+        fs::create_dir_all(model.parent().unwrap()).unwrap();
+        fs::write(&model, b"not really a model").unwrap();
+        let db = crate::db::Database::in_memory().unwrap();
+        let mut settings = db.get_settings().unwrap();
+        settings.selected_model_id = Some(models::PARAKEET_V3_ID.into());
+        settings.keep_parakeet_loaded = false;
+        db.save_settings(&settings).unwrap();
+        let backend = BackendState::new(
+            db,
+            root.join("cache").join("recordings"),
+            crate::data_hygiene::DataDirs {
+                data_dir: root.join("data"),
+                cache_dir: root.join("cache"),
+            },
+        );
+        let warm = WarmTranscriber::new_with(
+            host.clone(),
+            backend,
+            root.join("data").join("engine-measurements.json"),
+        );
+
+        warm.prewarm();
+        let started = Instant::now();
+        while host.tray_calls.load(Ordering::SeqCst) == 0 {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the load never announced itself"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        // The app quits now, on the busy main thread.
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let quitting = warm.clone();
+        std::thread::spawn(move || {
+            quitting.shutdown();
+            let _ = done_tx.send(());
+        });
+        let finished = done_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+        host.free_main_thread();
+        assert!(
+            finished,
+            "shutdown waited for the engine while the engine waited for the main thread"
+        );
+
         let _ = fs::remove_dir_all(&root);
     }
 
