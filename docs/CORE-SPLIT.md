@@ -25,7 +25,8 @@ Behaviour never changes along the way: same commands and names, same event names
 
 At startup the shell resolves `Paths`, installs a `TauriHost` (first thing in setup), starts each part in the same order as before, manages each part in Tauri state as before, then builds the `Core` from those same parts and manages it, and only then creates the windows.
 Each part is a cheap handle onto shared state, so `app.state::<BackendState>()` and `core.backend()` are the same instance.
-Tests in `app/src-tauri/src/lib.rs` pin the startup order and the 79 command names; tests in `tauri_host.rs` check `Paths` against Tauri's resolver for both flavours.
+Tests in `app/src-tauri/src/lib.rs` pin the startup order and the 79 command names; `app/src-tauri/tests/tauri_host.rs` checks `Paths` against Tauri's resolver for both flavours and the emitted payloads against the engine's own `app.emit` calls.
+A test that builds a Tauri mock app belongs in `app/src-tauri/tests/`, which `build.rs` gives the Windows app manifest; a mock app in a unit test fails to start on Windows.
 
 ## The pattern for a lane
 
