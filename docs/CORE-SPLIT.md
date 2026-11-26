@@ -58,6 +58,7 @@ A lane converts the engine modules it owns, one function at a time.
    Replace `app.state::<BackendState>()` with `core.backend()`, the other parts with their `Core` accessors, `app.emit(name, payload)` with `core.emit(CoreEvent::Variant(payload))`, `app.path().app_cache_dir()` and friends with `core.paths().cache_dir()` and friends, `is_dev_flavor(app)` with `core.flavor().is_dev()`, `display_name(app)` with `core.flavor().display_name()`, `app.config().identifier` with `core.flavor().identifier()`, `app.package_info().version` with `env!("CARGO_PKG_VERSION")` (a test keeps the engine's version equal to the app's), and `crate::shell::open_dashboard(app, route)` with `core.host().open_dashboard(route)`.
 3. Pick the signature by what the body still needs:
    - nothing from Tauri: `fn name_with(core: &Core, ...)`, or `fn name_with(host: &dyn Host, ...)` when it needs nothing but the host;
+     a function that starts a thread which outlives the call takes an owned handle instead (`Arc<dyn Host>`, or a `Core` clone), as `state_server::start_with` does;
    - still an `AppHandle`, because it calls another lane's function that takes one, a function of a module no lane owns that takes one (`autostart`), or a Tauri plugin or window API: the transitional `fn name_with(app: &AppHandle, core: &Core, ...)`, with everything else converted to `core`.
      Every such function is listed by name in the "still takes AppHandle" table of the lane's pull request, for P1-4.
      The full list as of P1-2 is below, so no lane has to find it.
