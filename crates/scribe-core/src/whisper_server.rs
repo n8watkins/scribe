@@ -3,7 +3,7 @@
 //! transcription.
 //!
 //! Design notes:
-//! - `WarmTranscriber::transcribe` is a stateless, serialized primitive:
+//! - `WarmTranscriber::transcribe_with` is a stateless, serialized primitive:
 //!   request in (WAV + model + language + prompt), text out. Nothing assumes
 //!   "one transcription per recording", so incremental/segment transcription
 //!   can reuse it as-is.

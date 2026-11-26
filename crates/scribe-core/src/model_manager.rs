@@ -252,9 +252,16 @@ pub fn select_model_with(
     state: &BackendState,
     model_id: &str,
 ) -> Result<ModelInfo, CommandError> {
-    let folders = ModelFolders::of(host);
+    select_model_in(&ModelFolders::of(host), state, model_id)
+}
+
+fn select_model_in(
+    folders: &ModelFolders,
+    state: &BackendState,
+    model_id: &str,
+) -> Result<ModelInfo, CommandError> {
     let catalog_model = catalog_model(model_id)?;
-    let resolved = resolve_model_file(&folders, catalog_model);
+    let resolved = resolve_model_file(folders, catalog_model);
     let Some(resolved) = resolved else {
         return Err(CommandError::new(
             "whisper_model_missing",
@@ -300,7 +307,7 @@ pub fn select_model_with(
     db.mark_model_selected(model_id)?;
 
     let registry = DownloadRegistry::default();
-    model_info_for_catalog(&folders, catalog_model, Some(&record), &settings, &registry)
+    model_info_for_catalog(folders, catalog_model, Some(&record), &settings, &registry)
 }
 
 /// The selected model (the default one when none is selected) and its file.
@@ -825,8 +832,34 @@ pub fn select_model_announced_with(
     model_id: &str,
     after: impl FnOnce(&AppSettings),
 ) -> Result<ModelInfo, CommandError> {
+    select_model_announced_in(&ModelFolders::of(host), host, state, model_id, after)
+}
+
+fn select_model_announced_in(
+    folders: &ModelFolders,
+    host: &dyn Host,
+    state: &BackendState,
+    model_id: &str,
+    after: impl FnOnce(&AppSettings),
+) -> Result<ModelInfo, CommandError> {
+    announce_selection_in(
+        host,
+        state,
+        || select_model_in(folders, state, model_id),
+        after,
+    )
+}
+
+/// Runs `select` under the settings write lock, then announces the stored
+/// settings and runs `after`. Nothing is announced when `select` fails.
+fn announce_selection_in(
+    host: &dyn Host,
+    state: &BackendState,
+    select: impl FnOnce() -> Result<ModelInfo, CommandError>,
+    after: impl FnOnce(&AppSettings),
+) -> Result<ModelInfo, CommandError> {
     let _writes = crate::settings_store::lock(state.settings_writes());
-    let info = select_model_with(host, state, model_id)?;
+    let info = select()?;
     let settings = state.db()?.get_settings()?;
     crate::settings_store::emit_changed_with(host, &settings);
     after(&settings);
@@ -1255,14 +1288,57 @@ mod tests {
         let (host, root) = temp_host("select-missing");
         let state = backend_in(&root);
 
-        let mut followed = 0;
-        let error = select_model_announced_with(&host, &state, "tiny.en", |_| followed += 1);
+        let folders = hosts_folders_only(&host);
 
-        // A developer's SCRIBE_MODEL_DIR may hold the model; then the checksum
-        // of a real file decides, and still nothing is announced on failure.
-        assert!(error.is_err());
+        let mut followed = 0;
+        let error =
+            select_model_announced_in(&folders, &host, &state, "tiny.en", |_| followed += 1)
+                .unwrap_err();
+
+        assert_eq!(error.code, "whisper_model_missing");
         assert_eq!(followed, 0);
         assert!(host.events().is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_selection_is_announced_once_before_the_engine_follows() {
+        let (host, root) = temp_host("select-announced");
+        let folders = hosts_folders_only(&host);
+        let state = backend_in(&root);
+        let tiny = models::catalog_model("tiny.en").unwrap();
+
+        let mut followed = Vec::new();
+        let info = announce_selection_in(
+            &host,
+            &state,
+            || {
+                let db = state.db()?;
+                let mut settings = db.get_settings()?;
+                settings.selected_model_id = Some("tiny.en".to_string());
+                db.save_settings(&settings)?;
+                model_info_for_catalog(
+                    &folders,
+                    tiny,
+                    None,
+                    &settings,
+                    &DownloadRegistry::default(),
+                )
+            },
+            |settings| followed.push((host.events().len(), settings.selected_model_id.clone())),
+        )
+        .unwrap();
+
+        assert_eq!(info.id, "tiny.en");
+        assert_eq!(followed, vec![(1, Some("tiny.en".to_string()))]);
+        let events = host.events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].name(), "scribe:settings-changed");
+        assert_eq!(
+            serde_json::to_value(&events[0]).unwrap()["selectedModelId"],
+            "tiny.en"
+        );
+        assert!(host.calls().is_empty());
         let _ = fs::remove_dir_all(&root);
     }
 
