@@ -296,12 +296,27 @@ struct Shared {
     /// thread, in order. The engine publishes while it holds its own locks,
     /// and must never wait on its host there: the tray waits for the shell's
     /// main thread, and at exit that thread waits for the engine lock in
-    /// [`WarmTranscriber::shutdown`]. None only when that thread could not
-    /// start; the host is then told directly.
-    status_out: Option<crossbeam_channel::Sender<EngineStatus>>,
+    /// [`WarmTranscriber::shutdown`]. None while that thread is not running:
+    /// the next status starts it again, and a status that finds no thread is
+    /// dropped (and logged) rather than sent from here.
+    status_out: Mutex<Option<crossbeam_channel::Sender<EngineStatus>>>,
     live: Mutex<Live>,
     prewarm_pending: AtomicBool,
+    /// Set by [`WarmTranscriber::shutdown`]: no load starts from then on.
+    shutting_down: AtomicBool,
+    /// Every engine process started and maybe still running, so quitting
+    /// can stop them without the engine lock (a load or a transcription can
+    /// hold it for a while). Checked by identity before stopping, so a
+    /// reused pid is never touched.
+    processes: Mutex<Vec<crate::process_info::ProcessIdentity>>,
+    /// Whether a background load first runs the GPU probe
+    /// ([`PROBE_GPU_BEFORE_LOAD`]; tests turn it on everywhere).
+    probe_gpu_before_load: bool,
 }
+
+/// Only Windows runs the GPU probe (the bundled whisper-cli loads a model to
+/// list the Vulkan devices), so only there does a load probe first.
+const PROBE_GPU_BEFORE_LOAD: bool = cfg!(windows);
 
 /// Starts the thread that tells `host` each new engine status: the event
 /// (`scribe:engine-status`), then the tray line. It ends when the last
@@ -380,7 +395,7 @@ impl WarmTranscriber {
             host.is_some(),
             backend.is_some()
         );
-        Self::build(host, backend, measurements_path)
+        Self::build(host, backend, measurements_path, PROBE_GPU_BEFORE_LOAD)
     }
 
     /// The speech engine for `host`, reading the settings and the dictation
@@ -391,13 +406,19 @@ impl WarmTranscriber {
         backend: BackendState,
         measurements_path: PathBuf,
     ) -> Self {
-        Self::build(Some(host), Some(backend), measurements_path)
+        Self::build(
+            Some(host),
+            Some(backend),
+            measurements_path,
+            PROBE_GPU_BEFORE_LOAD,
+        )
     }
 
     fn build(
         host: Option<Arc<dyn Host>>,
         backend: Option<BackendState>,
         measurements_path: PathBuf,
+        probe_gpu_before_load: bool,
     ) -> Self {
         let inner = Arc::new(Mutex::new(Inner {
             slot: Slot::default(),
@@ -411,11 +432,14 @@ impl WarmTranscriber {
             _stop_on_last_drop: Arc::new(StopOnDrop(inner.clone())),
             inner,
             shared: Arc::new(Shared {
-                status_out: host.clone().and_then(spawn_status_publisher),
+                status_out: Mutex::new(host.clone().and_then(spawn_status_publisher)),
                 host,
                 backend,
                 live: Mutex::new(Live::default()),
                 prewarm_pending: AtomicBool::new(false),
+                shutting_down: AtomicBool::new(false),
+                processes: Mutex::new(Vec::new()),
+                probe_gpu_before_load,
             }),
         };
         transcriber.start_watchdog();
@@ -515,7 +539,7 @@ impl WarmTranscriber {
     /// load overlaps with speaking. Repeated calls while a load is pending
     /// collapse into one.
     pub fn prewarm(&self) {
-        if self.shared.prewarm_pending.swap(true, Ordering::SeqCst) {
+        if self.shared.quitting() || self.shared.prewarm_pending.swap(true, Ordering::SeqCst) {
             return;
         }
         let shared = self.shared.clone();
@@ -527,9 +551,9 @@ impl WarmTranscriber {
             // The GPU probe loads a model of its own, so it runs (once per
             // session, then cached) before this load rather than later next
             // to the loaded model, when the Models page asks for it.
-            if cfg!(windows) {
+            if shared.probe_gpu_before_load {
                 if let Some(host) = shared.host.as_deref() {
-                    let _ = crate::gpu::probe_with(host, Some(&warm));
+                    let _ = crate::gpu::probe_using(host, |probe| warm.run_unloaded(probe));
                 }
             }
             drop(warm);
@@ -569,14 +593,7 @@ impl WarmTranscriber {
     /// memory together. The resident model is unloaded first and, when the
     /// switch is on, loaded again afterwards.
     pub fn run_exclusive<T>(&self, work: impl FnOnce() -> T) -> T {
-        let result = {
-            let mut inner = lock(&self.inner);
-            if inner.slot.unload() {
-                self.shared.after_unload();
-                self.publish(None);
-            }
-            work()
-        };
+        let result = self.run_unloaded(work);
         if lock(&self.shared.live)
             .selection
             .as_ref()
@@ -585,6 +602,19 @@ impl WarmTranscriber {
             self.prewarm();
         }
         result
+    }
+
+    /// Runs `work` with no resident model loaded (it is unloaded first), and
+    /// never loads one again afterwards. A background load uses this for its
+    /// GPU probe: it is about to load the model itself, and asking for
+    /// another background load from there would repeat without end.
+    fn run_unloaded<T>(&self, work: impl FnOnce() -> T) -> T {
+        let mut inner = lock(&self.inner);
+        if inner.slot.unload() {
+            self.shared.after_unload();
+            self.publish(None);
+        }
+        work()
     }
 
     /// [`Self::transcribe_with`]; the transcriber already knows its host, so
@@ -742,9 +772,36 @@ impl WarmTranscriber {
         Ok(whisper::normalize_transcript_text(&result.text))
     }
 
-    /// Stops the resident engine. Called on app exit; double-stop is safe.
+    /// Stops the speech engine for good. Called on app exit; double-stop is
+    /// safe. No load starts afterwards, and every engine process is stopped
+    /// at once, without waiting for the engine lock (a load or a
+    /// transcription may hold it for a while; it finds its process gone).
+    /// The slot is then tidied when the lock is free.
     pub fn shutdown(&self) {
-        stop_engine(&self.inner);
+        self.shared.shutting_down.store(true, Ordering::SeqCst);
+        let processes = std::mem::take(&mut *lock(&self.shared.processes));
+        for process in &processes {
+            if crate::process_info::terminate_if_same(process) {
+                log::info!(
+                    "Stopped the speech engine process {} ({})",
+                    process.pid,
+                    process.exe.display()
+                );
+            }
+        }
+        match self.inner.try_lock() {
+            Ok(mut inner) => {
+                if inner.slot.unload() {
+                    log::info!("Stopped the speech engine");
+                }
+            }
+            Err(TryLockError::Poisoned(poisoned)) => {
+                poisoned.into_inner().slot.unload();
+            }
+            Err(TryLockError::WouldBlock) => {
+                log::info!("The speech engine is busy; its processes were stopped directly");
+            }
+        }
     }
 
     fn publish(&self, memory: Option<u64>) {
@@ -1032,15 +1089,51 @@ impl Shared {
         live.published = Some(status.clone());
         // `scribe:engine-status` (ENGINE_STATUS_EVENT), then the tray, from
         // the status thread: the caller may hold the engine lock.
-        match (&self.status_out, &self.host) {
-            (Some(status_out), _) => {
-                if status_out.send(status).is_err() {
-                    log::warn!("The speech engine status thread has stopped");
+        self.send_status(status);
+    }
+
+    /// Hands `status` to the status thread, starting it again when it is not
+    /// running (it could not start, or a host call panicked on it). Never
+    /// calls the host itself: the caller may hold the engine lock.
+    fn send_status(&self, status: EngineStatus) {
+        let Some(host) = &self.host else {
+            return;
+        };
+        let mut status_out = lock(&self.status_out);
+        let mut status = status;
+        // A second try covers a thread that stopped since the last status.
+        for _ in 0..2 {
+            if status_out.is_none() {
+                *status_out = spawn_status_publisher(host.clone());
+            }
+            let Some(sender) = status_out.as_ref() else {
+                break;
+            };
+            match sender.send(status) {
+                Ok(()) => return,
+                Err(crossbeam_channel::SendError(unsent)) => {
+                    *status_out = None;
+                    status = unsent;
                 }
             }
-            (None, Some(host)) => tell_host(host.as_ref(), status),
-            (None, None) => {}
         }
+        log::warn!("The speech engine status thread is not running; a status was not shown");
+    }
+
+    /// Notes an engine process the moment it starts, so quitting can stop
+    /// it. Returns false when Scribe is quitting: the caller stops it at once
+    /// (either quitting finds it in the list, or the caller sees the flag).
+    fn started(&self, pid: u32) -> bool {
+        if let Some(identity) = crate::process_info::identity(pid) {
+            let mut processes = lock(&self.processes);
+            processes.retain(crate::process_info::is_same_process_running);
+            processes.push(identity);
+        }
+        !self.shutting_down.load(Ordering::SeqCst)
+    }
+
+    fn quitting(&self) -> bool {
+        self.shutting_down.load(Ordering::SeqCst)
     }
 }
 
@@ -1093,6 +1186,9 @@ fn load(
         .slot
         .resident()
         .is_some_and(|resident| resident.config() == config);
+    if !matches && shared.quitting() {
+        return Err("Scribe is quitting.".to_string());
+    }
     if !matches {
         if inner.slot.unload() {
             shared.after_unload();
@@ -1101,6 +1197,8 @@ fn load(
         shared.publish(None);
     }
     let started = Instant::now();
+    // Each engine process is noted the moment it starts, for quitting.
+    let note = |pid: u32| shared.started(pid);
     let outcome = inner.slot.ensure(config, |config| {
         let host = shared
             .host
@@ -1108,10 +1206,10 @@ fn load(
             .ok_or_else(|| no_main_window().message)?;
         match config.engine {
             EngineKind::Whisper => {
-                launch_whisper_server(host, config, client).map(EngineProcess::Whisper)
+                launch_whisper_server(host, config, client, &note).map(EngineProcess::Whisper)
             }
             EngineKind::Parakeet => {
-                ParakeetProcess::launch_with(host, config).map(EngineProcess::Parakeet)
+                ParakeetProcess::launch_with(host, config, &note).map(EngineProcess::Parakeet)
             }
         }
     });
@@ -1255,10 +1353,13 @@ fn http_client(inner: &mut Inner) -> Result<reqwest::blocking::Client, String> {
 
 /// Starts whisper-server for `config` and waits until the model is loaded.
 /// The caller ([`Slot::ensure`]) has already stopped any other engine.
+/// `started` hears the server's pid the moment it runs; when it answers false
+/// (Scribe is quitting) the server is stopped at once.
 fn launch_whisper_server(
     host: &dyn Host,
     config: &EngineConfig,
     client: &reqwest::blocking::Client,
+    started: &dyn Fn(u32) -> bool,
 ) -> Result<ServerProcess, String> {
     let executable = whisper::resolve_bundled_executable_with(host, SERVER_EXECUTABLE)
         .map_err(|error| error.message)?;
@@ -1295,6 +1396,10 @@ fn launch_whisper_server(
         request_path,
         config: config.clone(),
     };
+    if !started(server.child.id()) {
+        // Dropping `server` stops it.
+        return Err("Scribe is quitting.".to_string());
+    }
 
     // On failure, `server` is dropped here, which kills the child.
     wait_until_healthy(client, &mut server)?;
@@ -1865,5 +1970,301 @@ mod tests {
             ..base
         };
         assert!(cpu_retry_request(&cpu).is_none());
+    }
+
+    /// A speech engine with Parakeet selected and its model on disk, in a
+    /// fresh folder under `root`. There is no resources folder, so starting
+    /// the sidecar fails at once: a load is announced ("Loading") and ends
+    /// without ever running a process. The GPU probe runs before each load,
+    /// as it does on Windows; with no Whisper model it can never succeed.
+    fn parakeet_engine(root: &Path, host: Arc<dyn Host>, keep_loaded: bool) -> WarmTranscriber {
+        let _ = fs::remove_dir_all(root);
+        let parakeet = models::catalog_model(models::PARAKEET_V3_ID).unwrap();
+        let model = root.join("data").join("models").join(parakeet.filename);
+        fs::create_dir_all(model.parent().unwrap()).unwrap();
+        fs::write(&model, b"not really a model").unwrap();
+        let db = crate::db::Database::in_memory().unwrap();
+        let mut settings = db.get_settings().unwrap();
+        settings.selected_model_id = Some(models::PARAKEET_V3_ID.into());
+        settings.keep_parakeet_loaded = keep_loaded;
+        db.save_settings(&settings).unwrap();
+        let backend = BackendState::new(
+            db,
+            root.join("cache").join("recordings"),
+            crate::data_hygiene::DataDirs {
+                data_dir: root.join("data"),
+                cache_dir: root.join("cache"),
+            },
+        );
+        WarmTranscriber::build(
+            Some(host),
+            Some(backend),
+            root.join("data").join("engine-measurements.json"),
+            true,
+        )
+    }
+
+    fn recording_host(root: &Path) -> Arc<crate::host::RecordingHost> {
+        Arc::new(crate::host::RecordingHost::new(
+            crate::paths::Paths::from_parts(
+                root.join("data"),
+                root.join("cache"),
+                root.join("logs"),
+                None,
+                None,
+            ),
+            crate::host::Flavor::Stable,
+        ))
+    }
+
+    /// How many loads the engine has announced so far.
+    fn loads_started(host: &crate::host::RecordingHost) -> usize {
+        host.events()
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    CoreEvent::EngineStatus(status) if status.state == LoadState::Loading
+                )
+            })
+            .count()
+    }
+
+    /// With "Keep the speech model loaded" on, Parakeet selected and no
+    /// Whisper model (so the GPU probe can never run), each background load
+    /// used to probe through `run_exclusive`, which unloaded the engine and
+    /// asked for another background load: load, unload, load, without end.
+    /// One request must lead to one load, and then the engine must settle.
+    #[test]
+    fn a_background_load_settles_when_the_gpu_probe_cannot_run() {
+        let root = std::env::temp_dir().join(format!("scribe-warm-loop-{}", std::process::id()));
+        let host = recording_host(&root);
+        let warm = parakeet_engine(&root, host.clone(), true);
+        let settings = current_settings(&warm.shared).unwrap();
+
+        warm.sync_with_settings(&settings);
+        std::thread::sleep(Duration::from_millis(1500));
+        let after_a_while = loads_started(&host);
+        std::thread::sleep(Duration::from_millis(1000));
+        let later = loads_started(&host);
+        warm.shutdown();
+
+        assert_eq!(
+            (after_a_while, later),
+            (1, 1),
+            "loads started after 1.5 s and after 2.5 s"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Waits until `host` has seen `count` loads start (or 5 s pass), then a
+    /// little longer, so a load that should not happen has time to show.
+    fn settled_loads(host: &crate::host::RecordingHost, count: usize) -> usize {
+        let started = Instant::now();
+        while loads_started(host) < count && started.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        loads_started(host)
+    }
+
+    /// The background load's GPU probe runs with the engine unloaded and
+    /// asks for no further load; a one-off run from elsewhere (a file
+    /// transcription) loads the kept model again afterwards, as before.
+    #[test]
+    fn only_a_one_off_run_from_elsewhere_loads_the_model_again() {
+        let root = std::env::temp_dir().join(format!("scribe-warm-rerun-{}", std::process::id()));
+        let host = recording_host(&root);
+        let warm = parakeet_engine(&root, host.clone(), true);
+        warm.sync_with_settings(&current_settings(&warm.shared).unwrap());
+        assert_eq!(settled_loads(&host, 1), 1);
+
+        warm.run_unloaded(|| ());
+        assert_eq!(settled_loads(&host, 1), 1, "run_unloaded asked for a load");
+
+        warm.run_exclusive(|| ());
+        assert_eq!(settled_loads(&host, 2), 2, "run_exclusive did not reload");
+
+        warm.shutdown();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn no_load_starts_after_shutdown() {
+        let root = std::env::temp_dir().join(format!("scribe-warm-after-{}", std::process::id()));
+        let host = recording_host(&root);
+        let warm = parakeet_engine(&root, host.clone(), true);
+        warm.shutdown();
+
+        warm.sync_with_settings(&current_settings(&warm.shared).unwrap());
+        warm.prewarm();
+        warm.load_if_kept();
+        assert_eq!(settled_loads(&host, 1), 0);
+        // A transcription after quitting cannot start the sidecar either.
+        let mut inner = lock(&warm.inner);
+        let config = desired_config(&warm.shared, &current_settings(&warm.shared).unwrap())
+            .expect("the Parakeet model is on disk");
+        let client = http_client(&mut inner).unwrap();
+        assert_eq!(
+            load(&warm.shared, &mut inner, &config, &client),
+            Err("Scribe is quitting.".to_string())
+        );
+        drop(inner);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A command that runs for half a minute and does nothing.
+    fn long_running_process() -> std::process::Child {
+        let mut command = if cfg!(windows) {
+            let mut command = std::process::Command::new("ping");
+            command.args(["-n", "30", "127.0.0.1"]);
+            command
+        } else {
+            let mut command = std::process::Command::new("sleep");
+            command.arg("30");
+            command
+        };
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    /// Quitting stops every engine process at once, even while a load or a
+    /// transcription holds the engine lock, and no process may start after.
+    #[test]
+    fn shutdown_stops_engine_processes_without_the_engine_lock() {
+        let root = std::env::temp_dir().join(format!("scribe-warm-kill-{}", std::process::id()));
+        let host = recording_host(&root);
+        let warm = parakeet_engine(&root, host.clone(), false);
+        let mut process = long_running_process();
+        assert!(warm.shared.started(process.id()));
+
+        // Something holds the engine lock for longer than quitting may take.
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let busy = warm.clone();
+        let holder = std::thread::spawn(move || {
+            let _inner = lock(&busy.inner);
+            held_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_secs(3));
+        });
+        held_rx.recv().unwrap();
+
+        let quitting = Instant::now();
+        warm.shutdown();
+        assert!(
+            quitting.elapsed() < Duration::from_secs(2),
+            "shutdown waited {:?} for the engine lock",
+            quitting.elapsed()
+        );
+        let stopped = Instant::now();
+        while process.try_wait().unwrap().is_none() {
+            assert!(
+                stopped.elapsed() < Duration::from_secs(5),
+                "the engine process is still running"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        // A process that starts now is refused, so its launcher stops it.
+        let mut late = long_running_process();
+        assert!(!warm.shared.started(late.id()));
+        let _ = late.kill();
+        let _ = late.wait();
+
+        holder.join().unwrap();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A host whose first `emit` panics, which stops the status thread.
+    struct PanicsOnceHost {
+        inner: crate::host::RecordingHost,
+        emits: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Host for PanicsOnceHost {
+        fn emit(&self, event: CoreEvent) {
+            if self.emits.fetch_add(1, Ordering::SeqCst) == 0 {
+                panic!("the first status fails on purpose");
+            }
+            self.inner.emit(event);
+        }
+
+        fn paths(&self) -> &crate::paths::Paths {
+            self.inner.paths()
+        }
+
+        fn flavor(&self) -> crate::host::Flavor {
+            self.inner.flavor()
+        }
+
+        fn update_tray_status(&self, _status: AppStatus) {}
+
+        fn update_engine_summary(&self, _summary: String) {}
+
+        fn sync_settings(&self, _settings: &AppSettings) {}
+
+        fn open_dashboard(&self, _route: Option<&str>) -> Result<(), CommandError> {
+            Err(no_main_window())
+        }
+
+        fn toggle_dashboard(&self) -> Result<(), CommandError> {
+            Err(no_main_window())
+        }
+
+        fn main_window_logical_size(&self) -> Option<(u32, u32)> {
+            None
+        }
+    }
+
+    /// When the status thread has stopped, the next status starts it again
+    /// (statuses are never sent from the engine's own threads).
+    #[test]
+    fn a_stopped_status_thread_is_started_again() {
+        let root = std::env::temp_dir().join(format!("scribe-warm-restart-{}", std::process::id()));
+        let host = Arc::new(PanicsOnceHost {
+            inner: crate::host::RecordingHost::new(
+                crate::paths::Paths::from_parts(
+                    root.join("data"),
+                    root.join("cache"),
+                    root.join("logs"),
+                    None,
+                    None,
+                ),
+                crate::host::Flavor::Stable,
+            ),
+            emits: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let warm = parakeet_engine(&root, host.clone(), false);
+        let mut settings = current_settings(&warm.shared).unwrap();
+
+        warm.sync_with_settings(&settings);
+        let started = Instant::now();
+        while host.emits.load(Ordering::SeqCst) == 0 {
+            assert!(started.elapsed() < Duration::from_secs(5), "no status sent");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Let the status thread finish unwinding.
+        std::thread::sleep(Duration::from_millis(300));
+
+        settings.selected_model_id = Some("tiny.en".into());
+        settings.keep_whisper_loaded = false;
+        warm.sync_with_settings(&settings);
+        let started = Instant::now();
+        while host.inner.events().is_empty() && started.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let events = host.inner.events();
+        assert_eq!(events.len(), 1, "{events:?}");
+        let CoreEvent::EngineStatus(status) = &events[0] else {
+            panic!("not an engine status: {:?}", events[0]);
+        };
+        assert_eq!(status.model_id.as_deref(), Some("tiny.en"));
+
+        warm.shutdown();
+        let _ = fs::remove_dir_all(&root);
     }
 }

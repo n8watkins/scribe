@@ -141,7 +141,11 @@ pub async fn get_engine_status(
 pub async fn probe_gpu_devices(core: tauri::State<'_, Core>) -> Result<GpuProbe, CommandError> {
     let core = core.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::gpu::probe_with(core.host().as_ref(), Some(core.warm_transcriber()))
+        // Only Windows runs a probe (the bundled whisper-cli loads a model).
+        crate::gpu::probe_with(
+            core.host().as_ref(),
+            Some(core.warm_transcriber()).filter(|_| cfg!(windows)),
+        )
     })
     .await
     .map_err(|error| CommandError::new("gpu_probe_failed", error.to_string()))

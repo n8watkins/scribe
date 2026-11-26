@@ -146,11 +146,39 @@ fn write_silent_wav(path: &std::path::Path) -> std::io::Result<()> {
 /// yet) is deliberately NOT cached, so it retries once a model exists.
 static PROBE_CACHE: std::sync::Mutex<Option<GpuProbe>> = std::sync::Mutex::new(None);
 
+/// The model and binary of a probe that ran and failed, so the same probe is
+/// not tried again this session (each try unloads the resident engine). A
+/// new model or binary tries again.
+static FAILED_PROBE: std::sync::Mutex<Option<ProbeInputs>> = std::sync::Mutex::new(None);
+
+/// What a probe runs: the bundled whisper-cli on the smallest Whisper model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProbeInputs {
+    model: std::path::PathBuf,
+    executable: std::path::PathBuf,
+}
+
+/// The probe's model and binary, or None when it cannot run here: not on
+/// Windows (the only platform whose bundled whisper-cli lists Vulkan
+/// devices), no Whisper model downloaded, or no whisper-cli.
+fn probe_inputs(host: &dyn Host) -> Option<ProbeInputs> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let model = crate::model_manager::smallest_downloaded_model_path_with(host)?;
+    let executable =
+        crate::whisper::resolve_bundled_executable_with(host, "whisper-cli.exe").ok()?;
+    Some(ProbeInputs { model, executable })
+}
+
 /// Probe the Vulkan GPUs, using the session cache. Blocking (loads a model);
 /// callers should run it off the main thread.
 pub fn probe(app: &AppHandle) -> GpuProbe {
     match tauri::Manager::try_state::<crate::core::Core>(app) {
-        Some(core) => probe_with(core.host().as_ref(), Some(core.warm_transcriber())),
+        Some(core) => probe_with(
+            core.host().as_ref(),
+            Some(core.warm_transcriber()).filter(|_| cfg!(windows)),
+        ),
         None => {
             log::warn!("gpu::probe ran before the engine was ready");
             probe_from_stderr("", false)
@@ -158,27 +186,54 @@ pub fn probe(app: &AppHandle) -> GpuProbe {
     }
 }
 
-/// [`probe`] with the resources and models of `host`. On Windows the probe
-/// loads a model in whisper-cli, so it runs through `warm` (when given) to
-/// never sit next to the resident one.
+/// [`probe`] with the resources and models of `host`. The probe loads a model
+/// in whisper-cli (on Windows), so it runs through `warm` (when given) to
+/// never sit next to the resident one; callers pass `warm` only where the
+/// probe really runs.
 pub fn probe_with(
     host: &dyn Host,
     warm: Option<&crate::whisper_server::WarmTranscriber>,
+) -> GpuProbe {
+    probe_using(host, |probe| match warm {
+        Some(warm) => warm.run_exclusive(probe),
+        None => probe(),
+    })
+}
+
+/// The probe, with `run` choosing how the model run is fenced off from the
+/// resident engine. `run` is called only when a probe can really run (see
+/// [`probe_inputs`]) and has not already failed with the same model and
+/// binary, so a probe that cannot succeed never unloads the engine.
+pub(crate) fn probe_using(
+    host: &dyn Host,
+    run: impl FnOnce(&mut dyn FnMut() -> GpuProbe) -> GpuProbe,
 ) -> GpuProbe {
     if let Ok(guard) = PROBE_CACHE.lock() {
         if let Some(cached) = guard.as_ref() {
             return cached.clone();
         }
     }
-    let warm = warm.filter(|_| cfg!(windows));
-    let result = match warm {
-        Some(warm) => warm.run_exclusive(|| probe_uncached(host)),
-        None => probe_uncached(host),
+    let Some(inputs) = probe_inputs(host) else {
+        return probe_from_stderr("", false);
     };
+    let already_failed = FAILED_PROBE
+        .lock()
+        .map(|failed| failed.as_ref() == Some(&inputs))
+        .unwrap_or(false);
+    if already_failed {
+        return probe_from_stderr("", false);
+    }
+    let result = run(&mut || probe_uncached(&inputs));
     if result.probed {
         if let Ok(mut guard) = PROBE_CACHE.lock() {
             *guard = Some(result.clone());
         }
+    } else if let Ok(mut failed) = FAILED_PROBE.lock() {
+        log::warn!(
+            "The GPU probe failed with {}; not trying it again this session",
+            inputs.model.display()
+        );
+        *failed = Some(inputs);
     }
     result
 }
@@ -187,18 +242,11 @@ pub fn probe_with(
 /// Vulkan device listing from its stderr. Windows-only (the bundled binaries are
 /// Windows); elsewhere it reports "not probed".
 #[cfg(windows)]
-fn probe_uncached(host: &dyn Host) -> GpuProbe {
+fn probe_uncached(inputs: &ProbeInputs) -> GpuProbe {
     use std::process::Command;
 
-    let model_path = match crate::model_manager::smallest_downloaded_model_path_with(host) {
-        Some(path) => path,
-        None => return probe_from_stderr("", false),
-    };
-    let executable = match crate::whisper::resolve_bundled_executable_with(host, "whisper-cli.exe")
-    {
-        Ok(path) => path,
-        Err(_) => return probe_from_stderr("", false),
-    };
+    let model_path = &inputs.model;
+    let executable = &inputs.executable;
 
     let wav_path = std::env::temp_dir().join("scribe-gpu-probe.wav");
     if write_silent_wav(&wav_path).is_err() {
@@ -213,7 +261,7 @@ fn probe_uncached(host: &dyn Host) -> GpuProbe {
         wav_path.to_string_lossy().to_string(),
         "--no-timestamps".to_string(),
     ];
-    let mut command = Command::new(&executable);
+    let mut command = Command::new(executable);
     command.args(&args);
     crate::whisper::suppress_console_window(&mut command);
 
@@ -227,7 +275,9 @@ fn probe_uncached(host: &dyn Host) -> GpuProbe {
 }
 
 #[cfg(not(windows))]
-fn probe_uncached(_host: &dyn Host) -> GpuProbe {
+fn probe_uncached(inputs: &ProbeInputs) -> GpuProbe {
+    // Never reached: `probe_inputs` is None off Windows.
+    let _ = (&inputs.model, &inputs.executable);
     // The bundled whisper binaries are Windows-only, so there's nothing to probe
     // on other platforms (dev/CI on Linux).
     probe_from_stderr("", false)
@@ -236,6 +286,36 @@ fn probe_uncached(_host: &dyn Host) -> GpuProbe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// With no Whisper model and no whisper-cli the probe cannot run, so it
+    /// must not unload the speech engine for nothing (and, from a background
+    /// load, start the load and unload loop).
+    #[test]
+    fn a_probe_that_cannot_run_never_touches_the_engine() {
+        use crate::host::{Flavor, RecordingHost};
+        let root = std::env::temp_dir().join(format!("scribe-gpu-noprobe-{}", std::process::id()));
+        let host = RecordingHost::new(
+            crate::paths::Paths::from_parts(
+                root.join("data"),
+                root.join("cache"),
+                root.join("logs"),
+                None,
+                None,
+            ),
+            Flavor::Stable,
+        );
+        let mut fenced = false;
+        let result = probe_using(&host, |probe| {
+            fenced = true;
+            probe()
+        });
+        assert!(
+            !fenced,
+            "the engine was unloaded for a probe that cannot run"
+        );
+        assert!(!result.probed);
+        assert!(result.devices.is_empty());
+    }
 
     const REAL_7800XT: &str = "\
 whisper_init_with_params_no_state: use gpu    = 1
