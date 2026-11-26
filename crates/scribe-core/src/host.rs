@@ -120,12 +120,18 @@ pub trait Host: Send + Sync + 'static {
 
     /// Registers a global shortcut; the shell sends its presses to the engine
     /// (`hotkeys::handle_shortcut`). Fails when the shortcut is already taken.
-    /// Never call it on the shell's main thread: Tauri's plugin deadlocks
-    /// there.
+    ///
+    /// The engine's rule: once the shell's event loop runs, the engine never
+    /// calls this from the shell's main thread (rebinds, settings changes and
+    /// the note chord register from engine threads), so a host may wait for
+    /// its main thread here (Tauri's does). The one exception is the shell's
+    /// own setup, which registers the first hotkeys on the main thread before
+    /// the event loop starts.
     fn register_shortcut(&self, shortcut: HotKey) -> Result<(), String>;
 
-    /// Releases a global shortcut registered with [`Host::register_shortcut`].
-    /// Never call it on the shell's main thread (see `register_shortcut`).
+    /// Releases a global shortcut registered with [`Host::register_shortcut`],
+    /// under the same rule: never from the shell's main thread once its event
+    /// loop runs.
     fn unregister_shortcut(&self, shortcut: HotKey) -> Result<(), String>;
 
     /// Whether this app holds `shortcut`.
