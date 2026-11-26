@@ -15,6 +15,7 @@ Hosted runners have an interactive desktop but no audio devices.
 The job builds Scribe Dev with the `e2e-audio` feature, which records a WAV file in place of the microphone (`crates/scribe-core/src/test_audio.rs`), so hotkeys, recording, Whisper and output all run for real.
 It uses a CPU-only build of the pinned whisper.cpp source and the default model, downloaded through the app's verified download path.
 `app/e2e/windows/run.py` drives it with injected hotkeys against stand-in app windows in their own processes, and checks the window text, the clipboard, `status.json`, the state server's event stream, the database and the app log.
+Its last scenario fails the run when the app log contains "The engine's folder differs from Tauri's" (the engine and Tauri resolved different data folders at startup), and the Linux and macOS install-and-launch jobs make the same check on their logs (`app/e2e/folder_mismatch.py`, tested by `app/e2e/test_folder_mismatch.py`).
 Screenshots (dashboard, the floating pill while recording, any failure), app logs and results are uploaded on every run.
 
 - `--self-test-transcribe` downloads the default model on a fresh profile and transcribes `tests/fixtures/jfk.wav`.

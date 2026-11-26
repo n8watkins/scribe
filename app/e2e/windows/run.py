@@ -40,6 +40,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+import folder_mismatch  # noqa: E402  (app/e2e/folder_mismatch.py, shared with the Linux and macOS smoke scripts)
+
 IDENTIFIER = "com.natkins.scribe.dev"
 DATA_DIR = Path(os.environ.get("APPDATA", "")) / IDENTIFIER
 CACHE_DIR = Path(os.environ.get("LOCALAPPDATA", "")) / IDENTIFIER
@@ -2162,6 +2165,12 @@ class Run:
         for line in evidence:
             print(f"  {line}")
 
+    def no_folder_mismatch(self) -> None:
+        """The engine and Tauri resolved the same folders at startup: the app
+        logs "The engine's folder differs from Tauri's" otherwise (user data
+        could then be written to one folder and deleted from another)."""
+        folder_mismatch.check_log(log_text())
+
     def hotkey_evidence(self, held: list[int]) -> str:
         """What a failed hotkey scenario saw, for its report."""
         lines = [f"Keys held at the failure (now released): {[f'0x{vk:X}' for vk in held]}"]
@@ -2244,6 +2253,9 @@ class Run:
                     ("A hard kill takes the speech model down with Scribe", self.hard_kill_stops_speech_engine),
                 ]:
                     self.scenario(name, body)
+                # After the hard kill: the log it read is complete, and the
+                # app no longer needs to be running.
+                self.scenario("The engine's folders match Tauri's (app log)", self.no_folder_mismatch)
         finally:
             self.keys.release_all()
             if self.states:

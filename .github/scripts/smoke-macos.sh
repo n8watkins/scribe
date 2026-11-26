@@ -128,6 +128,13 @@ if [ -z "$hotkeys" ] || grep -q 'Hotkey registration failed' <<< "$hotkeys"; the
   fail "A default hotkey did not register"
 fi
 
+# The engine and Tauri must resolve the same folders at startup; the app logs
+# "The engine's folder differs from Tauri's" otherwise and keeps running
+# (app/e2e/folder_mismatch.py).
+python3 -I "$(dirname "${BASH_SOURCE[0]}")/../../app/e2e/folder_mismatch.py" \
+  "$HOME/Library/Logs/com.natkins.scribe" "$out/launch.log" ||
+  fail "The folder check failed: see the lines above"
+
 whisper_check
 self_test x86_64 arch -x86_64
 

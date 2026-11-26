@@ -77,6 +77,15 @@ self_test() {
     fail "The self-test ($label) ran version $(jq -r .appVersion "$result"), not $version"
 }
 
+# The engine and Tauri must resolve the same folders at startup; the app logs
+# "The engine's folder differs from Tauri's" otherwise and keeps running.
+# Reads the app's log folder and what the launch printed (app/e2e/folder_mismatch.py).
+folder_check() {
+  local label="$1"
+  python3 -I "$(dirname "${BASH_SOURCE[0]}")/../../app/e2e/folder_mismatch.py" \
+    "$data/logs" "$out/launch-$label.log" || fail "The folder check ($label) failed: see the lines above"
+}
+
 # A bundled whisper-cli on its own: it must start without any library the
 # bundle does not ship and transcribe the clip with the downloaded model.
 whisper_check() {
@@ -110,6 +119,7 @@ echo "Installed $package $installed: $exe"
 
 launch_check deb "$exe"
 self_test deb "$exe"
+folder_check deb
 whisper_check deb "$deb_cli"
 
 echo "::group::Remove the .deb"
@@ -125,6 +135,7 @@ cp "$appimage" "$app"
 chmod +x "$app"
 launch_check appimage "$app"
 self_test appimage "$app"
+folder_check appimage
 (cd "$out" && "$app" --appimage-extract > /dev/null)
 whisper_check appimage "$(find "$out/squashfs-root" -path '*/bin/linux/whisper-cli' | head -n 1)"
 rm -rf "$out/squashfs-root"
