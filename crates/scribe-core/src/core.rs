@@ -12,7 +12,7 @@
 //! those lookups to `&Core` module by module (docs/CORE-SPLIT.md); once none
 //! is left, only `Core` stays managed.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 
 use crate::{
     backend::BackendState,
@@ -132,6 +132,66 @@ impl Core {
     }
 }
 
+/// Hands the [`Core`] to the parts built before it (the dictation and
+/// note-sync workers), without letting them keep it alive.
+///
+/// The shell makes an empty cell, gives a clone to each worker, builds the
+/// `Core` and fills the cell with it. A worker calls [`CoreCell::get`] once
+/// per job (or per sync) and drops the `Core` it got when the job ends; it
+/// never stores one. The cell holds only a weak reference, so once every
+/// `Core` handle is dropped, `get` answers `None` again, the worker senders
+/// the `Core` held are dropped with it, and the worker threads end.
+#[derive(Clone, Default)]
+pub struct CoreCell(WeakCell<Inner>);
+
+impl CoreCell {
+    /// An empty cell: [`CoreCell::get`] answers `None` until it is filled.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Stores a weak reference to `core`. Filling a cell twice keeps the first
+    /// `Core` and logs a warning.
+    pub fn fill(&self, core: &Core) {
+        if !self.0.fill(&core.0) {
+            log::warn!("The engine was handed to its workers twice; kept the first");
+        }
+    }
+
+    /// The `Core`: `None` before the cell is filled, and again once every
+    /// `Core` handle has been dropped.
+    pub fn get(&self) -> Option<Core> {
+        self.0.get().map(Core)
+    }
+}
+
+/// A cheap `Clone` handle onto one shared, set-once weak reference.
+struct WeakCell<T>(Arc<OnceLock<Weak<T>>>);
+
+impl<T> Default for WeakCell<T> {
+    fn default() -> Self {
+        Self(Arc::new(OnceLock::new()))
+    }
+}
+
+impl<T> Clone for WeakCell<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T> WeakCell<T> {
+    /// Stores a weak reference to `value`; false (and nothing changes) when
+    /// the cell was already filled.
+    fn fill(&self, value: &Arc<T>) -> bool {
+        self.0.set(Arc::downgrade(value)).is_ok()
+    }
+
+    fn get(&self) -> Option<Arc<T>> {
+        self.0.get()?.upgrade()
+    }
+}
+
 /// A part [`Core::shutdown`] stops.
 trait Stop {
     fn stop(&self);
@@ -224,5 +284,70 @@ mod tests {
         assert_eq!(*log.lock().unwrap(), ["speech engine (status idle: true)"]);
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    // No test can build a `Core` yet (docs/CORE-SPLIT.md), so the cell's
+    // behaviour is pinned on `WeakCell`, the whole of `CoreCell` apart from
+    // wrapping the `Arc<Inner>` it hands back in a `Core`.
+
+    #[test]
+    fn an_empty_core_cell_has_no_core() {
+        let cell = CoreCell::new();
+        assert!(cell.get().is_none());
+        assert!(cell.clone().get().is_none());
+    }
+
+    #[test]
+    fn a_cell_answers_none_before_it_is_filled_and_the_value_after() {
+        let cell = WeakCell::<String>::default();
+        let worker = cell.clone();
+        assert!(worker.get().is_none());
+
+        let core = Arc::new("engine".to_string());
+        assert!(cell.fill(&core));
+        // Every clone sees the fill, including one made before it.
+        let got = worker.get().unwrap();
+        assert!(Arc::ptr_eq(&got, &core));
+        assert!(Arc::ptr_eq(&cell.clone().get().unwrap(), &core));
+    }
+
+    #[test]
+    fn a_cell_filled_twice_keeps_the_first() {
+        let cell = WeakCell::<String>::default();
+        let first = Arc::new("first".to_string());
+        let second = Arc::new("second".to_string());
+        assert!(cell.fill(&first));
+        assert!(!cell.fill(&second));
+        assert!(Arc::ptr_eq(&cell.get().unwrap(), &first));
+    }
+
+    #[test]
+    fn a_cell_keeps_no_strong_reference() {
+        let cell = WeakCell::<String>::default();
+        let worker = cell.clone();
+        let core = Arc::new("engine".to_string());
+        cell.fill(&core);
+        assert_eq!(Arc::strong_count(&core), 1);
+
+        // A worker's job holds the value only while it runs.
+        let job = worker.get().unwrap();
+        assert_eq!(Arc::strong_count(&core), 2);
+        drop(job);
+        assert_eq!(Arc::strong_count(&core), 1);
+
+        // Once the last handle is gone, the cell answers None again, and a
+        // later fill cannot bring a value back.
+        let weak = Arc::downgrade(&core);
+        drop(core);
+        assert!(weak.upgrade().is_none());
+        assert!(worker.get().is_none());
+        assert!(!cell.fill(&Arc::new("late".to_string())));
+        assert!(cell.get().is_none());
+    }
+
+    #[test]
+    fn a_core_cell_is_cheap_to_hand_to_a_worker_thread() {
+        fn send_sync_clone<T: Send + Sync + Clone + 'static>() {}
+        send_sync_clone::<CoreCell>();
     }
 }
