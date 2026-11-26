@@ -5,13 +5,18 @@
 //! used before this feature existed has no record yet, so it sees the card
 //! once; a brand-new install records its version silently and shows nothing.
 
-use crate::{core::Core, db::Database, error::CommandError};
+use crate::{core::Core, db::Database, error::CommandError, host::Host};
 
-/// [`pending_version`] for the running app's `version` (the
-/// `whats_new_pending` command). The shell passes the app's own version:
-/// Dev and test builds override it, so it can differ from this crate's.
-pub fn pending_version_with(core: &Core, version: &str) -> Result<Option<String>, CommandError> {
-    pending_version(&*core.backend().db()?, version)
+/// [`pending_version`] for the running app (the `whats_new_pending`
+/// command).
+pub fn pending_version_with(core: &Core) -> Result<Option<String>, CommandError> {
+    pending_version_on(&*core.backend().db()?, core.host().as_ref())
+}
+
+/// [`pending_version`] for the version `host` runs: the app's own, which Dev
+/// and test builds override, so it can differ from this crate's.
+fn pending_version_on(db: &Database, host: &dyn Host) -> Result<Option<String>, CommandError> {
+    pending_version(db, &host.app_version())
 }
 
 /// The version whose card should show now, or `None`.
@@ -64,7 +69,7 @@ mod tests {
     }
 
     /// Dev and test builds carry a version the shell overrides (say
-    /// 0.16.4-123); the card follows that version, not this crate's.
+    /// 0.16.4-123); the card follows the version it is given.
     #[test]
     fn the_card_follows_the_version_passed_in() {
         let db = Database::in_memory().unwrap();
@@ -74,6 +79,37 @@ mod tests {
             pending_version(&db, "0.16.4-124").unwrap().as_deref(),
             Some("0.16.4-124")
         );
+    }
+
+    /// The running app's version comes from the host, never from this
+    /// crate, and asking for it neither calls nor tells the host anything.
+    #[test]
+    fn the_card_follows_the_hosts_version() {
+        use crate::host::{Flavor, RecordingHost};
+
+        let root = tempfile::tempdir().unwrap();
+        let host = RecordingHost::new(
+            crate::paths::Paths::from_parts(
+                root.path().join("data"),
+                root.path().join("cache"),
+                root.path().join("logs"),
+                None,
+                None,
+            ),
+            Flavor::Dev,
+        )
+        .with_app_version("0.16.4-123");
+        let db = Database::in_memory().unwrap();
+        db.save_settings(&AppSettings::default()).unwrap();
+
+        assert_eq!(
+            pending_version_on(&db, &host).unwrap().as_deref(),
+            Some("0.16.4-123")
+        );
+        db.set_whats_new_seen_version("0.16.4-123").unwrap();
+        assert_eq!(pending_version_on(&db, &host).unwrap(), None);
+        assert!(host.calls().is_empty());
+        assert!(host.events().is_empty());
     }
 
     #[test]

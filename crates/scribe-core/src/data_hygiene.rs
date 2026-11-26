@@ -389,17 +389,6 @@ pub fn effective_data_dir_with(core: &Core) -> PathBuf {
     effective_data_dir_from(core.backend())
 }
 
-/// [`effective_data_dir_with`] for callers that still hold an `AppHandle`.
-pub fn effective_data_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandError> {
-    match app.try_state::<Core>() {
-        Some(core) => Ok(effective_data_dir_with(&core)),
-        None => {
-            log::warn!("Could not find the data folder: the engine is not running yet");
-            Err(no_main_window())
-        }
-    }
-}
-
 /// The user-chosen data folder stored in `state`'s settings when set (and
 /// not blank), otherwise the app data folder `state` writes into
 /// (`DataDirs::data_dir`, the folder Tauri resolved at startup).
@@ -426,17 +415,6 @@ pub fn logs_dir_with(host: &dyn Host) -> PathBuf {
     host.paths().log_dir().to_path_buf()
 }
 
-/// [`logs_dir_with`] for callers that still hold an `AppHandle`.
-pub fn logs_dir(_app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandError> {
-    match crate::shell::host() {
-        Some(host) => Ok(logs_dir_with(host.as_ref())),
-        None => {
-            log::warn!("Could not find the logs folder: no host yet");
-            Err(no_main_window())
-        }
-    }
-}
-
 /// The folder where audio from a dictation whose transcription failed is
 /// quarantined so it isn't lost. This deliberately mirrors the location used by
 /// dictation::quarantine_failed_recording — the OS app-data dir's `failed/`
@@ -445,20 +423,6 @@ pub fn logs_dir(_app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandEr
 /// `DataDirs` name, which "Clear history" and retention delete from.
 pub fn failed_recordings_dir_with(core: &Core) -> PathBuf {
     core.backend().dirs().failed_recordings()
-}
-
-/// [`failed_recordings_dir_with`] for callers that still hold an
-/// `AppHandle`.
-pub fn failed_recordings_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, CommandError> {
-    match app.try_state::<Core>() {
-        Some(core) => Ok(failed_recordings_dir_with(&core)),
-        None => {
-            log::warn!(
-                "Could not find the failed recordings folder: the engine is not running yet"
-            );
-            Err(no_main_window())
-        }
-    }
 }
 
 /// [`open_folder_with`] on the installed host, which exists before any
@@ -486,6 +450,57 @@ pub fn open_folder_with(host: &dyn Host, dir: PathBuf) -> Result<(), CommandErro
         CommandError::new(
             "open_folder_failed",
             format!("Could not open folder {}. {}", dir.display(), error),
+        )
+    })
+}
+
+/// Writes transcript `id`'s text to its "open in editor" copy (in the
+/// backend's `DataDirs`, which "Clear history" and the startup clean-up
+/// delete from) and opens it with the system's default text app (the
+/// `open_transcript_externally` command).
+pub fn open_transcript_externally_with(core: &Core, id: &str) -> Result<(), CommandError> {
+    open_editor_copy(core.backend(), core.host().as_ref(), id)
+}
+
+/// The body of [`open_transcript_externally_with`], over the parts it uses.
+fn open_editor_copy(state: &BackendState, host: &dyn Host, id: &str) -> Result<(), CommandError> {
+    let transcript = state
+        .db()?
+        .get_transcript_by_id(id)?
+        .ok_or_else(|| CommandError::new("transcript_not_found", "Transcript was not found."))?;
+
+    let export_dir = state.dirs().editor_copies();
+    fs::create_dir_all(&export_dir).map_err(|error| {
+        CommandError::new(
+            "transcript_export_failed",
+            format!(
+                "Could not create export folder {}. {}",
+                export_dir.display(),
+                error
+            ),
+        )
+    })?;
+
+    let path = state.dirs().editor_copy(id);
+    fs::write(&path, transcript.text.as_bytes()).map_err(|error| {
+        CommandError::new(
+            "transcript_export_failed",
+            format!(
+                "Could not write transcript file {}. {}",
+                path.display(),
+                error
+            ),
+        )
+    })?;
+
+    host.open_path(&path).map_err(|error| {
+        CommandError::new(
+            "transcript_open_failed",
+            format!(
+                "Could not open transcript file {}. {}",
+                path.display(),
+                error
+            ),
         )
     })
 }
@@ -900,5 +915,74 @@ mod tests {
         assert_eq!(error.code, "open_folder_failed");
         assert!(error.message.starts_with("Could not create folder"));
         assert_eq!(host.calls().len(), 2);
+    }
+
+    /// "Open in editor" writes the copy into the backend's editor copies
+    /// (never the chosen data folder), then opens it through the host once.
+    #[test]
+    fn opening_a_transcript_writes_its_editor_copy_then_opens_it_through_the_host() {
+        use crate::host::{Failing, HostCall};
+
+        let root = tempfile::tempdir().unwrap();
+        let host = host_in(root.path());
+        let state = state_with(Database::in_memory().unwrap(), root.path());
+        choose_data_dir(&state, &root.path().join("chosen").to_string_lossy());
+        let transcript = insert_with_audio(&state.db().unwrap(), "hello there", "clip.wav");
+        let copy = state.dirs().editor_copy(&transcript.id);
+        assert!(copy.starts_with(root.path().join("cache")));
+
+        open_editor_copy(&state, &host, &transcript.id).unwrap();
+        assert_eq!(fs::read_to_string(&copy).unwrap(), "hello there");
+        assert_eq!(host.calls(), [HostCall::OpenPath(copy.clone())]);
+        assert!(host.events().is_empty());
+
+        host.fail(Failing::OpenPath);
+        let error = open_editor_copy(&state, &host, &transcript.id).unwrap_err();
+        assert_eq!(error.code, "transcript_open_failed");
+        assert_eq!(
+            error.message,
+            format!(
+                "Could not open transcript file {}. {}",
+                copy.display(),
+                Failing::OpenPath.message()
+            )
+        );
+        assert_eq!(host.calls().len(), 2);
+        assert!(host.events().is_empty());
+    }
+
+    /// A transcript that is missing, or whose copy cannot be written, is
+    /// never handed to the host.
+    #[test]
+    fn a_transcript_that_cannot_be_copied_is_never_opened() {
+        let root = tempfile::tempdir().unwrap();
+        let host = host_in(root.path());
+        let state = state_with(Database::in_memory().unwrap(), root.path());
+
+        let error = open_editor_copy(&state, &host, "no-such-id").unwrap_err();
+        assert_eq!(error.code, "transcript_not_found");
+        assert_eq!(error.message, "Transcript was not found.");
+
+        let transcript = insert_with_audio(&state.db().unwrap(), "hello", "clip.wav");
+        let copies = state.dirs().editor_copies();
+        write(&copies, b"a file where the folder goes");
+        let error = open_editor_copy(&state, &host, &transcript.id).unwrap_err();
+        assert_eq!(error.code, "transcript_export_failed");
+        assert!(error.message.starts_with(&format!(
+            "Could not create export folder {}.",
+            copies.display()
+        )));
+
+        let poisoner = state.clone();
+        let _ = std::thread::spawn(move || {
+            let _db = poisoner.db().unwrap();
+            panic!("poison the database lock");
+        })
+        .join();
+        let error = open_editor_copy(&state, &host, &transcript.id).unwrap_err();
+        assert_eq!(error.code, "database_lock_poisoned");
+
+        assert!(host.calls().is_empty());
+        assert!(host.events().is_empty());
     }
 }
