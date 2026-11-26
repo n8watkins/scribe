@@ -58,12 +58,16 @@ A lane converts the engine modules it owns, one function at a time.
    Replace `app.state::<BackendState>()` with `core.backend()`, the other parts with their `Core` accessors, `app.emit(name, payload)` with `core.emit(CoreEvent::Variant(payload))`, `app.path().app_cache_dir()` and friends with `core.paths().cache_dir()` and friends, `is_dev_flavor(app)` with `core.flavor().is_dev()`, `display_name(app)` with `core.flavor().display_name()`, `app.config().identifier` with `core.flavor().identifier()`, `app.package_info().version` with `env!("CARGO_PKG_VERSION")` (a test keeps the engine's version equal to the app's), and `crate::shell::open_dashboard(app, route)` with `core.host().open_dashboard(route)`.
 3. Pick the signature by what the body still needs:
    - nothing from Tauri: `fn name_with(core: &Core, ...)`, or `fn name_with(host: &dyn Host, ...)` when it needs nothing but the host;
+     a function that starts a thread which outlives the call takes an owned handle instead (`Arc<dyn Host>`, or a `Core` clone), as `state_server::start_with` does;
    - still an `AppHandle`, because it calls another lane's function that takes one, a function of a module no lane owns that takes one (`autostart`), or a Tauri plugin or window API: the transitional `fn name_with(app: &AppHandle, core: &Core, ...)`, with everything else converted to `core`.
      Every such function is listed by name in the "still takes AppHandle" table of the lane's pull request, for P1-4.
      The full list as of P1-2 is below, so no lane has to find it.
 4. Keep the old function, with its old name and signature, as a thin wrapper that finds the `Core` and calls the engine version.
    A wrapper uses `app.try_state::<Core>()`, never `app.state::<Core>()` (which panics, and a panic on the dictation worker kills the one thread every dictation runs on).
    When the `Core` is missing, the wrapper logs a warning and returns what the function returns with no main window: the error `host::no_main_window()` for a function that returns a `Result<_, CommandError>`, `None` or nothing otherwise.
+   A function that returns a plain struct with an error field (for example `SyncAttempt`) returns that struct carrying `host::no_main_window()` in the field, with everything else empty.
+   A thread that starts before the `Core` is managed and looks it up later (the note-sync worker, the dictation worker) waits for it: it polls `try_state::<Core>()` every 50 to 100 ms and stops only when its channel closes.
+   It never drops the work it was woken for.
    Callers in other lanes keep compiling against the wrapper, untouched.
 5. Switch the callers inside your own lane to the `_with` version.
 6. Convert your commands in `app/src-tauri/src/commands/<domain>.rs` to take `core: tauri::State<'_, Core>` instead of `app: tauri::AppHandle` where they only needed the app for state.
@@ -71,7 +75,13 @@ A lane converts the engine modules it owns, one function at a time.
    A synchronous command stays synchronous: only its arguments change, never `fn` to `async fn`, because that moves it off the main thread.
    The synchronous commands today are `get_logs_dir`, `get_failed_recordings_dir`, `whats_new_pending`, `dismiss_whats_new` and `collect_diagnostics` (`data`), `github_device_cancel` (`sync`), and `open_dashboard` and `open_release_page` (`shell`, no lane).
    The windows pass no argument for `State`, so the command's interface does not change.
-7. Test the engine version with `RecordingHost` and `Paths::from_parts` on a temporary folder: it records every event sent, so a test can assert the event name and payload.
+7. Test the engine version.
+   A function that takes `&dyn Host` is tested with `RecordingHost` and `Paths::from_parts` on a temporary folder: it records every event sent, so a test can assert the event name and payload.
+   A function that takes `&Core` cannot be tested directly yet: no test can build a `Core`, because `WarmTranscriber`, `DictationWorker` and `NoteSyncWorker` are created from the real Tauri `AppHandle`, and a mock app's handle has a different type.
+   So keep the `_with(core: &Core)` function a thin shell, move its body into a private function over the parts it really uses (`&BackendState`, a store, plain values), and unit-test that function.
+   The sync lane's `collect_notes`, `collect_transcripts` and `record_attempt` in `note_sync.rs` are the model.
+   The integration test file `app/src-tauri/tests/<lane>.rs` is optional: add it only when it tests something a unit test cannot.
+   A way to build a `Core` in tests is on the P1-4 list.
 
 Rules that keep behaviour the same and the lanes apart:
 
@@ -240,6 +250,8 @@ A lane's pull request is ready when:
 
 - Give the `Host` what the "still takes AppHandle" tables need (expected: opening a path or URL, a system notification, registering global shortcuts, the autostart entry), then remove the `app` parameter from every transitional `_with(app, core, ...)` function.
 - Remove the `AppHandle` wrappers once no caller is left, and drop the `_with` suffix.
+- Give tests a way to build a `Core` (test doubles for `WarmTranscriber`, `DictationWorker` and `NoteSyncWorker`, or constructors that do not need the Tauri `AppHandle`), then test the `_with` functions directly.
+- Replace `host::no_main_window()` ("Could not find the main window.") as the answer when the `Core` is missing with an error that says the engine is not ready yet.
 - Manage only `Core`; remove the individual `app.manage(...)` calls and the `Clone` handles that existed only for them.
 - Remove the free functions in `shell.rs` and the `commands.rs` re-exports.
 - When the engine's folders move onto `Paths`, Tauri's answer wins wherever the two disagree until the switch, and the startup log (which reports every disagreement) is checked on Windows, macOS and Linux installs first.

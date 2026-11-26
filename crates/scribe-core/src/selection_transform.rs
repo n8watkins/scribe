@@ -25,8 +25,9 @@ use std::time::Duration;
 
 use tauri::AppHandle;
 
+use crate::core::Core;
 use crate::error::CommandError;
-use crate::output::OutputResult;
+use crate::output::{core_for, OutputResult};
 use crate::platform::{self, ClipboardSnapshot, WindowId};
 use crate::settings::AppSettings;
 
@@ -242,6 +243,18 @@ pub fn focus_previous_app() -> Result<(), CommandError> {
 pub fn apply_result(
     app: &AppHandle,
     text: &str,
+    captured: CapturedSelection,
+) -> Result<OutputResult, CommandError> {
+    let core = core_for(app, "paste the transformed text")?;
+    apply_result_with(app, &core, text, captured)
+}
+
+/// [`apply_result`] on the engine. Still takes the app because the paste
+/// (`output::paste_text_with`) does.
+pub fn apply_result_with(
+    app: &AppHandle,
+    core: &Core,
+    text: &str,
     mut captured: CapturedSelection,
 ) -> Result<OutputResult, CommandError> {
     let foreground = platform::foreground_window();
@@ -268,7 +281,7 @@ pub fn apply_result(
     // sent a copy, so the selection is still active). `paste_text` handles the
     // focus guard and modifier release. On failure, dropping `captured`
     // restores the clipboard.
-    let result = crate::output::paste_text(app, text)?;
+    let result = crate::output::paste_text_with(app, core, text)?;
     if result.status == crate::output::OutputStatus::PasteSkipped {
         // Windows would have blocked the paste (an administrator window), so
         // the result was left on the clipboard. Keep it there and say so.
@@ -297,8 +310,18 @@ pub fn transform_selection_blocking(
     app: &AppHandle,
     instruction: &str,
 ) -> Result<OutputResult, CommandError> {
+    let core = core_for(app, "transform the selection")?;
+    transform_selection_blocking_with(app, &core, instruction)
+}
+
+/// [`transform_selection_blocking`] on the engine. Still takes the app
+/// because the paste (`apply_result_with`) does.
+pub fn transform_selection_blocking_with(
+    app: &AppHandle,
+    core: &Core,
+    instruction: &str,
+) -> Result<OutputResult, CommandError> {
     use crate::selection_transform;
-    use tauri::Manager;
 
     if instruction.trim().is_empty() {
         return Err(CommandError::new(
@@ -308,7 +331,7 @@ pub fn transform_selection_blocking(
     }
 
     let (endpoint, model) = {
-        let state = app.state::<crate::backend::BackendState>().inner();
+        let state = core.backend();
         let settings = state.db()?.get_settings()?;
         selection_transform::ensure_enabled(&settings)?;
         (
@@ -339,7 +362,7 @@ pub fn transform_selection_blocking(
 
     // 4. Paste the result back over the still-selected original, then restore
     //    the pre-capture clipboard.
-    selection_transform::apply_result(app, &transformed, captured)
+    selection_transform::apply_result_with(app, core, &transformed, captured)
 }
 
 #[cfg(test)]
