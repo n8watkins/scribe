@@ -1408,6 +1408,64 @@ fn cpu_retry_request(request: &WhisperRequest) -> Option<WhisperRequest> {
 mod tests {
     use super::*;
 
+    /// The engine status goes to the transcriber's host as
+    /// `scribe:engine-status`, once per change. "Keep the speech model
+    /// loaded" is off and no model file exists, so nothing is started.
+    #[test]
+    fn the_engine_status_goes_to_the_host() {
+        use crate::host::{Flavor, RecordingHost};
+        use crate::paths::Paths;
+
+        let root = std::env::temp_dir().join(format!("scribe-warm-status-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let host = Arc::new(RecordingHost::new(
+            Paths::from_parts(
+                root.join("data"),
+                root.join("cache"),
+                root.join("logs"),
+                None,
+                None,
+            ),
+            Flavor::Stable,
+        ));
+        let db = crate::db::Database::in_memory().unwrap();
+        let mut settings = db.get_settings().unwrap();
+        settings.selected_model_id = Some("tiny.en".into());
+        settings.keep_whisper_loaded = false;
+        db.save_settings(&settings).unwrap();
+        let backend = BackendState::new(
+            db,
+            root.join("cache").join("recordings"),
+            crate::data_hygiene::DataDirs {
+                data_dir: root.join("data"),
+                cache_dir: root.join("cache"),
+            },
+        );
+
+        let warm = WarmTranscriber::new_with(
+            host.clone(),
+            backend,
+            root.join("data").join("engine-measurements.json"),
+        );
+        warm.sync_with_settings(&settings);
+        // The same settings again change nothing, so nothing new is sent.
+        warm.sync_with_settings(&settings);
+
+        let events = host.events();
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].name(), ENGINE_STATUS_EVENT);
+        let crate::events::CoreEvent::EngineStatus(status) = &events[0] else {
+            panic!("not an engine status: {:?}", events[0]);
+        };
+        assert_eq!(status.model_id.as_deref(), Some("tiny.en"));
+        assert!(!status.keep_loaded);
+        assert_ne!(status.state, LoadState::Loaded);
+        assert_eq!(&warm.status(), status);
+
+        warm.shutdown();
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn allocates_a_usable_free_port() {
         let port = find_free_port().expect("port allocation should succeed");

@@ -929,3 +929,159 @@ fn catalog_model(model_id: &str) -> Result<CatalogModel, CommandError> {
         )
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::{Flavor, RecordingHost};
+
+    /// A host whose folders live in a fresh temporary folder.
+    fn temp_host(name: &str) -> (RecordingHost, PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "scribe-model-manager-{}-{}",
+            name,
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let host = RecordingHost::new(
+            Paths::from_parts(
+                root.join("data"),
+                root.join("cache"),
+                root.join("logs"),
+                None,
+                None,
+            ),
+            Flavor::Stable,
+        );
+        (host, root)
+    }
+
+    fn place(path: &Path) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, b"not really a model").unwrap();
+    }
+
+    #[test]
+    fn models_live_in_the_hosts_data_folder() {
+        let (host, root) = temp_host("folder");
+        assert_eq!(models_dir_with(&host), root.join("data").join("models"));
+    }
+
+    #[test]
+    fn a_model_in_the_hosts_folder_is_listed_selected_and_found() {
+        let (host, root) = temp_host("list");
+        let db = Database::in_memory().unwrap();
+        let tiny = models::catalog_model("tiny.en").unwrap();
+        let file = root.join("data").join("models").join(tiny.filename);
+        place(&file);
+
+        let listed = list_models_with(&host, &db, &DownloadRegistry::default()).unwrap();
+        assert_eq!(listed.len(), models::catalog().len());
+        let info = listed.iter().find(|info| info.id == "tiny.en").unwrap();
+        assert_eq!(info.status, ModelStatus::Downloaded);
+        assert_eq!(info.source, Some(ModelSource::AppData));
+        assert_eq!(
+            info.local_path.as_deref(),
+            Some(file.to_string_lossy().as_ref())
+        );
+
+        let mut settings = db.get_settings().unwrap();
+        settings.selected_model_id = Some("tiny.en".into());
+        db.save_settings(&settings).unwrap();
+        let listed = list_models_with(&host, &db, &DownloadRegistry::default()).unwrap();
+        let info = listed.iter().find(|info| info.id == "tiny.en").unwrap();
+        assert_eq!(info.status, ModelStatus::Selected);
+        assert_eq!(
+            selected_model_path_with(&host, &db).unwrap(),
+            ("tiny.en".to_string(), file.clone())
+        );
+        assert_eq!(
+            model_path_for_id_with(&host, "tiny.en").unwrap().1,
+            file.clone()
+        );
+        // With no dictation pinning a model, a session uses the selected one.
+        assert_eq!(
+            session_model_path_with(&host, &db, "no-such-session")
+                .unwrap()
+                .1,
+            file
+        );
+        assert_eq!(
+            model_path_for_id_with(&host, "base.en").unwrap_err().code,
+            "whisper_model_missing"
+        );
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn deleting_the_selected_model_removes_its_files_and_the_selection() {
+        let (host, root) = temp_host("delete");
+        let db = Database::in_memory().unwrap();
+        let tiny = models::catalog_model("tiny.en").unwrap();
+        let models = root.join("data").join("models");
+        let file = models.join(tiny.filename);
+        let part = models.join(format!("{}.part", tiny.filename));
+        place(&file);
+        place(&part);
+        let mut settings = db.get_settings().unwrap();
+        settings.selected_model_id = Some("tiny.en".into());
+        db.save_settings(&settings).unwrap();
+
+        let info = delete_model_with(&host, &db, "tiny.en").unwrap();
+        assert_eq!(info.status, ModelStatus::NotDownloaded);
+        assert!(!file.exists());
+        assert!(!part.exists());
+        assert_eq!(db.get_settings().unwrap().selected_model_id, None);
+        assert_eq!(
+            delete_model_with(&host, &db, "no-such-model")
+                .unwrap_err()
+                .code,
+            "unknown_model"
+        );
+        assert!(host.events().is_empty());
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn download_progress_goes_to_the_host_as_today() {
+        let (host, _root) = temp_host("progress");
+        emit_progress(&host, "tiny.en", 50, Some(200), ModelStatus::Downloading);
+        emit_progress(&host, "tiny.en", 10, None, ModelStatus::Downloaded);
+
+        let events = host.events();
+        assert_eq!(events.len(), 2);
+        assert!(events
+            .iter()
+            .all(|event| event.name() == "model://download-progress"));
+        assert_eq!(
+            serde_json::to_value(&events[0]).unwrap(),
+            serde_json::json!({
+                "modelId": "tiny.en",
+                "bytesDownloaded": 50,
+                "totalBytes": 200,
+                "percent": 25.0,
+                "status": "downloading",
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&events[1]).unwrap()["percent"],
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn the_gpu_probe_picks_the_smallest_whisper_model_in_the_hosts_folder() {
+        let (host, root) = temp_host("smallest");
+        assert_eq!(smallest_downloaded_model_path_with(&host), None);
+        let models = root.join("data").join("models");
+        let base = models.join(models::catalog_model("base.en").unwrap().filename);
+        let tiny = models.join(models::catalog_model("tiny.en").unwrap().filename);
+        place(&base);
+        fs::write(&tiny, b"tiny").unwrap();
+        assert_eq!(smallest_downloaded_model_path_with(&host), Some(tiny));
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+}

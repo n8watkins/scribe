@@ -551,6 +551,72 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_engine_binaries_come_from_the_hosts_resources() {
+        use crate::host::{Flavor, RecordingHost};
+        use crate::paths::Paths;
+
+        let root =
+            std::env::temp_dir().join(format!("scribe-whisper-resources-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let host_with = |resource_dir: Option<PathBuf>| {
+            RecordingHost::new(
+                Paths::from_parts(
+                    root.join("data"),
+                    root.join("cache"),
+                    root.join("logs"),
+                    resource_dir,
+                    None,
+                ),
+                Flavor::Stable,
+            )
+        };
+
+        // No resources folder at all (Tauri's resolver failed).
+        let error =
+            resolve_bundled_executable_with(&host_with(None), "whisper-cli.exe").unwrap_err();
+        assert_eq!(error.code, "missing_whisper_executable");
+
+        // A resources folder without the binary.
+        let resources = root.join("resources");
+        let host = host_with(Some(resources.clone()));
+        let error = resolve_bundled_executable_with(&host, "whisper-cli.exe").unwrap_err();
+        assert_eq!(error.code, "missing_whisper_executable");
+
+        // The binary in this platform's folder, named for this platform.
+        let executable = resources
+            .join("bin")
+            .join(BUNDLED_BIN_DIR)
+            .join(platform_executable_name("whisper-cli.exe"));
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&executable, b"").unwrap();
+        assert_eq!(
+            resolve_bundled_executable_with(&host, "whisper-cli.exe").unwrap(),
+            executable
+        );
+
+        // A missing model is reported before any binary is looked for.
+        let request = WhisperRequest {
+            engine: crate::models::EngineKind::Whisper,
+            model_id: "tiny.en".into(),
+            model_path: root.join("missing.bin"),
+            wav_path: root.join("missing.wav"),
+            language: "en".into(),
+            translate: false,
+            vocabulary_prompt: String::new(),
+            filler: None,
+            gpu: crate::settings::GpuAcceleration::Off,
+            gpu_device_index: None,
+        };
+        assert_eq!(
+            transcribe_with(&host, request).unwrap_err().code,
+            "whisper_model_missing"
+        );
+        assert!(host.events().is_empty());
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn bundled_executables_use_the_platform_file_name() {
         if cfg!(windows) {
             assert_eq!(
