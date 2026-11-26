@@ -7,14 +7,32 @@
 # (restart_after_install = true), so the /R forms are what users get; the
 # current args are empty for a copy opened from the Start menu and
 # "--minimized" for one started at sign-in.
+#
+# $Candidate is the tested configuration: the real hooks plus the sidecar
+# cleanup (make-config.ps1). $RealHooksCandidate is the same build with the
+# hooks file unchanged; its known gap (the Tauri build's sidecars stay
+# behind) is pinned as an expectation, so the job goes red if it changes.
 param(
   [Parameter(Mandatory)] [string] $Candidate,
+  [Parameter(Mandatory)] [string] $RealHooksCandidate,
   [Parameter(Mandatory)] [string] $OldDir,
   [Parameter(Mandatory)] [string] $Version,
-  [Parameter(Mandatory)] [string] $ResultsPath,
-  # Optional: the same build packaged with the cleanup hooks variant.
-  [string] $CleanupCandidate = ""
+  [Parameter(Mandatory)] [string] $ResultsPath
 )
+
+# What 0.16.1, 0.16.2 and 0.16.3 install from `resources` ("resources/" -> "").
+$knownSidecars = @(
+  "bin\windows\ggml-base.dll", "bin\windows\ggml-cpu.dll", "bin\windows\ggml-vulkan.dll",
+  "bin\windows\ggml.dll", "bin\windows\parakeet.dll", "bin\windows\README.md",
+  "bin\windows\scribe-parakeet.exe", "bin\windows\whisper-cli.exe",
+  "bin\windows\whisper-server.exe", "bin\windows\whisper.dll"
+)
+
+function Same-Set($a, $b) {
+  $x = @($a | Sort-Object { $_.ToLowerInvariant() }) -join "|"
+  $y = @($b | Sort-Object { $_.ToLowerInvariant() }) -join "|"
+  return $x -ieq $y
+}
 
 . (Join-Path $PSScriptRoot "common.ps1")
 
@@ -28,7 +46,9 @@ function Old-Installer([string] $tag) {
   return (Get-ChildItem (Join-Path $OldDir "old-$tag") -Filter "*setup.exe" | Select-Object -First 1).FullName
 }
 
-function Bridge([string] $tag, [string] $formName, [string] $folder, [string] $setup = $Candidate, [string] $label = "real hooks") {
+function Bridge([string] $tag, [string] $formName, [string] $folder, [switch] $RealHooks) {
+  $setup = if ($RealHooks) { $RealHooksCandidate } else { $Candidate }
+  $label = if ($RealHooks) { "unchanged hooks, known gap pinned" } else { "hooks + sidecar cleanup" }
   $form = $forms[$formName]
   Scenario "NSIS $tag -> native $Version ($label), $formName ($($form.Args)), folder $folder"
   Reset-Machine
@@ -131,7 +151,11 @@ function Bridge([string] $tag, [string] $formName, [string] $folder, [string] $s
   Check "Scribe.exe is removed" (-not (Test-Path $exe))
   $remaining = @()
   if (Test-Path $folder) { $remaining = @(Get-ChildItem $folder -Recurse -File | ForEach-Object { $_.FullName.Substring($folder.Length + 1) }) }
-  Check "uninstall leaves no files in the install folder" ($remaining.Count -eq 0) "(left: $($remaining -join ', '))"
+  if ($RealHooks) {
+    Check "known gap: uninstall leaves exactly the ten known bin\windows sidecars" (Same-Set $remaining $knownSidecars) "(left: $($remaining -join ', '))"
+  } else {
+    Check "uninstall leaves no files in the install folder" ($remaining.Count -eq 0) "(left: $($remaining -join ', '))"
+  }
   Check "no Scribe entry in Installed apps" ((Installed-Entries).Count -eq 0)
   Check "the n8builds.dev key is gone" (-not (Test-Path -LiteralPath $newKey))
   Check "the natkins key is gone" (-not (Test-Path -LiteralPath $oldKey))
@@ -147,25 +171,24 @@ $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIde
 Scenario "Runner"
 Note "explorer.exe processes: $explorer; running elevated: $elevated (the /R relaunch goes through nsis_tauri_utils::RunAsUser)"
 
-foreach ($tag in "v0.16.1", "v0.16.2", "v0.16.3") {
-  foreach ($formName in $forms.Keys) {
-    Bridge $tag $formName $defaultDir
-  }
-}
-# A pre-0.16.2 copy in a custom folder: the hooks must adopt it.
-Bridge "v0.16.1" "relaunch-minimized" "C:\ScribeCustom\Scribe"
-Bridge "v0.16.3" "relaunch-minimized" "C:\ScribeCustom\Scribe"
-
-# The same bridge with the cleanup variant of the hooks (make-config.ps1),
-# which removes the Tauri build's sidecars after the update.
-if ($CleanupCandidate) {
+# The unchanged hooks first, so the runner-clean checks below follow the
+# tested configuration.
+foreach ($realHooks in $true, $false) {
   foreach ($tag in "v0.16.1", "v0.16.2", "v0.16.3") {
-    Bridge $tag "relaunch-minimized" $defaultDir $CleanupCandidate "hooks + sidecar cleanup"
+    foreach ($formName in $forms.Keys) {
+      Bridge $tag $formName $defaultDir -RealHooks:$realHooks
+    }
   }
-  Bridge "v0.16.1" "relaunch" "C:\ScribeCustom\Scribe" $CleanupCandidate "hooks + sidecar cleanup"
+  # Custom folders; a pre-0.16.2 copy there must be adopted by the hooks.
+  Bridge "v0.16.1" "relaunch-minimized" "C:\ScribeCustom\Scribe" -RealHooks:$realHooks
+  Bridge "v0.16.3" "relaunch-minimized" "C:\ScribeCustom\Scribe" -RealHooks:$realHooks
 }
 
 Scenario "Runner clean after the last NSIS uninstall"
+# The in-place uninstall (`_?=`) cannot remove its own folder, so an empty
+# folder may remain; no file may.
+$leftFiles = @(foreach ($dir in "C:\ScribeCustom\Scribe", $defaultDir) { if (Test-Path $dir) { Get-ChildItem $dir -Recurse -File } })
+Check "no files left in either install folder" ($leftFiles.Count -eq 0) "(left: $($leftFiles.FullName -join ', '))"
 Check "no Scribe entry in Installed apps" ((Installed-Entries).Count -eq 0)
 Check "no n8builds.dev or natkins key" (-not (Test-Path -LiteralPath $newKey) -and -not (Test-Path -LiteralPath $oldKey))
 Check "no Run value" ($null -eq (Run-Value))

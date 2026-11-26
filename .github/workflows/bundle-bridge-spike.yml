@@ -85,15 +85,17 @@ jobs:
           $msi = @(Get-ChildItem target/release/bundle/msi -Filter "*.msi")
           if ($setup.Count -ne 1 -or $msi.Count -ne 1) { throw "Expected one setup.exe and one MSI, found $($setup.Count) and $($msi.Count)" }
           New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\candidate" | Out-Null
-          Copy-Item $setup[0].FullName "$env:RUNNER_TEMP\candidate\native-setup.exe"
+          # The hooks file unchanged: only for the pinned known-gap scenarios.
+          Copy-Item $setup[0].FullName "$env:RUNNER_TEMP\candidate\native-realhooks-setup.exe"
           Copy-Item $msi[0].FullName "$env:RUNNER_TEMP\candidate\native.msi"
           Write-Host "Packaged $($setup[0].Name) and $($msi[0].Name) with tauri bundle"
-          # The same, with the cleanup variant of the hooks (NSIS only).
+          # The tested configuration: the real hooks plus the sidecar
+          # cleanup (NSIS only; the MSI has no hooks).
           node $tauri bundle --bundles nsis --no-sign --config tauri.cleanup.json
           if ($LASTEXITCODE -ne 0) { throw "tauri bundle (cleanup hooks) failed" }
           $setup = @(Get-ChildItem target/release/bundle/nsis -Filter "*-setup.exe")
           if ($setup.Count -ne 1) { throw "Expected one setup.exe, found $($setup.Count)" }
-          Copy-Item $setup[0].FullName "$env:RUNNER_TEMP\candidate\native-cleanup-setup.exe"
+          Copy-Item $setup[0].FullName "$env:RUNNER_TEMP\candidate\native-setup.exe"
 
       - name: Download the published installers
         shell: pwsh
@@ -110,7 +112,7 @@ jobs:
       - name: NSIS bridge scenarios
         if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}
         shell: pwsh
-        run: ./spikes/bundle-bridge/scripts/nsis-bridge.ps1 -Candidate "$env:RUNNER_TEMP\candidate\native-setup.exe" -OldDir $env:RUNNER_TEMP -Version $env:TEST_VERSION -ResultsPath "$env:RUNNER_TEMP\results-nsis.md" -CleanupCandidate "$env:RUNNER_TEMP\candidate\native-cleanup-setup.exe"
+        run: ./spikes/bundle-bridge/scripts/nsis-bridge.ps1 -Candidate "$env:RUNNER_TEMP\candidate\native-setup.exe" -OldDir $env:RUNNER_TEMP -Version $env:TEST_VERSION -RealHooksCandidate "$env:RUNNER_TEMP\candidate\native-realhooks-setup.exe" -ResultsPath "$env:RUNNER_TEMP\results-nsis.md"
 
       - name: Updater signature
         if: ${{ !cancelled() && steps.bundle.outcome == 'success' }}

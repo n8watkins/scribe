@@ -11,9 +11,11 @@ The per-check log of every run is in the job summary and in the `bundle-bridge-r
 A non-Tauri `Scribe.exe` packaged by `tauri bundle` with the real `tauri.conf.json` identity and the real hooks file updates installed 0.16.1, 0.16.2 and 0.16.3 copies in place with every argument form the updater uses.
 Same folder, one Installed apps entry at 0.99.0 from n8builds.dev, the Run value and shortcuts still valid, data untouched, and `/R` relaunches the new exe with the old arguments.
 
-The one gap: the Tauri build's sidecars (`bin\windows\*`, ten files) stay in the install folder after the update and after an uninstall, because the native installer does not list them.
-A two-command POSTINSTALL addition to the hooks (`RMDir /r "$INSTDIR\bin\windows"`, `RMDir "$INSTDIR\bin"`) closes it, and the variant built with it passes every check.
-The run stays red on purpose: the scenarios with the unchanged hooks report that gap as failures.
+The one gap: with the hooks file unchanged, the Tauri build's sidecars (`bin\windows\*`, ten files) stay in the install folder after the update and after an uninstall, because the native installer does not list them.
+A two-command POSTINSTALL addition to the hooks (`RMDir /r "$INSTDIR\bin\windows"`, `RMDir "$INSTDIR\bin"`) closes it.
+That variant, generated inside the spike by `scripts/make-config.ps1`, is the tested configuration, and it passes every check.
+The real `app/src-tauri/installer-hooks.nsh` is unchanged; the change belongs to the switch work (see "What this means for the real switch").
+The unchanged-hooks scenarios still run, with the gap pinned: they assert that exactly the ten known files are left, so the job goes red if that list ever changes.
 
 ## Packaging route
 
@@ -33,11 +35,11 @@ Argument forms, from tauri-plugin-updater 2.14.1 with `installMode` quiet:
 - `/S /UPDATE /R /ARGS` (the default, app opened from the Start menu).
 - `/S /UPDATE /R /ARGS --minimized` (the default, app started at sign-in).
 
-Scenarios: each of 0.16.1, 0.16.2 and 0.16.3 with each form in the default folder (nine), 0.16.1 and 0.16.3 in a custom folder `C:\ScribeCustom\Scribe`, and the cleanup variant for 0.16.1, 0.16.2, 0.16.3 (default folder) and 0.16.1 (custom folder).
+Scenarios, run once with each setup: each of 0.16.1, 0.16.2 and 0.16.3 with each form in the default folder (nine), plus 0.16.1 and 0.16.3 in a custom folder `C:\ScribeCustom\Scribe` (eleven per setup).
 
-515 checks passed and 11 failed; the 11 failures are one assertion, in each of the 11 scenarios with the unchanged hooks.
+NSIS_COUNTS
 
-| Assertion | Real hooks (11 scenarios) | Hooks + sidecar cleanup (4 scenarios) |
+| Assertion | Unchanged hooks (11 scenarios) | Hooks + sidecar cleanup, the tested configuration (11 scenarios) |
 | --- | --- | --- |
 | Old setup and native setup exit 0 | pass | pass |
 | Scribe.exe stays in the same folder (default or custom), no second copy in the default folder | pass | pass |
@@ -47,12 +49,12 @@ Scenarios: each of 0.16.1, 0.16.2 and 0.16.3 with each form in the default folde
 | Run value unchanged, points at an existing exe, and that exe is the native one | pass | pass |
 | Start menu shortcut `Scribe\Scribe.lnk` (and the desktop shortcut) present and pointing at the native exe | pass | pass |
 | Both data folders byte for byte unchanged | pass | pass |
-| `/S /UPDATE`: no relaunch | pass | not run |
+| `/S /UPDATE`: no relaunch | pass | pass |
 | `/R /ARGS`: relaunches the native exe from the install folder, with `--minimized` exactly when the old app had it | pass | pass |
 | The native exe starts from the Run value command with the Tauri leftovers present | pass | pass (no leftovers) |
 | Tauri files left after the update | ten files in `bin\windows` (whisper and parakeet sidecars, ggml DLLs, README.md) | none |
 | Uninstall exits 0, Scribe.exe removed | pass | pass |
-| Uninstall leaves no files in the install folder | **fail**: the ten `bin\windows` files stay | pass |
+| Uninstall leaves no files in the install folder | known gap, pinned: exactly the ten `bin\windows` files stay (asserted) | pass |
 | Uninstall removes the Installed apps entry, both hook-managed keys (`n8builds.dev` and `natkins`), the Run value and both shortcuts | pass | pass |
 
 The 0.16.x installers put no WebView2 loader DLL or other Tauri runtime file next to the exe (their file list is `Scribe.exe`, `uninstall.exe` and `bin\windows\*`), so the only leftovers are the sidecars from `resources`.
@@ -107,6 +109,20 @@ So the release pipeline's signing step fits the native setup unchanged.
 With the sidecar cleanup, an NSIS uninstall leaves the install folder empty and removes the Installed apps entry, `HKCU\Software\n8builds.dev\Scribe`, `HKCU\Software\natkins\Scribe`, the Run value and both shortcuts.
 Without it, everything else is removed but the ten `bin\windows` files keep the folder alive.
 After the last NSIS scenario the runner has no Scribe entry, neither key, no Run value and no Scribe process; after the MSI scenarios there is no entry and no Program Files folder.
+
+## What this means for the real switch
+
+The real native build will ship its own speech engine files, unlike the stub.
+If it keeps the `bin\windows` layout, every one of the ten files it ships again under the same name is simply overwritten by the update: with the same whisper.cpp and Parakeet engines that is `whisper-server.exe`, `whisper-cli.exe`, `scribe-parakeet.exe`, `whisper.dll`, `parakeet.dll`, `ggml.dll`, `ggml-base.dll`, `ggml-cpu.dll` and `ggml-vulkan.dll`.
+`README.md` is a repository placeholder that is not an engine file, so it is never overwritten, and neither is any engine file the native build drops (for example `whisper-cli.exe` if it no longer uses the CLI, or the sidecar exes if it links the engines in process).
+Those files are the problem: the NSIS template never runs the old uninstaller on `/UPDATE`, and its own uninstaller deletes only the files of the build that installed it, so nothing ever removes them.
+
+The rule the real hooks need: the installer owns `$INSTDIR\bin` entirely.
+On every install and update, empty it (`RMDir /r "$INSTDIR\bin"`) after the running app and its engine processes are stopped and before this build's files are written, so only what this build ships is left.
+NSIS_HOOK_PREINSTALL runs before the template's own check that stops a running Scribe.exe, so a PREINSTALL wipe must stop the app itself first, as the hook already does for `whisper-server.exe`.
+On a real uninstall (not `/UPDATE`), remove it recursively as well, so files from any earlier build go too.
+This only holds while nothing the user owns (models, settings) lives under `bin`; those stay in the data folders.
+The spike's POSTINSTALL cleanup is the stub's version of that rule (the stub ships nothing under `bin`), and the pinned scenarios are what to turn into "no files left" once the real hooks follow it.
 
 ## What could not be determined here
 
