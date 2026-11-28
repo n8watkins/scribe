@@ -326,7 +326,7 @@ impl ReplacementStore {
     }
 }
 
-/// The store as Tauri manages it.
+/// The shared store, as the `Core` holds it.
 pub type Replacements = Arc<ReplacementStore>;
 
 /// Lets GitHub backup pick up a changed replacements.txt.

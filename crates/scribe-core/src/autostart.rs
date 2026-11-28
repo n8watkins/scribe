@@ -28,10 +28,7 @@
 //! (`launch_at_login`, `set_launch_at_login`); the shell registers the plugin
 //! (`tauri_host::autostart_plugin` in app/src-tauri).
 
-use crate::{
-    error::CommandError,
-    host::Host,
-};
+use crate::{error::CommandError, host::Host};
 
 /// The argument the Windows sign-in entry starts Scribe with. A launch
 /// carrying it keeps the main window hidden; Scribe waits in the tray.

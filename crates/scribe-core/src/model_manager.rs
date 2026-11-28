@@ -15,7 +15,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    commands::BackendState,
+    backend::BackendState,
     db::Database,
     error::CommandError,
     events::CoreEvent,

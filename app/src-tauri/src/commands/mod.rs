@@ -4,10 +4,6 @@
 //! `audio`, `output`, `models`, `hotkeys`, `data`, `sync` and `status`.
 //! `shell` holds the commands that belong to the shell itself. Commands keep
 //! the names the windows call them by; `lib.rs` registers every one.
-//!
-//! The helpers the engine kept under its old `commands` module (the backend
-//! state, the launch-at-startup helpers) are re-exported here, so
-//! `crate::commands::BackendState` and friends still resolve.
 
 pub mod audio;
 pub mod data;
@@ -17,8 +13,6 @@ pub mod output;
 pub mod shell;
 pub mod status;
 pub mod sync;
-
-pub use scribe_core::commands::*;
 
 use scribe_core::{core::Core, error::CommandError};
 

@@ -3,8 +3,7 @@
 //! locks that keep settings and GitHub writes in order.
 //!
 //! It lived in `commands.rs` until the Tauri commands moved to the shell
-//! (app/src-tauri/src/commands); `crate::commands::BackendState` still
-//! resolves to it.
+//! (app/src-tauri/src/commands).
 
 use std::sync::Mutex;
 

@@ -15,13 +15,13 @@ pub use scribe_core::{
     github_oauth, gpu, hotkeys, import, incremental, model_manager, models, note_analysis,
     note_sync, output, parakeet, platform, process_info, prompt_budget, release_notes,
     remote_command, replacements_file, selection_transform, self_test, session_model, settings,
-    settings_store, shell, sounds, speech_engine, state_server, stats, status_file, sync_history,
+    settings_store, sounds, speech_engine, state_server, stats, status_file, sync_history,
     text_replace, transcript, update_check, whisper, whisper_server,
 };
 
 pub use scribe_core::{core::Core, events, host, paths};
 
-use commands::BackendState;
+use backend::BackendState;
 use db::Database;
 use tauri::Manager;
 
@@ -360,7 +360,6 @@ pub fn run() {
             // window, an event or a folder.
             let host: std::sync::Arc<dyn host::Host> =
                 std::sync::Arc::new(tauri_host::TauriHost::new(app.handle().clone(), paths));
-            shell::install(host.clone());
             let app_data_dir = app.path().app_data_dir()?;
             let audio_temp_dir = app.path().app_cache_dir()?.join("recordings");
             std::fs::create_dir_all(&app_data_dir)?;
@@ -1042,7 +1041,6 @@ mod startup_order_tests {
         let end = start + source[start..].find(".on_window_event(").unwrap();
         let setup = &source[start..end];
         let steps = [
-            "shell::install(host.clone())",
             "Database::open(",
             "autostart::reconcile_at_launch_with(",
             "BackendState::new(",

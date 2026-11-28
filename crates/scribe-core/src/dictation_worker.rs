@@ -37,7 +37,6 @@ use std::{
     time::Duration,
 };
 
-
 use crate::{
     app_state::AppStatus,
     audio::{self, RecordingResultStatus, RecordingSessionInfo, StartRecordingRequest},
@@ -627,9 +626,7 @@ fn execute_with(core: &Core, command: DictationCommand) -> Result<Outcome, Comma
             audio::cancel_recording_with(core)?;
             Outcome::Done
         }
-        DictationCommand::PasteLast => {
-            Outcome::Output(output::paste_last_transcript_with(core)?)
-        }
+        DictationCommand::PasteLast => Outcome::Output(output::paste_last_transcript_with(core)?),
         DictationCommand::FinishTimedOut { session_id } => {
             audio::finish_timed_out_recording_with(core, &session_id)?;
             Outcome::Done

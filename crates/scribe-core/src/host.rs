@@ -5,10 +5,7 @@
 //! `Host` on top of Tauri (`TauriHost`); a native shell implements it again
 //! without changing the engine.
 //!
-//! `Host` also carries what `shell::ShellHooks` used to (the tray and the
-//! main window), so there is one seam rather than two. Engine code that still
-//! takes an `AppHandle` reaches those through the free functions in
-//! [`crate::shell`], which forward to the installed host.
+//! `Host` also carries the tray and the main window, so there is one seam.
 
 use std::{
     collections::HashSet,

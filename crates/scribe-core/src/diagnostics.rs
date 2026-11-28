@@ -18,7 +18,7 @@ use chrono::Utc;
 use serde_json::Value;
 
 use crate::{
-    commands::BackendState, core::Core, error::CommandError, host::Host, settings::AppSettings,
+    backend::BackendState, core::Core, error::CommandError, host::Host, settings::AppSettings,
 };
 
 /// How much of the newest log file is read (its end).

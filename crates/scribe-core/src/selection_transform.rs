@@ -23,7 +23,6 @@
 
 use std::time::Duration;
 
-
 use crate::core::Core;
 use crate::error::CommandError;
 use crate::output::OutputResult;

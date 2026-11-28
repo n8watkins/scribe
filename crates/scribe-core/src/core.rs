@@ -6,11 +6,9 @@
 //! handle: clones share the same engine, so a command can move one onto a
 //! worker thread.
 //!
-//! For now the shell also manages each part in Tauri state, so the existing
-//! `app.state::<X>()` lookups find the very same instance `Core` holds (each
-//! part is itself a cheap handle onto shared state). Engine code moves from
-//! those lookups to `&Core` module by module (docs/CORE-SPLIT.md); once none
-//! is left, only `Core` stays managed.
+//! The Tauri shell manages only the `Core`; each part is itself a cheap handle
+//! onto shared state, so `core.backend()` and the clone a part was built with
+//! are the same instance.
 
 use std::sync::{Arc, OnceLock, Weak};
 

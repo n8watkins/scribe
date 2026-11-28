@@ -9,7 +9,6 @@
 //! `hold-start` and `hold-stop` drive hold to talk from desktops that can
 //! run a command on key release too (sway and Hyprland `bindr`).
 
-
 use crate::{
     core::Core,
     hotkeys::{self, ActionTarget, HotkeyAction},

@@ -82,7 +82,9 @@ pub async fn transcribe_file(
     path: String,
 ) -> Result<TranscribeFileResult, CommandError> {
     let core = core.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || file_transcribe::transcribe_file_with(&core, &path))
+    tauri::async_runtime::spawn_blocking(move || {
+        file_transcribe::transcribe_file_with(&core, &path)
+    })
     .await
     .map_err(|error| {
         CommandError::new(

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 
-use crate::commands::BackendState;
+use crate::backend::BackendState;
 use crate::core::{Core, CoreCell, CoreLookup};
 use crate::error::CommandError;
 use crate::github_backup::{GitHubBackup, SyncReport};

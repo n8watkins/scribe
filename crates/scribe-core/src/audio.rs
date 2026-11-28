@@ -1890,7 +1890,6 @@ pub(crate) fn duration_ms(sample_count: usize, sample_rate: u32) -> u64 {
     ((sample_count as u128 * 1_000) / sample_rate as u128) as u64
 }
 
-
 /// Logs the error and sends `audio://recording-error`.
 pub fn emit_recording_error_with(host: &dyn Host, error: CommandError) {
     log::error!("Recording error {}: {}", error.code, error.message);

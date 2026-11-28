@@ -256,8 +256,8 @@ impl DictationServer {
 }
 
 /// Bind the loopback server and spawn its accept loop. Returns the shared server
-/// handle and the bound port. Kept separate from `start` so it can be exercised
-/// in tests without a Tauri `AppHandle`.
+/// handle and the bound port. Kept separate from `start_with` so it can be
+/// exercised in tests without a host.
 fn spawn_http(hub: Arc<Hub>, shutdown: Arc<AtomicBool>) -> Result<u16, String> {
     let server = Server::http((SERVER_HOST, 0))
         .map_err(|error| format!("could not bind dictation-state server: {error}"))?;

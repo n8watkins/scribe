@@ -42,7 +42,7 @@ use serde::Deserialize;
 
 use crate::{
     app_state::AppStatus,
-    commands::BackendState,
+    backend::BackendState,
     error::CommandError,
     events::CoreEvent,
     host::{no_main_window, Host},

@@ -8,10 +8,7 @@ use std::{
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::{
-    error::CommandError,
-    host::Host,
-};
+use crate::{error::CommandError, host::Host};
 
 #[derive(Debug, Clone)]
 pub struct WhisperRequest {

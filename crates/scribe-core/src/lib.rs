@@ -3,16 +3,14 @@
 //! Tauri app, its windows and tray on top of it and re-exports these modules
 //! under their old `app_lib::` paths.
 //!
-//! For now the engine still runs inside Tauri (it takes an `AppHandle` and
-//! emits Tauri events). What it needs from the windows and the tray goes
-//! through [`shell`], which the desktop shell fills in at startup.
+//! The engine reaches the windows, the tray and the operating system only
+//! through the [`host::Host`] its shell hands to [`core::Core`].
 
 pub mod app_state;
 pub mod audio;
 pub mod autostart;
 pub mod backend;
 pub mod child_guard;
-pub mod commands;
 pub mod core;
 pub mod data_hygiene;
 pub mod db;
@@ -50,7 +48,6 @@ pub mod self_test;
 pub mod session_model;
 pub mod settings;
 pub mod settings_store;
-pub mod shell;
 pub mod sounds;
 pub mod speech_engine;
 pub mod state_server;
@@ -64,18 +61,3 @@ pub mod transcript;
 pub mod update_check;
 pub mod whisper;
 pub mod whisper_server;
-
-/// True when running the Scribe Dev flavor (identifier baked at build
-/// time by `tauri.dev-flavor.conf.json`).
-pub fn is_dev_flavor(app: &tauri::AppHandle) -> bool {
-    app.config().identifier.ends_with(".dev")
-}
-
-/// The flavored display name, used everywhere the UI says "Scribe".
-pub fn display_name(app: &tauri::AppHandle) -> &'static str {
-    if is_dev_flavor(app) {
-        "Scribe Dev"
-    } else {
-        "Scribe"
-    }
-}
