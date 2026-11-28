@@ -156,6 +156,9 @@ pub fn no_main_window() -> CommandError {
 /// A call [`RecordingHost`] recorded: every host call that acts on the
 /// system. The queries (`app_version`, `is_shortcut_registered`,
 /// `launch_at_login`) answer from the host's state and are not recorded.
+// A test record, built and dropped within a test: `SyncSettings` carries the
+// settings as they are (the spec's shape), so the size gap is not worth a box.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostCall {
     Exit(i32),
@@ -184,6 +187,9 @@ pub enum HostCall {
 /// One entry of [`RecordingHost::sequence`]: an event or a call, in the order
 /// the host received them. An event is kept as its name and its JSON payload
 /// (`CoreEvent` is not comparable).
+// A test record, built and dropped within a test: `SyncSettings` carries the
+// settings as they are (the spec's shape), so the size gap is not worth a box.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Recorded {
     Event(&'static str, serde_json::Value),
