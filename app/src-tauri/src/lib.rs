@@ -11,12 +11,12 @@ pub mod window_size;
 pub use scribe_core::test_audio;
 pub use scribe_core::{
     app_state, audio, autostart, backend, child_guard, data_hygiene, db, diagnostics, dictation,
-    dictation_state, dictation_worker, display_name, error, export, file_transcribe, filler,
-    github_backup, github_oauth, gpu, hotkeys, import, incremental, is_dev_flavor, model_manager,
-    models, note_analysis, note_sync, output, parakeet, platform, process_info, prompt_budget,
-    release_notes, remote_command, replacements_file, selection_transform, self_test,
-    session_model, settings, settings_store, shell, sounds, speech_engine, state_server, stats,
-    status_file, sync_history, text_replace, transcript, update_check, whisper, whisper_server,
+    dictation_state, dictation_worker, error, export, file_transcribe, filler, github_backup,
+    github_oauth, gpu, hotkeys, import, incremental, model_manager, models, note_analysis,
+    note_sync, output, parakeet, platform, process_info, prompt_budget, release_notes,
+    remote_command, replacements_file, selection_transform, self_test, session_model, settings,
+    settings_store, shell, sounds, speech_engine, state_server, stats, status_file, sync_history,
+    text_replace, transcript, update_check, whisper, whisper_server,
 };
 
 pub use scribe_core::{core::Core, events, host, paths};
@@ -219,31 +219,11 @@ fn platform_script<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
         .build()
 }
 
-/// The state the commands read with `app.state::<T>()`, which panics when the
-/// state is not managed yet. Names are for the startup error only.
+/// The state the commands read with `tauri::State<'_, Core>`, which panics
+/// when the state is not managed yet: the `Core`, the only state setup
+/// manages. Names are for the startup error only.
 fn missing_command_state(app: &tauri::App) -> Vec<&'static str> {
     let mut missing = Vec::new();
-    if app.try_state::<BackendState>().is_none() {
-        missing.push("BackendState");
-    }
-    if app.try_state::<whisper_server::WarmTranscriber>().is_none() {
-        missing.push("WarmTranscriber");
-    }
-    if app
-        .try_state::<std::sync::Arc<replacements_file::ReplacementStore>>()
-        .is_none()
-    {
-        missing.push("ReplacementStore");
-    }
-    if app
-        .try_state::<dictation_worker::DictationWorker>()
-        .is_none()
-    {
-        missing.push("DictationWorker");
-    }
-    if app.try_state::<note_sync::NoteSyncWorker>().is_none() {
-        missing.push("NoteSyncWorker");
-    }
     if app.try_state::<Core>().is_none() {
         missing.push("Core");
     }
@@ -297,11 +277,11 @@ pub fn run() {
                 // can come off the main thread) must not reach state that
                 // isn't managed yet. The Core is managed after every part
                 // it holds, the dictation worker included.
-                if app.try_state::<Core>().is_none() {
+                let Some(core) = app.try_state::<Core>() else {
                     log::warn!("Scribe is still starting; ignored {:?}", command);
                     return;
-                }
-                command.run(app);
+                };
+                command.run_with(&core);
                 return;
             }
             // The sign-in entry firing while Scribe already runs (started by
@@ -347,11 +327,11 @@ pub fn run() {
                     // Setup manages the Core before it registers a hotkey;
                     // this guards the engine work a key press starts if that
                     // order ever changes.
-                    if app.try_state::<Core>().is_none() {
+                    let Some(core) = app.try_state::<Core>() else {
                         log::warn!("Scribe is still starting; ignored a hotkey");
                         return;
-                    }
-                    hotkeys::handle_shortcut(app, shortcut, event);
+                    };
+                    hotkeys::handle_shortcut_with(&core, shortcut, event);
                 })
                 .build(),
         )
@@ -414,7 +394,7 @@ pub fn run() {
             // fighting over the same global binds. Only untouched (still
             // production) binds are remapped; the flag makes this one-shot so a
             // later "Load my production defaults" sticks.
-            if is_dev_flavor(app.handle()) && !settings.dev_hotkeys_seeded {
+            if host.flavor().is_dev() && !settings.dev_hotkeys_seeded {
                 if settings.hotkeys == crate::settings::HotkeySettings::default() {
                     settings.hotkeys = crate::settings::HotkeySettings::dev_defaults();
                     log::info!("Seeded Scribe Dev hotkey defaults");
@@ -441,7 +421,7 @@ pub fn run() {
             // write a missing one, and follow the switch in Windows' Startup
             // apps list when the user changed it there (see autostart.rs).
             if let Some(value) =
-                autostart::reconcile_at_launch(app.handle(), settings.launch_at_startup)
+                autostart::reconcile_at_launch_with(host.as_ref(), settings.launch_at_startup)
             {
                 settings.launch_at_startup = value;
                 db.save_settings(&settings)?;
@@ -450,22 +430,21 @@ pub fn run() {
                 data_dir: app_data_dir.clone(),
                 cache_dir: app.path().app_cache_dir()?,
             };
-            // Each part of the engine is managed on its own (the commands
-            // and the engine still look them up by type) and handed to the
-            // Core below, which holds the very same instance.
+            // Each part of the engine is built here and handed to the parts
+            // that need it directly; only the Core, which holds them all, is
+            // managed (below).
             let backend = BackendState::new(db, audio_temp_dir, dirs);
-            app.manage(backend.clone());
             // Folder cleanup (pre-rename paths, orphaned clips, stale temp
             // files) touches the disk, so it runs off the startup path.
             {
-                let handle = app.handle().clone();
-                let pre_rebrand_dir = pre_rebrand_data_dir(&handle, &app_data_dir);
+                let cleanup_backend = backend.clone();
+                let pre_rebrand_dir = pre_rebrand_data_dir(app.handle(), &app_data_dir);
                 let migration_complete = app_data_dir.join(".rebrand-migrated").exists();
                 std::thread::Builder::new()
                     .name("data-cleanup".into())
                     .spawn(move || {
-                        data_hygiene::run_startup_maintenance(
-                            &handle,
+                        data_hygiene::run_startup_maintenance_with(
+                            &cleanup_backend,
                             pre_rebrand_dir,
                             migration_complete,
                         )
@@ -481,18 +460,17 @@ pub fn run() {
                     stale
                 );
             }
-            let warm_transcriber = whisper_server::WarmTranscriber::new(
-                app.handle().clone(),
+            let warm_transcriber = whisper_server::WarmTranscriber::new_with(
+                host.clone(),
+                backend.clone(),
                 speech_engine::measurements_path(&app_data_dir),
             );
-            app.manage(warm_transcriber.clone());
             // Offer Scribe's live dictation state to external tools over an
             // in-process loopback HTTP+SSE server. Additive and best-effort: a
             // bind failure must never block the app, so log and carry on.
-            let dictation_server = match state_server::start(app.handle()) {
+            let dictation_server = match state_server::start_with(host.clone()) {
                 Ok(server) => {
                     log::info!("Dictation-state interface on {}", server.base_url());
-                    app.manage(server.clone());
                     Some(server)
                 }
                 Err(error) => {
@@ -500,69 +478,68 @@ pub fn run() {
                     None
                 }
             };
+            // The workers start before the Core exists (the Core holds them),
+            // so they find it through this cell, filled right after
+            // `Core::new` below; until then their work waits in order.
+            let cell = scribe_core::core::CoreCell::new();
             // Background worker that debounces note saves into GitHub auto-syncs.
-            let note_sync = note_sync::NoteSyncWorker::spawn(app.handle().clone());
-            app.manage(note_sync.clone());
+            let note_sync = note_sync::NoteSyncWorker::spawn_with(cell.clone());
             // Every dictation action (hotkeys, tray, pill, dashboard) runs on
             // this one worker thread, so it must exist before any of them.
-            let dictation_worker = dictation_worker::DictationWorker::spawn(app.handle().clone())?;
-            app.manage(dictation_worker.clone());
+            let dictation_worker =
+                dictation_worker::DictationWorker::spawn_on(cell.clone(), app.handle().clone())?;
             // Replacements live in replacements.txt in the data folder; the
-            // first run moves the list kept in settings there. A watcher picks
-            // up edits made in any editor.
-            let replacements = {
-                use tauri::Emitter;
-                let store = std::sync::Arc::new(replacements_file::ReplacementStore::open(
-                    app_data_dir.join(replacements_file::FILE_NAME),
-                    &settings.text_replacements,
-                ));
-                let watch_app = app.handle().clone();
-                store.watch(move |info| {
-                    log::info!(
-                        "Reloaded replacements.txt: {} replacements, {} lines skipped",
-                        info.rows.len(),
-                        info.skipped_lines.len()
-                    );
-                    let _ = watch_app.emit(commands::REPLACEMENTS_CHANGED_EVENT, info);
-                    // Back the edited file up with the notes, when backup is on.
-                    if let Some(worker) = watch_app.try_state::<note_sync::NoteSyncWorker>() {
-                        worker.notify();
-                    }
-                });
-                app.manage(store.clone());
-                store
-            };
+            // first run moves the list kept in settings there. A watcher,
+            // started once the Core exists, picks up edits made in any editor.
+            let replacements = std::sync::Arc::new(replacements_file::ReplacementStore::open(
+                app_data_dir.join(replacements_file::FILE_NAME),
+                &settings.text_replacements,
+            ));
             // The hotkey runtime exists (empty) before any hotkey is
-            // registered; hotkeys::setup fills it in below.
+            // registered; hotkeys::setup_with fills it in below.
             let hotkey_runtime = hotkeys::HotkeyRuntimeState::default();
-            app.manage(hotkey_runtime.clone());
-            // The engine as one handle, holding the parts managed above. It
-            // is managed before anything that can start engine work from
+            // The engine as one handle, holding the parts built above. It is
+            // managed before anything that can start engine work from
             // outside (a hotkey, a remote command from a second launch, the
             // tray, a window), so that work always finds it.
             let core = Core::new(
-                host,
+                host.clone(),
                 scribe_core::core::CoreParts {
                     backend,
                     warm_transcriber,
                     dictation_server,
                     note_sync,
                     dictation_worker,
-                    hotkey_runtime: hotkey_runtime.clone(),
+                    hotkey_runtime,
                     replacements,
                 },
             );
-            app.manage(core);
+            cell.fill(&core);
+            {
+                // The watcher thread never ends, so it holds the host and the
+                // cell, never a Core or a worker handle, which would keep
+                // the engine's threads alive after the Core.
+                let watch_host = host.clone();
+                let watch_cell = cell.clone();
+                core.replacements().watch(move |info| {
+                    log::info!(
+                        "Reloaded replacements.txt: {} replacements, {} lines skipped",
+                        info.rows.len(),
+                        info.skipped_lines.len()
+                    );
+                    watch_host.emit(events::CoreEvent::ReplacementsChanged(info.clone()));
+                    // Back the edited file up with the notes, when backup is on.
+                    if let Some(core) = watch_cell.get() {
+                        replacements_file::notify_backup_with(&core);
+                    }
+                });
+            }
+            app.manage(core.clone());
             // The Wayland portals need Scribe's app id and a place to keep
             // the permission they grant, before the hotkeys start.
             #[cfg(target_os = "linux")]
             platform::init(app_data_dir.clone(), &app.config().identifier);
-            hotkeys::setup(
-                app.handle(),
-                &hotkey_runtime,
-                &settings.hotkeys,
-                settings.notes_analysis_enabled,
-            )?;
+            hotkeys::setup_with(&core, &settings.hotkeys, settings.notes_analysis_enabled)?;
             tray::setup(app.handle(), &settings)?;
             // Only now, with every piece of state managed, may a webview
             // exist and invoke commands (see create_config_windows).
@@ -573,7 +550,7 @@ pub fn run() {
             }
             // The dev flavor must be tellable from stable at a glance: the
             // window title (and taskbar entry) carries the flavored name.
-            if is_dev_flavor(app.handle()) {
+            if core.flavor().is_dev() {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.set_title("Scribe Dev");
                 }
@@ -586,25 +563,24 @@ pub fn run() {
             // Builds made for the end-to-end tests can record a WAV file in
             // place of the microphone (see test_audio for the gates).
             #[cfg(feature = "e2e-audio")]
-            test_audio::activate(app.handle());
+            test_audio::activate_with(host.as_ref());
 
             // Seed the on-disk status file with the startup (Idle) state so a
             // second app (T-Hub) always has a file to read, even before the
             // first dictation.
-            status_file::publish_idle(app.handle());
+            status_file::publish_idle_with(host.as_ref());
 
             // `--self-test-transcribe <audio> <result>` (the release smoke
             // test) transcribes one file through the normal path, writes the
             // outcome and exits. Plain launches never take this branch.
             if let Some(request) = self_test::parse_args(std::env::args()) {
                 log::info!("Starting self-test run");
-                self_test::spawn(app.handle(), request);
+                self_test::spawn_with(app.handle(), &core, request);
             }
 
             // Load the speech model now when "Keep the speech model loaded" is
             // on, so the first dictation is instant; publish its status.
-            app.state::<whisper_server::WarmTranscriber>()
-                .sync_with_settings(&settings);
+            core.warm_transcriber().sync_with_settings(&settings);
 
             log::info!("Scribe setup complete");
             Ok(())
@@ -623,12 +599,15 @@ pub fn run() {
             // Coming back to Scribe after switching it in Windows' Startup
             // apps list shows the new value in Settings and the tray.
             if let tauri::WindowEvent::Focused(true) = event {
-                let app = window.app_handle().clone();
-                if cfg!(windows) && app.try_state::<BackendState>().is_some() {
+                let core = cfg!(windows)
+                    .then(|| window.app_handle().try_state::<Core>())
+                    .flatten()
+                    .map(|core| core.inner().clone());
+                if let Some(core) = core {
                     let _ = std::thread::Builder::new()
                         .name("launch-at-startup".into())
                         .spawn(move || {
-                            if let Err(error) = commands::sync_launch_at_startup(&app) {
+                            if let Err(error) = settings_store::sync_launch_at_startup_with(&core) {
                                 log::warn!(
                                     "Could not follow Windows' Startup apps switch. {}",
                                     error.message
@@ -641,9 +620,9 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let minimize_to_tray = window
                     .app_handle()
-                    .try_state::<BackendState>()
-                    .and_then(|state| {
-                        state
+                    .try_state::<Core>()
+                    .and_then(|core| {
+                        core.backend()
                             .db()
                             .ok()
                             .and_then(|db| db.get_settings().ok())
@@ -753,23 +732,12 @@ pub fn run() {
             // survives app quit (shutdown is safe to call multiple times).
             if let tauri::RunEvent::Exit = event {
                 // The status file, the dictation-state server and the speech
-                // engine, in that order (see Core::shutdown).
-                if let Some(core) = app.try_state::<Core>() {
-                    core.shutdown();
-                    return;
-                }
-                // Setup failed before the Core existed: stop whatever parts
-                // did start, the same way.
-                status_file::publish_idle(app);
-                // Stop the dictation-state server, close live SSE streams, and
-                // remove the ~/.scribe discovery file so a consumer sees Scribe
-                // is gone (stream EOF and a missing control file both resolve to
-                // not-dictating).
-                if let Some(server) = app.try_state::<state_server::DictationServer>() {
-                    server.shutdown();
-                }
-                if let Some(warm) = app.try_state::<whisper_server::WarmTranscriber>() {
-                    warm.shutdown();
+                // engine, in that order (see Core::shutdown). A setup that
+                // fails never gets here: Tauri panics with "Failed to setup
+                // app" instead, so the Core is always managed by now.
+                match app.try_state::<Core>() {
+                    Some(core) => core.shutdown(),
+                    None => log::warn!("Scribe exited before its engine was set up"),
                 }
             }
         });
@@ -823,8 +791,9 @@ mod install_identity_tests {
         assert_eq!(config["mainBinaryName"], "Scribe");
     }
 
-    /// The engine reports its own CARGO_PKG_VERSION (the update check, user
-    /// agents, the dictation-state interface), so it must carry the app's.
+    /// The engine reports its own CARGO_PKG_VERSION in the update check and
+    /// its HTTP user agents (everything else reads the app's version from the
+    /// host), so it must carry the app's.
     #[test]
     fn the_engine_carries_the_app_version() {
         let config: serde_json::Value =
@@ -1058,12 +1027,15 @@ mod startup_order_tests {
     }
 
     /// The engine starts in a fixed order: the host first (the engine's
-    /// tray, window and event calls go through it), then each part, then the
-    /// Core, which holds them all, and only then what can start engine work
-    /// from outside: the hotkeys (a key press), the tray (a menu click) and
-    /// the windows (a command). A remote command from a second launch waits
-    /// for the Core too (see the single-instance handler). So engine code
-    /// reached that way always finds the Core managed.
+    /// tray, window and event calls go through it), then each part, handed
+    /// what it needs directly (the clean-up thread its backend, the workers
+    /// a cell), then the Core, which holds them all and fills the cell, the
+    /// replacements watcher once the cell is filled, and the Core managed,
+    /// the only state setup manages. Only then comes what can start engine
+    /// work from outside: the hotkeys (a key press), the tray (a menu click)
+    /// and the windows (a command). A remote command from a second launch
+    /// waits for the Core too (see the single-instance handler). So engine
+    /// code reached that way always finds the Core managed.
     #[test]
     fn setup_starts_the_engine_in_order() {
         let source = include_str!("lib.rs");
@@ -1073,18 +1045,27 @@ mod startup_order_tests {
         let steps = [
             "shell::install(host.clone())",
             "Database::open(",
-            "app.manage(backend.clone())",
+            "autostart::reconcile_at_launch_with(",
+            "BackendState::new(",
+            "data_hygiene::run_startup_maintenance_with(",
             "child_guard::init(",
-            "app.manage(warm_transcriber.clone())",
-            "app.manage(server.clone())",
-            "app.manage(note_sync.clone())",
-            "app.manage(dictation_worker.clone())",
-            "app.manage(store.clone())",
-            "app.manage(hotkey_runtime.clone())",
-            "app.manage(core)",
-            "hotkeys::setup(",
+            "WarmTranscriber::new_with(",
+            "state_server::start_with(",
+            "CoreCell::new()",
+            "NoteSyncWorker::spawn_with(cell.clone())",
+            "DictationWorker::spawn_on(cell.clone(),",
+            "ReplacementStore::open(",
+            "HotkeyRuntimeState::default()",
+            "Core::new(",
+            "cell.fill(&core)",
+            ".watch(",
+            "app.manage(core.clone())",
+            "hotkeys::setup_with(",
             "tray::setup(",
             "create_config_windows(app)",
+            "status_file::publish_idle_with(",
+            "self_test::spawn_with(",
+            "sync_with_settings(",
         ];
         let mut previous = 0;
         for step in steps {
@@ -1095,11 +1076,23 @@ mod startup_order_tests {
             assert!(at > previous, "`{step}` runs out of order");
             previous = at;
         }
-        // Every part the Core holds is managed on its own too, so the
-        // existing `app.state::<X>()` lookups keep finding it.
+        // The cell is filled right after `Core::new`: nothing runs between
+        // building the Core and handing it to the waiting workers.
+        let built = setup.find("Core::new(").unwrap();
+        // The end of the `Core::new(..);` statement (the source may have CRLF
+        // line ends, on a Windows checkout).
+        let built = built + setup[built..].find(");").unwrap() + ");".len();
+        let filled = setup.find("cell.fill(&core)").unwrap();
+        assert_eq!(
+            setup[built..filled].trim(),
+            "",
+            "the cell must be filled right after Core::new"
+        );
+        // Only the Core is managed; every part is reached through it.
+        assert_eq!(setup.matches("app.manage(").count(), 1);
         let handler = source.find("tauri_plugin_single_instance::init(").unwrap();
         let remote = handler + source[handler..].find("RemoteCommand::parse").unwrap();
-        let guard = remote + source[remote..].find("command.run(app)").unwrap();
+        let guard = remote + source[remote..].find("command.run_with(&core)").unwrap();
         assert!(
             source[remote..guard].contains("try_state::<Core>()"),
             "a remote command must wait for the Core"
@@ -1109,12 +1102,11 @@ mod startup_order_tests {
             .unwrap();
         let handle = shortcuts
             + source[shortcuts..]
-                .find("hotkeys::handle_shortcut")
+                .find("hotkeys::handle_shortcut_with(&core,")
                 .unwrap();
         assert!(
             source[shortcuts..handle].contains("try_state::<Core>()"),
             "a hotkey press must wait for the Core"
         );
-        assert_eq!(setup.matches("app.manage(").count(), 8);
     }
 }

@@ -1,25 +1,24 @@
 //! Commands that belong to the shell itself (windows, the release page, the
 //! update check), not to an engine domain. No P1-3 lane owns this file.
 
-use tauri::Manager;
 use tauri_plugin_opener::OpenerExt;
 
-use super::off_main;
-use crate::{commands::BackendState, error::CommandError, settings::AppSettings, settings_store};
+use super::off_main_core;
+use crate::{error::CommandError, settings::AppSettings, settings_store, Core};
 
 #[tauri::command]
-pub fn open_dashboard(app: tauri::AppHandle) -> Result<(), CommandError> {
-    crate::shell::open_dashboard(&app, None)
+pub fn open_dashboard(core: tauri::State<'_, Core>) -> Result<(), CommandError> {
+    core.host().open_dashboard(None)
 }
 
 /// Saves the main window's current inner size, in logical pixels, as the size
 /// Scribe opens at (Appearance > Window size). Restored at launch by
 /// `window_size::restore`.
 #[tauri::command]
-pub async fn save_window_size(app: tauri::AppHandle) -> Result<AppSettings, CommandError> {
-    off_main(app, move |app| {
-        let state = app.state::<BackendState>().inner();
-        let (width, height) = crate::shell::main_window_logical_size(app).ok_or_else(|| {
+pub async fn save_window_size(core: tauri::State<'_, Core>) -> Result<AppSettings, CommandError> {
+    off_main_core(core.inner().clone(), move |core| {
+        let state = core.backend();
+        let (width, height) = core.host().main_window_logical_size().ok_or_else(|| {
             CommandError::new("window_size_unavailable", "Could not read the window size.")
         })?;
 
@@ -29,7 +28,7 @@ pub async fn save_window_size(app: tauri::AppHandle) -> Result<AppSettings, Comm
         settings.window_height = Some(height as i32);
         settings.window_size_logical = true;
         state.db()?.save_settings(&settings)?;
-        settings_store::emit_changed(app, &settings);
+        settings_store::emit_changed_with(core.host().as_ref(), &settings);
         log::info!("Saved default window size {}x{}", width, height);
         Ok(settings)
     })

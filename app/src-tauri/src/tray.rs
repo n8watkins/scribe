@@ -9,7 +9,9 @@ use crate::{
     app_state::AppStatus,
     dictation_worker::{self, Intent},
     error::CommandError,
+    host::Flavor,
     settings::AppSettings,
+    settings_store, Core,
 };
 
 const TRAY_ID: &str = "scribe-main-tray";
@@ -89,7 +91,7 @@ pub fn setup(app: &AppHandle, settings: &AppSettings) -> tauri::Result<()> {
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
-        .tooltip(format!("{} - Idle", crate::display_name(app)))
+        .tooltip(format!("{} - Idle", display_name(app)))
         // Left-click opens the dashboard (handled below); the menu stays on
         // right-click only.
         .show_menu_on_left_click(false)
@@ -115,9 +117,9 @@ pub fn setup(app: &AppHandle, settings: &AppSettings) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             // Dictation actions run on the dictation worker, never on this
             // (main) thread, so a stop that transcribes cannot freeze the UI.
-            MENU_START_DICTATION => dictation_worker::submit(app, Intent::StartFromTray),
-            MENU_STOP_DICTATION => dictation_worker::submit(app, Intent::Stop),
-            MENU_PASTE_LAST_TRANSCRIPT => dictation_worker::submit(app, Intent::PasteLast),
+            MENU_START_DICTATION => submit(app, Intent::StartFromTray),
+            MENU_STOP_DICTATION => submit(app, Intent::Stop),
+            MENU_PASTE_LAST_TRANSCRIPT => submit(app, Intent::PasteLast),
             MENU_OPEN_DASHBOARD => {
                 let _ = open_dashboard(app, None);
             }
@@ -151,6 +153,29 @@ pub fn setup(app: &AppHandle, settings: &AppSettings) -> tauri::Result<()> {
     Ok(())
 }
 
+/// "Scribe" or "Scribe Dev", from the app's identifier, the same way the
+/// host tells the flavours apart.
+fn display_name(app: &AppHandle) -> &'static str {
+    Flavor::from_identifier(&app.config().identifier).display_name()
+}
+
+/// The engine, once setup has managed it (the tray is built after that, so
+/// a tray event always finds it).
+fn core_of(app: &AppHandle) -> Option<Core> {
+    app.try_state::<Core>().map(|core| core.inner().clone())
+}
+
+/// Queues a dictation action from the menu on the dictation worker.
+fn submit(app: &AppHandle, intent: Intent) {
+    match core_of(app) {
+        Some(core) => dictation_worker::submit_with(&core, intent),
+        None => log::error!(
+            "Dictation worker is not reachable yet: the engine is not ready; dropped {:?}",
+            intent
+        ),
+    }
+}
+
 /// Sets "Launch at startup" from the tray to the state the user ticked, the
 /// same way the switch in Settings does. Runs off the main thread: it writes
 /// the registry and the database.
@@ -159,13 +184,15 @@ fn set_launch_at_startup(app: &AppHandle, wanted: bool) {
     let spawned = std::thread::Builder::new()
         .name("launch-at-startup".into())
         .spawn(move || {
-            if let Err(error) = crate::commands::set_launch_at_startup(&app, wanted) {
+            let Some(core) = core_of(&app) else {
+                log::warn!("Could not reach the settings: the engine is not running yet");
+                return;
+            };
+            if let Err(error) = settings_store::set_launch_at_startup_with(&app, &core, wanted) {
                 log::warn!("Could not change launch at startup. {}", error.message);
                 // Put the tick back to the stored value.
-                if let Some(state) = app.try_state::<crate::commands::BackendState>() {
-                    if let Ok(settings) = state.db().and_then(|db| db.get_settings()) {
-                        sync_settings(&app, &settings);
-                    }
+                if let Ok(settings) = core.backend().db().and_then(|db| db.get_settings()) {
+                    sync_settings(&app, &settings);
                 }
             }
         });
@@ -177,14 +204,16 @@ fn set_launch_at_startup(app: &AppHandle, wanted: bool) {
 /// Copies Windows' Startup apps switch into "Launch at startup" (and so the
 /// tick). Never writes the startup entry. Runs off the main thread.
 fn refresh_launch_at_startup(app: &AppHandle) {
-    if !cfg!(windows) || app.try_state::<crate::commands::BackendState>().is_none() {
+    if !cfg!(windows) {
         return;
     }
-    let app = app.clone();
+    let Some(core) = core_of(app) else {
+        return;
+    };
     let _ = std::thread::Builder::new()
         .name("launch-at-startup".into())
         .spawn(move || {
-            if let Err(error) = crate::commands::sync_launch_at_startup(&app) {
+            if let Err(error) = settings_store::sync_launch_at_startup_with(&core) {
                 log::warn!(
                     "Could not follow Windows' Startup apps switch. {}",
                     error.message
@@ -253,7 +282,7 @@ fn set_tooltip(app: &AppHandle) {
         .clone();
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         let _ = tray.set_tooltip(Some(tooltip_text(
-            crate::display_name(app),
+            display_name(app),
             label,
             engine.as_deref(),
         )));

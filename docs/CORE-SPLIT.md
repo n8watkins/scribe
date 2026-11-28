@@ -25,7 +25,7 @@ The one intended visible change so far is #165's: `appVersion` in `status.json`,
 | `crates/scribe-core/src/host.rs` | `trait Host`: what the engine needs from its shell (`emit`, `paths`, `flavor`, the tray and main-window calls, the app's version, exiting, opening a path or URL, notifications, global shortcuts, the startup entry). `Flavor` (Stable or Dev). `RecordingHost`, a host for tests. |
 | `crates/scribe-core/src/core.rs` | `Core`: a cheap, cloneable handle owning the engine's parts (`backend()`, `warm_transcriber()`, `dictation_server()`, `note_sync()`, `dictation_worker()`, `hotkey_runtime()`, `replacements()`) and its `host()`, with `emit()`, `paths()` and `flavor()` shortcuts, and `shutdown()`. `CoreCell` hands the `Core` to the workers built before it. |
 | `crates/scribe-core/src/backend.rs` | `BackendState` (was in `commands.rs`): the database, the state machine, the audio service and the shared locks. |
-| `crates/scribe-core/src/shell.rs` | The installed `Host` (`shell::install`, `shell::host()`), which the remaining host-only wrappers use, and the old tray and window free functions, which forward to it. |
+| `crates/scribe-core/src/shell.rs` | The installed `Host` (`shell::install`, `shell::host()`), which the remaining host-only wrappers use (its tray and window free functions went in step 3c). |
 | `app/src-tauri/src/tauri_host.rs` | `TauriHost`: `Host` on Tauri. `emit` sends `app.emit(event.name(), &event)`. |
 | `app/src-tauri/src/commands/<domain>.rs` | The `#[tauri::command]` functions, one file per domain. `commands/mod.rs` has `off_main` (takes the app), `off_main_core` and `on_dialog_thread` (take the `Core`). |
 
@@ -52,18 +52,18 @@ Setup runs in this order, and a test in `app/src-tauri/src/lib.rs` pins it:
 
 1. resolve `Paths` and log any folder where they disagree with Tauri (every build; debug builds also assert);
 2. install the `TauriHost` (`shell::install`);
-3. open the database, manage `BackendState`, start the folder clean-up thread, stop stale speech processes;
-4. manage the `WarmTranscriber`, the `DictationServer` (when it starts), the `NoteSyncWorker`, the `DictationWorker`, the replacements store, and an empty `HotkeyRuntimeState`;
-5. build the `Core` from those same parts and manage it;
-6. register the hotkeys (`hotkeys::setup`, which fills in the hotkey runtime), build the tray, create the windows.
+3. open the database, build `BackendState`, start the folder clean-up thread on a clone of it, stop stale speech processes;
+4. build the `WarmTranscriber` and the `DictationServer` (when it starts) on the host, the `NoteSyncWorker` and the `DictationWorker` on a `CoreCell`, the replacements store (without its watch), and an empty `HotkeyRuntimeState`;
+5. build the `Core` from those parts, fill the cell, start the replacements watch (on the host and the cell), and manage the `Core`, the only state setup manages (since step 3c);
+6. register the hotkeys (`hotkeys::setup_with`, which fills in the hotkey runtime), build the tray, create the windows.
 
-Each part is a cheap handle onto shared state, so `app.state::<BackendState>()` and `core.backend()` are the same instance.
+Each part is a cheap handle onto shared state, so the clone a part was handed and `core.backend()` are the same instance.
 
 Engine work can also start from outside setup's own code: a queued dictation job, a hotkey press, a tray click, a window's command, or a remote command from a second launch (`Scribe toggle`).
 All of these can start only once the `Core` is managed: the hotkeys, the tray and the windows come after it, and the single-instance handler and the global-shortcut handler both drop their event with a log line while `try_state::<Core>()` is `None`.
-The only engine code that runs before the `Core` exists is setup's own steps 1 to 4 (and the threads they start: the folder clean-up, the speech engine watchdog and its `speech-engine-status` thread, the note-sync and dictation workers, the replacements watcher, the dictation-state server).
-Until step 3, three of those find what they need without the `Core`: the folder clean-up looks up the managed `BackendState`, `WarmTranscriber::new` takes the installed host and the managed `BackendState`, and the note-sync and dictation workers poll `try_state::<Core>()` until it is managed.
-Step 3 manages only the `Core`, hands those parts what they need directly, and gives the workers a `CoreCell` (see "Step 3").
+The only engine code that runs before the `Core` exists is setup's own steps 1 to 4 (and the threads they start: the folder clean-up, the speech engine watchdog and its `speech-engine-status` thread, the note-sync and dictation workers, the dictation-state server).
+The replacements watcher starts in step 5, once the cell is filled.
+None of those looks anything up: the folder clean-up gets its `BackendState`, the speech engine and the dictation-state server get the host, and the note-sync and dictation workers get a `CoreCell`, which they poll until setup fills it right after `Core::new` (step 3c).
 
 At exit the shell calls `Core::shutdown()`, which writes an idle status file, stops the dictation-state server and stops the speech engine, in that order.
 Stopping the speech engine (`WarmTranscriber::shutdown`, #154) first sets a `shutting_down` flag, then stops every speech helper process it started (whisper-server, scribe-parakeet) by its recorded identity, without taking the engine lock, and tidies the engine slot only if the lock is free.
@@ -73,7 +73,7 @@ Nothing in the app may rely on drop to stop anything: the handles are shared and
 (`WarmTranscriber` has a safety net that stops the engine when its last handle drops, for tests and for a shell that drops its `Core`; the app never reaches it.)
 The native shell must call `Core::shutdown()` on its way out too.
 
-Tests in `app/src-tauri/src/lib.rs` pin the startup order, the guards, the number of `app.manage(` calls (8, `lib.rs:1118`) and the 79 command names (`:871`); `app/src-tauri/tests/tauri_host.rs` checks `Paths` against Tauri's resolver for both flavors and the emitted payloads against the engine's own `app.emit` calls; `app/src-tauri/tests/models.rs` does the same for the models folder and the two models events.
+Tests in `app/src-tauri/src/lib.rs` pin the startup order, the guards, the number of `app.manage(` calls in setup (1, since step 3c) and the 79 command names; `app/src-tauri/tests/tauri_host.rs` checks `Paths` against Tauri's resolver for both flavors and the emitted payloads against the engine's own `app.emit` calls; `app/src-tauri/tests/models.rs` does the same for the models folder and the two models events.
 
 ### How the engine knows the main thread
 
@@ -182,7 +182,7 @@ It is done when `lib.rs` setup calls `app.manage(` exactly once (for the `Core`,
 | 2 | `output`, `data`, `audio`, `models`, `sync`, `hotkeys` | merged: #163, #161, #165, #162, #160, #164 (main 550f041) |
 | 3a | `recording-host` | merged: #169 |
 | 3b | `core-cell` | merged: #170 |
-| 3c | `wiring` | after 3a and 3b |
+| 3c | `wiring` | in review: #171 |
 | 4 | `sweep` | after 3c; one lane, alone |
 | 4b | `test-seams` | after 4; in parallel with 5 |
 | 5 | `drop-tauri` | after 4 |
@@ -200,9 +200,11 @@ Steps 3 to 6 build on these names:
   `TauriHost` answers them with the plugin calls the engine used to make; `tauri_host::autostart_plugin()` is the autostart plugin the shell registers (`lib.rs:358`).
 - The engine names the global-shortcut types from `global-hotkey`, which the plugin re-exports: `HotKey`, `GlobalHotKeyEvent`, `HotKeyState`, `Code`, `Modifiers` (#164).
   The plugin's handler stays in the shell (`lib.rs:344`-`:357`) and calls the engine.
-- `RecordingHost` records every event (`events()`) and, in a separate list, every call that acts (`calls()`, a list of `HostCall`: `Exit`, `OpenPath`, `OpenUrl`, `Notify`, `RegisterShortcut`, `UnregisterShortcut`, `SetLaunchAtLogin`; `host.rs:160`-`:168`).
+- `RecordingHost` records every event (`events()`) and, in a separate list, every call that acts (`calls()`, a list of `HostCall`: `Exit`, `OpenPath`, `OpenUrl`, `Notify`, `RegisterShortcut`, `UnregisterShortcut`, `SetLaunchAtLogin`, and since #169 the tray and main-window calls `SyncSettings`, `OpenDashboard`, `ToggleDashboard`, `UpdateTrayStatus` and `UpdateEngineSummary`).
+  `sequence()` keeps events and calls in one ordered log, so a test can pin an event against a call.
   It answers `RECORDING_HOST_VERSION` (or `with_app_version(..)`), holds shortcuts and the startup entry the way the plugins do, and `fail(Failing::..)` makes one kind of call fail with `Failing::message()`.
-  It records neither the queries (`app_version`, `is_shortcut_registered`, `launch_at_login`) nor the tray and main-window calls (`update_tray_status`, `update_engine_summary`, `sync_settings`, `open_dashboard`, `toggle_dashboard`; `host.rs:287`-`:299`), so two lanes wrote test-only wrapper hosts: `SequencedHost` (`output.rs:1096`, events and notifications in one ordered list) and `DashboardHost` (`hotkeys.rs:1880`, the main-window calls).
+  It does not record the queries (`app_version`, `is_shortcut_registered`, `launch_at_login`, `main_window_logical_size`).
+  The test-only wrapper hosts `SequencedHost` and `DashboardHost` that two step-2 lanes wrote are gone (#169).
   `RecordingHost::unregister_shortcut` answers `Ok` for a shortcut it does not hold, where the real plugin may answer an error, so no test may rely on releasing an unheld shortcut succeeding.
 - `CoreCell` (`core.rs:145`-`:166`): `CoreCell::new()`, `cell.fill(&core)` right after `Core::new(host, parts)` (whose signature did not change), and `cell.get()`.
   It holds `Arc<OnceLock<Weak<Inner>>>`; filling twice keeps the first and logs a warning; `get()` answers `None` both before the fill and after every `Core` handle is dropped.
@@ -397,10 +399,10 @@ The work is mostly deletions, ordered so each commit keeps `-D warnings` green, 
    | `model_manager::select_model_with`, `model_path_for_id_with` (not `AppHandle` wrappers; their bodies `select_model_in` and `model_path_for_id_in` stay, used at `:848` and `:391`) | `model_manager.rs:250`, `:349` | none (#162) |
    | `is_dev_flavor`, `display_name` (core `lib.rs`, with their doc comments) | `lib.rs:68`-`:81` | `lib.rs:417`, `:576`, `tray.rs:92`, `:256` (step 3) |
 
-5. Delete `crates/scribe-core/src/commands.rs` and `pub mod commands` (core `lib.rs:15`), and point its importers at `crate::backend::BackendState`: `data_hygiene.rs:25`, `model_manager.rs:18`, `note_sync.rs:11`, `diagnostics.rs:21`, `whisper_server.rs:46`, app `commands/mod.rs:21` (`pub use scribe_core::commands::*`), app `lib.rs:24`, `commands/shell.rs:8`, and whatever step 3 left in `tray.rs` (`:165`, `:180` on main).
+5. Delete `crates/scribe-core/src/commands.rs` and `pub mod commands` (core `lib.rs:15`), and point its importers at `crate::backend::BackendState`: `data_hygiene.rs:25`, `model_manager.rs:18`, `note_sync.rs:10`, `diagnostics.rs:21`, `whisper_server.rs:46`, app `commands/mod.rs:21` (`pub use scribe_core::commands::*`) and app `lib.rs:24` (step 3c removed the imports in `commands/shell.rs` and `tray.rs`).
    Step 4 does this rather than step 3 because five engine files import through it and step 4 edits every engine file anyway.
 6. Once no engine code calls `shell::host()` (after item 4 its callers are gone), delete `shell.rs` and its process-wide `HOST`, `pub mod shell` (core `lib.rs:53`, whose module comment links to it at `:8`), `shell::install` in setup and its step in the startup-order test, and `shell` from the app's re-exports (`lib.rs:18`).
-7. Stale comments that name the app or a later step in the files it edits (for example `hotkeys.rs:823`-`:824`, `file_transcribe.rs:36`-`:39`, `self_test.rs:76`-`:78`, `dictation_worker.rs:349`-`:350`, `:607`-`:609`, `:630`-`:633`, `:713`-`:717`).
+7. Stale comments that name the app or a later step in the files it edits (for example `hotkeys.rs:823`-`:824`, `file_transcribe.rs:36`-`:39`, `self_test.rs:76`-`:78`, `dictation_worker.rs:349`-`:350`, `:607`-`:609`, `:630`-`:633`, `:713`-`:717`), and the two that step 3c made stale outside its files: `core.rs:9`-`:13` (the shell no longer manages each part) and `replacements_file.rs:329` ("The store as Tauri manages it").
 
 **Hazards:** the `-D warnings` cases above (each `pub(crate)` or private item, unused import or unread field goes in the commit that removes its last use); `host::no_main_window()` (`host.rs:152`) keeps its code and its message, because after step 4 its remaining users mean "no window" or "no host", not "engine not ready"; the Windows-only code in `hotkeys.rs` and `autostart.rs` (see "Hazards") is proven only by the Windows CI jobs.
 
