@@ -188,7 +188,7 @@ fn set_launch_at_startup(app: &AppHandle, wanted: bool) {
                 log::warn!("Could not reach the settings: the engine is not running yet");
                 return;
             };
-            if let Err(error) = settings_store::set_launch_at_startup_with(&app, &core, wanted) {
+            if let Err(error) = settings_store::set_launch_at_startup_with(&core, wanted) {
                 log::warn!("Could not change launch at startup. {}", error.message);
                 // Put the tick back to the stored value.
                 if let Ok(settings) = core.backend().db().and_then(|db| db.get_settings()) {

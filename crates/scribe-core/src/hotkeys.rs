@@ -819,11 +819,7 @@ fn swap_transform_enabled(runtime: &HotkeyRuntime, enabled: bool) -> bool {
 /// registered (working bindings stay registered). Returns Err only when
 /// `next` fails validation, in which case nothing is changed. Runs on an
 /// engine thread, never the shell's main thread (see [`Host::register_shortcut`]).
-///
-/// `_app` is unused: `settings_store` (the `data` lane) still passes it, and
-/// P1-4 step 4 removes it with that caller.
 pub fn replace_hotkeys_with(
-    _app: &AppHandle,
     core: &Core,
     previous: &HotkeySettings,
     next: &HotkeySettings,

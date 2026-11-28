@@ -8,4 +8,3 @@
 
 pub use crate::backend::{Backend, BackendState};
 pub use crate::replacements_file::REPLACEMENTS_CHANGED_EVENT;
-pub use crate::settings_store::{set_launch_at_startup, sync_launch_at_startup};
