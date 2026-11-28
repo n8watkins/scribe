@@ -1924,7 +1924,7 @@ pub(crate) mod test_target {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::{Failing, HostCall};
+    use crate::host::{Failing, HostCall, Recorded};
     use crate::settings::AppSettings;
     use test_target::Recorder;
 
@@ -2373,7 +2373,16 @@ mod tests {
             } else {
                 crate::host::HostCall::OpenDashboard(None)
             };
-            assert_eq!(target.host.calls(), [expected]);
+            assert_eq!(target.host.calls(), std::slice::from_ref(&expected));
+            // The window call comes between the action's event and the error.
+            assert_eq!(
+                target.host.sequence(),
+                [
+                    Recorded::Event("scribe:hotkey-action", events[0].payload()),
+                    Recorded::Call(expected),
+                    Recorded::Event("audio://recording-error", events[1].payload()),
+                ]
+            );
         }
     }
 
