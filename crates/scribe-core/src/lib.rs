@@ -1,10 +1,11 @@
 //! Scribe's engine: recording, transcription, output, storage, sync and the
-//! interfaces other tools read. The desktop shell (app/src-tauri) builds the
-//! Tauri app, its windows and tray on top of it and re-exports these modules
-//! under their old `app_lib::` paths.
+//! interfaces other tools read. The engine has no dependency on Tauri. The
+//! desktop shell (app/src-tauri) builds the Tauri app, its windows and tray on
+//! top of it and re-exports these modules under their old `app_lib::` paths.
 //!
 //! The engine reaches the windows, the tray and the operating system only
-//! through the [`host::Host`] its shell hands to [`core::Core`].
+//! through the [`host::Host`] its shell hands to [`core::Core`], and reports
+//! what happens through the events the host receives.
 
 pub mod app_state;
 pub mod audio;
