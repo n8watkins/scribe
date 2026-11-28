@@ -385,7 +385,7 @@ mod tests {
     use super::*;
     use crate::data_hygiene::DataDirs;
     use crate::db::Database;
-    use crate::host::{Flavor, RecordingHost};
+    use crate::host::{Flavor, HostCall, Recorded, RecordingHost};
     use crate::paths::Paths;
     use serde_json::json;
     use std::path::Path;
@@ -446,6 +446,31 @@ mod tests {
                 "scribe:settings-changed",
                 serde_json::to_value(&settings).unwrap()
             )]
+        );
+    }
+
+    /// The tray menu's "Launch at startup" tick follows the announcement:
+    /// `scribe:settings-changed` first, then `SyncSettings` with the same
+    /// settings, and nothing else.
+    #[test]
+    fn emit_changed_announces_the_settings_then_syncs_the_tray() {
+        let root = tempfile::tempdir().unwrap();
+        let host = host_in(root.path());
+        let settings = AppSettings {
+            pill_x: Some(12),
+            launch_at_startup: true,
+            ..AppSettings::default()
+        };
+        emit_changed_with(&host, &settings);
+        assert_eq!(
+            host.sequence(),
+            [
+                Recorded::Event(
+                    "scribe:settings-changed",
+                    serde_json::to_value(&settings).unwrap()
+                ),
+                Recorded::Call(HostCall::SyncSettings(settings)),
+            ]
         );
     }
 

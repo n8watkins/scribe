@@ -992,7 +992,7 @@ fn catalog_model(model_id: &str) -> Result<CatalogModel, CommandError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::{Flavor, RecordingHost};
+    use crate::host::{Flavor, HostCall, RecordingHost};
 
     /// A host whose folders live in a fresh temporary folder.
     fn temp_host(name: &str) -> (RecordingHost, PathBuf) {
@@ -1246,7 +1246,14 @@ mod tests {
             serde_json::to_value(&events[0]).unwrap()["selectedModelId"],
             serde_json::Value::Null
         );
-        assert!(host.calls().is_empty());
+        // The tray menu is synced with the stored (cleared) settings, and
+        // nothing else is asked of the host.
+        assert_eq!(
+            host.calls(),
+            [HostCall::SyncSettings(
+                state.db().unwrap().get_settings().unwrap()
+            )]
+        );
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1338,7 +1345,14 @@ mod tests {
             serde_json::to_value(&events[0]).unwrap()["selectedModelId"],
             "tiny.en"
         );
-        assert!(host.calls().is_empty());
+        // The tray menu is synced with the stored settings, and nothing else
+        // is asked of the host.
+        assert_eq!(
+            host.calls(),
+            [HostCall::SyncSettings(
+                state.db().unwrap().get_settings().unwrap()
+            )]
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

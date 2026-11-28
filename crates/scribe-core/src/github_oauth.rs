@@ -770,8 +770,10 @@ mod tests {
         let stored = state.db().unwrap().get_settings().unwrap();
         assert_eq!(stored.github_account_login, "alice");
         // One announcement, carrying exactly what was stored.
-        assert_eq!(announced(&host), [stored]);
-        assert!(host.calls().is_empty());
+        assert_eq!(announced(&host), vec![stored.clone()]);
+        // The tray menu is synced with the same settings, and nothing else
+        // is asked of the host.
+        assert_eq!(host.calls(), [HostCall::SyncSettings(stored)]);
     }
 
     #[test]
@@ -820,7 +822,8 @@ mod tests {
         assert!(!settings.github_sync_all_transcripts);
         assert_eq!(settings.github_repo, "");
         assert_eq!(state.db().unwrap().get_settings().unwrap(), settings);
-        assert_eq!(announced(&host), [settings]);
+        assert_eq!(announced(&host), vec![settings.clone()]);
+        assert_eq!(host.calls(), [HostCall::SyncSettings(settings)]);
     }
 
     #[test]

@@ -180,8 +180,8 @@ It is done when `lib.rs` setup calls `app.manage(` exactly once (for the `Core`,
 |---|---|---|
 | 1 | `seams`, `e2e-log-check` | merged: #159, #158 |
 | 2 | `output`, `data`, `audio`, `models`, `sync`, `hotkeys` | merged: #163, #161, #165, #162, #160, #164 (main 550f041) |
-| 3a | `recording-host` | next; in parallel with 3b |
-| 3b | `core-cell` | in review: #170 |
+| 3a | `recording-host` | merged: #169 |
+| 3b | `core-cell` | merged: #170 |
 | 3c | `wiring` | after 3a and 3b |
 | 4 | `sweep` | after 3c; one lane, alone |
 | 4b | `test-seams` | after 4; in parallel with 5 |
