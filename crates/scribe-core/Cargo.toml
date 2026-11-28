@@ -1,8 +1,8 @@
 [package]
 name = "scribe-core"
 # Always the app's version: the engine reports CARGO_PKG_VERSION (update
-# check, user agents, the dictation-state interface), so release-kit bumps it
-# with the app (.release.json) and a test in the app crate checks they match.
+# check and user agents), so release-kit bumps it with the app
+# (.release.json) and a test in the app crate checks they match.
 version = "0.16.3"
 description = "Scribe's engine: recording, transcription, output, storage and sync, under the desktop shell."
 authors = ["Nat Atkins"]
@@ -17,18 +17,11 @@ publish = false
 e2e-audio = []
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-global-shortcut = "2"
 # The global-shortcut types the engine names (HotKey, Code, the press
-# events) without Tauri: the plugin above re-exports them from this crate, so
-# both name the same types (Host::register_shortcut, src/host.rs).
+# events; Host::register_shortcut, src/host.rs). The Tauri shell's
+# global-shortcut plugin re-exports them from this crate, so both name the
+# same types.
 global-hotkey = "0.8"
-tauri-plugin-opener = "2"
-tauri-plugin-single-instance = "2"
-tauri-plugin-log = "2"
-tauri-plugin-updater = "2"
-tauri-plugin-process = "2"
-tauri-plugin-notification = "2"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -52,14 +45,13 @@ keyring = { version = "3", features = ["windows-native"] }
 # own; tiny_http fits that model on a dedicated thread with hand-written SSE
 # framing, and pulls in almost no transitive dependencies.
 tiny_http = "0.12"
-# The app's folders without Tauri (src/paths.rs). The same major as Tauri's
-# own path resolver uses, so both name the same folders.
+# The app's folders (src/paths.rs). The same major as Tauri's path resolver
+# uses in the desktop shell, so both name the same folders.
 dirs = "7"
 
 [target.'cfg(windows)'.dependencies]
 # Reads the sign-in entry and Windows' Startup apps switch for it
-# (src/autostart.rs); the shell's autostart plugin, which writes the entry,
-# already uses it.
+# (src/autostart.rs); the shell's autostart plugin writes the entry.
 windows-registry = "0.6"
 windows = { version = "0.58", features = [
     "Win32_Devices_FunctionDiscovery",
@@ -90,8 +82,8 @@ libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The app in front (NSWorkspace), window order (CGWindowList), synthetic
-# keystrokes (CGEvent) and the full clipboard (NSPasteboard). Already in the
-# tree through Tauri and arboard.
+# keystrokes (CGEvent) and the full clipboard (NSPasteboard). Also in the
+# workspace tree through arboard and the Tauri shell.
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "libc", "NSPasteboard", "NSPasteboardItem", "NSRunningApplication", "NSWorkspace"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFArray", "CFDictionary", "CFNumber", "CFString"] }
@@ -107,14 +99,14 @@ keyring = { version = "3", features = ["apple-native"] }
 # through arboard.
 x11rb = { version = "0.13", features = ["xtest", "xfixes"] }
 # The GitHub token store: the freedesktop Secret Service (GNOME Keyring,
-# KWallet, KeePassXC) over D-Bus. libdbus is already linked through tao;
-# crypto-rust encrypts the session without needing OpenSSL.
+# KWallet, KeePassXC) over D-Bus. crypto-rust encrypts the session without
+# needing OpenSSL.
 keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 # Native Wayland: the XDG desktop portals send the paste keystroke
 # (RemoteDesktop, keyboard only, permission remembered with a restore token)
 # and deliver global hotkeys (GlobalShortcuts). async-io matches the zbus 5
-# runtime already in the tree through the single-instance plugin, so no
-# second D-Bus stack or tokio-bound connection is pulled in. ashpd's
+# runtime the workspace already uses (the shell's single-instance plugin), so
+# no second D-Bus stack or tokio-bound connection is pulled in. ashpd's
 # remote_desktop module needs its screencast types to compile; Scribe opens
 # no screen cast.
 ashpd = { version = "0.13", default-features = false, features = ["async-io", "remote_desktop", "screencast", "global_shortcuts"] }

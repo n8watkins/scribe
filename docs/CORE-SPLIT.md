@@ -149,7 +149,7 @@ It is done when `lib.rs` setup calls `app.manage(` exactly once (for the `Core`,
 | 3a | `recording-host` | merged: #169 |
 | 3b | `core-cell` | merged: #170 |
 | 3c | `wiring` | merged: #171 |
-| 4 | `sweep` | in review: #172 |
+| 4 | `sweep` | merged: #172 |
 | 4b | `test-seams` | after 4; in parallel with 5 |
 | 5 | `drop-tauri` | after 4 |
 | 6 | `rename` | after 4b and 5 |
