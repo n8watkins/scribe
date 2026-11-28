@@ -61,7 +61,8 @@ Each part is a cheap handle onto shared state, so the clone a part was handed an
 
 Engine work can also start from outside setup's own code: a queued dictation job, a hotkey press, a tray click, a window's command, or a remote command from a second launch (`Scribe toggle`).
 All of these can start only once the `Core` is managed: the hotkeys, the tray and the windows come after it, and the single-instance handler and the global-shortcut handler both drop their event with a log line while `try_state::<Core>()` is `None`.
-The only engine code that runs before the `Core` exists is setup's own steps 1 to 4 (and the threads they start: the folder clean-up, the speech engine watchdog and its `speech-engine-status` thread, the note-sync and dictation workers, the replacements watcher, the dictation-state server).
+The only engine code that runs before the `Core` exists is setup's own steps 1 to 4 (and the threads they start: the folder clean-up, the speech engine watchdog and its `speech-engine-status` thread, the note-sync and dictation workers, the dictation-state server).
+The replacements watcher starts in step 5, once the cell is filled.
 None of those looks anything up: the folder clean-up gets its `BackendState`, the speech engine and the dictation-state server get the host, and the note-sync and dictation workers get a `CoreCell`, which they poll until setup fills it right after `Core::new` (step 3c).
 
 At exit the shell calls `Core::shutdown()`, which writes an idle status file, stops the dictation-state server and stops the speech engine, in that order.
@@ -398,10 +399,10 @@ The work is mostly deletions, ordered so each commit keeps `-D warnings` green, 
    | `model_manager::select_model_with`, `model_path_for_id_with` (not `AppHandle` wrappers; their bodies `select_model_in` and `model_path_for_id_in` stay, used at `:848` and `:391`) | `model_manager.rs:250`, `:349` | none (#162) |
    | `is_dev_flavor`, `display_name` (core `lib.rs`, with their doc comments) | `lib.rs:68`-`:81` | `lib.rs:417`, `:576`, `tray.rs:92`, `:256` (step 3) |
 
-5. Delete `crates/scribe-core/src/commands.rs` and `pub mod commands` (core `lib.rs:15`), and point its importers at `crate::backend::BackendState`: `data_hygiene.rs:25`, `model_manager.rs:18`, `note_sync.rs:11`, `diagnostics.rs:21`, `whisper_server.rs:46`, app `commands/mod.rs:21` (`pub use scribe_core::commands::*`), app `lib.rs:24`, `commands/shell.rs:8`, and whatever step 3 left in `tray.rs` (`:165`, `:180` on main).
+5. Delete `crates/scribe-core/src/commands.rs` and `pub mod commands` (core `lib.rs:15`), and point its importers at `crate::backend::BackendState`: `data_hygiene.rs:25`, `model_manager.rs:18`, `note_sync.rs:10`, `diagnostics.rs:21`, `whisper_server.rs:46`, app `commands/mod.rs:21` (`pub use scribe_core::commands::*`) and app `lib.rs:24` (step 3c removed the imports in `commands/shell.rs` and `tray.rs`).
    Step 4 does this rather than step 3 because five engine files import through it and step 4 edits every engine file anyway.
 6. Once no engine code calls `shell::host()` (after item 4 its callers are gone), delete `shell.rs` and its process-wide `HOST`, `pub mod shell` (core `lib.rs:53`, whose module comment links to it at `:8`), `shell::install` in setup and its step in the startup-order test, and `shell` from the app's re-exports (`lib.rs:18`).
-7. Stale comments that name the app or a later step in the files it edits (for example `hotkeys.rs:823`-`:824`, `file_transcribe.rs:36`-`:39`, `self_test.rs:76`-`:78`, `dictation_worker.rs:349`-`:350`, `:607`-`:609`, `:630`-`:633`, `:713`-`:717`).
+7. Stale comments that name the app or a later step in the files it edits (for example `hotkeys.rs:823`-`:824`, `file_transcribe.rs:36`-`:39`, `self_test.rs:76`-`:78`, `dictation_worker.rs:349`-`:350`, `:607`-`:609`, `:630`-`:633`, `:713`-`:717`), and the two that step 3c made stale outside its files: `core.rs:9`-`:13` (the shell no longer manages each part) and `replacements_file.rs:329` ("The store as Tauri manages it").
 
 **Hazards:** the `-D warnings` cases above (each `pub(crate)` or private item, unused import or unread field goes in the commit that removes its last use); `host::no_main_window()` (`host.rs:152`) keeps its code and its message, because after step 4 its remaining users mean "no window" or "no host", not "engine not ready"; the Windows-only code in `hotkeys.rs` and `autostart.rs` (see "Hazards") is proven only by the Windows CI jobs.
 
