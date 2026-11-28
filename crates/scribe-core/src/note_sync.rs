@@ -9,7 +9,7 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use tauri::{AppHandle, Manager};
 
 use crate::commands::BackendState;
-use crate::core::{Core, CoreCell};
+use crate::core::{Core, CoreCell, CoreLookup};
 use crate::error::CommandError;
 use crate::github_backup::{GitHubBackup, SyncReport};
 use crate::replacements_file::ReplacementStore;
@@ -290,11 +290,10 @@ fn combine_sync_results(
     }
 }
 
-/// Owns the channel that note-save events are pushed onto. Held in Tauri's
-/// managed state. Clones share the channel (Tauri state and `core::Core` hold
-/// the same worker). The thread would end once every clone dropped, but the
-/// app never drops them; it ends with the process, so nothing may rely on drop
-/// to finish a sync.
+/// Owns the channel that note-save events are pushed onto. Clones share the
+/// channel; the `Core` holds one. The thread ends once every clone is dropped,
+/// or at the next signal after the `Core` is gone, but nothing may rely on
+/// drop to finish a sync: the app ends the thread with the process.
 #[derive(Clone)]
 pub struct NoteSyncWorker {
     tx: Sender<()>,
@@ -308,7 +307,10 @@ impl NoteSyncWorker {
     /// engine split switches the shell to [`NoteSyncWorker::spawn_with`].
     pub fn spawn(app: AppHandle) -> Self {
         Self::start(
-            move || app.try_state::<Core>().map(|core| core.inner().clone()),
+            move || match app.try_state::<Core>() {
+                Some(core) => CoreLookup::Ready(core.inner().clone()),
+                None => CoreLookup::NotFilled,
+            },
             sync_automatically,
             DEBOUNCE,
         )
@@ -319,18 +321,18 @@ impl NoteSyncWorker {
     /// through `cell` once per sync and drops it when the sync ends. It never
     /// stores a strong `Core`, so dropping the last `Core` closes the channel
     /// and ends the thread, when the `Core` holds the last sender. If another
-    /// sender outlives the `Core`, the thread keeps waking every 50 ms until
-    /// that sender drops. Until the cell is filled it polls every 50 ms and
-    /// drops no note-saved signal.
+    /// sender outlives the `Core`, the thread ends at its next note-saved
+    /// signal, which finds the `Core` gone. Until the cell is filled it polls
+    /// every 50 ms and drops no note-saved signal.
     pub fn spawn_with(cell: CoreCell) -> Self {
-        Self::start(move || cell.get(), sync_automatically, DEBOUNCE).0
+        Self::start(move || cell.lookup(), sync_automatically, DEBOUNCE).0
     }
 
     /// Starts the thread over any way of finding the engine, so tests can run
-    /// the whole worker without building a `Core`. Returns the thread's
-    /// handle too (`None` when the thread could not start).
+    /// the whole worker on a stand-in engine. Returns the thread's handle too
+    /// (`None` when the thread could not start).
     fn start<C: Send + 'static>(
-        find_core: impl Fn() -> Option<C> + Send + 'static,
+        find_core: impl Fn() -> CoreLookup<C> + Send + 'static,
         sync: impl Fn(&C) + Send + 'static,
         debounce: Duration,
     ) -> (Self, Option<thread::JoinHandle<()>>) {
@@ -353,12 +355,18 @@ impl NoteSyncWorker {
 const CORE_POLL: Duration = Duration::from_millis(50);
 
 /// Waits for the engine, which the shell builds after it starts this worker.
-/// Returns `None` only when the channel disconnects (the app is shutting
-/// down), so a note-saved signal is never dropped whatever the startup timing.
-fn wait_for_core<C>(find_core: &impl Fn() -> Option<C>, rx: &Receiver<()>) -> Option<C> {
+/// Returns `None`, and the thread ends, when the engine is gone for good or
+/// the channel disconnects (the app is shutting down); otherwise a
+/// note-saved signal is never dropped whatever the startup timing.
+fn wait_for_core<C>(find_core: &impl Fn() -> CoreLookup<C>, rx: &Receiver<()>) -> Option<C> {
     loop {
-        if let Some(core) = find_core() {
-            return Some(core);
+        match find_core() {
+            CoreLookup::Ready(core) => return Some(core),
+            CoreLookup::Gone => {
+                log::info!("The engine is gone; automatic GitHub backup stops");
+                return None;
+            }
+            CoreLookup::NotFilled => {}
         }
         match rx.recv_timeout(CORE_POLL) {
             // More saves while waiting: the sync that follows covers them.
@@ -369,7 +377,7 @@ fn wait_for_core<C>(find_core: &impl Fn() -> Option<C>, rx: &Receiver<()>) -> Op
 }
 
 fn worker_loop<C>(
-    find_core: impl Fn() -> Option<C>,
+    find_core: impl Fn() -> CoreLookup<C>,
     sync: impl Fn(&C),
     debounce: Duration,
     rx: Receiver<()>,
@@ -514,6 +522,31 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
+    /// A stand-in engine that is not built for the first `polls` lookups.
+    fn ready_after(seen: &AtomicUsize, polls: usize, engine: u32) -> CoreLookup<u32> {
+        if seen.fetch_add(1, Ordering::SeqCst) >= polls {
+            CoreLookup::Ready(engine)
+        } else {
+            CoreLookup::NotFilled
+        }
+    }
+
+    /// How long a test waits for the worker before it fails.
+    const TEST_DEADLINE: Duration = Duration::from_secs(10);
+
+    /// Joins `thread`, failing the test instead of hanging it when the
+    /// thread does not end within [`TEST_DEADLINE`].
+    fn join_within_deadline(thread: thread::JoinHandle<()>) {
+        let (ended, has_ended) = crossbeam_channel::bounded(1);
+        thread::spawn(move || {
+            let _ = ended.send(thread.join());
+        });
+        has_ended
+            .recv_timeout(TEST_DEADLINE)
+            .expect("the worker thread never ended")
+            .expect("the worker thread panicked");
+    }
+
     fn wait_until(what: &str, done: impl Fn() -> bool) {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while !done() {
@@ -532,7 +565,7 @@ mod tests {
             worker_loop(
                 move || {
                     seen_polls.fetch_add(1, Ordering::SeqCst);
-                    None::<u32>
+                    CoreLookup::<u32>::NotFilled
                 },
                 move |_| {
                     seen_syncs.fetch_add(1, Ordering::SeqCst);
@@ -560,7 +593,7 @@ mod tests {
         let (seen_polls, seen_synced) = (polls.clone(), synced.clone());
         let worker = thread::spawn(move || {
             worker_loop(
-                move || (seen_polls.fetch_add(1, Ordering::SeqCst) >= 3).then_some(7u32),
+                move || ready_after(&seen_polls, 3, 7u32),
                 move |core| seen_synced.lock().unwrap().push(*core),
                 Duration::from_millis(5),
                 rx,
@@ -579,7 +612,7 @@ mod tests {
         let synced = Arc::new(std::sync::Mutex::new(Vec::new()));
         let (seen_polls, seen_synced) = (polls.clone(), synced.clone());
         let (worker, thread) = NoteSyncWorker::start(
-            move || (seen_polls.fetch_add(1, Ordering::SeqCst) >= 2).then_some(9u32),
+            move || ready_after(&seen_polls, 2, 9u32),
             move |core| seen_synced.lock().unwrap().push(*core),
             Duration::from_millis(20),
         );
@@ -603,20 +636,84 @@ mod tests {
         let synced = Arc::new(AtomicUsize::new(0));
         let seen_synced = synced.clone();
         let find = cell.clone();
+        let (asked, was_asked) = crossbeam_channel::unbounded();
         let (worker, thread) = NoteSyncWorker::start(
-            move || find.get(),
+            move || {
+                let _ = asked.send(());
+                find.lookup()
+            },
             move |_core| {
                 seen_synced.fetch_add(1, Ordering::SeqCst);
             },
             Duration::from_millis(5),
         );
         worker.notify();
-        // Let it get past the debounce and into waiting for the engine.
-        thread::sleep(Duration::from_millis(120));
+        // Past the debounce and waiting for the engine: asked, and asked
+        // again.
+        for _ in 0..2 {
+            was_asked
+                .recv_timeout(TEST_DEADLINE)
+                .expect("the worker looks for the engine");
+        }
         drop(worker);
-        thread.expect("the thread started").join().unwrap();
-        assert!(cell.get().is_none());
+        join_within_deadline(thread.expect("the thread started"));
+        assert!(matches!(cell.lookup(), CoreLookup::NotFilled));
         assert_eq!(synced.load(Ordering::SeqCst), 0);
+    }
+
+    /// The regression step 3b fixes: with a sender that outlives the `Core`
+    /// (here the test's handle), the thread used to wake every 50 ms for as
+    /// long as that sender lived, since a dropped `Core` looked unfilled.
+    #[test]
+    fn a_signal_after_the_core_is_gone_ends_the_thread() {
+        use crate::core::test_core::TestCore;
+
+        let started = Arc::new(std::sync::Mutex::new(None));
+        let synced = Arc::new(AtomicUsize::new(0));
+        let (asked, was_asked) = crossbeam_channel::unbounded();
+        let TestCore {
+            core,
+            cell,
+            dir: _dir,
+            ..
+        } = {
+            let (started, synced) = (started.clone(), synced.clone());
+            TestCore::with_note_sync(move |cell| {
+                let (worker, thread) = NoteSyncWorker::start(
+                    move || {
+                        let found = cell.lookup();
+                        let _ = asked.send(matches!(found, CoreLookup::Gone));
+                        found
+                    },
+                    move |_core: &Core| {
+                        synced.fetch_add(1, Ordering::SeqCst);
+                    },
+                    Duration::ZERO,
+                );
+                *started.lock().unwrap() = thread;
+                worker
+            })
+        };
+        let thread = started.lock().unwrap().take().expect("the thread started");
+
+        // Kept past the `Core`, so the channel stays open.
+        let worker = core.note_sync().clone();
+        core.shutdown();
+        drop(core);
+        assert!(matches!(cell.lookup(), CoreLookup::Gone));
+
+        worker.notify();
+        // The one lookup this signal made found the engine gone ...
+        let gone = was_asked
+            .recv_timeout(TEST_DEADLINE)
+            .expect("the worker looks for the engine");
+        assert!(gone);
+        // ... and the thread ended on it, with the sender still alive.
+        join_within_deadline(thread);
+        assert!(was_asked.try_recv().is_err(), "no lookup after Gone");
+        assert_eq!(synced.load(Ordering::SeqCst), 0);
+        worker.notify();
+        drop(worker);
     }
 
     #[test]
