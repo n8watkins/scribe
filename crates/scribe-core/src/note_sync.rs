@@ -6,7 +6,6 @@ use std::thread;
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
-use tauri::{AppHandle, Manager};
 
 use crate::commands::BackendState;
 use crate::core::{Core, CoreCell, CoreLookup};
@@ -300,24 +299,8 @@ pub struct NoteSyncWorker {
 }
 
 impl NoteSyncWorker {
-    /// Spawns the background debounce-and-sync thread.
-    ///
-    /// The worker starts before the Core exists (the Core holds the worker),
-    /// so it finds the Core through the app each time it syncs. Step 3 of the
-    /// engine split switches the shell to [`NoteSyncWorker::spawn_with`].
-    pub fn spawn(app: AppHandle) -> Self {
-        Self::start(
-            move || match app.try_state::<Core>() {
-                Some(core) => CoreLookup::Ready(core.inner().clone()),
-                None => CoreLookup::NotFilled,
-            },
-            sync_automatically,
-            DEBOUNCE,
-        )
-        .0
-    }
-
-    /// [`NoteSyncWorker::spawn`] without the app: the worker finds the `Core`
+    /// Spawns the background debounce-and-sync thread. The worker starts
+    /// before the `Core` exists (the `Core` holds the worker): it finds the `Core`
     /// through `cell` once per sync and drops it when the sync ends. It never
     /// stores a strong `Core`, so dropping the last `Core` closes the channel
     /// and ends the thread, when the `Core` holds the last sender. If another

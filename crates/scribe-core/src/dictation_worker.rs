@@ -318,21 +318,6 @@ fn is_start(command: &DictationCommand) -> bool {
 }
 
 impl DictationWorker {
-    /// Starts the worker for the running app.
-    ///
-    /// The worker starts before the `Core` exists (the `Core` holds the
-    /// worker), so its thread finds the `Core` through the app for each job,
-    /// waiting for it rather than dropping the first jobs.
-    pub fn spawn(app: AppHandle) -> std::io::Result<Self> {
-        Self::spawn_finding(move || match app.try_state::<Core>() {
-            Some(core) => CoreLookup::Ready(AppExecutor {
-                app: app.clone(),
-                core: core.inner().clone(),
-            }),
-            None => CoreLookup::NotFilled,
-        })
-    }
-
     /// Starts the worker for a shell that hands it the `Core` through `cell`,
     /// which the shell fills right after `Core::new`.
     ///
