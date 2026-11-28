@@ -1079,7 +1079,9 @@ mod startup_order_tests {
         // The cell is filled right after `Core::new`: nothing runs between
         // building the Core and handing it to the waiting workers.
         let built = setup.find("Core::new(").unwrap();
-        let built = built + setup[built..].find(");\n").unwrap() + ");\n".len();
+        // The end of the `Core::new(..);` statement (the source may have CRLF
+        // line ends, on a Windows checkout).
+        let built = built + setup[built..].find(");").unwrap() + ");".len();
         let filled = setup.find("cell.fill(&core)").unwrap();
         assert_eq!(
             setup[built..filled].trim(),
