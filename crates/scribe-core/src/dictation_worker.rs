@@ -42,7 +42,7 @@ use tauri::{AppHandle, Manager};
 use crate::{
     app_state::AppStatus,
     audio::{self, RecordingResultStatus, RecordingSessionInfo, StartRecordingRequest},
-    core::{Core, CoreCell},
+    core::{Core, CoreCell, CoreLookup},
     dictation,
     error::CommandError,
     output::{self, OutputResult},
@@ -299,8 +299,8 @@ fn async_reply() -> (AsyncReply, ReplyFuture) {
     (AsyncReply(slot.clone()), ReplyFuture(slot))
 }
 
-/// Handle to the worker thread, kept in Tauri's managed state. Clones share
-/// the one worker (Tauri state and `core::Core` hold the same one).
+/// Handle to the worker thread. Clones share the one worker; the `Core`
+/// holds one.
 #[derive(Clone)]
 pub struct DictationWorker {
     sender: Sender<Job>,
@@ -324,52 +324,62 @@ impl DictationWorker {
     /// worker), so its thread finds the `Core` through the app for each job,
     /// waiting for it rather than dropping the first jobs.
     pub fn spawn(app: AppHandle) -> std::io::Result<Self> {
-        Self::spawn_finding(move || {
-            app.try_state::<Core>().map(|core| AppExecutor {
+        Self::spawn_finding(move || match app.try_state::<Core>() {
+            Some(core) => CoreLookup::Ready(AppExecutor {
                 app: app.clone(),
                 core: core.inner().clone(),
-            })
+            }),
+            None => CoreLookup::NotFilled,
         })
     }
 
     /// Starts the worker for a shell that hands it the `Core` through `cell`,
     /// which the shell fills right after `Core::new`.
     ///
-    /// The worker never keeps the `Core`: it calls [`CoreCell::get`] once per
-    /// job and drops the `Core` when that job ends. So the `Core`, which holds
-    /// this worker's sender, can be dropped while the worker exists, and the
-    /// worker thread then ends with the last sender. Before the cell is
-    /// filled, jobs wait in arrival order and none is dropped. Once a job has
-    /// found the `Core` and every `Core` handle is gone, later jobs are
-    /// answered `dictation_worker_unavailable`. If every `Core` handle is
-    /// dropped before any job ran, the worker cannot tell that from "not
-    /// filled yet" ([`CoreCell::get`] answers `None` for both) and keeps
-    /// polling until its channel closes; step 3 lets it tell them apart.
+    /// The worker never keeps the `Core`: it calls [`CoreCell::lookup`] once
+    /// per job and drops the `Core` when that job ends. So the `Core`, which
+    /// holds this worker's sender, can be dropped while the worker exists,
+    /// and the worker thread then ends with the last sender. Before the cell
+    /// is filled, jobs wait in arrival order and none is dropped. Once every
+    /// `Core` handle is gone, whether or not a job ever ran, the waiting job
+    /// and every later one are answered `dictation_worker_unavailable`.
     ///
     /// Still takes the app, only to pass it on to the other lanes' functions
     /// a job calls (see [`execute_with`]); P1-4 step 4 removes it.
     pub fn spawn_on(cell: CoreCell, app: AppHandle) -> std::io::Result<Self> {
         Self::spawn_finding(move || {
-            cell.get().map(|core| AppExecutor {
+            cell.lookup().map(|core| AppExecutor {
                 app: app.clone(),
                 core,
             })
         })
     }
 
+    /// [`DictationWorker::spawn_on`] for tests: finds the `Core` through
+    /// `cell` the same way and runs each job on the executor `executor_for`
+    /// builds from it, so no job reaches the microphone or the clipboard.
+    #[cfg(test)]
+    pub(crate) fn spawn_on_for_tests<E: Executor>(
+        cell: CoreCell,
+        executor_for: impl Fn(Core) -> E + Send + 'static,
+    ) -> std::io::Result<Self> {
+        Self::spawn_finding(move || cell.lookup().map(&executor_for))
+    }
+
     /// Starts the worker with an executor that is ready now.
     #[cfg(test)]
     pub(crate) fn spawn_with<E: Executor + Clone>(executor: E) -> std::io::Result<Self> {
-        Self::spawn_finding(move || Some(executor.clone()))
+        Self::spawn_finding(move || CoreLookup::Ready(executor.clone()))
     }
 
     /// Starts the worker thread. `find_executor` is asked for an executor
     /// once per job, which runs the job and is dropped with it, so the
-    /// worker keeps no executor (and no engine) between jobs. Until it first
-    /// answers, it is asked again every [`EXECUTOR_POLL`] while jobs queue up
-    /// in order; once it has answered, `None` means the engine is gone.
+    /// worker keeps no executor (and no engine) between jobs. While it
+    /// answers `NotFilled`, it is asked again every [`EXECUTOR_POLL`] while
+    /// jobs queue up in order; `Gone` answers the job
+    /// `dictation_worker_unavailable`.
     fn spawn_finding<E: Executor>(
-        find_executor: impl FnMut() -> Option<E> + Send + 'static,
+        find_executor: impl FnMut() -> CoreLookup<E> + Send + 'static,
     ) -> std::io::Result<Self> {
         let (sender, receiver) = channel::<Job>();
         let pending_starts = Arc::new(AtomicUsize::new(0));
@@ -463,12 +473,10 @@ const EXECUTOR_POLL: Duration = Duration::from_millis(50);
 /// The worker thread: runs every job in arrival order. Ends when every sender
 /// is gone, which is app shutdown (or the last `Core` dropped).
 fn worker_loop<E: Executor>(
-    mut find_executor: impl FnMut() -> Option<E>,
+    mut find_executor: impl FnMut() -> CoreLookup<E>,
     receiver: &Receiver<Job>,
     pending_starts: &AtomicUsize,
 ) {
-    // Whether the executor (the engine) was ever found.
-    let mut found = false;
     // Jobs that arrived while the worker waited for its executor, in order.
     let mut backlog = VecDeque::new();
     loop {
@@ -479,35 +487,37 @@ fn worker_loop<E: Executor>(
                 Err(_) => return,
             },
         };
-        let executor = if found {
-            find_executor()
-        } else {
-            let Some(executor) = wait_for_executor(&mut find_executor, receiver, &mut backlog)
-            else {
-                // The channel closed while waiting: the app is shutting down.
-                return;
-            };
-            found = true;
-            Some(executor)
-        };
         let start = is_start(&job.command);
         let finished = || {
             if start {
                 pending_starts.fetch_sub(1, Ordering::SeqCst);
             }
         };
-        match executor {
+        match wait_for_executor(&mut find_executor, receiver, &mut backlog) {
             // The executor, and the engine it holds, is dropped with its job.
-            Some(executor) => run_job(&executor, job, finished),
-            None => engine_gone(job, finished),
+            Found::Ready(executor) => run_job(&executor, job, finished),
+            Found::Gone => engine_gone(job, finished),
+            // The channel closed while waiting: the app is shutting down.
+            // Dropping the waiting jobs tells their callers the worker is
+            // gone.
+            Found::Closed => return,
         }
     }
 }
 
-/// A job that arrived after the engine it was found with went away (every
-/// `Core` handle was dropped): it cannot run. A waiting caller hears that the
-/// worker is gone; a fire-and-forget job is logged, as when the worker thread
-/// itself is gone.
+/// What [`wait_for_executor`] found.
+enum Found<E> {
+    Ready(E),
+    /// The engine is gone for good (every `Core` handle was dropped).
+    Gone,
+    /// Every sender is gone before the engine came.
+    Closed,
+}
+
+/// A job that arrived after the engine went away (every `Core` handle was
+/// dropped, whether or not a job ever ran on it): it cannot run. A waiting
+/// caller hears that the worker is gone; a fire-and-forget job is logged, as
+/// when the worker thread itself is gone.
 fn engine_gone(job: Job, finished: impl FnOnce()) {
     finished();
     log::error!(
@@ -519,23 +529,25 @@ fn engine_gone(job: Job, finished: impl FnOnce()) {
     }
 }
 
-/// Waits for the executor, which the shell builds after it starts this
-/// worker. Jobs that arrive meanwhile join `backlog`, in order, so none is
-/// dropped whatever the startup timing. Returns `None` only when the channel
-/// closes (the app is shutting down).
+/// Finds the executor for one job: asks once, and while the shell has not
+/// built the engine yet (`NotFilled`) waits for it, asking again every
+/// [`EXECUTOR_POLL`]. Jobs that arrive meanwhile join `backlog`, in order,
+/// so none is dropped whatever the startup timing.
 fn wait_for_executor<E>(
-    find_executor: &mut impl FnMut() -> Option<E>,
+    find_executor: &mut impl FnMut() -> CoreLookup<E>,
     receiver: &Receiver<Job>,
     backlog: &mut VecDeque<Job>,
-) -> Option<E> {
+) -> Found<E> {
     loop {
-        if let Some(executor) = find_executor() {
-            return Some(executor);
+        match find_executor() {
+            CoreLookup::Ready(executor) => return Found::Ready(executor),
+            CoreLookup::Gone => return Found::Gone,
+            CoreLookup::NotFilled => {}
         }
         match receiver.recv_timeout(EXECUTOR_POLL) {
             Ok(job) => backlog.push_back(job),
             Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => return None,
+            Err(RecvTimeoutError::Disconnected) => return Found::Closed,
         }
     }
 }
@@ -1108,7 +1120,11 @@ mod tests {
             let (fake, ready, asked) = (fake.clone(), ready.clone(), asked.clone());
             DictationWorker::spawn_finding(move || {
                 asked.fetch_add(1, Ordering::SeqCst);
-                ready.load(Ordering::SeqCst).then(|| fake.clone())
+                if ready.load(Ordering::SeqCst) {
+                    CoreLookup::Ready(fake.clone())
+                } else {
+                    CoreLookup::NotFilled
+                }
             })
             .unwrap()
         };
@@ -1165,11 +1181,12 @@ mod tests {
         }
     }
 
-    /// The `CoreCell` contract, on a stand-in engine (no test can build a
-    /// `Core` yet): the worker keeps no strong reference between jobs, so
+    /// The `CoreCell` contract, on a stand-in engine behind a weak
+    /// reference: the worker keeps no strong reference between jobs, so
     /// the engine can be dropped while the worker exists; jobs after that
     /// are answered at once, not left polling; and the worker thread ends
-    /// once its last sender is gone.
+    /// once its last sender is gone. The same on a real `Core`:
+    /// `a_core_dropped_before_any_job_answers_every_job_unavailable`.
     #[test]
     fn the_engine_can_be_dropped_while_the_worker_exists() {
         use std::sync::atomic::AtomicBool;
@@ -1182,7 +1199,10 @@ mod tests {
             let guard = SetOnDrop(ended.clone());
             DictationWorker::spawn_finding(move || {
                 let _guard = &guard;
-                cell.upgrade()
+                match cell.upgrade() {
+                    Some(engine) => CoreLookup::Ready(engine),
+                    None => CoreLookup::Gone,
+                }
             })
             .unwrap()
         };
@@ -1296,7 +1316,7 @@ mod tests {
 
         // The worker shuts down (its last sender dropped) while the command
         // still waits for an engine that never came.
-        let waiting = DictationWorker::spawn_finding(|| None::<Fake>).unwrap();
+        let waiting = DictationWorker::spawn_finding(|| CoreLookup::<Fake>::NotFilled).unwrap();
         let pending = waiting.call_async(start());
         drop(waiting);
         let error = block_on(pending).unwrap_err();
@@ -1321,7 +1341,7 @@ mod tests {
             let asked = asked.clone();
             DictationWorker::spawn_finding(move || {
                 asked.fetch_add(1, Ordering::SeqCst);
-                Some(Fake::default())
+                CoreLookup::Ready(Fake::default())
             })
             .unwrap()
         };
@@ -1329,6 +1349,116 @@ mod tests {
         assert_eq!(asked.load(Ordering::SeqCst), 0);
         worker.call(DictationCommand::Cancel).unwrap();
         assert_eq!(asked.load(Ordering::SeqCst), 1);
+    }
+
+    /// The regression step 3b fixes: a cell filled and emptied before any
+    /// job ran used to look unfilled, so the first job polled until the
+    /// channel closed, and a caller holding a worker handle (which keeps the
+    /// channel open) never heard back.
+    #[test]
+    fn a_core_dropped_before_any_job_answers_every_job_unavailable() {
+        use crate::core::test_core::TestCore;
+
+        let TestCore {
+            core,
+            cell,
+            ran,
+            dir: _dir,
+            ..
+        } = TestCore::new();
+        let worker = core.dictation_worker().clone();
+        core.shutdown();
+        drop(core);
+        assert!(matches!(cell.lookup(), CoreLookup::Gone));
+
+        let error = block_on(worker.call_async(start())).unwrap_err();
+        assert_eq!(error.code, "dictation_worker_unavailable");
+        let error = call_within_deadline(&worker, DictationCommand::Stop).unwrap_err();
+        assert_eq!(error.code, "dictation_worker_unavailable");
+        // A fire-and-forget start is dropped too, without leaving a start
+        // pending (the call behind it returns only after it was handled).
+        worker.send(start());
+        let error = block_on(worker.call_async(DictationCommand::Cancel)).unwrap_err();
+        assert_eq!(error.code, "dictation_worker_unavailable");
+        assert_eq!(worker.pending_starts.load(Ordering::SeqCst), 0);
+        assert!(ran.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_cell_driven_worker_runs_jobs_on_the_real_core_then_answers_unavailable_once_it_is_gone() {
+        use crate::core::test_core::TestCore;
+
+        let TestCore {
+            core,
+            cell,
+            ran,
+            dir: _dir,
+            ..
+        } = TestCore::new();
+        let worker = core.dictation_worker().clone();
+        let outcome = block_on(worker.call_async(DictationCommand::Cancel)).unwrap();
+        assert!(matches!(outcome, Outcome::Done));
+        // Not admitted while the real state machine is idle.
+        let outcome = block_on(worker.call_async(DictationCommand::Stop)).unwrap();
+        assert!(matches!(outcome, Outcome::Skipped));
+        assert_eq!(*ran.lock().unwrap(), vec!["Cancel".to_string()]);
+
+        // The worker may still hold the last job's `Core` for a moment after
+        // replying, but it lets go before it takes the next job, so the next
+        // job finds the engine gone.
+        core.shutdown();
+        drop(core);
+        let error = block_on(worker.call_async(DictationCommand::Cancel)).unwrap_err();
+        assert_eq!(error.code, "dictation_worker_unavailable");
+        assert!(matches!(cell.lookup(), CoreLookup::Gone));
+        assert_eq!(*ran.lock().unwrap(), vec!["Cancel".to_string()]);
+    }
+
+    #[test]
+    fn jobs_waiting_for_an_engine_that_goes_away_are_all_answered_in_order() {
+        #[derive(Clone, Copy)]
+        enum Engine {
+            NotFilled,
+            Gone,
+        }
+        let engine = Arc::new(Mutex::new(Engine::NotFilled));
+        let (asked, was_asked) = channel::<()>();
+        let worker = {
+            let engine = engine.clone();
+            DictationWorker::spawn_finding(move || {
+                let _ = asked.send(());
+                match *engine.lock().unwrap() {
+                    Engine::NotFilled => CoreLookup::<Fake>::NotFilled,
+                    Engine::Gone => CoreLookup::Gone,
+                }
+            })
+            .unwrap()
+        };
+
+        let first = worker.call_async(start());
+        worker.send(start());
+        let last = worker.call_async(DictationCommand::Stop);
+        // The worker is waiting for the engine: asked, and asked again.
+        for _ in 0..2 {
+            was_asked
+                .recv_timeout(TEST_DEADLINE)
+                .expect("the worker looks for the engine");
+        }
+
+        *engine.lock().unwrap() = Engine::Gone;
+        assert_eq!(
+            block_on(first).unwrap_err().code,
+            "dictation_worker_unavailable"
+        );
+        assert_eq!(
+            block_on(last).unwrap_err().code,
+            "dictation_worker_unavailable"
+        );
+        // Both starts were handled, the fire-and-forget one before `last`.
+        assert_eq!(worker.pending_starts.load(Ordering::SeqCst), 0);
+        // And every later job too, at once.
+        let error = call_within_deadline(&worker, DictationCommand::Cancel).unwrap_err();
+        assert_eq!(error.code, "dictation_worker_unavailable");
     }
 
     #[test]
