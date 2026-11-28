@@ -815,21 +815,56 @@ fn register_hotkey_set_with(
     core: &Core,
     hotkeys: &HotkeySettings,
 ) -> Vec<HotkeyRegistrationFailure> {
-    let registration = register_bindings(core.host().as_ref(), core.hotkey_runtime(), hotkeys);
+    register_hotkey_set_in(
+        core.host().as_ref(),
+        core.hotkey_runtime(),
+        &CoreWatchers(core),
+        hotkeys,
+    )
+}
 
-    configure_chord_watcher_with(core, registration.chord_bindings);
+/// The body of [`register_hotkey_set_with`]: registers the bindings, then
+/// configures the chord watcher, then the toggle watcher. Tests pass their
+/// own [`Watchers`], so no test starts a keyboard-polling thread.
+fn register_hotkey_set_in(
+    host: &dyn Host,
+    runtime: &HotkeyRuntime,
+    watchers: &impl Watchers,
+    hotkeys: &HotkeySettings,
+) -> Vec<HotkeyRegistrationFailure> {
+    let registration = register_bindings(host, runtime, hotkeys);
+
+    watchers.configure_chords(registration.chord_bindings);
 
     // The toggle key gets a native press/release watcher whenever its binding
     // maps to a pollable virtual key (see configure_toggle_watcher) - needed in
     // both modes, since modifier-less keys deliver no plugin events at all. The
     // watcher fires on the edge the toggle trigger selects.
-    configure_toggle_watcher_with(
-        core,
-        registration.toggle_vk,
-        hotkeys.toggle_dictation_trigger,
-    );
+    watchers.configure_toggle(registration.toggle_vk, hotkeys.toggle_dictation_trigger);
 
     registration.failures
+}
+
+/// Configures the two key watchers a registration asks for (Windows only;
+/// elsewhere they only record that nothing is watched).
+trait Watchers {
+    /// Stops the chord watcher and starts one on `bindings` when there are any.
+    fn configure_chords(&self, bindings: Vec<(ModifierChord, HotkeyAction)>);
+    /// Stops the toggle watcher and starts one on `vk` when it is set.
+    fn configure_toggle(&self, vk: Option<i32>, trigger: TriggerEdge);
+}
+
+/// The real watchers, run on the `Core` they poll for.
+struct CoreWatchers<'a>(&'a Core);
+
+impl Watchers for CoreWatchers<'_> {
+    fn configure_chords(&self, bindings: Vec<(ModifierChord, HotkeyAction)>) {
+        configure_chord_watcher_with(self.0, bindings);
+    }
+
+    fn configure_toggle(&self, vk: Option<i32>, trigger: TriggerEdge) {
+        configure_toggle_watcher_with(self.0, vk, trigger);
+    }
 }
 
 /// The host and runtime half of [`register_hotkey_set_with`]: registers the
@@ -2610,6 +2645,95 @@ mod tests {
         assert_eq!(
             runtime.action_for(&plugin_shortcut("Ctrl+Alt+Y")),
             Some(HotkeyAction::ToggleDictation)
+        );
+        assert!(host.events().is_empty());
+    }
+
+    /// What a test's [`FakeWatchers`] was asked to configure, with how many
+    /// host calls had been made by then.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Configured {
+        Chords(Vec<(ModifierChord, HotkeyAction)>, usize),
+        Toggle(Option<i32>, TriggerEdge, usize),
+    }
+
+    /// Records what the watchers would watch, without starting a thread.
+    struct FakeWatchers<'a> {
+        host: &'a crate::host::RecordingHost,
+        log: Mutex<Vec<Configured>>,
+    }
+
+    impl Watchers for FakeWatchers<'_> {
+        fn configure_chords(&self, bindings: Vec<(ModifierChord, HotkeyAction)>) {
+            let calls = self.host.calls().len();
+            self.log
+                .lock()
+                .unwrap()
+                .push(Configured::Chords(bindings, calls));
+        }
+
+        fn configure_toggle(&self, vk: Option<i32>, trigger: TriggerEdge) {
+            let calls = self.host.calls().len();
+            self.log
+                .lock()
+                .unwrap()
+                .push(Configured::Toggle(vk, trigger, calls));
+        }
+    }
+
+    /// Registering a set registers every binding with a key first, then
+    /// configures the chord watcher, then the toggle watcher, each once and
+    /// with what the registration found (on Windows a modifier-only chord
+    /// and a pollable toggle key; elsewhere neither can be watched).
+    #[test]
+    fn a_set_registers_its_bindings_then_the_chord_then_the_toggle_watcher() {
+        let host = recording_host();
+        let runtime = HotkeyRuntime::default();
+        let watchers = FakeWatchers {
+            host: &host,
+            log: Mutex::new(Vec::new()),
+        };
+        let hotkeys = HotkeySettings {
+            hold_to_talk: "Ctrl+Shift".to_string(),
+            toggle_dictation: "F9".to_string(),
+            toggle_dictation_trigger: TriggerEdge::Release,
+            ..keyed_hotkeys()
+        };
+
+        let failures = register_hotkey_set_in(&host, &runtime, &watchers, &hotkeys);
+
+        let keyed = [
+            HotkeyAction::ToggleDictation,
+            HotkeyAction::PasteLastTranscript,
+            HotkeyAction::OpenDashboard,
+            HotkeyAction::DiscardDictation,
+        ];
+        assert_eq!(
+            host.calls(),
+            keyed
+                .iter()
+                .map(|action| HostCall::RegisterShortcut(plugin_shortcut(
+                    action.shortcut(&hotkeys)
+                )))
+                .collect::<Vec<_>>()
+        );
+        let registered = keyed.len();
+        let (chords, toggle_vk, failed) = if cfg!(windows) {
+            (
+                vec![(expect_chord("Ctrl+Shift"), HotkeyAction::HoldToTalk)],
+                Some(0x78),
+                0,
+            )
+        } else {
+            (Vec::new(), None, 1)
+        };
+        assert_eq!(failures.len(), failed);
+        assert_eq!(
+            watchers.log.into_inner().unwrap(),
+            [
+                Configured::Chords(chords, registered),
+                Configured::Toggle(toggle_vk, TriggerEdge::Release, registered),
+            ]
         );
         assert!(host.events().is_empty());
     }
