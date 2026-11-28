@@ -150,7 +150,7 @@ It is done when `lib.rs` setup calls `app.manage(` exactly once (for the `Core`,
 | 3b | `core-cell` | merged: #170 |
 | 3c | `wiring` | merged: #171 |
 | 4 | `sweep` | merged: #172 |
-| 4b | `test-seams` | after 4; in parallel with 5 |
+| 4b | `test-seams` | in review: #174 |
 | 5 | `drop-tauri` | in review: #173 |
 | 6 | `rename` | after 4b and 5 |
 
