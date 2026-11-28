@@ -1366,18 +1366,6 @@ fn handle_note_chord_with(target: &(impl ActionTarget + ?Sized)) {
 /// recording for the spoken instruction. Aborts with a friendly notice when
 /// Local AI is off or nothing is selected, so the user never records an
 /// instruction for an empty selection. Runs on the dictation worker.
-/// Without the `Core` nothing is captured and the no-engine error comes back.
-pub(crate) fn start_transform(app: &AppHandle) -> Result<(), CommandError> {
-    match app.try_state::<Core>() {
-        Some(core) => start_transform_with(core.inner()),
-        None => {
-            log::warn!("Could not start Transform Selection: the engine is not ready yet");
-            Err(crate::host::no_main_window())
-        }
-    }
-}
-
-/// [`start_transform`] on the engine handle.
 pub(crate) fn start_transform_with(core: &Core) -> Result<(), CommandError> {
     // Second guard behind registration: never copy a selection while Local AI
     // is off.

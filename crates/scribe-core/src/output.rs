@@ -1,7 +1,6 @@
 use std::{thread, time::Duration};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
 
 pub use crate::platform::PasteTarget;
 use crate::{
@@ -11,7 +10,7 @@ use crate::{
     dictation_state::emit_state_snapshot_with,
     error::CommandError,
     events::CoreEvent,
-    host::{self, Host},
+    host::Host,
     platform,
     settings::{AppSettings, OutputMode, PasteMethod},
     transcript::Transcript,
@@ -150,26 +149,9 @@ pub struct OutputResult {
     pub message: String,
 }
 
-/// The engine's handle from an app, for the `AppHandle` wrappers that still
-/// find the `Core` through the app (the `audio` lane's, until P1-4 step 4
-/// deletes them and this). When the `Core` is not managed yet, logs a warning
-/// and gives the error a function with no main window returns.
-pub(crate) fn core_for<'a>(
-    app: &'a AppHandle,
-    what: &str,
-) -> Result<tauri::State<'a, Core>, CommandError> {
-    app.try_state::<Core>().ok_or_else(|| {
-        log::warn!("Could not {what}: the engine is not ready yet");
-        host::no_main_window()
-    })
-}
-
 /// Outputs a finished dictation the way the settings say (save only, paste,
-/// copy, or copy and paste). The app is unused: the parameter stays until
-/// P1-4 step 4 changes this and its caller (`dictation`, the `audio` lane)
-/// together.
+/// copy, or copy and paste).
 pub fn handle_transcription_output_with(
-    _app: &AppHandle,
     core: &Core,
     transcript: &Transcript,
     settings: &AppSettings,
@@ -232,13 +214,8 @@ pub fn paste_text_with(core: &Core, text: &str) -> Result<OutputResult, CommandE
     )
 }
 
-/// Pastes the Last Transcript Buffer. The app is unused: the parameter stays
-/// until P1-4 step 4 changes this and its caller (`dictation_worker`, the
-/// `audio` lane) together.
-pub fn paste_last_transcript_with(
-    _app: &AppHandle,
-    core: &Core,
-) -> Result<OutputResult, CommandError> {
+/// Pastes the Last Transcript Buffer.
+pub fn paste_last_transcript_with(core: &Core) -> Result<OutputResult, CommandError> {
     let state = core.backend();
     let transcript = state.last_transcript()?.ok_or_else(no_last_transcript)?;
     let paste_method = state.db()?.get_settings()?.paste_method;

@@ -23,7 +23,6 @@
 
 use std::time::Duration;
 
-use tauri::AppHandle;
 
 use crate::core::Core;
 use crate::error::CommandError;
@@ -240,11 +239,7 @@ pub fn focus_previous_app() -> Result<(), CommandError> {
 /// When the user has moved to another app while the model was working, the
 /// text is left on the clipboard instead (the error says so), because pasting
 /// into whatever is in front now would drop it in the wrong place.
-///
-/// The app is unused: the parameter stays until P1-4 step 4 changes this and
-/// its caller (`dictation`, the `audio` lane) together.
 pub fn apply_result_with(
-    _app: &AppHandle,
     core: &Core,
     text: &str,
     captured: CapturedSelection,

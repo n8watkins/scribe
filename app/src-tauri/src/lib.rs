@@ -486,8 +486,7 @@ pub fn run() {
             let note_sync = note_sync::NoteSyncWorker::spawn_with(cell.clone());
             // Every dictation action (hotkeys, tray, pill, dashboard) runs on
             // this one worker thread, so it must exist before any of them.
-            let dictation_worker =
-                dictation_worker::DictationWorker::spawn_on(cell.clone(), app.handle().clone())?;
+            let dictation_worker = dictation_worker::DictationWorker::spawn_on(cell.clone())?;
             // Replacements live in replacements.txt in the data folder; the
             // first run moves the list kept in settings there. A watcher,
             // started once the Core exists, picks up edits made in any editor.
@@ -1053,7 +1052,7 @@ mod startup_order_tests {
             "state_server::start_with(",
             "CoreCell::new()",
             "NoteSyncWorker::spawn_with(cell.clone())",
-            "DictationWorker::spawn_on(cell.clone(),",
+            "DictationWorker::spawn_on(cell.clone())",
             "ReplacementStore::open(",
             "HotkeyRuntimeState::default()",
             "Core::new(",
