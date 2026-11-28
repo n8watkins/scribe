@@ -37,7 +37,6 @@ use std::{
     time::Duration,
 };
 
-use tauri::{AppHandle, Manager};
 
 use crate::{
     app_state::AppStatus,
@@ -566,17 +565,6 @@ fn run_job<E: Executor>(executor: &E, job: Job, finished: impl FnOnce()) {
 /// Resolves `intent` against the current status and queues the resulting
 /// command. Safe to call from any thread, including the main thread and the
 /// audio callback thread: it never waits for the command to run.
-pub fn submit(app: &AppHandle, intent: Intent) {
-    match app.try_state::<Core>() {
-        Some(core) => submit_with(&core, intent),
-        None => log::error!(
-            "Dictation worker is not reachable yet: the engine is not ready; dropped {:?}",
-            intent
-        ),
-    }
-}
-
-/// [`submit`] on the engine.
 pub fn submit_with(core: &Core, intent: Intent) {
     let status = || Ok(core.backend().app_state()?.status().clone());
     if let Err(error) = core.dictation_worker().submit_intent(intent, status) {

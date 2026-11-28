@@ -188,17 +188,6 @@ pub fn cancel_model_download(
     Ok(())
 }
 
-/// Deletes a model (and any partial download of it) from the models folder of
-/// `host`. Deleting the selected model clears the selection unless another
-/// copy is still found.
-pub fn delete_model_with(
-    host: &dyn Host,
-    db: &Database,
-    model_id: &str,
-) -> Result<ModelInfo, CommandError> {
-    delete_model_in(&ModelFolders::of(host), db, model_id)
-}
-
 fn delete_model_in(
     folders: &ModelFolders,
     db: &Database,
@@ -243,16 +232,6 @@ fn delete_model_in(
 
     let registry = DownloadRegistry::default();
     model_info_for_catalog(folders, catalog_model, Some(&record), &settings, &registry)
-}
-
-/// Selects a downloaded model. The checksum of a large model takes seconds, so
-/// the database is locked only after it passes.
-pub fn select_model_with(
-    host: &dyn Host,
-    state: &BackendState,
-    model_id: &str,
-) -> Result<ModelInfo, CommandError> {
-    select_model_in(&ModelFolders::of(host), state, model_id)
 }
 
 fn select_model_in(
@@ -341,16 +320,6 @@ fn selected_model_path_in(
     };
 
     Ok((catalog_model.id.to_string(), resolved.path))
-}
-
-/// The file of a catalog model by id: the model a dictation started with,
-/// when it differs from the one selected now.
-/// In the models folder of `host`.
-pub fn model_path_for_id_with(
-    host: &dyn Host,
-    model_id: &str,
-) -> Result<(String, PathBuf), CommandError> {
-    model_path_for_id_in(&ModelFolders::of(host), model_id)
 }
 
 fn model_path_for_id_in(

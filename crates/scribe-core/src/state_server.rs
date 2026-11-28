@@ -35,7 +35,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::AppHandle;
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
 /// Loopback host - never bind a routable interface.
@@ -642,16 +641,6 @@ pub fn start_with(host: Arc<dyn Host>) -> Result<DictationServer, String> {
         control_path,
         base_url,
     })
-}
-
-/// [`start_with`] for callers that still hold an `AppHandle`. Uses the host the
-/// shell installed first thing in its setup; without one the server cannot
-/// start, which the caller already treats as best-effort.
-pub fn start(_app: &AppHandle) -> Result<DictationServer, String> {
-    match crate::shell::host() {
-        Some(host) => start_with(host.clone()),
-        None => Err("no host yet".to_string()),
-    }
 }
 
 #[cfg(test)]

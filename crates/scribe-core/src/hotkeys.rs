@@ -12,7 +12,6 @@ use global_hotkey::{
     GlobalHotKeyEvent, HotKeyState,
 };
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
 
 use crate::{
     audio,
@@ -485,31 +484,10 @@ impl HotkeyRuntime {
     }
 }
 
-/// Registers the hotkeys. `runtime` is the hotkey runtime the shell created
-/// and already manages (and handed to the `Core`), so a key press that
-/// arrives the moment a hotkey is registered finds it. The shell manages the
-/// `Core` before calling this; without it, nothing is registered and the
-/// no-engine error comes back.
-pub fn setup(
-    app: &AppHandle,
-    runtime: &HotkeyRuntimeState,
-    hotkeys: &HotkeySettings,
-    transform_enabled: bool,
-) -> Result<(), CommandError> {
-    let Some(core) = app.try_state::<Core>() else {
-        log::warn!("Could not register the hotkeys: the engine is not ready yet");
-        return Err(crate::host::no_main_window());
-    };
-    debug_assert!(
-        Arc::ptr_eq(&runtime.0, &core.hotkey_runtime().0),
-        "setup must fill in the Core's own hotkey runtime"
-    );
-    setup_with(core.inner(), hotkeys, transform_enabled)
-}
-
-/// [`setup`] on the engine handle; fills in `core`'s hotkey runtime and
-/// registers the hotkeys through the host. The shell calls it on its main
-/// thread before the event loop starts (the one registration allowed there).
+/// Registers the hotkeys and fills in `core`'s hotkey runtime, which the
+/// `Core` holds, so a key press that arrives the moment a hotkey is
+/// registered finds it. The shell calls it on its main thread before the
+/// event loop starts (the one registration allowed there).
 pub fn setup_with(
     core: &Core,
     hotkeys: &HotkeySettings,
@@ -542,17 +520,8 @@ pub fn setup_with(
     Ok(())
 }
 
-/// A global-shortcut plugin event. Ignored until the `Core` exists (the
-/// shell's handler already drops events before then).
-pub fn handle_shortcut(app: &AppHandle, shortcut: &HotKey, event: GlobalHotKeyEvent) {
-    let Some(core) = app.try_state::<Core>() else {
-        log::warn!("Ignored a hotkey: the engine is not ready yet");
-        return;
-    };
-    handle_shortcut_with(core.inner(), shortcut, event);
-}
-
-/// [`handle_shortcut`] on the engine handle.
+/// A global-shortcut plugin event. The shell's handler drops events before
+/// the `Core` exists.
 pub fn handle_shortcut_with(core: &Core, shortcut: &HotKey, event: GlobalHotKeyEvent) {
     let runtime = core.hotkey_runtime();
 

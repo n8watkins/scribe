@@ -25,7 +25,6 @@ use std::{
 };
 
 use crossbeam_channel::{Receiver, RecvTimeoutError};
-use tauri::AppHandle;
 
 use crate::{audio::MicrophoneInfo, error::CommandError, host::Host};
 
@@ -42,18 +41,8 @@ const CHUNK: Duration = Duration::from_millis(10);
 static CLIP_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 /// Switches the test input on when the process was started with [`ENV_VAR`]
-/// and this is the Dev flavor. Called once during setup.
-///
-/// Needs only the host, which is installed before anything else, so it uses
-/// that rather than the `Core` (like `status_file::publish`).
-pub fn activate(_app: &AppHandle) {
-    match crate::shell::host() {
-        Some(host) => activate_with(host.as_ref()),
-        None => log::warn!("E2E test audio stays off: no host yet"),
-    }
-}
-
-/// [`activate`] on the host, which says the flavor.
+/// and this is the Dev flavor. Called once during setup; the host says the
+/// flavor.
 pub fn activate_with(host: &dyn Host) {
     let requested = std::env::var_os(ENV_VAR);
     let dev_flavor = host.flavor().is_dev();

@@ -9,7 +9,6 @@
 //! `hold-start` and `hold-stop` drive hold to talk from desktops that can
 //! run a command on key release too (sway and Hyprland `bindr`).
 
-use tauri::{AppHandle, Manager};
 
 use crate::{
     core::Core,
@@ -42,18 +41,8 @@ impl RemoteCommand {
         }
     }
 
-    /// Acts as the matching hotkey would. Ignored until the `Core` exists
-    /// (the shell's single-instance handler already drops it before then).
-    pub fn run(self, app: &AppHandle) {
-        match app.try_state::<Core>() {
-            Some(core) => self.run_with(core.inner()),
-            None => {
-                log::warn!("Ignored {self:?} from the command line: the engine is not ready yet")
-            }
-        }
-    }
-
-    /// [`RemoteCommand::run`] on the engine handle.
+    /// Acts as the matching hotkey would. The shell's single-instance handler
+    /// drops the command before the `Core` exists.
     pub fn run_with(self, core: &Core) {
         self.run_on(core);
     }

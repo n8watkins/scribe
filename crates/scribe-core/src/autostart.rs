@@ -26,15 +26,11 @@
 //!
 //! The entry is written, removed and read through the [`Host`]
 //! (`launch_at_login`, `set_launch_at_login`); the shell registers the plugin
-//! (`tauri_host::autostart_plugin` in app/src-tauri). The functions that take
-//! an `AppHandle` are the old signatures, kept for their callers until P1-4
-//! moves them to the `_with` versions (docs/CORE-SPLIT.md).
-
-use tauri::AppHandle;
+//! (`tauri_host::autostart_plugin` in app/src-tauri).
 
 use crate::{
     error::CommandError,
-    host::{no_main_window, Host},
+    host::Host,
 };
 
 /// The argument the Windows sign-in entry starts Scribe with. A launch
@@ -163,18 +159,6 @@ fn dev_build_error() -> CommandError {
     )
 }
 
-/// [`apply_with`] on the installed host. The old signature, kept for its
-/// callers until P1-4.
-pub fn apply(_app: &AppHandle, enabled: bool) -> Result<(), CommandError> {
-    match crate::shell::host() {
-        Some(host) => apply_with(host.as_ref(), enabled),
-        None => {
-            log::warn!("Could not change launch at startup: no host yet");
-            Err(no_main_window())
-        }
-    }
-}
-
 /// Writes or removes the entry for the setting the user just chose in Scribe
 /// (the settings switch or the tray menu). Development builds refuse, so they
 /// never point the entry at a build folder.
@@ -200,18 +184,6 @@ fn write_entry(host: &dyn Host, enabled: bool) -> Result<(), CommandError> {
             ),
         )
     })
-}
-
-/// [`reconcile_at_launch_with`] on the installed host. The old signature,
-/// kept for its caller (the shell's setup) until P1-4.
-pub fn reconcile_at_launch(_app: &AppHandle, wanted: bool) -> Option<bool> {
-    match crate::shell::host() {
-        Some(host) => reconcile_at_launch_with(host.as_ref(), wanted),
-        None => {
-            log::warn!("Could not check the launch-at-startup entry: no host yet");
-            None
-        }
-    }
 }
 
 /// At launch: repairs or writes the entry when this is the installed copy,
@@ -270,13 +242,6 @@ pub fn reconcile_at_launch_with(host: &dyn Host, wanted: bool) -> Option<bool> {
         Err(error) => log::warn!("Could not read launch-at-startup state. {}", error),
     }
     None
-}
-
-/// [`follow_windows_switch_with`] on the installed host. The old signature,
-/// kept for its callers until P1-4.
-pub fn follow_windows_switch(_app: &AppHandle, wanted: bool) -> Option<bool> {
-    let host = crate::shell::host()?;
-    follow_windows_switch_with(host.as_ref(), wanted)
 }
 
 /// The value "Launch at startup" should take to follow Windows' switch, when
