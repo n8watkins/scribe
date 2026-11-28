@@ -78,14 +78,11 @@ pub async fn get_test_clip_audio(core: tauri::State<'_, Core>) -> Result<String,
 /// main thread.
 #[tauri::command]
 pub async fn transcribe_file(
-    app: tauri::AppHandle,
     core: tauri::State<'_, Core>,
     path: String,
 ) -> Result<TranscribeFileResult, CommandError> {
     let core = core.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        file_transcribe::transcribe_file_with(&app, &core, &path)
-    })
+    tauri::async_runtime::spawn_blocking(move || file_transcribe::transcribe_file_with(&core, &path))
     .await
     .map_err(|error| {
         CommandError::new(

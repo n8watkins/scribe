@@ -574,7 +574,7 @@ pub fn run() {
             // outcome and exits. Plain launches never take this branch.
             if let Some(request) = self_test::parse_args(std::env::args()) {
                 log::info!("Starting self-test run");
-                self_test::spawn_with(app.handle(), &core, request);
+                self_test::spawn_with(&core, request);
             }
 
             // Load the speech model now when "Keep the speech model loaded" is

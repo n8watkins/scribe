@@ -6,12 +6,11 @@ use std::{
 };
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
 use crate::{
     error::CommandError,
-    host::{no_main_window, Host},
+    host::Host,
 };
 
 #[derive(Debug, Clone)]
@@ -75,18 +74,6 @@ pub struct WhisperTranscription {
     pub latency_ms: u32,
 }
 
-/// The engine's host, for the `AppHandle` wrappers below: found through the
-/// managed [`Core`](crate::core::Core). None (logged) before it is managed.
-fn host_of(app: &AppHandle, function: &str) -> Option<std::sync::Arc<dyn Host>> {
-    match app.try_state::<crate::core::Core>() {
-        Some(core) => Some(core.host().clone()),
-        None => {
-            log::warn!("whisper::{function} ran before the engine was ready");
-            None
-        }
-    }
-}
-
 /// Transcribes one WAV with the bundled whisper-cli from the resources of
 /// `host`.
 pub fn transcribe_with(
@@ -115,15 +102,6 @@ pub fn transcribe_with(
 
     let output_prefix = output_prefix_for_wav(&request.wav_path);
     transcribe_with_output_prefix_with(host, &request, &output_prefix)
-}
-
-pub(crate) fn transcribe_with_output_prefix(
-    app: &AppHandle,
-    request: &WhisperRequest,
-    output_prefix: &Path,
-) -> Result<WhisperTranscription, CommandError> {
-    let host = host_of(app, "transcribe_with_output_prefix").ok_or_else(no_main_window)?;
-    transcribe_with_output_prefix_with(host.as_ref(), request, output_prefix)
 }
 
 /// Direct whisper-cli invocation with a caller-chosen output prefix, so the

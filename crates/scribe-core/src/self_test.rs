@@ -14,7 +14,6 @@ use std::{
 };
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
 
 use crate::{backend::BackendState, core::Core, file_transcribe, host::Host, model_manager};
 
@@ -61,26 +60,13 @@ where
 }
 
 /// Runs the self-test on a worker thread, then exits the app with 0 on a
-/// non-empty transcript and 1 otherwise.
-pub fn spawn(app: &AppHandle, request: SelfTestRequest) {
-    let Some(core) = app.try_state::<Core>() else {
-        log::error!("Could not start the self-test: the engine is not ready yet");
-        app.exit(1);
-        return;
-    };
-    spawn_with(app, &core, request);
-}
-
-/// [`spawn`] on the engine. The app's version and the exit go through the
-/// host: Dev and installer-upgrade builds override the version with
-/// `--config`, so it is not the engine crate's `CARGO_PKG_VERSION`. Still
-/// takes the app, only to pass it on to `file_transcribe::transcribe_file_with`
-/// (until P1-4 step 4).
-pub fn spawn_with(app: &AppHandle, core: &Core, request: SelfTestRequest) {
-    let worker_app = app.clone();
+/// non-empty transcript and 1 otherwise. The app's version and the exit go
+/// through the host: Dev and installer-upgrade builds override the version
+/// with `--config`, so it is not the engine crate's `CARGO_PKG_VERSION`.
+pub fn spawn_with(core: &Core, request: SelfTestRequest) {
     let worker_core = core.clone();
     start(core.host().clone(), request, move |app_version, audio| {
-        run(&worker_app, &worker_core, app_version, audio)
+        run(&worker_core, app_version, audio)
     });
 }
 
@@ -113,9 +99,8 @@ fn start(
     }
 }
 
-/// `app_version` is the running app's version (see [`spawn_with`]). Still
-/// takes the app for `file_transcribe::transcribe_file_with`.
-fn run(app: &AppHandle, core: &Core, app_version: String, audio: &Path) -> SelfTestResult {
+/// `app_version` is the running app's version (see [`spawn_with`]).
+fn run(core: &Core, app_version: String, audio: &Path) -> SelfTestResult {
     let mut result = SelfTestResult {
         ok: false,
         app_version,
@@ -131,7 +116,7 @@ fn run(app: &AppHandle, core: &Core, app_version: String, audio: &Path) -> SelfT
         return result;
     }
 
-    match file_transcribe::transcribe_file_with(app, core, &audio.to_string_lossy()) {
+    match file_transcribe::transcribe_file_with(core, &audio.to_string_lossy()) {
         Ok(transcription) => {
             result.ok = !transcription.text.trim().is_empty();
             if !result.ok {
