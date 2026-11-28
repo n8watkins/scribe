@@ -114,6 +114,79 @@ fn paste_block(pinned: Option<PasteTarget>) -> Option<PasteBlock> {
     paste_block_reason(pinned, current, elevated)
 }
 
+/// What the output paths do to the system: the focus guard, the paste
+/// check, keystrokes, and the clipboard. The paths take it as a parameter so
+/// a test can run them without typing into, pasting into or overwriting the
+/// clipboard of the machine it runs on; the app always passes
+/// [`SystemOutput`]. It holds no lock, and the paths never call it while
+/// holding an engine lock.
+trait OutputPlatform {
+    /// The user's clipboard, saved before a paste borrows it.
+    type Snapshot;
+    /// The transcript lent to the clipboard for one paste.
+    type Loan;
+
+    fn ensure_foreign_focus(&self) -> Result<(), CommandError>;
+    fn paste_block(&self, pinned: Option<PasteTarget>) -> Option<PasteBlock>;
+    fn type_text(&self, text: &str) -> Result<(), CommandError>;
+    fn set_private_clipboard_text(&self, text: &str) -> Result<(), CommandError>;
+    fn set_clipboard_text(&self, text: &str) -> Result<(), CommandError>;
+    fn send_paste_shortcut(&self) -> Result<(), CommandError>;
+    fn save_clipboard_snapshot(&self) -> Self::Snapshot;
+    fn lend_clipboard_text(&self, text: &str) -> Result<Self::Loan, CommandError>;
+    fn wait_for_read(&self, loan: Self::Loan, timeout: Duration) -> platform::LoanOutcome;
+    fn restore_clipboard_snapshot(&self, snapshot: &Self::Snapshot) -> Result<(), CommandError>;
+}
+
+/// The real system: each call is the `platform` call the output paths made
+/// before the seam.
+struct SystemOutput;
+
+impl OutputPlatform for SystemOutput {
+    type Snapshot = platform::ClipboardSnapshot;
+    type Loan = platform::ClipboardLoan;
+
+    fn ensure_foreign_focus(&self) -> Result<(), CommandError> {
+        platform::ensure_foreign_focus()
+    }
+
+    fn paste_block(&self, pinned: Option<PasteTarget>) -> Option<PasteBlock> {
+        paste_block(pinned)
+    }
+
+    fn type_text(&self, text: &str) -> Result<(), CommandError> {
+        platform::type_text(text)
+    }
+
+    fn set_private_clipboard_text(&self, text: &str) -> Result<(), CommandError> {
+        set_private_clipboard_text(text)
+    }
+
+    fn set_clipboard_text(&self, text: &str) -> Result<(), CommandError> {
+        set_clipboard_text(text)
+    }
+
+    fn send_paste_shortcut(&self) -> Result<(), CommandError> {
+        platform::send_paste_shortcut()
+    }
+
+    fn save_clipboard_snapshot(&self) -> Self::Snapshot {
+        platform::save_clipboard_snapshot()
+    }
+
+    fn lend_clipboard_text(&self, text: &str) -> Result<Self::Loan, CommandError> {
+        platform::lend_clipboard_text(text)
+    }
+
+    fn wait_for_read(&self, loan: Self::Loan, timeout: Duration) -> platform::LoanOutcome {
+        loan.wait_for_read(timeout)
+    }
+
+    fn restore_clipboard_snapshot(&self, snapshot: &Self::Snapshot) -> Result<(), CommandError> {
+        platform::restore_clipboard_snapshot(snapshot)
+    }
+}
+
 /// Honest description of what each output path did to the system clipboard.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -156,6 +229,15 @@ pub fn handle_transcription_output_with(
     transcript: &Transcript,
     settings: &AppSettings,
 ) -> Result<Option<OutputResult>, CommandError> {
+    handle_transcription_output_in(core, &SystemOutput, transcript, settings)
+}
+
+fn handle_transcription_output_in(
+    core: &Core,
+    system: &impl OutputPlatform,
+    transcript: &Transcript,
+    settings: &AppSettings,
+) -> Result<Option<OutputResult>, CommandError> {
     // Taken whatever the output mode, so a stale target never carries over
     // to a later dictation.
     let pinned = core.backend().take_paste_target();
@@ -163,6 +245,7 @@ pub fn handle_transcription_output_with(
         OutputMode::SaveOnly => return Ok(None),
         OutputMode::AutoPaste => paste_transcript_text(
             core,
+            system,
             transcript,
             OutputMode::AutoPaste,
             settings.paste_method.clone(),
@@ -171,11 +254,14 @@ pub fn handle_transcription_output_with(
         ),
         OutputMode::CopyClipboard => copy_transcript_text(
             core.host().as_ref(),
+            system,
             transcript,
             OutputMode::CopyClipboard,
             true,
         ),
-        OutputMode::CopyAndPaste => copy_and_paste_transcript_text(core, transcript, pinned, true),
+        OutputMode::CopyAndPaste => {
+            copy_and_paste_transcript_text(core, system, transcript, pinned, true)
+        }
     };
 
     result.map(Some)
@@ -191,6 +277,14 @@ pub fn handle_transcription_output_with(
 /// reuse `paste_transcript_text`; nothing is saved to history. Output events
 /// (`scribe:output-*`) are suppressed because this is not a dictation.
 pub fn paste_text_with(core: &Core, text: &str) -> Result<OutputResult, CommandError> {
+    paste_text_in(core, &SystemOutput, text)
+}
+
+fn paste_text_in(
+    core: &Core,
+    system: &impl OutputPlatform,
+    text: &str,
+) -> Result<OutputResult, CommandError> {
     let transcript = Transcript::new_last_buffer(text, None, None, None).ok_or_else(|| {
         CommandError::new(
             "transform_result_empty",
@@ -206,6 +300,7 @@ pub fn paste_text_with(core: &Core, text: &str) -> Result<OutputResult, CommandE
 
     paste_transcript_text(
         core,
+        system,
         &transcript,
         OutputMode::AutoPaste,
         paste_method,
@@ -216,12 +311,17 @@ pub fn paste_text_with(core: &Core, text: &str) -> Result<OutputResult, CommandE
 
 /// Pastes the Last Transcript Buffer.
 pub fn paste_last_transcript_with(core: &Core) -> Result<OutputResult, CommandError> {
+    paste_last_in(core, &SystemOutput)
+}
+
+fn paste_last_in(core: &Core, system: &impl OutputPlatform) -> Result<OutputResult, CommandError> {
     let state = core.backend();
     let transcript = state.last_transcript()?.ok_or_else(no_last_transcript)?;
     let paste_method = state.db()?.get_settings()?.paste_method;
 
     paste_transcript_text(
         core,
+        system,
         &transcript,
         OutputMode::AutoPaste,
         paste_method,
@@ -232,17 +332,29 @@ pub fn paste_last_transcript_with(core: &Core) -> Result<OutputResult, CommandEr
 
 /// Copies the Last Transcript Buffer to the clipboard.
 pub fn copy_last_transcript_with(core: &Core) -> Result<OutputResult, CommandError> {
-    copy_last(core.backend(), core.host().as_ref())
+    copy_last(core.backend(), core.host().as_ref(), &SystemOutput)
 }
 
-fn copy_last(state: &BackendState, host: &dyn Host) -> Result<OutputResult, CommandError> {
+fn copy_last(
+    state: &BackendState,
+    host: &dyn Host,
+    system: &impl OutputPlatform,
+) -> Result<OutputResult, CommandError> {
     let transcript = state.last_transcript()?.ok_or_else(no_last_transcript)?;
 
-    copy_transcript_text(host, &transcript, OutputMode::CopyClipboard, true)
+    copy_transcript_text(host, system, &transcript, OutputMode::CopyClipboard, true)
 }
 
 /// Pastes a saved transcript.
 pub fn paste_transcript_with(core: &Core, id: &str) -> Result<OutputResult, CommandError> {
+    paste_saved_in(core, &SystemOutput, id)
+}
+
+fn paste_saved_in(
+    core: &Core,
+    system: &impl OutputPlatform,
+    id: &str,
+) -> Result<OutputResult, CommandError> {
     let state = core.backend();
     let (transcript, paste_method) = {
         let db = state.db()?;
@@ -255,6 +367,7 @@ pub fn paste_transcript_with(core: &Core, id: &str) -> Result<OutputResult, Comm
 
     paste_transcript_text(
         core,
+        system,
         &transcript,
         OutputMode::AutoPaste,
         paste_method,
@@ -265,12 +378,13 @@ pub fn paste_transcript_with(core: &Core, id: &str) -> Result<OutputResult, Comm
 
 /// Copies a saved transcript to the clipboard.
 pub fn copy_transcript_with(core: &Core, id: &str) -> Result<OutputResult, CommandError> {
-    copy_saved(core.backend(), core.host().as_ref(), id)
+    copy_saved(core.backend(), core.host().as_ref(), &SystemOutput, id)
 }
 
 fn copy_saved(
     state: &BackendState,
     host: &dyn Host,
+    system: &impl OutputPlatform,
     id: &str,
 ) -> Result<OutputResult, CommandError> {
     let transcript = state
@@ -278,11 +392,12 @@ fn copy_saved(
         .get_transcript_by_id(id)?
         .ok_or_else(|| transcript_not_found(id))?;
 
-    copy_transcript_text(host, &transcript, OutputMode::CopyClipboard, true)
+    copy_transcript_text(host, system, &transcript, OutputMode::CopyClipboard, true)
 }
 
 fn paste_transcript_text(
     core: &Core,
+    system: &impl OutputPlatform,
     transcript: &Transcript,
     output_mode: OutputMode,
     paste_method: PasteMethod,
@@ -304,10 +419,10 @@ fn paste_transcript_text(
 
         // The paste hotkey can fire while one of our own windows is focused;
         // the transcript must never be typed into Scribe itself.
-        platform::ensure_foreign_focus()?;
+        system.ensure_foreign_focus()?;
 
-        if let Some(block) = paste_block(pinned) {
-            set_private_clipboard_text(&transcript.text)?;
+        if let Some(block) = system.paste_block(pinned) {
+            system.set_private_clipboard_text(&transcript.text)?;
             return Ok(paste_skipped_result(
                 transcript,
                 output_mode,
@@ -318,7 +433,7 @@ fn paste_transcript_text(
 
         match paste_method {
             PasteMethod::DirectInsert => {
-                platform::type_text(&transcript.text)?;
+                system.type_text(&transcript.text)?;
                 Ok(OutputResult {
                     transcript_id: transcript.id.clone(),
                     action: OutputAction::Paste,
@@ -333,7 +448,7 @@ fn paste_transcript_text(
                     message: "Inserted via keystrokes; clipboard untouched.".to_string(),
                 })
             }
-            PasteMethod::ClipboardPaste => clipboard_paste(transcript, output_mode),
+            PasteMethod::ClipboardPaste => clipboard_paste(system, transcript, output_mode),
         }
     })();
 
@@ -372,6 +487,7 @@ fn finish_output(
 /// skips a paste, so it never raises the "didn't paste" notification.
 fn copy_transcript_text(
     host: &dyn Host,
+    system: &impl OutputPlatform,
     transcript: &Transcript,
     output_mode: OutputMode,
     emit_events: bool,
@@ -384,7 +500,7 @@ fn copy_transcript_text(
         None,
     );
     let result = (|| {
-        set_clipboard_text(&transcript.text)?;
+        system.set_clipboard_text(&transcript.text)?;
 
         Ok(OutputResult {
             transcript_id: transcript.id.clone(),
@@ -407,6 +523,7 @@ fn copy_transcript_text(
 
 fn copy_and_paste_transcript_text(
     core: &Core,
+    system: &impl OutputPlatform,
     transcript: &Transcript,
     pinned: Option<PasteTarget>,
     emit_events: bool,
@@ -425,13 +542,13 @@ fn copy_and_paste_transcript_text(
             emit_state_snapshot_with(core, snapshot)
         });
 
-        set_clipboard_text(&transcript.text)?;
+        system.set_clipboard_text(&transcript.text)?;
         thread::sleep(Duration::from_millis(60));
         // The paste hotkey can fire while one of our own windows is focused;
         // the transcript must never be typed into Scribe itself. The
         // clipboard copy above is kept either way so a manual paste still works.
-        platform::ensure_foreign_focus()?;
-        if let Some(block) = paste_block(pinned) {
+        system.ensure_foreign_focus()?;
+        if let Some(block) = system.paste_block(pinned) {
             // The text is already on the clipboard, where this mode keeps it.
             return Ok(paste_skipped_result(
                 transcript,
@@ -440,7 +557,7 @@ fn copy_and_paste_transcript_text(
                 block,
             ));
         }
-        platform::send_paste_shortcut()?;
+        system.send_paste_shortcut()?;
 
         Ok(OutputResult {
             transcript_id: transcript.id.clone(),
@@ -487,6 +604,7 @@ const PASTE_READ_TIMEOUT: Duration = Duration::from_secs(3);
 /// a GlobalAlloc-backed variant such as CF_DIB/CF_DIBV5/CF_HDROP that IS
 /// captured, so images and files still restore correctly).
 fn clipboard_paste(
+    system: &impl OutputPlatform,
     transcript: &Transcript,
     output_mode: OutputMode,
 ) -> Result<OutputResult, CommandError> {
@@ -494,19 +612,19 @@ fn clipboard_paste(
     // bytes so the full payload (text, image, files, ...) can be restored after
     // the paste. A snapshot failure (e.g. another app is holding the clipboard)
     // is treated as "nothing to restore" so the paste still proceeds.
-    let snapshot = platform::save_clipboard_snapshot();
+    let snapshot = system.save_clipboard_snapshot();
 
     // The transcript is only borrowing the clipboard, so it is kept out of
     // Clipboard History, the cloud clipboard and clipboard managers.
-    let loan = platform::lend_clipboard_text(&transcript.text)?;
+    let loan = system.lend_clipboard_text(&transcript.text)?;
     // Let the clipboard write settle before the paste reads it.
     thread::sleep(Duration::from_millis(60));
     // `send_paste_shortcut` waits for held modifiers to release before injecting
     // Ctrl+V, so a still-held paste chord can't scramble the keystroke.
-    if let Err(error) = platform::send_paste_shortcut() {
+    if let Err(error) = system.send_paste_shortcut() {
         // Nothing was pasted; don't leave the transcript in place of the
         // user's clipboard.
-        if let Err(restore_error) = platform::restore_clipboard_snapshot(&snapshot) {
+        if let Err(restore_error) = system.restore_clipboard_snapshot(&snapshot) {
             log::warn!(
                 "Could not restore the clipboard after a failed paste: {}",
                 restore_error.message
@@ -516,7 +634,7 @@ fn clipboard_paste(
     }
     // Never put the old clipboard back before the target has read the text,
     // or it pastes the old clipboard instead of the dictation.
-    let outcome = loan.wait_for_read(PASTE_READ_TIMEOUT);
+    let outcome = system.wait_for_read(loan, PASTE_READ_TIMEOUT);
     if outcome == platform::LoanOutcome::NotRead {
         log::warn!(
             "The app in front didn't read the pasted text within {} s; restoring the clipboard anyway.",
@@ -525,7 +643,7 @@ fn clipboard_paste(
     }
 
     Ok(restore_result(transcript, output_mode, outcome, || {
-        platform::restore_clipboard_snapshot(&snapshot)
+        system.restore_clipboard_snapshot(&snapshot)
     }))
 }
 
@@ -858,7 +976,9 @@ pub fn paste_permission() -> PastePermission {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::{HostCall, Recorded};
+    use crate::core::test_core::TestCore;
+    use crate::host::{HostCall, Recorded, RecordingHost};
+    use std::sync::{Arc, Mutex};
 
     const EDITOR: PasteTarget = PasteTarget {
         window: 10,
@@ -1266,27 +1386,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    // The copies' success path writes the real clipboard, so only the paths
-    // that stop before it are tested here.
     #[test]
     fn copying_with_nothing_to_copy_fails_before_any_event() {
         let (state, root) = backend();
-        let host = recording_host();
+        let host = Arc::new(recording_host());
+        let system = FakeSystem::new(&host);
 
-        let error = copy_last(&state, &host).unwrap_err();
+        let error = copy_last(&state, host.as_ref(), &system).unwrap_err();
         assert_eq!(error.code, "last_transcript_missing");
-        let error = copy_saved(&state, &host, "no-such-id").unwrap_err();
+        let error = copy_saved(&state, host.as_ref(), &system, "no-such-id").unwrap_err();
         assert_eq!(error.code, "transcript_not_found");
         assert!(error.message.contains("no-such-id"));
 
         assert!(host.events().is_empty());
+        assert!(system.calls().is_empty(), "nothing reached the system");
         let _ = std::fs::remove_dir_all(root);
     }
 
-    // NOTE: `clipboard_paste` itself needs a real clipboard and a window to
-    // paste into; the Windows end-to-end test drives it (including an app
-    // that reads the clipboard late, issue #105). These tests cover how the
-    // wait's outcome and the restore turn into the result the user sees.
+    // The real clipboard paste needs a real clipboard and a window to paste
+    // into; the Windows end-to-end test drives it (including an app that
+    // reads the clipboard late, issue #105). These tests cover how the
+    // wait's outcome and the restore turn into the result the user sees; the
+    // tests on `FakeSystem` below cover the order of its steps.
 
     use crate::platform::LoanOutcome;
 
@@ -1358,5 +1479,515 @@ mod tests {
             result.clipboard_restore_error.as_deref(),
             Some("clipboard write failed")
         );
+    }
+
+    // The output paths on a `FakeSystem`: nothing here types, pastes or
+    // touches the clipboard of the machine the tests run on.
+
+    /// A call an output path made to the system.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Sys {
+        EnsureForeignFocus,
+        PasteBlock,
+        TypeText(String),
+        SetPrivateClipboardText(String),
+        SetClipboardText(String),
+        SendPasteShortcut,
+        SaveClipboardSnapshot,
+        LendClipboardText(String),
+        WaitForRead,
+        RestoreClipboardSnapshot,
+    }
+
+    /// Records each call with how many entries the host's ordered log held
+    /// when it came, so [`trace`] can place it among the events. It can fail
+    /// one kind of call and hold a paste back.
+    struct FakeSystem {
+        host: Arc<RecordingHost>,
+        calls: Mutex<Vec<(Sys, usize)>>,
+        failing: Option<std::mem::Discriminant<Sys>>,
+        block: Option<PasteBlock>,
+    }
+
+    impl FakeSystem {
+        fn new(host: &Arc<RecordingHost>) -> Self {
+            Self {
+                host: host.clone(),
+                calls: Mutex::new(Vec::new()),
+                failing: None,
+                block: None,
+            }
+        }
+
+        /// Fails every call of the kind `call` names (its text is ignored).
+        fn failing(mut self, call: Sys) -> Self {
+            self.failing = Some(std::mem::discriminant(&call));
+            self
+        }
+
+        fn blocking(mut self, block: PasteBlock) -> Self {
+            self.block = Some(block);
+            self
+        }
+
+        fn calls(&self) -> Vec<Sys> {
+            let calls = self.calls.lock().unwrap();
+            calls.iter().map(|(call, _)| call.clone()).collect()
+        }
+
+        fn record(&self, call: Sys) -> Result<(), CommandError> {
+            let at = self.host.sequence().len();
+            let fails = self.failing == Some(std::mem::discriminant(&call));
+            let error = fails.then(|| failure_of(&call));
+            self.calls.lock().unwrap().push((call, at));
+            error.map_or(Ok(()), Err)
+        }
+    }
+
+    fn failure_of(call: &Sys) -> CommandError {
+        CommandError::new("system_failed", format!("{call:?} failed."))
+    }
+
+    impl OutputPlatform for FakeSystem {
+        type Snapshot = ();
+        type Loan = ();
+
+        fn ensure_foreign_focus(&self) -> Result<(), CommandError> {
+            self.record(Sys::EnsureForeignFocus)
+        }
+
+        fn paste_block(&self, _pinned: Option<PasteTarget>) -> Option<PasteBlock> {
+            let _ = self.record(Sys::PasteBlock);
+            self.block
+        }
+
+        fn type_text(&self, text: &str) -> Result<(), CommandError> {
+            self.record(Sys::TypeText(text.to_string()))
+        }
+
+        fn set_private_clipboard_text(&self, text: &str) -> Result<(), CommandError> {
+            self.record(Sys::SetPrivateClipboardText(text.to_string()))
+        }
+
+        fn set_clipboard_text(&self, text: &str) -> Result<(), CommandError> {
+            self.record(Sys::SetClipboardText(text.to_string()))
+        }
+
+        fn send_paste_shortcut(&self) -> Result<(), CommandError> {
+            self.record(Sys::SendPasteShortcut)
+        }
+
+        fn save_clipboard_snapshot(&self) {
+            let _ = self.record(Sys::SaveClipboardSnapshot);
+        }
+
+        fn lend_clipboard_text(&self, text: &str) -> Result<(), CommandError> {
+            self.record(Sys::LendClipboardText(text.to_string()))
+        }
+
+        fn wait_for_read(&self, _loan: (), _timeout: Duration) -> platform::LoanOutcome {
+            let _ = self.record(Sys::WaitForRead);
+            platform::LoanOutcome::Read
+        }
+
+        fn restore_clipboard_snapshot(&self, _snapshot: &()) -> Result<(), CommandError> {
+            self.record(Sys::RestoreClipboardSnapshot)
+        }
+    }
+
+    /// One ordered log of the host's events and calls and the system's
+    /// calls: an app-state event shows its status, a system call its
+    /// `Debug` text.
+    fn trace(host: &RecordingHost, system: &FakeSystem) -> Vec<String> {
+        let sequence = host.sequence();
+        let calls = system.calls.lock().unwrap().clone();
+        let mut calls = calls.into_iter().peekable();
+        let mut out = Vec::new();
+        for (index, recorded) in sequence.iter().enumerate() {
+            while let Some((call, _)) = calls.next_if(|(_, at)| *at <= index) {
+                out.push(format!("{call:?}"));
+            }
+            out.push(match recorded {
+                Recorded::Event("scribe:app-state", payload) => {
+                    format!("scribe:app-state {}", payload["status"].as_str().unwrap())
+                }
+                Recorded::Event(name, _) => name.to_string(),
+                Recorded::Call(HostCall::Notify { title, .. }) => format!("notify {title}"),
+                Recorded::Call(call) => format!("{call:?}"),
+            });
+        }
+        out.extend(calls.map(|(call, _)| format!("{call:?}")));
+        out
+    }
+
+    fn settings(output_mode: OutputMode, paste_method: PasteMethod) -> AppSettings {
+        AppSettings {
+            output_mode,
+            paste_method,
+            ..AppSettings::default()
+        }
+    }
+
+    fn hello() -> Transcript {
+        Transcript::new_last_buffer("hello", Some(100), None, None).unwrap()
+    }
+
+    /// The default paste after a dictation: the state shows Pasting around
+    /// every step of the borrow (published through `emit_state_snapshot_with`),
+    /// then Ready, then the outcome is announced.
+    #[test]
+    fn a_clipboard_paste_runs_between_pasting_and_ready() {
+        let test = TestCore::new();
+        to_ready(test.core.backend());
+        let system = FakeSystem::new(&test.host);
+
+        let result = handle_transcription_output_in(
+            &test.core,
+            &system,
+            &hello(),
+            &settings(OutputMode::AutoPaste, PasteMethod::ClipboardPaste),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(result.status, OutputStatus::Completed);
+        assert_eq!(
+            result.clipboard_preservation,
+            ClipboardPreservation::RestoredAfterPaste
+        );
+        assert_eq!(
+            trace(&test.host, &system),
+            [
+                "scribe:output-started",
+                "scribe:app-state Pasting",
+                "EnsureForeignFocus",
+                "PasteBlock",
+                "SaveClipboardSnapshot",
+                "LendClipboardText(\"hello\")",
+                "SendPasteShortcut",
+                "WaitForRead",
+                "RestoreClipboardSnapshot",
+                "scribe:app-state Ready",
+                "scribe:output-completed",
+            ]
+        );
+        assert_eq!(status(test.core.backend()), AppStatus::Ready);
+        // Each state went to the status file as well as the event.
+        let status_file =
+            std::fs::read_to_string(test.core.paths().cache_dir().join("status.json")).unwrap();
+        assert!(status_file.contains("\"Ready\""), "{status_file}");
+        test.core.shutdown();
+    }
+
+    /// Every way a dictation's output can fail, on each of the three paths:
+    /// the failure is announced exactly once, after the state is back to
+    /// Ready, and the steps after the failed one never run.
+    #[test]
+    fn each_output_path_announces_a_failure_exactly_once() {
+        let cases = [
+            (
+                settings(OutputMode::AutoPaste, PasteMethod::DirectInsert),
+                Sys::TypeText(String::new()),
+                vec![
+                    "scribe:output-started",
+                    "scribe:app-state Pasting",
+                    "EnsureForeignFocus",
+                    "PasteBlock",
+                    "TypeText(\"hello\")",
+                    "scribe:app-state Ready",
+                    "scribe:output-failed",
+                ],
+            ),
+            (
+                settings(OutputMode::AutoPaste, PasteMethod::DirectInsert),
+                Sys::EnsureForeignFocus,
+                vec![
+                    "scribe:output-started",
+                    "scribe:app-state Pasting",
+                    "EnsureForeignFocus",
+                    "scribe:app-state Ready",
+                    "scribe:output-failed",
+                ],
+            ),
+            (
+                // A paste that could not be sent puts the user's clipboard
+                // back before it fails.
+                settings(OutputMode::AutoPaste, PasteMethod::ClipboardPaste),
+                Sys::SendPasteShortcut,
+                vec![
+                    "scribe:output-started",
+                    "scribe:app-state Pasting",
+                    "EnsureForeignFocus",
+                    "PasteBlock",
+                    "SaveClipboardSnapshot",
+                    "LendClipboardText(\"hello\")",
+                    "SendPasteShortcut",
+                    "RestoreClipboardSnapshot",
+                    "scribe:app-state Ready",
+                    "scribe:output-failed",
+                ],
+            ),
+            (
+                settings(OutputMode::AutoPaste, PasteMethod::ClipboardPaste),
+                Sys::LendClipboardText(String::new()),
+                vec![
+                    "scribe:output-started",
+                    "scribe:app-state Pasting",
+                    "EnsureForeignFocus",
+                    "PasteBlock",
+                    "SaveClipboardSnapshot",
+                    "LendClipboardText(\"hello\")",
+                    "scribe:app-state Ready",
+                    "scribe:output-failed",
+                ],
+            ),
+            (
+                // A copy has no paste, so the state is left alone.
+                settings(OutputMode::CopyClipboard, PasteMethod::ClipboardPaste),
+                Sys::SetClipboardText(String::new()),
+                vec![
+                    "scribe:output-started",
+                    "SetClipboardText(\"hello\")",
+                    "scribe:output-failed",
+                ],
+            ),
+            (
+                settings(OutputMode::CopyAndPaste, PasteMethod::ClipboardPaste),
+                Sys::SendPasteShortcut,
+                vec![
+                    "scribe:output-started",
+                    "scribe:app-state Pasting",
+                    "SetClipboardText(\"hello\")",
+                    "EnsureForeignFocus",
+                    "PasteBlock",
+                    "SendPasteShortcut",
+                    "scribe:app-state Ready",
+                    "scribe:output-failed",
+                ],
+            ),
+            (
+                settings(OutputMode::CopyAndPaste, PasteMethod::ClipboardPaste),
+                Sys::SetClipboardText(String::new()),
+                vec![
+                    "scribe:output-started",
+                    "scribe:app-state Pasting",
+                    "SetClipboardText(\"hello\")",
+                    "scribe:app-state Ready",
+                    "scribe:output-failed",
+                ],
+            ),
+        ];
+
+        for (settings, failing, expected) in cases {
+            let test = TestCore::new();
+            to_ready(test.core.backend());
+            let system = FakeSystem::new(&test.host).failing(failing);
+            let transcript = hello();
+
+            let error = handle_transcription_output_in(&test.core, &system, &transcript, &settings)
+                .unwrap_err();
+
+            let failed_call = system.calls().last().cloned().unwrap();
+            assert_eq!(error.code, "system_failed", "{settings:?}");
+            assert_eq!(
+                trace(&test.host, &system),
+                expected,
+                "{:?} {:?}",
+                settings.output_mode,
+                settings.paste_method
+            );
+            let failed = test
+                .host
+                .events()
+                .into_iter()
+                .filter(|event| event.name() == "scribe:output-failed")
+                .map(|event| event.payload())
+                .collect::<Vec<_>>();
+            let reported = if failed_call == Sys::RestoreClipboardSnapshot {
+                // The restore after a failed paste succeeded; the paste's
+                // own error is the one reported.
+                failure_of(&Sys::SendPasteShortcut)
+            } else {
+                failure_of(&failed_call)
+            };
+            assert_eq!(
+                failed,
+                [serde_json::json!({
+                    "transcriptId": transcript.id,
+                    "code": "system_failed",
+                    "message": reported.message,
+                })]
+            );
+            assert_eq!(status(test.core.backend()), AppStatus::Ready);
+            test.core.shutdown();
+        }
+    }
+
+    /// A paste Scribe held back leaves the text on the clipboard (privately
+    /// for a paste, as asked for Copy + Paste) and is announced, then
+    /// notified; nothing is typed or pasted.
+    #[test]
+    fn a_held_back_paste_is_copied_then_announced_then_notified() {
+        let cases = [
+            (
+                settings(OutputMode::AutoPaste, PasteMethod::ClipboardPaste),
+                vec![
+                    "scribe:output-started",
+                    "scribe:app-state Pasting",
+                    "EnsureForeignFocus",
+                    "PasteBlock",
+                    "SetPrivateClipboardText(\"hello\")",
+                    "scribe:app-state Ready",
+                    "scribe:output-completed",
+                    "notify Scribe didn't paste",
+                ],
+            ),
+            (
+                settings(OutputMode::CopyAndPaste, PasteMethod::ClipboardPaste),
+                vec![
+                    "scribe:output-started",
+                    "scribe:app-state Pasting",
+                    "SetClipboardText(\"hello\")",
+                    "EnsureForeignFocus",
+                    "PasteBlock",
+                    "scribe:app-state Ready",
+                    "scribe:output-completed",
+                    "notify Scribe didn't paste",
+                ],
+            ),
+        ];
+
+        for (settings, expected) in cases {
+            let test = TestCore::new();
+            to_ready(test.core.backend());
+            let system = FakeSystem::new(&test.host).blocking(PasteBlock::FocusChanged);
+
+            let result = handle_transcription_output_in(&test.core, &system, &hello(), &settings)
+                .unwrap()
+                .unwrap();
+
+            assert_eq!(result.status, OutputStatus::PasteSkipped);
+            assert!(!result.pasted);
+            assert_eq!(trace(&test.host, &system), expected, "{settings:?}");
+            test.core.shutdown();
+        }
+    }
+
+    /// The selected-text transform pastes with events off: whether the paste
+    /// lands or fails, no outcome and no notification is sent. (Today it
+    /// still sends `scribe:output-started`, which this pins.)
+    #[test]
+    fn the_transform_paste_announces_no_outcome() {
+        for (failing, expected) in [
+            (
+                None,
+                vec![
+                    "scribe:output-started",
+                    "scribe:app-state Pasting",
+                    "EnsureForeignFocus",
+                    "PasteBlock",
+                    "SaveClipboardSnapshot",
+                    "LendClipboardText(\"rewritten\")",
+                    "SendPasteShortcut",
+                    "WaitForRead",
+                    "RestoreClipboardSnapshot",
+                    "scribe:app-state Ready",
+                ],
+            ),
+            (
+                Some(Sys::EnsureForeignFocus),
+                vec![
+                    "scribe:output-started",
+                    "scribe:app-state Pasting",
+                    "EnsureForeignFocus",
+                    "scribe:app-state Ready",
+                ],
+            ),
+        ] {
+            let test = TestCore::new();
+            to_ready(test.core.backend());
+            let system = FakeSystem::new(&test.host);
+            let system = match failing.clone() {
+                Some(call) => system.failing(call),
+                None => system,
+            };
+
+            let result = paste_text_in(&test.core, &system, "rewritten");
+
+            assert_eq!(result.is_err(), failing.is_some());
+            assert_eq!(trace(&test.host, &system), expected, "{failing:?}");
+            assert!(test.host.calls().is_empty(), "no notification");
+            test.core.shutdown();
+        }
+
+        // Even a paste held back raises no notification.
+        let test = TestCore::new();
+        let system = FakeSystem::new(&test.host).blocking(PasteBlock::Elevated);
+        let result = paste_text_in(&test.core, &system, "rewritten").unwrap();
+        assert_eq!(result.status, OutputStatus::PasteSkipped);
+        assert_eq!(
+            trace(&test.host, &system),
+            [
+                "scribe:output-started",
+                "EnsureForeignFocus",
+                "PasteBlock",
+                "SetPrivateClipboardText(\"rewritten\")",
+            ]
+        );
+        test.core.shutdown();
+    }
+
+    /// Pasting or copying a transcript the user picked announces its
+    /// outcome, and outside Ready the state is left alone.
+    #[test]
+    fn a_picked_transcript_is_pasted_or_copied_and_announced() {
+        let test = TestCore::new();
+        let transcript = hello();
+        {
+            let db = test.core.backend().db().unwrap();
+            db.save_settings(&settings(OutputMode::AutoPaste, PasteMethod::DirectInsert))
+                .unwrap();
+            db.save_last_transcript(&transcript).unwrap();
+        }
+        let host = test.host.as_ref();
+        let system = FakeSystem::new(&test.host);
+
+        let pasted = paste_last_in(&test.core, &system).unwrap();
+        let pasted_again = paste_saved_in(&test.core, &system, &transcript.id).unwrap();
+        let copied = copy_last(test.core.backend(), host, &system).unwrap();
+        let copied_again = copy_saved(test.core.backend(), host, &system, &transcript.id).unwrap();
+
+        for result in [&pasted, &pasted_again] {
+            assert_eq!(result.paste_method, Some(PasteMethod::DirectInsert));
+            assert_eq!(
+                result.clipboard_preservation,
+                ClipboardPreservation::Untouched
+            );
+        }
+        for result in [&copied, &copied_again] {
+            assert_eq!(result.action, OutputAction::CopyClipboard);
+            assert_eq!(
+                result.clipboard_preservation,
+                ClipboardPreservation::ReplacedWithTranscript
+            );
+        }
+        let paste = [
+            "scribe:output-started",
+            "EnsureForeignFocus",
+            "PasteBlock",
+            "TypeText(\"hello\")",
+            "scribe:output-completed",
+        ];
+        let copy = [
+            "scribe:output-started",
+            "SetClipboardText(\"hello\")",
+            "scribe:output-completed",
+        ];
+        assert_eq!(
+            trace(host, &system),
+            [&paste[..], &paste[..], &copy[..], &copy[..]].concat()
+        );
+        assert_eq!(status(test.core.backend()), AppStatus::Idle);
+        test.core.shutdown();
     }
 }
