@@ -37,7 +37,7 @@ pub const SETTINGS_CHANGED_EVENT: &str = "scribe:settings-changed";
 /// registers hotkeys), and a host may wait for its main thread there (Tauri
 /// does), so a main-thread caller could wait on itself. Debug builds assert
 /// this; every caller runs on an engine thread (the async commands through
-/// `off_main` or `off_main_core`, the tray and window-focus handlers on
+/// `off_main_core`, the tray and window-focus handlers on
 /// their own `launch-at-startup` threads).
 pub fn lock(writes: &Mutex<()>) -> MutexGuard<'_, ()> {
     debug_assert!(
@@ -521,9 +521,9 @@ mod tests {
 
     /// `AppEffects::apply_autostart` reaches `autostart::apply_with`, which in
     /// a debug build (every test build) refuses with `autostart_dev_build`
-    /// before it calls the host. The change is rolled back: the stored
-    /// setting is unchanged, no `scribe:settings-changed` goes out and the
-    /// startup entry is never touched.
+    /// before it calls the host. The change stops there, before the save: the
+    /// stored setting is unchanged, no `scribe:settings-changed` goes out, the
+    /// tray is not synced and the startup entry is never touched.
     #[cfg(debug_assertions)]
     #[test]
     fn a_refused_startup_entry_leaves_the_setting_unchanged_and_sends_nothing() {
@@ -541,10 +541,10 @@ mod tests {
         assert_eq!(error.code, "autostart_dev_build");
         assert_eq!(core.backend().db().unwrap().get_settings().unwrap(), stored);
         assert!(host.events().is_empty());
-        assert!(!host
-            .calls()
-            .iter()
-            .any(|call| matches!(call, HostCall::SetLaunchAtLogin(_))));
+        assert!(!host.calls().iter().any(|call| matches!(
+            call,
+            HostCall::SetLaunchAtLogin(_) | HostCall::SyncSettings(_)
+        )));
         core.shutdown();
     }
 

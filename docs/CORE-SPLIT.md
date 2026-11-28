@@ -26,7 +26,7 @@ The one intended visible change so far is #165's: `appVersion` in `status.json`,
 | `crates/scribe-core/src/core.rs` | `Core`: a cheap, cloneable handle owning the engine's parts (`backend()`, `warm_transcriber()`, `dictation_server()`, `note_sync()`, `dictation_worker()`, `hotkey_runtime()`, `replacements()`) and its `host()`, with `emit()`, `paths()` and `flavor()` shortcuts, and `shutdown()`. `CoreCell` hands the `Core` to the workers built before it. |
 | `crates/scribe-core/src/backend.rs` | `BackendState` (was in `commands.rs`, which step 4 deleted): the database, the state machine, the audio service and the shared locks. |
 | `app/src-tauri/src/tauri_host.rs` | `TauriHost`: `Host` on Tauri. `emit` sends `app.emit(event.name(), &event)`. |
-| `app/src-tauri/src/commands/<domain>.rs` | The `#[tauri::command]` functions, one file per domain. `commands/mod.rs` has `off_main` (takes the app), `off_main_core` and `on_dialog_thread` (take the `Core`). |
+| `app/src-tauri/src/commands/<domain>.rs` | The `#[tauri::command]` functions, one file per domain. `commands/mod.rs` has `off_main_core` and `on_dialog_thread` (both take the `Core`; step 4 deleted `off_main`, which took the app). |
 
 `Paths::data_dir()` is the framework's app data folder (Tauri's `app_data_dir()`: the database, clips, models, replacements.txt).
 It is not the folder the user can choose in Settings (`dataDir`, resolved by `data_hygiene::effective_data_dir_with`), and the two must never be swapped for each other.
@@ -102,7 +102,7 @@ What still applies to steps 3 to 6:
   On Tauri the tray calls wait for the main thread, and at exit the main thread waits for the engine lock in `Core::shutdown`: that is the quit deadlock #148 fixed.
   Read what you need, drop the lock, then call the host (as `dictation_worker::refresh_tray` does).
 - The one lock held across host calls on purpose is the settings write lock (`BackendState::settings_writes`, taken through `settings_store::lock`): it is held from reading the settings to announcing them, so the events go out in the order the writes happened, and while it is held the announcement (`emit_changed_with`) updates the tray menu and a settings change registers hotkeys.
-  So it is never taken on the main thread (see "How the engine knows the main thread"); every caller runs off it (the async commands inside `off_main` or `off_main_core`, the tray and window-focus handlers on their own `launch-at-startup` threads).
+  So it is never taken on the main thread (see "How the engine knows the main thread"); every caller runs off it (the async commands inside `off_main_core`, the tray and window-focus handlers on their own `launch-at-startup` threads).
 - Once the shell's event loop runs, the engine calls `Host::register_shortcut` and `unregister_shortcut` only from its own threads (Tauri's plugin waits for the main thread); only setup registers the first hotkeys on the main thread, before the event loop starts.
 - A test that builds a Tauri mock app lives in `app/src-tauri/tests/`: `build.rs` embeds the Windows app manifest into integration tests only, and a mock app in a unit test fails to start on Windows (`STATUS_ENTRYPOINT_NOT_FOUND`).
 
@@ -135,7 +135,7 @@ A step's pull request is ready when:
 None in `crates/scribe-core/src` since step 4.
 In `app/src-tauri/src/commands` only `open_release_page` keeps the app: it uses the opener plugin, and it is the shell's own command.
 The Tauri shell's own files (`app/src-tauri/src/lib.rs`, `tray.rs`, `window_size.rs`, `tauri_host.rs`) keep using the `AppHandle`: they are the shell.
-What the step 4 section below lists as the old table (the unused, pass-through and Tauri API functions) is gone: `git show db8748c:docs/CORE-SPLIT.md` has it.
+The table of the unused, pass-through and Tauri API functions that step 4 removed is in `git show db8748c:docs/CORE-SPLIT.md`.
 
 ## For P1-4
 
@@ -319,7 +319,8 @@ It starts when 3a and 3b are merged.
 ### Step 4: `sweep`
 
 Done in the step 4 pull request; the text below is kept as the record of what it did, and its file and line references are to main at aef18a0.
-One addition to the list: `dictation_worker::submit` lost its last caller in step 3c and went with the other wrappers, `self_test::spawn` too, and the `AppEffects` autostart test is `a_refused_startup_entry_leaves_the_setting_unchanged_and_sends_nothing` in `settings_store.rs`.
+Every wrapper in the table below had lost its last caller by step 3c, `dictation_worker::submit` and `self_test::spawn` included, and went with the others.
+The `AppEffects` autostart test is `a_refused_startup_entry_leaves_the_setting_unchanged_and_sends_nothing` in `settings_store.rs`.
 
 Every remaining `AppHandle` parameter and wrapper goes, and with them `output::core_for`, `settings_store::core_of`, `off_main`, `crates/scribe-core/src/commands.rs` and `shell.rs`.
 

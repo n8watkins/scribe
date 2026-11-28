@@ -101,7 +101,7 @@ fn write_atomic(dir: &Path, payload: &StatusFile) -> std::io::Result<()> {
 /// Publish a state snapshot to the status file in the host's cache folder.
 /// Best-effort: a failure is logged and swallowed, never propagated, so status
 /// publishing can never disrupt dictation. Called next to every
-/// `emit_state_snapshot`.
+/// `emit_state_snapshot_with`.
 pub fn publish_with(host: &dyn Host, snapshot: &AppStateSnapshot) {
     let dir = host.paths().cache_dir();
     // The cache dir is created during setup(), but a first write on a fresh

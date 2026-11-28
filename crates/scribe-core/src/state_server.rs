@@ -14,7 +14,7 @@
 //!     hand-written SSE framing. This matches the app's blocking/`std::thread`
 //!     model and avoids pulling in an async runtime the codebase does not use.
 //!   * The server never owns dictation state. It caches the latest snapshot
-//!     pushed through the shared `emit_state_snapshot` choke point (exactly as
+//!     pushed through the shared `emit_state_snapshot_with` choke point (exactly as
 //!     `status_file` does) and derives `dictating`/`busy` via `dictation_state`,
 //!     so there is a single source of truth and the mapping cannot drift.
 //!   * Liveness is intrinsic: if Scribe is down the port refuses connections; if
@@ -231,7 +231,7 @@ pub struct DictationServer {
 
 impl DictationServer {
     /// Broadcast a fresh state snapshot to all SSE consumers. Called from
-    /// `dictation_state::emit_state_snapshot`.
+    /// `dictation_state::emit_state_snapshot_with`.
     pub fn publish(&self, snapshot: &AppStateSnapshot) {
         self.hub.publish(snapshot);
     }

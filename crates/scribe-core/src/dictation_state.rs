@@ -106,9 +106,8 @@ impl DictationSnapshot {
 
 /// The single fan-out point for a fresh state snapshot.
 ///
-/// Every state transition reaches here through the per-module
-/// `emit_state_snapshot` shims (`audio`, `dictation`, `output`), which keeps the
-/// three side effects in one place so they cannot drift. All three are
+/// Every state transition (`audio`, `dictation`, `output`) reaches here, which
+/// keeps the three side effects in one place so they cannot drift. All three are
 /// best-effort and must never fail the caller, so a status consumer can never
 /// disrupt dictation:
 ///   1. emit the `scribe:app-state` Tauri event to the webview,

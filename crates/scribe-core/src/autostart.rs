@@ -9,8 +9,8 @@
 //! removing it (the `StartupApproved\Run` value). Scribe follows that switch:
 //!
 //! - Scribe writes or switches on the entry only at launch
-//!   ([`reconcile_at_launch`], and only from the installed copy) and when the
-//!   user flips "Launch at startup" in Scribe ([`apply`]).
+//!   ([`reconcile_at_launch_with`], and only from the installed copy) and when
+//!   the user flips "Launch at startup" in Scribe ([`apply_with`]).
 //! - It never switches on an entry that Windows has off, with one exception:
 //!   an entry that points at a program that no longer exists (left by a
 //!   release before v0.8.0 renamed `app.exe` to `Scribe.exe`) is rewritten
@@ -19,7 +19,7 @@
 //!   the owner's PC two such entries were switched off by a program 5 ms apart.
 //! - Otherwise "Launch at startup" mirrors Windows' switch: at launch, when the
 //!   window is focused and when the tray menu is about to open
-//!   ([`follow_windows_switch`], which never writes the entry).
+//!   ([`follow_windows_switch_with`], which never writes the entry).
 //!
 //! macOS and Linux keep the behaviour they had before: no start flag, and the
 //! stored setting is applied at launch.
@@ -37,7 +37,7 @@ pub const SIGN_IN_FLAG: &str = "--minimized";
 /// The publishers whose `Software\<publisher>\<product>` key may record the
 /// install folder: the one releases before the publisher change used (the
 /// installer hooks read it as a fallback, then remove it) and the current one
-/// (see [`reconcile_at_launch`]).
+/// (see [`reconcile_at_launch_with`]).
 pub const PREVIOUS_PUBLISHER: &str = "natkins";
 pub const PUBLISHER: &str = "n8builds.dev";
 
