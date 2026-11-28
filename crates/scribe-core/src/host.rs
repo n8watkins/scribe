@@ -5,10 +5,7 @@
 //! `Host` on top of Tauri (`TauriHost`); a native shell implements it again
 //! without changing the engine.
 //!
-//! `Host` also carries what `shell::ShellHooks` used to (the tray and the
-//! main window), so there is one seam rather than two. Engine code that still
-//! takes an `AppHandle` reaches those through the free functions in
-//! [`crate::shell`], which forward to the installed host.
+//! `Host` also carries the tray and the main window, so there is one seam.
 
 use std::{
     collections::HashSet,
@@ -119,7 +116,7 @@ pub trait Host: Send + Sync + 'static {
     fn notify(&self, title: &str, body: &str) -> Result<(), String>;
 
     /// Registers a global shortcut; the shell sends its presses to the engine
-    /// (`hotkeys::handle_shortcut`). Fails when the shortcut is already taken.
+    /// (`hotkeys::handle_shortcut_with`). Fails when the shortcut is already taken.
     ///
     /// The engine's rule: once the shell's event loop runs, the engine never
     /// calls this from the shell's main thread (rebinds, settings changes and

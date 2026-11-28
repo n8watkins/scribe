@@ -9,8 +9,8 @@
 //! removing it (the `StartupApproved\Run` value). Scribe follows that switch:
 //!
 //! - Scribe writes or switches on the entry only at launch
-//!   ([`reconcile_at_launch`], and only from the installed copy) and when the
-//!   user flips "Launch at startup" in Scribe ([`apply`]).
+//!   ([`reconcile_at_launch_with`], and only from the installed copy) and when
+//!   the user flips "Launch at startup" in Scribe ([`apply_with`]).
 //! - It never switches on an entry that Windows has off, with one exception:
 //!   an entry that points at a program that no longer exists (left by a
 //!   release before v0.8.0 renamed `app.exe` to `Scribe.exe`) is rewritten
@@ -19,23 +19,16 @@
 //!   the owner's PC two such entries were switched off by a program 5 ms apart.
 //! - Otherwise "Launch at startup" mirrors Windows' switch: at launch, when the
 //!   window is focused and when the tray menu is about to open
-//!   ([`follow_windows_switch`], which never writes the entry).
+//!   ([`follow_windows_switch_with`], which never writes the entry).
 //!
 //! macOS and Linux keep the behaviour they had before: no start flag, and the
 //! stored setting is applied at launch.
 //!
 //! The entry is written, removed and read through the [`Host`]
 //! (`launch_at_login`, `set_launch_at_login`); the shell registers the plugin
-//! (`tauri_host::autostart_plugin` in app/src-tauri). The functions that take
-//! an `AppHandle` are the old signatures, kept for their callers until P1-4
-//! moves them to the `_with` versions (docs/CORE-SPLIT.md).
+//! (`tauri_host::autostart_plugin` in app/src-tauri).
 
-use tauri::AppHandle;
-
-use crate::{
-    error::CommandError,
-    host::{no_main_window, Host},
-};
+use crate::{error::CommandError, host::Host};
 
 /// The argument the Windows sign-in entry starts Scribe with. A launch
 /// carrying it keeps the main window hidden; Scribe waits in the tray.
@@ -44,7 +37,7 @@ pub const SIGN_IN_FLAG: &str = "--minimized";
 /// The publishers whose `Software\<publisher>\<product>` key may record the
 /// install folder: the one releases before the publisher change used (the
 /// installer hooks read it as a fallback, then remove it) and the current one
-/// (see [`reconcile_at_launch`]).
+/// (see [`reconcile_at_launch_with`]).
 pub const PREVIOUS_PUBLISHER: &str = "natkins";
 pub const PUBLISHER: &str = "n8builds.dev";
 
@@ -163,18 +156,6 @@ fn dev_build_error() -> CommandError {
     )
 }
 
-/// [`apply_with`] on the installed host. The old signature, kept for its
-/// callers until P1-4.
-pub fn apply(_app: &AppHandle, enabled: bool) -> Result<(), CommandError> {
-    match crate::shell::host() {
-        Some(host) => apply_with(host.as_ref(), enabled),
-        None => {
-            log::warn!("Could not change launch at startup: no host yet");
-            Err(no_main_window())
-        }
-    }
-}
-
 /// Writes or removes the entry for the setting the user just chose in Scribe
 /// (the settings switch or the tray menu). Development builds refuse, so they
 /// never point the entry at a build folder.
@@ -200,18 +181,6 @@ fn write_entry(host: &dyn Host, enabled: bool) -> Result<(), CommandError> {
             ),
         )
     })
-}
-
-/// [`reconcile_at_launch_with`] on the installed host. The old signature,
-/// kept for its caller (the shell's setup) until P1-4.
-pub fn reconcile_at_launch(_app: &AppHandle, wanted: bool) -> Option<bool> {
-    match crate::shell::host() {
-        Some(host) => reconcile_at_launch_with(host.as_ref(), wanted),
-        None => {
-            log::warn!("Could not check the launch-at-startup entry: no host yet");
-            None
-        }
-    }
 }
 
 /// At launch: repairs or writes the entry when this is the installed copy,
@@ -270,13 +239,6 @@ pub fn reconcile_at_launch_with(host: &dyn Host, wanted: bool) -> Option<bool> {
         Err(error) => log::warn!("Could not read launch-at-startup state. {}", error),
     }
     None
-}
-
-/// [`follow_windows_switch_with`] on the installed host. The old signature,
-/// kept for its callers until P1-4.
-pub fn follow_windows_switch(_app: &AppHandle, wanted: bool) -> Option<bool> {
-    let host = crate::shell::host()?;
-    follow_windows_switch_with(host.as_ref(), wanted)
 }
 
 /// The value "Launch at startup" should take to follow Windows' switch, when

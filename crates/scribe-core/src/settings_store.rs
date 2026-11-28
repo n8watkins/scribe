@@ -13,14 +13,13 @@
 use std::sync::{Mutex, MutexGuard};
 
 use serde_json::{Map, Value};
-use tauri::{AppHandle, Manager};
 
 use crate::{
     backend::BackendState,
     core::Core,
     error::CommandError,
     events::CoreEvent,
-    host::{no_main_window, Host},
+    host::Host,
     hotkeys::{self, HotkeyRegistrationFailure},
     settings::{AppSettings, HotkeySettings},
 };
@@ -38,7 +37,7 @@ pub const SETTINGS_CHANGED_EVENT: &str = "scribe:settings-changed";
 /// registers hotkeys), and a host may wait for its main thread there (Tauri
 /// does), so a main-thread caller could wait on itself. Debug builds assert
 /// this; every caller runs on an engine thread (the async commands through
-/// `off_main` or `off_main_core`, the tray and window-focus handlers on
+/// `off_main_core`, the tray and window-focus handlers on
 /// their own `launch-at-startup` threads).
 pub fn lock(writes: &Mutex<()>) -> MutexGuard<'_, ()> {
     debug_assert!(
@@ -62,26 +61,6 @@ pub fn emit_changed_with(host: &dyn Host, settings: &AppSettings) {
     host.emit(CoreEvent::SettingsChanged(settings.clone()));
     // The tray menu's "Launch at startup" check mark shows the stored value.
     host.sync_settings(settings);
-}
-
-/// [`emit_changed_with`] for callers that still hold an `AppHandle`. Needs
-/// only the host, which the shell installs before anything else.
-pub fn emit_changed(_app: &AppHandle, settings: &AppSettings) {
-    match crate::shell::host() {
-        Some(host) => emit_changed_with(host.as_ref(), settings),
-        None => log::warn!("Could not announce the settings change: no host yet"),
-    }
-}
-
-/// The `Core`, for the wrappers below that still take an `AppHandle`.
-fn core_of(app: &AppHandle) -> Result<Core, CommandError> {
-    match app.try_state::<Core>() {
-        Some(core) => Ok(core.inner().clone()),
-        None => {
-            log::warn!("Could not reach the settings: the engine is not running yet");
-            Err(no_main_window())
-        }
-    }
 }
 
 /// Returns `current` with the fields named in `patch` replaced. Keys are the
@@ -134,11 +113,7 @@ where
 /// Applies a settings patch from the backend (the tray, Windows' Startup apps
 /// switch) exactly as a window's patch is applied. Blocks; call it off the
 /// main thread.
-///
-/// Still takes the `AppHandle` for the hotkeys (see
-/// [`apply_settings_change_with`]).
 pub fn patch_settings_now_with(
-    app: &AppHandle,
     core: &Core,
     patch: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<AppSettings, CommandError> {
@@ -147,7 +122,7 @@ pub fn patch_settings_now_with(
         state.settings_writes(),
         patch,
         || state.db()?.get_settings(),
-        |previous, next| apply_settings_change_with(app, core, previous, next),
+        |previous, next| apply_settings_change_with(core, previous, next),
     )
 }
 
@@ -158,12 +133,6 @@ pub fn patch_settings_now_with(
 /// Blocks; call it off the main thread.
 pub fn sync_launch_at_startup_with(core: &Core) -> Result<AppSettings, CommandError> {
     sync_launch_at_startup_in(core.backend(), core.host().as_ref())
-}
-
-/// [`sync_launch_at_startup_with`] for callers that still hold only an
-/// `AppHandle`.
-pub fn sync_launch_at_startup(app: &AppHandle) -> Result<AppSettings, CommandError> {
-    sync_launch_at_startup_with(&core_of(app)?)
 }
 
 /// The body of [`sync_launch_at_startup_with`], over the parts it uses: the
@@ -197,31 +166,17 @@ fn follow_launch_switch(
 }
 
 /// Turns "Launch at startup" on or off, as the settings toggle does.
-pub fn set_launch_at_startup_with(
-    app: &AppHandle,
-    core: &Core,
-    enabled: bool,
-) -> Result<AppSettings, CommandError> {
+pub fn set_launch_at_startup_with(core: &Core, enabled: bool) -> Result<AppSettings, CommandError> {
     let mut patch = serde_json::Map::new();
     patch.insert("launchAtStartup".into(), serde_json::Value::Bool(enabled));
-    patch_settings_now_with(app, core, &patch)
-}
-
-/// [`set_launch_at_startup_with`] for callers that still hold only an
-/// `AppHandle`.
-pub fn set_launch_at_startup(app: &AppHandle, enabled: bool) -> Result<AppSettings, CommandError> {
-    set_launch_at_startup_with(app, &core_of(app)?, enabled)
+    patch_settings_now_with(core, &patch)
 }
 
 /// Stores `settings` over `previous` and applies what changed: launch at
 /// startup, hotkey registration, GitHub activity, and retention. Rolls the
 /// side effects back when the save fails. The caller holds the settings write
 /// lock.
-///
-/// Still takes the `AppHandle` for the hotkeys lane's `replace_hotkeys_with`
-/// (the global-shortcut plugin).
 fn apply_settings_change_with(
-    app: &AppHandle,
     core: &Core,
     previous: &AppSettings,
     settings: AppSettings,
@@ -229,7 +184,7 @@ fn apply_settings_change_with(
     apply_settings_change_in(
         core.backend(),
         core.host().as_ref(),
-        &AppEffects { app, core },
+        &AppEffects { core },
         previous,
         settings,
     )
@@ -252,7 +207,6 @@ trait SettingsEffects {
 
 /// The settings side effects in the running app.
 struct AppEffects<'a> {
-    app: &'a AppHandle,
     core: &'a Core,
 }
 
@@ -270,7 +224,7 @@ impl SettingsEffects for AppEffects<'_> {
         previous: &HotkeySettings,
         next: &HotkeySettings,
     ) -> Result<Vec<HotkeyRegistrationFailure>, CommandError> {
-        hotkeys::replace_hotkeys_with(self.app, self.core, previous, next)
+        hotkeys::replace_hotkeys_with(self.core, previous, next)
     }
 
     fn sync_speech_engine(&self, settings: &AppSettings) {
@@ -563,6 +517,35 @@ mod tests {
         assert_eq!(state.db().unwrap().get_settings().unwrap(), stored);
         assert!(host.events().is_empty());
         assert!(host.calls().is_empty());
+    }
+
+    /// `AppEffects::apply_autostart` reaches `autostart::apply_with`, which in
+    /// a debug build (every test build) refuses with `autostart_dev_build`
+    /// before it calls the host. The change stops there, before the save: the
+    /// stored setting is unchanged, no `scribe:settings-changed` goes out, the
+    /// tray is not synced and the startup entry is never touched.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_refused_startup_entry_leaves_the_setting_unchanged_and_sends_nothing() {
+        use crate::core::test_core::TestCore;
+        let TestCore {
+            core,
+            host,
+            dir: _dir,
+            ..
+        } = TestCore::new();
+        let stored = core.backend().db().unwrap().get_settings().unwrap();
+
+        let error = set_launch_at_startup_with(&core, !stored.launch_at_startup).unwrap_err();
+
+        assert_eq!(error.code, "autostart_dev_build");
+        assert_eq!(core.backend().db().unwrap().get_settings().unwrap(), stored);
+        assert!(host.events().is_empty());
+        assert!(!host.calls().iter().any(|call| matches!(
+            call,
+            HostCall::SetLaunchAtLogin(_) | HostCall::SyncSettings(_)
+        )));
+        core.shutdown();
     }
 
     #[test]

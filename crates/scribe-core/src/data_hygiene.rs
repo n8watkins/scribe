@@ -19,15 +19,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use tauri::Manager;
-
-use crate::{
-    commands::BackendState,
-    core::Core,
-    db::Database,
-    error::CommandError,
-    host::{no_main_window, Host},
-};
+use crate::{backend::BackendState, core::Core, db::Database, error::CommandError, host::Host};
 
 /// Temp recordings and segment WAVs older than this are leftovers from a
 /// crash or an interrupted session.
@@ -261,20 +253,6 @@ pub fn run_startup_maintenance_with(
     }
 }
 
-/// [`run_startup_maintenance_with`] for the shell's setup, which starts it
-/// on its own thread before the `Core` exists. It needs only the backend,
-/// which setup manages before starting that thread.
-pub fn run_startup_maintenance(
-    app: &tauri::AppHandle,
-    pre_rebrand_dir: Option<PathBuf>,
-    migration_complete: bool,
-) {
-    match app.try_state::<BackendState>() {
-        Some(state) => run_startup_maintenance_with(&state, pre_rebrand_dir, migration_complete),
-        None => log::warn!("Skipping the startup cleanup: the database is not open"),
-    }
-}
-
 /// Clears everything "Clear history" promises beyond the transcript rows:
 /// the Last Transcript Buffer, failed recordings and editor copies, then
 /// compacts the database.
@@ -423,18 +401,6 @@ pub fn logs_dir_with(host: &dyn Host) -> PathBuf {
 /// `DataDirs` name, which "Clear history" and retention delete from.
 pub fn failed_recordings_dir_with(core: &Core) -> PathBuf {
     core.backend().dirs().failed_recordings()
-}
-
-/// [`open_folder_with`] on the installed host, which exists before any
-/// command runs. The old signature, kept for its callers until P1-4.
-pub fn open_folder(_app: &tauri::AppHandle, dir: PathBuf) -> Result<(), CommandError> {
-    match crate::shell::host() {
-        Some(host) => open_folder_with(host.as_ref(), dir),
-        None => {
-            log::warn!("Could not open folder {}: no host yet", dir.display());
-            Err(no_main_window())
-        }
-    }
 }
 
 /// Creates `dir` when missing and opens it in the system file manager.

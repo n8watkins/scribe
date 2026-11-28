@@ -22,7 +22,6 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
 
 /// Snapshot contract version. Bumped only on a breaking change to the snapshot
 /// shape; see the wire contract's versioning rules.
@@ -107,25 +106,13 @@ impl DictationSnapshot {
 
 /// The single fan-out point for a fresh state snapshot.
 ///
-/// Every state transition reaches here through the per-module
-/// `emit_state_snapshot` shims (`audio`, `dictation`, `output`), which keeps the
-/// three side effects in one place so they cannot drift. All three are
+/// Every state transition (`audio`, `dictation`, `output`) reaches here, which
+/// keeps the three side effects in one place so they cannot drift. All three are
 /// best-effort and must never fail the caller, so a status consumer can never
 /// disrupt dictation:
 ///   1. emit the `scribe:app-state` Tauri event to the webview,
 ///   2. mirror the snapshot to the on-disk status file (the file fallback),
 ///   3. broadcast it to the in-process HTTP+SSE server, if it is running.
-pub fn emit_state_snapshot(app: &AppHandle, snapshot: &AppStateSnapshot) {
-    match app.try_state::<Core>() {
-        Some(core) => emit_state_snapshot_with(&core, snapshot),
-        None => log::warn!(
-            "Could not publish the dictation state {:?}: the engine is not ready yet",
-            snapshot.status
-        ),
-    }
-}
-
-/// [`emit_state_snapshot`] on the engine.
 pub fn emit_state_snapshot_with(core: &Core, snapshot: &AppStateSnapshot) {
     Parts::of(core).publish(snapshot);
 }

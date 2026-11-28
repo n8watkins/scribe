@@ -14,7 +14,7 @@
 //!     hand-written SSE framing. This matches the app's blocking/`std::thread`
 //!     model and avoids pulling in an async runtime the codebase does not use.
 //!   * The server never owns dictation state. It caches the latest snapshot
-//!     pushed through the shared `emit_state_snapshot` choke point (exactly as
+//!     pushed through the shared `emit_state_snapshot_with` choke point (exactly as
 //!     `status_file` does) and derives `dictating`/`busy` via `dictation_state`,
 //!     so there is a single source of truth and the mapping cannot drift.
 //!   * Liveness is intrinsic: if Scribe is down the port refuses connections; if
@@ -35,7 +35,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::AppHandle;
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
 /// Loopback host - never bind a routable interface.
@@ -232,7 +231,7 @@ pub struct DictationServer {
 
 impl DictationServer {
     /// Broadcast a fresh state snapshot to all SSE consumers. Called from
-    /// `dictation_state::emit_state_snapshot`.
+    /// `dictation_state::emit_state_snapshot_with`.
     pub fn publish(&self, snapshot: &AppStateSnapshot) {
         self.hub.publish(snapshot);
     }
@@ -257,8 +256,8 @@ impl DictationServer {
 }
 
 /// Bind the loopback server and spawn its accept loop. Returns the shared server
-/// handle and the bound port. Kept separate from `start` so it can be exercised
-/// in tests without a Tauri `AppHandle`.
+/// handle and the bound port. Kept separate from `start_with` so it can be
+/// exercised in tests without a host.
 fn spawn_http(hub: Arc<Hub>, shutdown: Arc<AtomicBool>) -> Result<u16, String> {
     let server = Server::http((SERVER_HOST, 0))
         .map_err(|error| format!("could not bind dictation-state server: {error}"))?;
@@ -642,16 +641,6 @@ pub fn start_with(host: Arc<dyn Host>) -> Result<DictationServer, String> {
         control_path,
         base_url,
     })
-}
-
-/// [`start_with`] for callers that still hold an `AppHandle`. Uses the host the
-/// shell installed first thing in its setup; without one the server cannot
-/// start, which the caller already treats as best-effort.
-pub fn start(_app: &AppHandle) -> Result<DictationServer, String> {
-    match crate::shell::host() {
-        Some(host) => start_with(host.clone()),
-        None => Err("no host yet".to_string()),
-    }
 }
 
 #[cfg(test)]

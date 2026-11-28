@@ -39,11 +39,10 @@ use std::{
 };
 
 use serde::Deserialize;
-use tauri::{AppHandle, Manager};
 
 use crate::{
     app_state::AppStatus,
-    commands::BackendState,
+    backend::BackendState,
     error::CommandError,
     events::CoreEvent,
     host::{no_main_window, Host},
@@ -382,27 +381,6 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl WarmTranscriber {
-    /// The shell's setup builds the transcriber before the `Core` exists, so
-    /// this finds the installed host and the managed backend directly (both
-    /// come first at startup).
-    pub fn new(app: AppHandle, measurements_path: PathBuf) -> Self {
-        let host = crate::shell::host().cloned();
-        let backend = app
-            .try_state::<BackendState>()
-            .map(|state| state.inner().clone());
-        if host.is_none() || backend.is_none() {
-            log::warn!("The speech engine was set up before the shell's host or backend");
-        }
-        debug_assert!(
-            host.is_some() && backend.is_some(),
-            "WarmTranscriber::new needs the shell's host installed and BackendState managed first \
-             (host: {}, backend: {})",
-            host.is_some(),
-            backend.is_some()
-        );
-        Self::build(host, backend, measurements_path, PROBE_GPU_BEFORE_LOAD)
-    }
-
     /// The speech engine for `host`, reading the settings and the dictation
     /// state from `backend`. Starts the watchdog; loads nothing until
     /// [`Self::sync_with_settings`] or a transcription asks for a model.

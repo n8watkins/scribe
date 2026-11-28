@@ -16,7 +16,6 @@ use crate::host::Host;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::path::Path;
-use tauri::AppHandle;
 
 /// The on-disk payload. `rename_all = "camelCase"` keeps the JSON keys aligned
 /// with the rest of Scribe's IPC surface (e.g. `updatedAt`).
@@ -102,7 +101,7 @@ fn write_atomic(dir: &Path, payload: &StatusFile) -> std::io::Result<()> {
 /// Publish a state snapshot to the status file in the host's cache folder.
 /// Best-effort: a failure is logged and swallowed, never propagated, so status
 /// publishing can never disrupt dictation. Called next to every
-/// `emit_state_snapshot`.
+/// `emit_state_snapshot_with`.
 pub fn publish_with(host: &dyn Host, snapshot: &AppStateSnapshot) {
     let dir = host.paths().cache_dir();
     // The cache dir is created during setup(), but a first write on a fresh
@@ -127,23 +126,6 @@ pub fn publish_idle_with(host: &dyn Host) {
         updated_at: Utc::now(),
     };
     publish_with(host, &snapshot);
-}
-
-/// [`publish_with`] for callers that still hold an `AppHandle`. Publishes
-/// through the host the shell installed first thing in its setup.
-pub fn publish(_app: &AppHandle, snapshot: &AppStateSnapshot) {
-    match crate::shell::host() {
-        Some(host) => publish_with(host.as_ref(), snapshot),
-        None => log::warn!("Could not resolve cache dir for status file: no host yet"),
-    }
-}
-
-/// [`publish_idle_with`] for callers that still hold an `AppHandle`.
-pub fn publish_idle(_app: &AppHandle) {
-    match crate::shell::host() {
-        Some(host) => publish_idle_with(host.as_ref()),
-        None => log::warn!("Could not resolve cache dir for status file: no host yet"),
-    }
 }
 
 #[cfg(test)]

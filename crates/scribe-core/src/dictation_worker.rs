@@ -37,8 +37,6 @@ use std::{
     time::Duration,
 };
 
-use tauri::{AppHandle, Manager};
-
 use crate::{
     app_state::AppStatus,
     audio::{self, RecordingResultStatus, RecordingSessionInfo, StartRecordingRequest},
@@ -328,16 +326,8 @@ impl DictationWorker {
     /// is filled, jobs wait in arrival order and none is dropped. Once every
     /// `Core` handle is gone, whether or not a job ever ran, the waiting job
     /// and every later one are answered `dictation_worker_unavailable`.
-    ///
-    /// Still takes the app, only to pass it on to the other lanes' functions
-    /// a job calls (see [`execute_with`]); P1-4 step 4 removes it.
-    pub fn spawn_on(cell: CoreCell, app: AppHandle) -> std::io::Result<Self> {
-        Self::spawn_finding(move || {
-            cell.lookup().map(|core| AppExecutor {
-                app: app.clone(),
-                core,
-            })
-        })
+    pub fn spawn_on(cell: CoreCell) -> std::io::Result<Self> {
+        Self::spawn_finding(move || cell.lookup().map(|core| AppExecutor { core }))
     }
 
     /// [`DictationWorker::spawn_on`] for tests: finds the `Core` through
@@ -574,17 +564,6 @@ fn run_job<E: Executor>(executor: &E, job: Job, finished: impl FnOnce()) {
 /// Resolves `intent` against the current status and queues the resulting
 /// command. Safe to call from any thread, including the main thread and the
 /// audio callback thread: it never waits for the command to run.
-pub fn submit(app: &AppHandle, intent: Intent) {
-    match app.try_state::<Core>() {
-        Some(core) => submit_with(&core, intent),
-        None => log::error!(
-            "Dictation worker is not reachable yet: the engine is not ready; dropped {:?}",
-            intent
-        ),
-    }
-}
-
-/// [`submit`] on the engine.
 pub fn submit_with(core: &Core, intent: Intent) {
     let status = || Ok(core.backend().app_state()?.status().clone());
     if let Err(error) = core.dictation_worker().submit_intent(intent, status) {
@@ -602,10 +581,7 @@ pub async fn request_with(core: Core, command: DictationCommand) -> Result<Outco
 }
 
 /// Production side effects: the real audio, transcription, and output paths.
-/// Still holds the app for the calls into other lanes that take it (see
-/// [`execute_with`]).
 struct AppExecutor {
-    app: AppHandle,
     core: Core,
 }
 
@@ -615,7 +591,7 @@ impl Executor for AppExecutor {
     }
 
     fn execute(&self, command: DictationCommand) -> Result<Outcome, CommandError> {
-        execute_with(&self.app, &self.core, command)
+        execute_with(&self.core, command)
     }
 
     fn report(&self, error: CommandError) {
@@ -624,15 +600,8 @@ impl Executor for AppExecutor {
     }
 }
 
-/// Runs one admitted command. Still takes the app for the paste
-/// (`output::paste_last_transcript_with`), the transform start
-/// (`hotkeys::start_transform`) and the transcription
-/// (`dictation::transcribe_recording_with`).
-fn execute_with(
-    app: &AppHandle,
-    core: &Core,
-    command: DictationCommand,
-) -> Result<Outcome, CommandError> {
+/// Runs one admitted command.
+fn execute_with(core: &Core, command: DictationCommand) -> Result<Outcome, CommandError> {
     let outcome = match command {
         DictationCommand::Start {
             request,
@@ -646,28 +615,26 @@ fn execute_with(
             Outcome::Started(audio::start_recording_with(core, Some(request), true)?)
         }
         DictationCommand::StartTransform => {
-            start_transform(app, core)?;
+            start_transform(core)?;
             Outcome::Done
         }
         DictationCommand::Stop => {
-            stop_and_transcribe(app, core)?;
+            stop_and_transcribe(core)?;
             Outcome::Done
         }
         DictationCommand::Cancel => {
             audio::cancel_recording_with(core)?;
             Outcome::Done
         }
-        DictationCommand::PasteLast => {
-            Outcome::Output(output::paste_last_transcript_with(app, core)?)
-        }
+        DictationCommand::PasteLast => Outcome::Output(output::paste_last_transcript_with(core)?),
         DictationCommand::FinishTimedOut { session_id } => {
-            audio::finish_timed_out_recording_with(app, core, &session_id)?;
+            audio::finish_timed_out_recording_with(core, &session_id)?;
             Outcome::Done
         }
         DictationCommand::FinishDisconnected { session_id } => {
             // The disconnect already told the user what happened; a
             // failure to salvage the audio is only logged.
-            if let Err(error) = audio::finish_disconnected_recording_with(app, core, &session_id) {
+            if let Err(error) = audio::finish_disconnected_recording_with(core, &session_id) {
                 log::warn!(
                     "Could not recover from a mid-recording audio stream error: {}",
                     error.message
@@ -689,9 +656,8 @@ fn refresh_tray(core: &Core) {
 }
 
 /// Stops the active recording and finishes it: a too-short tap is reported as
-/// "nothing heard"; anything else is transcribed and output. Still takes the
-/// app for the transcription.
-fn stop_and_transcribe(app: &AppHandle, core: &Core) -> Result<(), CommandError> {
+/// "nothing heard"; anything else is transcribed and output.
+fn stop_and_transcribe(core: &Core) -> Result<(), CommandError> {
     let result = audio::stop_recording_with(core)?;
     refresh_tray(core);
 
@@ -703,18 +669,15 @@ fn stop_and_transcribe(app: &AppHandle, core: &Core) -> Result<(), CommandError>
         return Ok(());
     }
 
-    dictation::transcribe_recording_with(app, core, result)?;
+    dictation::transcribe_recording_with(core, result)?;
     Ok(())
 }
 
 /// Where the system can't copy the selection out of another app, the
-/// typed-instruction panel on the dashboard stands in for it. Still takes the
-/// app for `hotkeys::start_transform` (hotkeys). That is the hotkeys lane's
-/// wrapper: its `start_transform_with` exists, but switching to it here would
-/// leave the `pub(crate)` wrapper, whose only caller this is, unused.
-fn start_transform(app: &AppHandle, core: &Core) -> Result<(), CommandError> {
+/// typed-instruction panel on the dashboard stands in for it.
+fn start_transform(core: &Core) -> Result<(), CommandError> {
     if crate::platform::can_capture_selection() {
-        crate::hotkeys::start_transform(app)
+        crate::hotkeys::start_transform_with(core)
     } else {
         core.host().open_dashboard(Some("dashboard"))
     }

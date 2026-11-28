@@ -7,7 +7,6 @@ use cpal::{
 };
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
 use uuid::Uuid;
 
 use std::{
@@ -28,7 +27,6 @@ use crate::{
     error::CommandError,
     events::CoreEvent,
     host::Host,
-    output::core_for,
     settings::AppSettings,
 };
 
@@ -429,16 +427,6 @@ pub fn list_microphones_with(core: &Core) -> Result<Vec<MicrophoneInfo>, Command
 
 /// `allow_auto_stop` marks the recording as eligible for silence auto-stop
 /// (toggle hotkey / tray menu / UI Start). Hold-to-talk passes false.
-pub fn start_recording_for_app(
-    app: &AppHandle,
-    request: Option<StartRecordingRequest>,
-    allow_auto_stop: bool,
-) -> Result<RecordingSessionInfo, CommandError> {
-    let core = core_for(app, "start recording")?;
-    start_recording_with(&core, request, allow_auto_stop)
-}
-
-/// [`start_recording_for_app`] on the engine.
 pub fn start_recording_with(
     core: &Core,
     request: Option<StartRecordingRequest>,
@@ -645,10 +633,8 @@ fn no_test_clip() -> CommandError {
 /// ceiling, or the silence rule past the long-recording point (see
 /// [`StopPolicy`]). Runs on the dictation worker; a no-op when `session_id` is
 /// no longer the active recording (the user stopped it while this was
-/// queued), so the transcript is never lost or duplicated. Still takes the
-/// app for the transcription (`dictation::transcribe_recording_with`).
+/// queued), so the transcript is never lost or duplicated.
 pub(crate) fn finish_timed_out_recording_with(
-    app: &AppHandle,
     core: &Core,
     session_id: &str,
 ) -> Result<(), CommandError> {
@@ -662,7 +648,7 @@ pub(crate) fn finish_timed_out_recording_with(
     if result.status == RecordingResultStatus::TooShort {
         crate::dictation::emit_dictation_empty_with(core.host().as_ref());
     } else {
-        crate::dictation::transcribe_recording_with(app, core, result)?;
+        crate::dictation::transcribe_recording_with(core, result)?;
     }
     Ok(())
 }
@@ -694,10 +680,8 @@ fn stop_timed_out_recording(
 /// recording error, then finishes transcription exactly like the manual-stop
 /// and timeout paths so the app never strands in Recording/Transcribing. If the
 /// session is already gone (the user stopped first, or a duplicate error
-/// callback slipped past the guard), it no-ops cleanly. Still takes the app
-/// for the transcription (`dictation::transcribe_recording_with`).
+/// callback slipped past the guard), it no-ops cleanly.
 pub(crate) fn finish_disconnected_recording_with(
-    app: &AppHandle,
     core: &Core,
     session_id: &str,
 ) -> Result<(), CommandError> {
@@ -730,7 +714,7 @@ pub(crate) fn finish_disconnected_recording_with(
     if result.status == RecordingResultStatus::TooShort {
         crate::dictation::emit_dictation_empty_with(parts.host.as_ref());
     } else {
-        crate::dictation::transcribe_recording_with(app, core, result)?;
+        crate::dictation::transcribe_recording_with(core, result)?;
     }
     Ok(())
 }
@@ -1904,19 +1888,6 @@ pub(crate) fn duration_ms(sample_count: usize, sample_rate: u32) -> u64 {
     }
 
     ((sample_count as u128 * 1_000) / sample_rate as u128) as u64
-}
-
-/// Needs only the host, which is installed before anything else, so it uses
-/// that rather than the `Core` (like `status_file::publish`).
-pub fn emit_recording_error(_app: &AppHandle, error: CommandError) {
-    match crate::shell::host() {
-        Some(host) => emit_recording_error_with(host.as_ref(), error),
-        None => log::error!(
-            "Recording error {}: {} (not sent: no host yet)",
-            error.code,
-            error.message
-        ),
-    }
 }
 
 /// Logs the error and sends `audio://recording-error`.

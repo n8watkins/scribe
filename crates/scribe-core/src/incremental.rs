@@ -1,6 +1,7 @@
 //! Incremental transcription: while the user is still talking, finished
 //! phrases are cut at natural pauses, written out as 16 kHz WAV segments, and
-//! transcribed in the background through the shared [`WarmTranscriber`]. On
+//! transcribed in the background through the shared
+//! [`WarmTranscriber`](crate::whisper_server::WarmTranscriber). On
 //! stop only the tail phrase remains to transcribe, so stop-to-text latency
 //! stays near-instant regardless of recording length.
 //!

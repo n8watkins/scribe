@@ -2,9 +2,7 @@
 //! import, stats, release_notes, diagnostics, replacements_file).
 //!
 //! Converted to the engine handle: commands take the managed [`Core`], and
-//! open files and folders and read the app's version through its host. Only
-//! `patch_settings` still takes the `AppHandle`, for the settings side
-//! effects of the hotkeys domain (see `settings_store::patch_settings_now_with`).
+//! open files and folders and read the app's version through its host.
 
 use tauri::State;
 
@@ -39,12 +37,11 @@ pub async fn get_settings(core: State<'_, Core>) -> Result<AppSettings, CommandE
 /// every window hears the result through `scribe:settings-changed`.
 #[tauri::command]
 pub async fn patch_settings(
-    app: tauri::AppHandle,
     core: State<'_, Core>,
     patch: serde_json::Map<String, serde_json::Value>,
 ) -> Result<AppSettings, CommandError> {
     off_main_core(core.inner().clone(), move |core| {
-        patch_settings_now_with(&app, core, &patch)
+        patch_settings_now_with(core, &patch)
     })
     .await
 }

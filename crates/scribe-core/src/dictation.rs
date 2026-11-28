@@ -7,7 +7,6 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use tauri::AppHandle;
 
 use crate::{
     app_state::{AppEvent, AppStatus},
@@ -65,11 +64,7 @@ pub struct DictationResult {
 /// Idle and "scribe:dictation-empty" is emitted, no transcript is
 /// saved). On any error, the state machine is never left stranded in
 /// Transcribing: it fails over to Error, which self-heals to Idle.
-///
-/// Still takes the app for the output lane (pasting the text, the
-/// transform's paste).
 pub fn transcribe_recording_with(
-    app: &AppHandle,
     core: &Core,
     recording: RecordingResult,
 ) -> Result<Option<DictationResult>, CommandError> {
@@ -79,7 +74,7 @@ pub fn transcribe_recording_with(
     let stopped = Instant::now();
     let incremental = core.backend().incremental().take(&recording.session_id);
 
-    let result = transcribe_recording_checked(app, core, &recording, incremental, stopped);
+    let result = transcribe_recording_checked(core, &recording, incremental, stopped);
     // The dictation is done with its model. If another one was chosen
     // meanwhile, load it now, so the next dictation starts warm.
     crate::session_model::global().release(&recording.session_id);
@@ -100,7 +95,6 @@ pub fn transcribe_recording_with(
 }
 
 fn transcribe_recording_checked(
-    app: &AppHandle,
     core: &Core,
     recording: &RecordingResult,
     incremental: Option<SessionHandle>,
@@ -116,7 +110,7 @@ fn transcribe_recording_checked(
     let cleanup = WavCleanup::new(wav_path.clone());
 
     let result =
-        transcribe_recording_inner(app, core, recording, wav_path.clone(), incremental, stopped);
+        transcribe_recording_inner(core, recording, wav_path.clone(), incremental, stopped);
     match &result {
         Ok(_) => cleanup.remove(),
         Err(error) => {
@@ -222,10 +216,7 @@ fn prune_failed_recordings(dir: &Path, keep: usize) {
     }
 }
 
-/// Still takes the app for `output::handle_transcription_output_with` and
-/// `selection_transform::apply_result_with` (output).
 fn transcribe_recording_inner(
-    app: &AppHandle,
     core: &Core,
     recording: &RecordingResult,
     wav_path: PathBuf,
@@ -314,7 +305,7 @@ fn transcribe_recording_inner(
     // rewrite the selection captured when the recording started, paste it back
     // in place — and skip the normal save / paste path entirely.
     if recording.is_transform {
-        return finish_selection_transform(app, core, &settings, &final_text);
+        return finish_selection_transform(core, &settings, &final_text);
     }
 
     // Empty or whitespace-only text is a benign outcome, not an error (e.g.
@@ -369,7 +360,7 @@ fn transcribe_recording_inner(
     // hallucinations into the focused app. It's in History; Paste-Last can
     // recover it if the user really did say something before the drop.
     if !transcript.is_note && !recording.disconnected {
-        let outcome = output::handle_transcription_output_with(app, core, &transcript, &settings);
+        let outcome = output::handle_transcription_output_with(core, &transcript, &settings);
         settle_output(&transcript, outcome);
     }
 
@@ -487,16 +478,14 @@ fn save_and_announce(
 /// result over the still-active selection. Nothing is saved as a transcript and
 /// the normal dictation output never runs. The state machine always leaves
 /// Transcribing (success or a toasted, recoverable failure — never a wedged
-/// Error for a routine LLM miss). Still takes the app for the paste
-/// (`selection_transform::apply_result_with`, output).
+/// Error for a routine LLM miss).
 fn finish_selection_transform(
-    app: &AppHandle,
     core: &Core,
     settings: &AppSettings,
     instruction: &str,
 ) -> Result<Option<DictationResult>, CommandError> {
     finish_selection_transform_in(Parts::of(core), settings, instruction, |text, captured| {
-        crate::selection_transform::apply_result_with(app, core, text, captured)
+        crate::selection_transform::apply_result_with(core, text, captured)
     })
 }
 
