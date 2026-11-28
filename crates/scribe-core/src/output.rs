@@ -881,6 +881,7 @@ pub fn paste_permission() -> PastePermission {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::{HostCall, Recorded};
 
     const EDITOR: PasteTarget = PasteTarget {
         window: 10,
@@ -1083,105 +1084,6 @@ mod tests {
         );
     }
 
-    /// What reached the host, events and calls together, in the order they
-    /// arrived (`RecordingHost` keeps the two in separate lists).
-    #[derive(Debug, Clone, PartialEq)]
-    enum Sent {
-        Event(&'static str, serde_json::Value),
-        Notify { title: String, body: String },
-    }
-
-    /// A `RecordingHost` that also logs events and notifications in one
-    /// list, so a test can pin their order.
-    struct SequencedHost {
-        inner: crate::host::RecordingHost,
-        log: std::sync::Mutex<Vec<Sent>>,
-    }
-
-    impl SequencedHost {
-        fn new() -> Self {
-            Self {
-                inner: recording_host(),
-                log: std::sync::Mutex::new(Vec::new()),
-            }
-        }
-
-        fn sequence(&self) -> Vec<Sent> {
-            self.log.lock().unwrap().clone()
-        }
-    }
-
-    impl Host for SequencedHost {
-        fn emit(&self, event: CoreEvent) {
-            self.log.lock().unwrap().push(Sent::Event(
-                event.name(),
-                serde_json::to_value(&event).unwrap(),
-            ));
-            self.inner.emit(event);
-        }
-        fn paths(&self) -> &crate::paths::Paths {
-            self.inner.paths()
-        }
-        fn flavor(&self) -> crate::host::Flavor {
-            self.inner.flavor()
-        }
-        fn update_tray_status(&self, status: AppStatus) {
-            self.inner.update_tray_status(status)
-        }
-        fn update_engine_summary(&self, summary: String) {
-            self.inner.update_engine_summary(summary)
-        }
-        fn sync_settings(&self, settings: &AppSettings) {
-            self.inner.sync_settings(settings)
-        }
-        fn open_dashboard(&self, route: Option<&str>) -> Result<(), CommandError> {
-            self.inner.open_dashboard(route)
-        }
-        fn toggle_dashboard(&self) -> Result<(), CommandError> {
-            self.inner.toggle_dashboard()
-        }
-        fn main_window_logical_size(&self) -> Option<(u32, u32)> {
-            self.inner.main_window_logical_size()
-        }
-        fn app_version(&self) -> String {
-            self.inner.app_version()
-        }
-        fn exit(&self, code: i32) {
-            self.inner.exit(code)
-        }
-        fn open_path(&self, path: &std::path::Path) -> Result<(), String> {
-            self.inner.open_path(path)
-        }
-        fn open_url(&self, url: &str) -> Result<(), String> {
-            self.inner.open_url(url)
-        }
-        fn notify(&self, title: &str, body: &str) -> Result<(), String> {
-            self.log.lock().unwrap().push(Sent::Notify {
-                title: title.to_string(),
-                body: body.to_string(),
-            });
-            self.inner.notify(title, body)
-        }
-        fn register_shortcut(&self, shortcut: global_hotkey::hotkey::HotKey) -> Result<(), String> {
-            self.inner.register_shortcut(shortcut)
-        }
-        fn unregister_shortcut(
-            &self,
-            shortcut: global_hotkey::hotkey::HotKey,
-        ) -> Result<(), String> {
-            self.inner.unregister_shortcut(shortcut)
-        }
-        fn is_shortcut_registered(&self, shortcut: global_hotkey::hotkey::HotKey) -> bool {
-            self.inner.is_shortcut_registered(shortcut)
-        }
-        fn launch_at_login(&self) -> Result<bool, String> {
-            self.inner.launch_at_login()
-        }
-        fn set_launch_at_login(&self, enabled: bool) -> Result<(), String> {
-            self.inner.set_launch_at_login(enabled)
-        }
-    }
-
     fn skipped_paste(transcript: &Transcript) -> OutputResult {
         paste_skipped_result(
             transcript,
@@ -1206,7 +1108,7 @@ mod tests {
 
     #[test]
     fn a_skipped_paste_is_announced_then_notified() {
-        let host = SequencedHost::new();
+        let host = recording_host();
         let transcript = Transcript::new_last_buffer("hello", Some(100), None, None).unwrap();
         let skipped = skipped_paste(&transcript);
 
@@ -1216,19 +1118,19 @@ mod tests {
         assert_eq!(
             host.sequence(),
             [
-                Sent::Event(
+                Recorded::Event(
                     "scribe:output-completed",
                     serde_json::to_value(&skipped).unwrap()
                 ),
-                Sent::Notify {
+                Recorded::Call(HostCall::Notify {
                     title: "Scribe didn't paste".to_string(),
                     body: skipped.message.clone(),
-                },
+                }),
             ]
         );
         assert_eq!(
-            host.inner.calls(),
-            [crate::host::HostCall::Notify {
+            host.calls(),
+            [HostCall::Notify {
                 title: "Scribe didn't paste".to_string(),
                 body: skipped.message,
             }]
@@ -1237,8 +1139,8 @@ mod tests {
 
     #[test]
     fn a_failed_notification_is_only_logged() {
-        let host = SequencedHost::new();
-        host.inner.fail(crate::host::Failing::Notify);
+        let host = recording_host();
+        host.fail(crate::host::Failing::Notify);
         let transcript = Transcript::new_last_buffer("hello", Some(100), None, None).unwrap();
         let skipped = skipped_paste(&transcript);
 
@@ -1248,18 +1150,24 @@ mod tests {
 
         assert_eq!(result.status, OutputStatus::PasteSkipped);
         assert_eq!(
-            sent(&host.inner),
-            [(
-                "scribe:output-completed",
-                serde_json::to_value(&skipped).unwrap()
-            )]
+            host.sequence(),
+            [
+                Recorded::Event(
+                    "scribe:output-completed",
+                    serde_json::to_value(&skipped).unwrap()
+                ),
+                Recorded::Call(HostCall::Notify {
+                    title: "Scribe didn't paste".to_string(),
+                    body: skipped.message.clone(),
+                }),
+            ]
         );
-        assert_eq!(host.inner.calls().len(), 1);
+        assert_eq!(host.calls().len(), 1);
     }
 
     #[test]
     fn a_completed_output_raises_no_notification() {
-        let host = SequencedHost::new();
+        let host = recording_host();
         let transcript = Transcript::new_last_buffer("hello", Some(100), None, None).unwrap();
         let completed = completed_paste(&transcript);
 
@@ -1267,17 +1175,17 @@ mod tests {
 
         assert_eq!(
             host.sequence(),
-            [Sent::Event(
+            [Recorded::Event(
                 "scribe:output-completed",
                 serde_json::to_value(&completed).unwrap()
             )]
         );
-        assert!(host.inner.calls().is_empty());
+        assert!(host.calls().is_empty());
     }
 
     #[test]
     fn a_failed_output_is_announced_exactly_once() {
-        let host = SequencedHost::new();
+        let host = recording_host();
         let transcript = Transcript::new_last_buffer("hello", Some(100), None, None).unwrap();
 
         let error = finish_output(&host, &transcript.id, Err(not_pasted()), true).unwrap_err();
@@ -1285,7 +1193,7 @@ mod tests {
         assert_eq!(error.code, "paste_failed");
         assert_eq!(
             host.sequence(),
-            [Sent::Event(
+            [Recorded::Event(
                 "scribe:output-failed",
                 serde_json::json!({
                     "transcriptId": transcript.id,
@@ -1294,14 +1202,14 @@ mod tests {
                 })
             )]
         );
-        assert!(host.inner.calls().is_empty());
+        assert!(host.calls().is_empty());
     }
 
     #[test]
     fn an_output_without_events_sends_nothing() {
         // The selected-text transform pastes with events off: neither the
         // outcome nor the "didn't paste" notification reaches the host.
-        let host = SequencedHost::new();
+        let host = recording_host();
         let transcript = Transcript::new_last_buffer("hello", Some(100), None, None).unwrap();
 
         let result =
@@ -1311,8 +1219,8 @@ mod tests {
         assert_eq!(error.code, "paste_failed");
 
         assert!(host.sequence().is_empty());
-        assert!(host.inner.events().is_empty());
-        assert!(host.inner.calls().is_empty());
+        assert!(host.events().is_empty());
+        assert!(host.calls().is_empty());
     }
 
     fn backend() -> (BackendState, std::path::PathBuf) {

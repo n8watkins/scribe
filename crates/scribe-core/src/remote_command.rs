@@ -154,8 +154,8 @@ mod tests {
             command.run_on(&target);
             assert_eq!(target.event_names(), events, "{command:?}");
             assert_eq!(target.submitted(), [(intent, events.len())], "{command:?}");
+            // No host call at all, so no window call either.
             assert!(target.host.calls().is_empty());
-            assert!(target.host.dashboard_calls().is_empty());
         }
     }
 
@@ -164,13 +164,13 @@ mod tests {
     /// window is only logged.
     #[test]
     fn the_dashboard_command_only_opens_the_window() {
-        use crate::hotkeys::test_target::{DashboardCall, Recorder};
+        use crate::{host::HostCall, hotkeys::test_target::Recorder};
 
         let target = Recorder::new();
         RemoteCommand::Dashboard.run_on(&target);
-        assert_eq!(target.host.dashboard_calls(), [DashboardCall::Open(None)]);
+        // Exactly one call, the open (a toggle would be `ToggleDashboard`).
+        assert_eq!(target.host.calls(), [HostCall::OpenDashboard(None)]);
         assert!(target.host.events().is_empty());
         assert!(target.submitted().is_empty());
-        assert!(target.host.calls().is_empty());
     }
 }

@@ -161,10 +161,33 @@ pub enum HostCall {
     Exit(i32),
     OpenPath(PathBuf),
     OpenUrl(String),
-    Notify { title: String, body: String },
+    Notify {
+        title: String,
+        body: String,
+    },
     RegisterShortcut(HotKey),
     UnregisterShortcut(HotKey),
     SetLaunchAtLogin(bool),
+    /// The tray menu's "Launch at startup" tick was synced to these settings.
+    SyncSettings(AppSettings),
+    /// The main window was asked to open, on this route (`None` is the
+    /// default one).
+    OpenDashboard(Option<String>),
+    /// The main window was asked to toggle.
+    ToggleDashboard,
+    /// The tray's status word was updated.
+    UpdateTrayStatus(AppStatus),
+    /// The tray tooltip's speech-model line was updated.
+    UpdateEngineSummary(String),
+}
+
+/// One entry of [`RecordingHost::sequence`]: an event or a call, in the order
+/// the host received them. An event is kept as its name and its JSON payload
+/// (`CoreEvent` is not comparable).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Recorded {
+    Event(&'static str, serde_json::Value),
+    Call(HostCall),
 }
 
 /// A kind of [`RecordingHost`] call a test can make fail
@@ -194,15 +217,18 @@ pub const RECORDING_HOST_VERSION: &str = "0.0.0-recording-host";
 
 /// A host with no windows and no tray that keeps every event it is sent and
 /// every call it gets, for tests (in this crate and in the shell). Window
-/// calls answer as they do with no main window; nothing it is asked to do
-/// reaches the system (no exit, no opened file, no shortcut, no startup
-/// entry).
+/// calls are recorded and answer as they do with no main window; nothing it
+/// is asked to do reaches the system (no exit, no opened file, no shortcut,
+/// no startup entry). [`RecordingHost::events`] and
+/// [`RecordingHost::calls`] are the two lists; [`RecordingHost::sequence`]
+/// is both in one list, in arrival order.
 pub struct RecordingHost {
     paths: Paths,
     flavor: Flavor,
     app_version: String,
     events: Mutex<Vec<CoreEvent>>,
     calls: Mutex<Vec<HostCall>>,
+    sequence: Mutex<Vec<Recorded>>,
     shortcuts: Mutex<HashSet<HotKey>>,
     launch_at_login: Mutex<bool>,
     failing: Mutex<HashSet<Failing>>,
@@ -224,6 +250,7 @@ impl RecordingHost {
             app_version: RECORDING_HOST_VERSION.to_string(),
             events: Mutex::new(Vec::new()),
             calls: Mutex::new(Vec::new()),
+            sequence: Mutex::new(Vec::new()),
             shortcuts: Mutex::new(HashSet::new()),
             launch_at_login: Mutex::new(false),
             failing: Mutex::new(HashSet::new()),
@@ -246,6 +273,12 @@ impl RecordingHost {
         lock(&self.calls).clone()
     }
 
+    /// Every event and call so far in one list, oldest first, so a test can
+    /// pin an event against a call (`events()` and `calls()` cannot).
+    pub fn sequence(&self) -> Vec<Recorded> {
+        lock(&self.sequence).clone()
+    }
+
     /// From now on, calls of this kind answer `Err(what.message())` (they
     /// are still recorded).
     pub fn fail(&self, what: Failing) {
@@ -258,8 +291,12 @@ impl RecordingHost {
         *lock(&self.launch_at_login) = enabled;
     }
 
+    /// Keeps a call in `calls` and, in the same step, in `sequence`, so the
+    /// two lists never disagree about the order.
     fn record(&self, call: HostCall) {
-        lock(&self.calls).push(call);
+        let mut sequence = lock(&self.sequence);
+        lock(&self.calls).push(call.clone());
+        sequence.push(Recorded::Call(call));
     }
 
     fn check(&self, what: Failing) -> Result<(), String> {
@@ -273,6 +310,11 @@ impl RecordingHost {
 
 impl Host for RecordingHost {
     fn emit(&self, event: CoreEvent) {
+        let mut sequence = lock(&self.sequence);
+        sequence.push(Recorded::Event(
+            event.name(),
+            serde_json::to_value(&event).expect("an event serializes"),
+        ));
         lock(&self.events).push(event);
     }
 
@@ -284,17 +326,25 @@ impl Host for RecordingHost {
         self.flavor
     }
 
-    fn update_tray_status(&self, _status: AppStatus) {}
+    fn update_tray_status(&self, status: AppStatus) {
+        self.record(HostCall::UpdateTrayStatus(status));
+    }
 
-    fn update_engine_summary(&self, _summary: String) {}
+    fn update_engine_summary(&self, summary: String) {
+        self.record(HostCall::UpdateEngineSummary(summary));
+    }
 
-    fn sync_settings(&self, _settings: &AppSettings) {}
+    fn sync_settings(&self, settings: &AppSettings) {
+        self.record(HostCall::SyncSettings(settings.clone()));
+    }
 
-    fn open_dashboard(&self, _route: Option<&str>) -> Result<(), CommandError> {
+    fn open_dashboard(&self, route: Option<&str>) -> Result<(), CommandError> {
+        self.record(HostCall::OpenDashboard(route.map(str::to_string)));
         Err(no_main_window())
     }
 
     fn toggle_dashboard(&self) -> Result<(), CommandError> {
+        self.record(HostCall::ToggleDashboard);
         Err(no_main_window())
     }
 
@@ -409,6 +459,70 @@ mod tests {
         assert_eq!(host.flavor(), Flavor::Dev);
         assert!(host.open_dashboard(None).is_err());
         assert_eq!(host.main_window_logical_size(), None);
+    }
+
+    #[test]
+    fn a_recording_host_records_the_tray_and_window_calls() {
+        let host = recording_host();
+        let settings = AppSettings::default();
+        host.update_tray_status(AppStatus::Recording);
+        host.update_engine_summary("Whisper tiny.en".into());
+        host.sync_settings(&settings);
+        assert_eq!(
+            host.open_dashboard(Some("settings")).unwrap_err().code,
+            "window_not_found"
+        );
+        assert_eq!(
+            host.open_dashboard(None).unwrap_err().code,
+            "window_not_found"
+        );
+        assert_eq!(
+            host.toggle_dashboard().unwrap_err().code,
+            "window_not_found"
+        );
+        assert_eq!(
+            host.calls(),
+            [
+                HostCall::UpdateTrayStatus(AppStatus::Recording),
+                HostCall::UpdateEngineSummary("Whisper tiny.en".into()),
+                HostCall::SyncSettings(settings),
+                HostCall::OpenDashboard(Some("settings".into())),
+                HostCall::OpenDashboard(None),
+                HostCall::ToggleDashboard,
+            ]
+        );
+        assert!(host.events().is_empty());
+    }
+
+    #[test]
+    fn a_recording_host_keeps_events_and_calls_in_one_ordered_list() {
+        let host = recording_host();
+        host.emit(CoreEvent::SelectionTransformed("one".into()));
+        host.update_engine_summary("model".into());
+        host.exit(0);
+        host.emit(CoreEvent::SelectionTransformed("two".into()));
+        // The queries are not recorded.
+        let _ = host.app_version();
+        let _ = host.launch_at_login();
+
+        assert_eq!(
+            host.sequence(),
+            [
+                Recorded::Event("scribe:selection-transformed", serde_json::json!("one")),
+                Recorded::Call(HostCall::UpdateEngineSummary("model".into())),
+                Recorded::Call(HostCall::Exit(0)),
+                Recorded::Event("scribe:selection-transformed", serde_json::json!("two")),
+            ]
+        );
+        // The two lists keep their own order and agree with the sequence.
+        assert_eq!(host.events().len(), 2);
+        assert_eq!(
+            host.calls(),
+            [
+                HostCall::UpdateEngineSummary("model".into()),
+                HostCall::Exit(0)
+            ]
+        );
     }
 
     fn recording_host() -> RecordingHost {
